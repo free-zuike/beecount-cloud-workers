@@ -687,6 +687,26 @@ const FRONTEND_HTML = `<!DOCTYPE html>
     .bar-fill.income { background: var(--success); }
     .bar-fill.expense { background: var(--error); }
 
+    .ledger-actions { display: flex; gap: 8px; }
+
+    .budget-list { display: flex; flex-direction: column; gap: 12px; }
+    .budget-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px;
+      background: var(--background);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .budget-info { display: flex; flex-direction: column; gap: 4px; }
+    .budget-category { font-weight: 500; }
+    .budget-period { font-size: 0.8rem; color: var(--text-muted); }
+    .budget-amount { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+    .budget-progress { width: 100px; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+    .progress-bar { height: 100%; background: var(--primary); transition: width 0.3s; }
+    .budget-actions { display: flex; gap: 8px; margin-left: 16px; }
+
     .page-header {
       display: flex;
       justify-content: space-between;
@@ -900,11 +920,11 @@ const FRONTEND_HTML = `<!DOCTYPE html>
     }
 
     function renderMainLayout() {
-      return '<header class="header"><div class="container header-content"><div class="logo"><div class="logo-icon">🐝</div><span>蜜蜂记账</span></div><div class="nav-tabs"><button class="nav-tab active" data-page="home">首页</button><button class="nav-tab" data-page="transactions">交易</button><button class="nav-tab" data-page="categories">分类</button><button class="nav-tab" data-page="accounts">账户</button><button class="nav-tab" data-page="stats">统计</button></div><div class="header-actions"><button class="header-btn" onclick="showSettingsModal()">⚙️</button><button class="header-btn" onclick="logout()">退出</button></div></div></header><main class="container" id="mainContent"></main>' + renderAllModals();
+      return '<header class="header"><div class="container header-content"><div class="logo"><div class="logo-icon">🐝</div><span>蜜蜂记账</span></div><div class="nav-tabs"><button class="nav-tab active" data-page="home">首页</button><button class="nav-tab" data-page="transactions">交易</button><button class="nav-tab" data-page="categories">分类</button><button class="nav-tab" data-page="accounts">账户</button><button class="nav-tab" data-page="stats">统计</button><button class="nav-tab" data-page="tags">🏷️ 标签</button><button class="nav-tab" data-page="budgets">💰 预算</button><button class="nav-tab" data-page="backup">☁️ 备份</button></div><div class="header-actions"><button class="header-btn" onclick="showSettingsModal()">⚙️</button><button class="header-btn" onclick="logout()">退出</button></div></div></header><main class="container" id="mainContent"></main>' + renderAllModals();
     }
 
     function renderAllModals() {
-      return '<div id="ledgerModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title" id="ledgerModalTitle">账本详情</h3><button class="modal-close" onclick="closeModal(\\'ledgerModal\\')">×</button></div><div id="ledgerModalContent"></div></div></div><div id="createLedgerModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">新建账本</h3><button class="modal-close" onclick="closeModal(\\'createLedgerModal\\')">×</button></div><form id="createLedgerForm"><div class="form-group"><label>账本名称</label><input type="text" name="name" placeholder="例如：家庭账本" required></div><div class="form-group"><label>货币</label><select name="currency"><option value="CNY">人民币 (CNY)</option><option value="USD">美元 (USD)</option><option value="EUR">欧元 (EUR)</option></select></div><button type="submit" class="btn btn-primary btn-block">创建</button></form></div></div><div id="settingsModal" class="modal"><div class="modal-content" style="max-width: 600px;"><div class="modal-header"><h3 class="modal-title">设置</h3><button class="modal-close" onclick="closeModal(\\'settingsModal\\')">×</button></div><div id="settingsContent"></div></div></div><div id="createTxModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">记一笔</h3><button class="modal-close" onclick="closeModal(\\'createTxModal\\')">×</button></div><form id="createTxForm"><div class="form-group"><label>账本</label><select name="ledger_id" id="txLedgerSelect"></select></div><div class="type-selector"><div class="type-btn expense active" data-type="expense" onclick="selectTxType(\\'expense\\')"><div class="icon">📉</div><div class="label">支出</div></div><div class="type-btn income" data-type="income" onclick="selectTxType(\\'income\\')"><div class="icon">📈</div><div class="label">收入</div></div></div><div class="form-group"><label>金额 (分)</label><input type="number" name="amount" placeholder="请输入金额" min="1" required><small style="color: var(--text-muted);">例如：1000 = 10元</small></div><div class="quick-amounts"><button type="button" class="quick-amount" onclick="setQuickAmount(1000)">10元</button><button type="button" class="quick-amount" onclick="setQuickAmount(5000)">50元</button><button type="button" class="quick-amount" onclick="setQuickAmount(10000)">100元</button><button type="button" class="quick-amount" onclick="setQuickAmount(50000)">500元</button></div><div class="form-group"><label>分类</label><input type="text" name="category_name" placeholder="例如：餐饮、交通"></div><div class="form-group"><label>账户</label><input type="text" name="account_name" placeholder="例如：现金、银行卡"></div><div class="form-group"><label>备注</label><input type="text" name="note" placeholder="可选"></div><input type="hidden" name="tx_type" id="txTypeInput" value="expense"><button type="submit" class="btn btn-primary btn-block">保存</button></form></div></div><div id="editTxModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">编辑交易</h3><button class="modal-close" onclick="closeModal(\\'editTxModal\\')">×</button></div><form id="editTxForm"><input type="hidden" name="tx_id"><div class="form-group"><label>账本</label><select name="ledger_id" id="editTxLedgerSelect"></select></div><div class="type-selector"><div class="type-btn expense" data-type="expense" onclick="selectEditTxType(\\'expense\\')"><div class="icon">📉</div><div class="label">支出</div></div><div class="type-btn income" data-type="income" onclick="selectEditTxType(\\'income\\')"><div class="icon">📈</div><div class="label">收入</div></div></div><div class="form-group"><label>金额 (分)</label><input type="number" name="amount" placeholder="请输入金额" min="1" required></div><div class="form-group"><label>分类</label><input type="text" name="category_name" placeholder="例如：餐饮、交通"></div><div class="form-group"><label>账户</label><input type="text" name="account_name" placeholder="例如：现金、银行卡"></div><div class="form-group"><label>备注</label><input type="text" name="note" placeholder="可选"></div><input type="hidden" name="tx_type" id="editTxTypeInput" value="expense"><button type="submit" class="btn btn-primary btn-block">保存</button></form></div></div><div id="createCategoryModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">新建分类</h3><button class="modal-close" onclick="closeModal(\\'createCategoryModal\\')">×</button></div><form id="createCategoryForm"><div class="form-group"><label>分类名称</label><input type="text" name="name" placeholder="例如：餐饮" required></div><div class="form-group"><label>类型</label><select name="kind"><option value="expense">支出</option><option value="income">收入</option></select></div><div class="form-group"><label>图标</label><input type="text" name="icon" placeholder="例如：🍔" value="📁"></div><button type="submit" class="btn btn-primary btn-block">创建</button></form></div></div><div id="createAccountModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">新建账户</h3><button class="modal-close" onclick="closeModal(\\'createAccountModal\\')">×</button></div><form id="createAccountForm"><div class="form-group"><label>账户名称</label><input type="text" name="name" placeholder="例如：现金" required></div><div class="form-group"><label>类型</label><select name="kind"><option value="cash">现金</option><option value="bank">银行卡</option><option value="credit">信用卡</option><option value="other">其他</option></select></div><div class="form-group"><label>余额 (分)</label><input type="number" name="balance" placeholder="当前余额" value="0"></div><button type="submit" class="btn btn-primary btn-block">创建</button></form></div></div>';
+      return '<div id="ledgerModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title" id="ledgerModalTitle">账本详情</h3><button class="modal-close" onclick="closeModal(\\'ledgerModal\\')">×</button></div><div id="ledgerModalContent"></div></div></div><div id="createLedgerModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">新建账本</h3><button class="modal-close" onclick="closeModal(\\'createLedgerModal\\')">×</button></div><form id="createLedgerForm"><div class="form-group"><label>账本名称</label><input type="text" name="name" placeholder="例如：家庭账本" required></div><div class="form-group"><label>货币</label><select name="currency"><option value="CNY">人民币 (CNY)</option><option value="USD">美元 (USD)</option><option value="EUR">欧元 (EUR)</option></select></div><button type="submit" class="btn btn-primary btn-block">创建</button></form></div></div><div id="editLedgerModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">编辑账本</h3><button class="modal-close" onclick="closeModal(\\'editLedgerModal\\')">×</button></div><form id="editLedgerForm"><input type="hidden" name="ledger_id"><div class="form-group"><label>账本名称</label><input type="text" name="name" placeholder="例如：家庭账本" required></div><div class="form-group"><label>货币</label><select name="currency"><option value="CNY">人民币 (CNY)</option><option value="USD">美元 (USD)</option><option value="EUR">欧元 (EUR)</option></select></div><button type="submit" class="btn btn-primary btn-block">保存</button></form></div></div><div id="createCategoryModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">新建分类</h3><button class="modal-close" onclick="closeModal(\\'createCategoryModal\\')">×</button></div><form id="createCategoryForm"><div class="form-group"><label>分类名称</label><input type="text" name="name" placeholder="例如：餐饮" required></div><div class="form-group"><label>类型</label><select name="kind"><option value="expense">支出</option><option value="income">收入</option></select></div><div class="form-group"><label>图标</label><input type="text" name="icon" placeholder="例如：🍔" value="📁"></div><button type="submit" class="btn btn-primary btn-block">创建</button></form></div></div><div id="editCategoryModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">编辑分类</h3><button class="modal-close" onclick="closeModal(\\'editCategoryModal\\')">×</button></div><form id="editCategoryForm"><input type="hidden" name="category_sync_id"><div class="form-group"><label>分类名称</label><input type="text" name="name" placeholder="例如：餐饮" required></div><div class="form-group"><label>类型</label><select name="kind"><option value="expense">支出</option><option value="income">收入</option></select></div><div class="form-group"><label>图标</label><input type="text" name="icon" placeholder="例如：🍔" value="📁"></div><button type="submit" class="btn btn-primary btn-block">保存</button></form></div></div><div id="deleteCategoryModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">删除分类</h3><button class="modal-close" onclick="closeModal(\\'deleteCategoryModal\\')">×</button></div><p>确定要删除这个分类吗？</p><form id="deleteCategoryForm"><input type="hidden" name="category_sync_id"><button type="submit" class="btn btn-danger btn-block">确认删除</button></form></div></div><div id="createAccountModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">新建账户</h3><button class="modal-close" onclick="closeModal(\\'createAccountModal\\')">×</button></div><form id="createAccountForm"><div class="form-group"><label>账户名称</label><input type="text" name="name" placeholder="例如：现金" required></div><div class="form-group"><label>类型</label><select name="kind"><option value="cash">现金</option><option value="bank">银行卡</option><option value="credit">信用卡</option><option value="other">其他</option></select></div><div class="form-group"><label>余额 (分)</label><input type="number" name="balance" placeholder="当前余额" value="0"></div><button type="submit" class="btn btn-primary btn-block">创建</button></form></div></div><div id="editAccountModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">编辑账户</h3><button class="modal-close" onclick="closeModal(\\'editAccountModal\\')">×</button></div><form id="editAccountForm"><input type="hidden" name="account_sync_id"><div class="form-group"><label>账户名称</label><input type="text" name="name" placeholder="例如：现金" required></div><div class="form-group"><label>类型</label><select name="kind"><option value="cash">现金</option><option value="bank">银行卡</option><option value="credit">信用卡</option><option value="other">其他</option></select></div><div class="form-group"><label>余额 (分)</label><input type="number" name="balance" placeholder="当前余额"></div><button type="submit" class="btn btn-primary btn-block">保存</button></form></div></div><div id="deleteAccountModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">删除账户</h3><button class="modal-close" onclick="closeModal(\\'deleteAccountModal\\')">×</button></div><p>确定要删除这个账户吗？</p><form id="deleteAccountForm"><input type="hidden" name="account_sync_id"><button type="submit" class="btn btn-danger btn-block">确认删除</button></form></div></div><div id="createTagModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">新建标签</h3><button class="modal-close" onclick="closeModal(\\'createTagModal\\')">×</button></div><form id="createTagForm"><div class="form-group"><label>标签名称</label><input type="text" name="name" placeholder="例如：重要" required></div><button type="submit" class="btn btn-primary btn-block">创建</button></form></div></div><div id="createBudgetModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">设置预算</h3><button class="modal-close" onclick="closeModal(\\'createBudgetModal\\')">×</button></div><form id="createBudgetForm"><div class="form-group"><label>分类</label><select name="category_name" id="budgetCategorySelect"><option value="">选择分类</option></select></div><div class="form-group"><label>预算金额 (分)</label><input type="number" name="amount" placeholder="例如：500000 = 5000元" required></div><button type="submit" class="btn btn-primary btn-block">保存</button></form></div></div><div id="settingsModal" class="modal"><div class="modal-content" style="max-width: 600px;"><div class="modal-header"><h3 class="modal-title">设置</h3><button class="modal-close" onclick="closeModal(\\'settingsModal\\')">×</button></div><div id="settingsContent"></div></div></div><div id="createTxModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">记一笔</h3><button class="modal-close" onclick="closeModal(\\'createTxModal\\')">×</button></div><form id="createTxForm"><div class="form-group"><label>账本</label><select name="ledger_id" id="txLedgerSelect"></select></div><div class="type-selector"><div class="type-btn expense active" data-type="expense" onclick="selectTxType(\\'expense\\')"><div class="icon">📉</div><div class="label">支出</div></div><div class="type-btn income" data-type="income" onclick="selectTxType(\\'income\\')"><div class="icon">📈</div><div class="label">收入</div></div></div><div class="form-group"><label>金额 (分)</label><input type="number" name="amount" placeholder="请输入金额" min="1" required><small style="color: var(--text-muted);">例如：1000 = 10元</small></div><div class="quick-amounts"><button type="button" class="quick-amount" onclick="setQuickAmount(1000)">10元</button><button type="button" class="quick-amount" onclick="setQuickAmount(5000)">50元</button><button type="button" class="quick-amount" onclick="setQuickAmount(10000)">100元</button><button type="button" class="quick-amount" onclick="setQuickAmount(50000)">500元</button></div><div class="form-group"><label>分类</label><input type="text" name="category_name" placeholder="例如：餐饮、交通"></div><div class="form-group"><label>账户</label><input type="text" name="account_name" placeholder="例如：现金、银行卡"></div><div class="form-group"><label>备注</label><input type="text" name="note" placeholder="可选"></div><input type="hidden" name="tx_type" id="txTypeInput" value="expense"><button type="submit" class="btn btn-primary btn-block">保存</button></form></div></div><div id="editTxModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">编辑交易</h3><button class="modal-close" onclick="closeModal(\\'editTxModal\\')">×</button></div><form id="editTxForm"><input type="hidden" name="tx_id"><div class="form-group"><label>账本</label><select name="ledger_id" id="editTxLedgerSelect"></select></div><div class="type-selector"><div class="type-btn expense" data-type="expense" onclick="selectEditTxType(\\'expense\\')"><div class="icon">📉</div><div class="label">支出</div></div><div class="type-btn income" data-type="income" onclick="selectEditTxType(\\'income\\')"><div class="icon">📈</div><div class="label">收入</div></div></div><div class="form-group"><label>金额 (分)</label><input type="number" name="amount" placeholder="请输入金额" min="1" required></div><div class="form-group"><label>分类</label><input type="text" name="category_name" placeholder="例如：餐饮、交通"></div><div class="form-group"><label>账户</label><input type="text" name="account_name" placeholder="例如：现金、银行卡"></div><div class="form-group"><label>备注</label><input type="text" name="note" placeholder="可选"></div><input type="hidden" name="tx_type" id="editTxTypeInput" value="expense"><button type="submit" class="btn btn-primary btn-block">保存</button></form></div></div>';
     }
 
     function bindNavigationEvents() {
@@ -1036,6 +1056,146 @@ const FRONTEND_HTML = `<!DOCTYPE html>
           showToast(err.message, 'error');
         }
       });
+
+      document.getElementById('editLedgerForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const ledgerId = formData.get('ledger_id');
+        try {
+          await api('/api/v1/write/ledgers/' + ledgerId, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              base_change_id: 0,
+              ledger_name: formData.get('name'),
+              currency: formData.get('currency')
+            })
+          });
+          closeModal('editLedgerModal');
+          showToast('账本更新成功');
+          loadPageData();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+
+      document.getElementById('editCategoryForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const syncId = formData.get('category_sync_id');
+        try {
+          await api('/api/v1/write/categories/' + syncId, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              base_change_id: 0,
+              name: formData.get('name'),
+              kind: formData.get('kind'),
+              icon: formData.get('icon')
+            })
+          });
+          closeModal('editCategoryModal');
+          showToast('分类更新成功');
+          loadPageData();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+
+      document.getElementById('deleteCategoryForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const syncId = formData.get('category_sync_id');
+        try {
+          await api('/api/v1/write/categories/' + syncId, {
+            method: 'DELETE',
+            body: JSON.stringify({ base_change_id: 0 })
+          });
+          closeModal('deleteCategoryModal');
+          showToast('分类已删除');
+          loadPageData();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+
+      document.getElementById('editAccountForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const syncId = formData.get('account_sync_id');
+        try {
+          await api('/api/v1/write/accounts/' + syncId, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              base_change_id: 0,
+              name: formData.get('name'),
+              kind: formData.get('kind'),
+              initial_balance: parseInt(formData.get('balance')) || 0
+            })
+          });
+          closeModal('editAccountModal');
+          showToast('账户更新成功');
+          loadPageData();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+
+      document.getElementById('deleteAccountForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const syncId = formData.get('account_sync_id');
+        try {
+          await api('/api/v1/write/accounts/' + syncId, {
+            method: 'DELETE',
+            body: JSON.stringify({ base_change_id: 0 })
+          });
+          closeModal('deleteAccountModal');
+          showToast('账户已删除');
+          loadPageData();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+
+      document.getElementById('createTagForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        try {
+          await api('/api/v1/write/tags', {
+            method: 'POST',
+            body: JSON.stringify({
+              base_change_id: 0,
+              name: formData.get('name')
+            })
+          });
+          closeModal('createTagModal');
+          showToast('标签创建成功');
+          loadPageData();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+
+      document.getElementById('createBudgetForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const now = new Date();
+        try {
+          await api('/api/v1/write/budgets', {
+            method: 'POST',
+            body: JSON.stringify({
+              base_change_id: 0,
+              category_name: formData.get('category_name'),
+              amount: parseInt(formData.get('amount')),
+              period: now.toISOString().slice(0, 7)
+            })
+          });
+          closeModal('createBudgetModal');
+          showToast('预算设置成功');
+          loadPageData();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
     }
 
     async function loadPageData() {
@@ -1060,6 +1220,15 @@ const FRONTEND_HTML = `<!DOCTYPE html>
             break;
           case 'stats':
             await renderStatsPage(mainContent);
+            break;
+          case 'tags':
+            await renderTagsPage(mainContent);
+            break;
+          case 'budgets':
+            await renderBudgetsPage(mainContent);
+            break;
+          case 'backup':
+            await renderBackupPage(mainContent);
             break;
         }
       } catch (err) {
@@ -1093,7 +1262,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         ledgerHtml = '<div class="empty-state"><div class="empty-state-icon">📒</div><p>还没有账本</p><p>点击上方按钮创建您的第一个账本</p></div>';
       } else {
         ledgerHtml = '<div class="ledger-list">' + state.ledgers.map(function(ledger) {
-          return '<div class="ledger-item" onclick="showLedgerDetail(\\'' + ledger.ledger_id + '\\')"><div class="ledger-info"><h3>' + ledger.ledger_name + '</h3><p>' + (ledger.currency || 'CNY') + '</p></div><div class="ledger-stats"><div class="income">+' + formatMoney(ledger.income_total || 0) + '</div><div class="expense">-' + formatMoney(ledger.expense_total || 0) + '</div></div></div>';
+          return '<div class="ledger-item"><div class="ledger-info" onclick="showLedgerDetail(\'' + ledger.ledger_id + '\')"><h3>' + ledger.ledger_name + '</h3><p>' + (ledger.currency || 'CNY') + '</p></div><div class="ledger-stats"><div class="income">+' + formatMoney(ledger.income_total || 0) + '</div><div class="expense">-' + formatMoney(ledger.expense_total || 0) + '</div></div><div class="ledger-actions" style="display: flex; gap: 8px;"><button class="tx-action-btn" onclick="event.stopPropagation(); showEditLedgerModal(\'' + ledger.ledger_id + '\')">编辑</button><button class="tx-action-btn delete" onclick="event.stopPropagation(); deleteLedger(\'' + ledger.ledger_id + '\')">删除</button></div></div>';
         }).join('') + '</div>';
       }
 
@@ -1151,7 +1320,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       const expenseCats = state.categories.filter(c => c.kind === 'expense');
       const incomeCats = state.categories.filter(c => c.kind === 'income');
       
-      container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal(\\'createCategoryModal\\')">+ 新建分类</button></div><div class="card"><h4 class="section-title">支出分类</h4><div class="category-list">' + (expenseCats.length > 0 ? expenseCats.map(c => '<div class="category-item"><span class="category-icon">' + (c.icon || '📁') + '</span><span>' + c.name + '</span></div>').join('') : '<p style="color: var(--text-muted);">暂无支出分类</p>') + '</div></div><div class="card" style="margin-top: 16px;"><h4 class="section-title">收入分类</h4><div class="category-list">' + (incomeCats.length > 0 ? incomeCats.map(c => '<div class="category-item"><span class="category-icon">' + (c.icon || '📁') + '</span><span>' + c.name + '</span></div>').join('') : '<p style="color: var(--text-muted);">暂无收入分类</p>') + '</div></div></div>';
+      container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal(\'createCategoryModal\')">+ 新建分类</button></div><div class="card"><h4 class="section-title">支出分类</h4><div class="category-list">' + (expenseCats.length > 0 ? expenseCats.map(c => '<div class="category-item"><span class="category-icon">' + (c.icon || '📁') + '</span><span>' + c.name + '</span><div class="tag-actions" style="margin-left: auto; display: flex; gap: 4px;"><button class="tx-action-btn" onclick="showEditCategoryModal(\'' + (c.id || c.sync_id) + '\')">编辑</button><button class="tx-action-btn delete" onclick="showDeleteCategoryModal(\'' + (c.id || c.sync_id) + '\')">删除</button></div></div>').join('') : '<p style="color: var(--text-muted);">暂无支出分类</p>') + '</div></div><div class="card" style="margin-top: 16px;"><h4 class="section-title">收入分类</h4><div class="category-list">' + (incomeCats.length > 0 ? incomeCats.map(c => '<div class="category-item"><span class="category-icon">' + (c.icon || '📁') + '</span><span>' + c.name + '</span><div class="tag-actions" style="margin-left: auto; display: flex; gap: 4px;"><button class="tx-action-btn" onclick="showEditCategoryModal(\'' + (c.id || c.sync_id) + '\')">编辑</button><button class="tx-action-btn delete" onclick="showDeleteCategoryModal(\'' + (c.id || c.sync_id) + '\')">删除</button></div></div>').join('') : '<p style="color: var(--text-muted);">暂无收入分类</p>') + '</div></div></div>';
     }
 
     async function renderAccountsPage(container) {
@@ -1163,7 +1332,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       
       const kindLabels = {cash: '💵 现金', bank: '🏦 银行卡', credit: '💳 信用卡', other: '📋 其他'};
       
-      container.innerHTML = '<div class="page active"><div class="page-header"><h2>账户管理</h2><button class="btn btn-primary" onclick="showModal(\\'createAccountModal\\')">+ 新建账户</button></div><div class="stats-grid" style="margin-bottom: 20px;"><div class="stat-card"><div class="stat-label">账户数量</div><div class="stat-value">' + state.accounts.length + '</div></div><div class="stat-card"><div class="stat-label">总余额</div><div class="stat-value">' + formatMoney(state.accounts.reduce((sum, a) => sum + (a.balance || 0), 0)) + '</div></div></div><div class="card"><div class="account-list">' + (state.accounts.length > 0 ? state.accounts.map(a => '<div class="account-item"><div><span style="font-size: 1.2rem; margin-right: 8px;">' + (kindLabels[a.kind] || '📋') + '</span><strong>' + a.name + '</strong></div><div class="transaction-amount ' + ((a.balance || 0) >= 0 ? 'income' : 'expense') + '">' + formatMoney(a.balance || 0) + '</div></div>').join('') : '<p style="color: var(--text-muted);">暂无账户</p>') + '</div></div></div>';
+      container.innerHTML = '<div class="page active"><div class="page-header"><h2>账户管理</h2><button class="btn btn-primary" onclick="showModal(\'createAccountModal\')">+ 新建账户</button></div><div class="stats-grid" style="margin-bottom: 20px;"><div class="stat-card"><div class="stat-label">账户数量</div><div class="stat-value">' + state.accounts.length + '</div></div><div class="stat-card"><div class="stat-label">总余额</div><div class="stat-value">' + formatMoney(state.accounts.reduce((sum, a) => sum + (a.balance || 0), 0)) + '</div></div></div><div class="card"><div class="account-list">' + (state.accounts.length > 0 ? state.accounts.map(a => '<div class="account-item"><div><span style="font-size: 1.2rem; margin-right: 8px;">' + (kindLabels[a.kind] || '📋') + '</span><strong>' + a.name + '</strong></div><div class="transaction-amount ' + ((a.balance || 0) >= 0 ? 'income' : 'expense') + '">' + formatMoney(a.balance || 0) + '</div><div class="tag-actions" style="display: flex; gap: 4px;"><button class="tx-action-btn" onclick="showEditAccountModal(\'' + (a.id || a.sync_id) + '\')">编辑</button><button class="tx-action-btn delete" onclick="showDeleteAccountModal(\'' + (a.id || a.sync_id) + '\')">删除</button></div></div>').join('') : '<p style="color: var(--text-muted);">暂无账户</p>') + '</div></div></div>';
     }
 
     async function renderStatsPage(container) {
@@ -1206,9 +1375,230 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       container.innerHTML = '<div class="page active"><div class="page-header"><h2>统计分析</h2></div><div class="stats-grid"><div class="stat-card"><div class="stat-label">本月收入</div><div class="stat-value income">' + formatMoney(monthlyIncome) + '</div></div><div class="stat-card"><div class="stat-label">本月支出</div><div class="stat-value expense">' + formatMoney(monthlyExpense) + '</div></div><div class="stat-card"><div class="stat-label">本月结余</div><div class="stat-value ' + ((monthlyIncome - monthlyExpense) >= 0 ? 'income' : 'expense') + '">' + formatMoney(monthlyIncome - monthlyExpense) + '</div></div><div class="stat-card"><div class="stat-label">交易笔数</div><div class="stat-value">' + allTxs.length + '</div></div></div><div class="chart-container"><h4 class="chart-title">支出排行 TOP 5</h4><div class="bar-chart">' + (sortedExpenseCats.length > 0 ? sortedExpenseCats.map(([name, stats]) => '<div class="bar-item"><div class="bar-label">' + name + '</div><div class="bar-track"><div class="bar-fill expense" style="width: ' + Math.max(5, (stats.expense / maxExpense) * 100) + '%">' + formatMoney(stats.expense) + '</div></div></div>').join('') : '<p style="color: var(--text-muted);">本月暂无支出记录</p>') + '</div></div></div>';
     }
 
+    async function renderTagsPage(container) {
+      try {
+        state.tags = await api('/api/v1/read/workspace/tags') || [];
+      } catch (err) {
+        state.tags = [];
+      }
+
+      container.innerHTML = '<div class="page active"><div class="page-header"><h2>标签管理</h2><button class="btn btn-primary" onclick="showModal(\'createTagModal\')">+ 新建标签</button></div><div class="card"><div class="tag-list">' + (state.tags.length > 0 ? state.tags.map(t => '<div class="tag-item"><span class="tag-name">' + t.name + '</span><div class="tag-actions"><button class="tx-action-btn" onclick="editTag(\'' + (t.id || t.sync_id) + '\')">编辑</button><button class="tx-action-btn delete" onclick="deleteTag(\'' + (t.id || t.sync_id) + '\')">删除</button></div></div>').join('') : '<p style="color: var(--text-muted);">暂无标签</p>') + '</div></div></div>';
+    }
+
+    async function editTag(syncId) {
+      const tag = state.tags.find(t => (t.id || t.sync_id) === syncId);
+      if (!tag) return;
+      const newName = prompt('请输入新的标签名称：', tag.name);
+      if (!newName || newName === tag.name) return;
+      try {
+        await api('/api/v1/write/tags/' + syncId, {
+          method: 'PATCH',
+          body: JSON.stringify({ base_change_id: 0, name: newName })
+        });
+        showToast('标签更新成功');
+        loadPageData();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    async function deleteTag(syncId) {
+      if (!confirm('确定要删除这个标签吗？')) return;
+      try {
+        await api('/api/v1/write/tags/' + syncId, {
+          method: 'DELETE',
+          body: JSON.stringify({ base_change_id: 0 })
+        });
+        showToast('标签已删除');
+        loadPageData();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    async function renderBudgetsPage(container) {
+      try {
+        const budgets = await api('/api/v1/read/workspace/budgets') || [];
+        const categories = await api('/api/v1/read/workspace/categories') || [];
+        const now = new Date();
+        const currentMonth = now.toISOString().slice(0, 7);
+
+        container.innerHTML = '<div class="page active"><div class="page-header"><h2>预算管理</h2><button class="btn btn-primary" onclick="openCreateBudgetModal()">+ 设置预算</button></div><div class="card"><div class="budget-list">' + (budgets.length > 0 ? budgets.map(b => '<div class="budget-item"><div class="budget-info"><span class="budget-category">' + (categories.find(c => c.id === b.category_id)?.name || b.category_name || '未分类') + '</span><span class="budget-period">' + (b.period || currentMonth) + '</span></div><div class="budget-amount"><div class="budget-progress"><div class="progress-bar" style="width: ' + Math.min(100, (b.spent || 0) / b.amount * 100) + '%"></div></div><span>' + formatMoney(b.spent || 0) + ' / ' + formatMoney(b.amount) + '</span></div><div class="budget-actions"><button class="tx-action-btn" onclick="editBudget(\'' + b.id + '\')">编辑</button><button class="tx-action-btn delete" onclick="deleteBudget(\'' + b.id + '\')">删除</button></div></div>').join('') : '<p style="color: var(--text-muted);">暂无预算设置</p>') + '</div></div></div>';
+      } catch (err) {
+        container.innerHTML = '<div class="page active"><div class="page-header"><h2>预算管理</h2><button class="btn btn-primary" onclick="openCreateBudgetModal()">+ 设置预算</button></div><div class="card"><p style="color: var(--text-muted);">暂无预算设置</p></div></div>';
+      }
+    }
+
+    function openCreateBudgetModal() {
+      const categorySelect = document.getElementById('budgetCategorySelect');
+      if (categorySelect && state.categories) {
+        categorySelect.innerHTML = '<option value="">选择分类</option>' + state.categories.map(c => '<option value="' + c.name + '">' + c.name + '</option>').join('');
+      }
+      showModal('createBudgetModal');
+    }
+
+    async function editBudget(budgetId) {
+      const budgets = await api('/api/v1/read/workspace/budgets') || [];
+      const budget = budgets.find(b => b.id === budgetId);
+      if (!budget) return;
+      const amount = prompt('请输入新的预算金额（分）：', budget.amount);
+      if (!amount) return;
+      try {
+        await api('/api/v1/write/budgets/' + budgetId, {
+          method: 'PATCH',
+          body: JSON.stringify({ base_change_id: 0, amount: parseInt(amount) })
+        });
+        showToast('预算更新成功');
+        loadPageData();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    async function deleteBudget(budgetId) {
+      if (!confirm('确定要删除这个预算吗？')) return;
+      try {
+        await api('/api/v1/write/budgets/' + budgetId, {
+          method: 'DELETE',
+          body: JSON.stringify({ base_change_id: 0 })
+        });
+        showToast('预算已删除');
+        loadPageData();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    async function renderBackupPage(container) {
+      container.innerHTML = '<div class="page active"><div class="page-header"><h2>备份与恢复</h2></div><div class="card"><h4>导出备份</h4><p style="color: var(--text-muted); margin-bottom: 16px;">将您的所有数据导出为 JSON 文件</p><button class="btn btn-primary" onclick="exportBackup()">📤 导出数据</button></div><div class="card" style="margin-top: 16px;"><h4>导入备份</h4><p style="color: var(--text-muted); margin-bottom: 16px;">从备份文件恢复数据</p><input type="file" id="backupFileInput" accept=".json" style="display: none;" onchange="importBackup(event)"><button class="btn btn-secondary" onclick="document.getElementById(\'backupFileInput\').click()">📥 选择文件</button></div><div class="card" style="margin-top: 16px;"><h4>危险操作</h4><p style="color: var(--text-muted); margin-bottom: 16px;">此操作不可恢复</p><button class="btn btn-danger" onclick="clearAllData()">🗑️ 清空所有数据</button></div></div>';
+    }
+
+    async function exportBackup() {
+      try {
+        const ledgers = await api('/api/v1/read/ledgers') || [];
+        const transactions = await api('/api/v1/read/workspace/transactions?limit=1000') || [];
+        const categories = await api('/api/v1/read/workspace/categories') || [];
+        const accounts = await api('/api/v1/read/workspace/accounts') || [];
+        const tags = await api('/api/v1/read/workspace/tags') || [];
+        const budgets = await api('/api/v1/read/workspace/budgets') || [];
+
+        const backup = {
+          version: '1.0',
+          exportTime: new Date().toISOString(),
+          data: { ledgers, transactions, categories, accounts, tags, budgets }
+        };
+
+        const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'beecount-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('备份导出成功');
+      } catch (err) {
+        showToast('导出失败: ' + err.message, 'error');
+      }
+    }
+
+    function importBackup(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      if (!confirm('导入将合并现有数据，确定继续吗？')) return;
+
+      const reader = new FileReader();
+      reader.onload = async function(e) {
+        try {
+          const backup = JSON.parse(e.target.result);
+          showToast('备份文件读取成功，开始导入...');
+          showToast('导入功能开发中，请稍后使用完整版');
+        } catch (err) {
+          showToast('备份文件格式错误', 'error');
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    async function clearAllData() {
+      if (!confirm('确定要清空所有数据吗？此操作不可恢复！')) return;
+      if (!confirm('这是最后一次确认，确定删除所有账本和交易记录吗？')) return;
+
+      try {
+        const ledgers = await api('/api/v1/read/ledgers') || [];
+        for (const ledger of ledgers) {
+          await api('/api/v1/write/ledgers/' + ledger.ledger_id, {
+            method: 'DELETE',
+            body: JSON.stringify({ base_change_id: 0 })
+          });
+        }
+        showToast('所有数据已清空');
+        loadPageData();
+      } catch (err) {
+        showToast('清空失败: ' + err.message, 'error');
+      }
+    }
+
     function showCreateLedgerModal() {
       document.getElementById('createLedgerForm').reset();
       showModal('createLedgerModal');
+    }
+
+    function showEditLedgerModal(ledgerId) {
+      const ledger = state.ledgers.find(l => l.ledger_id === ledgerId);
+      if (!ledger) return;
+      const form = document.getElementById('editLedgerForm');
+      form.querySelector('[name="ledger_id"]').value = ledgerId;
+      form.querySelector('[name="name"]').value = ledger.ledger_name;
+      form.querySelector('[name="currency"]').value = ledger.currency || 'CNY';
+      showModal('editLedgerModal');
+    }
+
+    async function deleteLedger(ledgerId) {
+      if (!confirm('确定要删除这个账本吗？所有交易记录将被永久删除！')) return;
+      try {
+        await api('/api/v1/write/ledgers/' + ledgerId, {
+          method: 'DELETE',
+          body: JSON.stringify({ base_change_id: 0 })
+        });
+        showToast('账本已删除');
+        loadPageData();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    function showEditCategoryModal(syncId) {
+      const cat = state.categories.find(c => c.id === syncId || c.sync_id === syncId);
+      if (!cat) return;
+      const form = document.getElementById('editCategoryForm');
+      form.querySelector('[name="category_sync_id"]').value = cat.id || cat.sync_id;
+      form.querySelector('[name="name"]').value = cat.name;
+      form.querySelector('[name="kind"]').value = cat.kind;
+      form.querySelector('[name="icon"]').value = cat.icon || '📁';
+      showModal('editCategoryModal');
+    }
+
+    function showDeleteCategoryModal(syncId) {
+      const form = document.getElementById('deleteCategoryForm');
+      form.querySelector('[name="category_sync_id"]').value = syncId;
+      showModal('deleteCategoryModal');
+    }
+
+    function showEditAccountModal(syncId) {
+      const account = state.accounts.find(a => a.id === syncId || a.sync_id === syncId);
+      if (!account) return;
+      const form = document.getElementById('editAccountForm');
+      form.querySelector('[name="account_sync_id"]').value = account.id || account.sync_id;
+      form.querySelector('[name="name"]').value = account.name;
+      form.querySelector('[name="kind"]').value = account.kind || 'cash';
+      form.querySelector('[name="balance"]').value = account.balance || 0;
+      showModal('editAccountModal');
+    }
+
+    function showDeleteAccountModal(syncId) {
+      const form = document.getElementById('deleteAccountForm');
+      form.querySelector('[name="account_sync_id"]').value = syncId;
+      showModal('deleteAccountModal');
     }
 
     function openCreateTxModal() {
