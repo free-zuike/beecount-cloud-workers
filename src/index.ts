@@ -713,8 +713,35 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         var ledgersData = await api('/api/v1/read/ledgers');
         state.ledgers = ledgersData || [];
         
+        // 计算本月收入和支出
+        var now = new Date();
+        var currentMonth = now.getMonth();
+        var currentYear = now.getFullYear();
         var monthlyIncome = 0;
         var monthlyExpense = 0;
+        
+        // 对每个账本，获取本月交易来计算统计
+        for (var i = 0; i < state.ledgers.length; i++) {
+          var ledger = state.ledgers[i];
+          try {
+            var transactions = await api('/api/v1/read/ledgers/' + ledger.ledger_id + '/transactions?limit=100');
+            var txArray = Array.isArray(transactions) ? transactions : (transactions.transactions || []);
+            
+            for (var j = 0; j < txArray.length; j++) {
+              var tx = txArray[j];
+              var txDate = new Date(tx.happened_at);
+              if (txDate.getMonth() === currentMonth && txDate.getFullYear() === currentYear) {
+                if (tx.tx_type === 'income') {
+                  monthlyIncome += tx.amount;
+                } else if (tx.tx_type === 'expense') {
+                  monthlyExpense += tx.amount;
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Error loading transactions for ledger', ledger.ledger_id, e);
+          }
+        }
         
         statsGrid.innerHTML = '<div class="stat-card"><div class="stat-label">账本数量</div><div class="stat-value">' + state.ledgers.length + '</div></div><div class="stat-card"><div class="stat-label">本月收入</div><div class="stat-value income">' + formatMoney(monthlyIncome) + '</div></div><div class="stat-card"><div class="stat-label">本月支出</div><div class="stat-value expense">' + formatMoney(monthlyExpense) + '</div></div><div class="stat-card"><div class="stat-label">本月结余</div><div class="stat-value ' + ((monthlyIncome - monthlyExpense) >= 0 ? 'income' : 'expense') + '">' + formatMoney(monthlyIncome - monthlyExpense) + '</div></div>';
         
@@ -740,14 +767,14 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       
       try {
         var transactions = await api('/api/v1/read/ledgers/' + ledgerId + '/transactions?limit=10');
-        state.transactions = transactions.transactions || [];
+        state.transactions = Array.isArray(transactions) ? transactions : (transactions.transactions || []);
         
         if (state.transactions.length === 0) {
-          content.innerHTML = '<h4 style="margin-bottom: 16px;">账本详情</h4><p style="color: var(--text-muted); text-align: center; padding: 20px;">暂无交易记录</p><div style="margin-top: 20px;"><button class="btn btn-secondary btn-block" onclick="closeModal(\\'ledgerModal\\')">关闭</button></div>';
+          content.innerHTML = '<h4 style="margin-bottom: 16px;">账本详情</h4><p style="color: var(--text-muted); text-align: center; padding: 20px;">暂无交易记录</p><div style="margin-top: 20px;"><button class="btn btn-primary btn-block" onclick="openCreateTxForLedger(\\'' + ledgerId + '\\')">+ 记一笔</button><button class="btn btn-secondary btn-block" onclick="closeModal(\\'ledgerModal\\')">关闭</button></div>';
         } else {
           content.innerHTML = '<h4 style="margin-bottom: 16px;">最近交易</h4><div class="transaction-list">' + state.transactions.map(function(tx) {
-            return '<div class="transaction-item"><div class="transaction-icon ' + tx.type + '">' + (tx.type === 'income' ? '📈' : '📉') + '</div><div class="transaction-info"><h4>' + (tx.description || tx.category_name) + '</h4><p>' + formatDate(tx.date) + '</p></div><div class="transaction-amount ' + tx.type + '">' + (tx.type === 'income' ? '+' : '-') + formatMoney(tx.amount) + '</div></div>';
-          }).join('') + '</div><div style="margin-top: 20px;"><button class="btn btn-secondary btn-block" onclick="closeModal(\\'ledgerModal\\')">关闭</button></div>';
+            return '<div class="transaction-item"><div class="transaction-icon ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '📈' : '📉') + '</div><div class="transaction-info"><h4>' + (tx.note || tx.category_name || '未分类') + '</h4><p>' + formatDate(tx.happened_at) + '</p></div><div class="transaction-amount ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '+' : '-') + formatMoney(tx.amount) + '</div></div>';
+          }).join('') + '</div><div style="margin-top: 20px;"><button class="btn btn-primary btn-block" onclick="openCreateTxForLedger(\\'' + ledgerId + '\\')">+ 记一笔</button><button class="btn btn-secondary btn-block" onclick="closeModal(\\'ledgerModal\\')">关闭</button></div>';
         }
       } catch (err) {
         content.innerHTML = '<p style="color: var(--error);">加载失败: ' + err.message + '</p>';
