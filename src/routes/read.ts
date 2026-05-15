@@ -562,6 +562,8 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
   const db = c.env.DB;
   const ledgerExternalId = c.req.param('ledgerExternalId');
 
+  console.log('[READ] /transactions called, ledgerId:', ledgerExternalId, 'userId:', userId);
+
   const txType = c.req.query('tx_type') ?? null;
   const q = c.req.query('q') ?? null;
   const startAt = c.req.query('start_at') ?? null;
@@ -579,59 +581,14 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
     .first<{ id: string; external_id: string; name: string | null }>();
 
   if (!ledger) {
+    console.log('[READ] Ledger not found:', ledgerExternalId);
     return c.json({ error: 'Ledger not found' }, 404);
   }
 
-  // 动态构建查询
-  let query = db
-    .prepare(
-      `SELECT * FROM read_tx_projection
-       WHERE ledger_id = ?`
-    )
-    .bind(ledger.id);
+  console.log('[READ] Found ledger:', ledger.id, ledger.name);
 
-  if (txType) {
-    query = db
-      .prepare(
-        `SELECT * FROM read_tx_projection
-         WHERE ledger_id = ? AND tx_type = ?`
-      )
-      .bind(ledger.id, txType);
-  }
-
-  if (startAt) {
-    const conditions: string[] = ['ledger_id = ?'];
-    const params: (string | number)[] = [ledger.id];
-    conditions.push('happened_at >= ?');
-    params.push(startAt);
-    if (txType) {
-      conditions.push('tx_type = ?');
-      params.push(txType);
-    }
-    query = db
-      .prepare(
-        `SELECT * FROM read_tx_projection WHERE ${conditions.join(' AND ')}`
-      )
-      .bind(...params);
-  }
-
-  if (endAt) {
-    const conditions: string[] = ['ledger_id = ?'];
-    const params: (string | number)[] = [ledger.id];
-    conditions.push('happened_at <= ?');
-    params.push(endAt);
-    if (txType) {
-      conditions.push('tx_type = ?');
-      params.push(txType);
-    }
-    query = db
-      .prepare(
-        `SELECT * FROM read_tx_projection WHERE ${conditions.join(' AND ')}`
-      )
-      .bind(...params);
-  }
-
-  const rows = await query
+  // 构建查询
+  const rows = await db
     .prepare(
       `SELECT * FROM read_tx_projection
        WHERE ledger_id = ?
@@ -641,23 +598,47 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
     .bind(ledger.id, limit, offset)
     .all<Record<string, unknown>>();
 
+  console.log('[READ] Found transactions:', rows.results.length);
+
   // 获取创建者信息
-  const owner = await db
-    .prepare(
-      `SELECT u.id, u.email, p.display_name, p.avatar_file_id, p.avatar_version
-       FROM users u
-       JOIN ledgers l ON l.user_id = u.id
-       LEFT JOIN user_profiles p ON p.user_id = u.id
-       WHERE l.id = ?`
-    )
-    .bind(ledger.id)
-    .first<{
-      id: string;
-      email: string;
-      display_name: string | null;
-      avatar_file_id: string | null;
-      avatar_version: number;
-    }>();
+  let ownerInfo = {
+    id: null as string | null,
+    email: null as string | null,
+    display_name: null as string | null,
+    avatar_file_id: null as string | null,
+    avatar_version: null as number | null,
+  };
+
+  try {
+    const owner = await db
+      .prepare(
+        `SELECT u.id, u.email, p.display_name, p.avatar_file_id, p.avatar_version
+         FROM users u
+         JOIN ledgers l ON l.user_id = u.id
+         LEFT JOIN user_profiles p ON p.user_id = u.id
+         WHERE l.id = ?`
+      )
+      .bind(ledger.id)
+      .first<{
+        id: string;
+        email: string;
+        display_name: string | null;
+        avatar_file_id: string | null;
+        avatar_version: number | null;
+      }>();
+
+    if (owner) {
+      ownerInfo = {
+        id: owner.id,
+        email: owner.email,
+        display_name: owner.display_name,
+        avatar_file_id: owner.avatar_file_id,
+        avatar_version: owner.avatar_version,
+      };
+    }
+  } catch (err) {
+    console.log('[READ] Error getting owner info:', err);
+  }
 
   const result: ReadTransactionOut[] = rows.results.map((row) => {
     const tagIds = safeJsonParse<string[]>(row.tag_sync_ids_json as string | null) ?? [];
@@ -688,14 +669,15 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
       last_change_id: (row.source_change_id as number) ?? 0,
       ledger_id: ledger.external_id,
       ledger_name: ledger.name,
-      created_by_user_id: owner?.id ?? null,
-      created_by_email: owner?.email ?? null,
-      created_by_display_name: owner?.display_name ?? null,
-      created_by_avatar_url: owner?.avatar_file_id ?? null,
-      created_by_avatar_version: owner?.avatar_version ?? null,
+      created_by_user_id: ownerInfo.id,
+      created_by_email: ownerInfo.email,
+      created_by_display_name: ownerInfo.display_name,
+      created_by_avatar_url: ownerInfo.avatar_file_id,
+      created_by_avatar_version: ownerInfo.avatar_version,
     };
   });
 
+  console.log('[READ] Returning transactions:', result.length);
   return c.json(result);
 });
 
