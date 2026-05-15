@@ -455,6 +455,71 @@ const FRONTEND_HTML = `<!DOCTYPE html>
     .empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); }
     .empty-state-icon { font-size: 4rem; margin-bottom: 16px; }
 
+    .settings-nav {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .settings-nav-btn {
+      padding: 10px 16px;
+      background: var(--background);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+
+    .settings-nav-btn:hover { background: var(--border); }
+    .settings-nav-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
+
+    .settings-section { display: none; }
+    .settings-section.active { display: block; }
+
+    .type-selector {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .type-btn {
+      flex: 1;
+      padding: 16px;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s;
+    }
+
+    .type-btn:hover { border-color: var(--primary); }
+    .type-btn.active { border-color: var(--primary); background: var(--primary-light); }
+    .type-btn .icon { font-size: 2rem; margin-bottom: 8px; }
+    .type-btn .label { font-weight: 600; }
+    .type-btn.expense.active { border-color: var(--error); background: #fee2e2; }
+    .type-btn.income.active { border-color: var(--success); background: #dcfce7; }
+
+    .quick-amounts {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+
+    .quick-amount {
+      padding: 8px 16px;
+      background: var(--background);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+
+    .quick-amount:hover { background: var(--border); }
+
     @media (max-width: 768px) {
       .header-content { flex-direction: column; gap: 12px; }
       .stats-grid { grid-template-columns: 1fr; }
@@ -581,7 +646,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
     }
 
     function renderDashboard() {
-      return '<header class="header"><div class="container header-content"><div class="logo"><div class="logo-icon">🐝</div><span>蜜蜂记账</span></div><button class="btn btn-secondary" onclick="logout()">退出</button></div></header><main class="container dashboard active"><div style="display: flex; justify-content: space-between; align-items: center; margin: 24px 0;"><h2>我的账本</h2><button class="btn btn-primary" onclick="showCreateLedgerModal()">+ 新建账本</button></div><div id="statsGrid" class="stats-grid"></div><div id="ledgerList" class="ledger-list"></div></main><div id="ledgerModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title" id="ledgerModalTitle">账本详情</h3><button class="modal-close" onclick="closeModal(\\'ledgerModal\\')">×</button></div><div id="ledgerModalContent"></div></div></div><div id="createLedgerModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">新建账本</h3><button class="modal-close" onclick="closeModal(\\'createLedgerModal\\')">×</button></div><form id="createLedgerForm"><div class="form-group"><label>账本名称</label><input type="text" name="name" placeholder="例如：家庭账本" required></div><div class="form-group"><label>货币</label><select name="currency"><option value="CNY">人民币 (CNY)</option><option value="USD">美元 (USD)</option><option value="EUR">欧元 (EUR)</option></select></div><button type="submit" class="btn btn-primary btn-block">创建</button></form></div></div>';
+      return '<header class="header"><div class="container header-content"><div class="logo"><div class="logo-icon">🐝</div><span>蜜蜂记账</span></div><div style="display: flex; gap: 12px;"><button class="btn btn-secondary" onclick="showSettingsModal()">⚙️ 设置</button><button class="btn btn-secondary" onclick="logout()">退出</button></div></div></header><main class="container dashboard active"><div style="display: flex; justify-content: space-between; align-items: center; margin: 24px 0;"><h2>我的账本</h2><button class="btn btn-primary" onclick="showCreateLedgerModal()">+ 新建账本</button></div><div id="statsGrid" class="stats-grid"></div><div id="ledgerList" class="ledger-list"></div></main><div id="ledgerModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title" id="ledgerModalTitle">账本详情</h3><button class="modal-close" onclick="closeModal(\\'ledgerModal\\')">×</button></div><div id="ledgerModalContent"></div></div></div><div id="createLedgerModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">新建账本</h3><button class="modal-close" onclick="closeModal(\\'createLedgerModal\\')">×</button></div><form id="createLedgerForm"><div class="form-group"><label>账本名称</label><input type="text" name="name" placeholder="例如：家庭账本" required></div><div class="form-group"><label>货币</label><select name="currency"><option value="CNY">人民币 (CNY)</option><option value="USD">美元 (USD)</option><option value="EUR">欧元 (EUR)</option></select></div><button type="submit" class="btn btn-primary btn-block">创建</button></form></div></div><div id="settingsModal" class="modal"><div class="modal-content" style="max-width: 600px;"><div class="modal-header"><h3 class="modal-title">设置</h3><button class="modal-close" onclick="closeModal(\\'settingsModal\\')">×</button></div><div id="settingsContent"></div></div></div><div id="createTxModal" class="modal"><div class="modal-content"><div class="modal-header"><h3 class="modal-title">记一笔</h3><button class="modal-close" onclick="closeModal(\\'createTxModal\\')">×</button></div><form id="createTxForm"><div class="type-selector"><div class="type-btn expense active" data-type="expense" onclick="selectTxType(\\'expense\\')"><div class="icon">📉</div><div class="label">支出</div></div><div class="type-btn income" data-type="income" onclick="selectTxType(\\'income\\')"><div class="icon">📈</div><div class="label">收入</div></div></div><div class="form-group"><label>金额 (分)</label><input type="number" name="amount" placeholder="请输入金额" min="1" required><small style="color: var(--text-muted);">例如：1000 = 10元</small></div><div class="quick-amounts"><button type="button" class="quick-amount" onclick="setQuickAmount(1000)">10元</button><button type="button" class="quick-amount" onclick="setQuickAmount(5000)">50元</button><button type="button" class="quick-amount" onclick="setQuickAmount(10000)">100元</button><button type="button" class="quick-amount" onclick="setQuickAmount(50000)">500元</button></div><div class="form-group"><label>分类</label><input type="text" name="category_name" placeholder="例如：餐饮、交通"></div><div class="form-group"><label>备注</label><input type="text" name="note" placeholder="可选"></div><input type="hidden" name="tx_type" id="txTypeInput" value="expense"><button type="submit" class="btn btn-primary btn-block">保存</button></form></div></div>';
     }
 
     function bindDashboardEvents() {
@@ -598,6 +663,35 @@ const FRONTEND_HTML = `<!DOCTYPE html>
           });
           closeModal('createLedgerModal');
           showToast('账本创建成功');
+          loadLedgers();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+      
+      document.getElementById('createTxForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var formData = new FormData(e.target);
+        var ledgerId = state.currentLedgerForTx || (state.ledgers.length > 0 ? state.ledgers[0].ledger_id : null);
+        
+        if (!ledgerId) {
+          showToast('请先创建账本', 'error');
+          return;
+        }
+        
+        try {
+          await api('/api/v1/write/transactions', {
+            method: 'POST',
+            body: JSON.stringify({
+              tx_type: formData.get('tx_type'),
+              amount: parseInt(formData.get('amount')),
+              category_name: formData.get('category_name') || null,
+              note: formData.get('note') || null,
+              happened_at: new Date().toISOString()
+            })
+          });
+          closeModal('createTxModal');
+          showToast('记账成功');
           loadLedgers();
         } catch (err) {
           showToast(err.message, 'error');
@@ -669,6 +763,112 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       localStorage.removeItem('token');
       showToast('已退出登录');
       render();
+    }
+
+    async function showSettingsModal() {
+      var modal = document.getElementById('settingsModal');
+      var content = document.getElementById('settingsContent');
+      modal.classList.add('active');
+      
+      content.innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
+      
+      try {
+        var profile = await api('/api/v1/profile/me');
+        content.innerHTML = '<div class="settings-nav"><button class="settings-nav-btn active" onclick="showSettingsSection(\\'profile\\', this)">个人资料</button><button class="settings-nav-btn" onclick="showSettingsSection(\\'password\\', this)">修改密码</button></div><div id="settingsProfileSection" class="settings-section active"><div class="card" style="margin-top: 16px;"><h4 style="margin-bottom: 16px;">个人资料</h4><form id="profileForm"><div class="form-group"><label>邮箱</label><input type="email" value="' + profile.email + '" disabled></div><div class="form-group"><label>显示名称</label><input type="text" name="display_name" value="' + (profile.display_name || '') + '" placeholder="设置您的显示名称"></div><button type="submit" class="btn btn-primary btn-block">保存</button></form></div></div><div id="settingsPasswordSection" class="settings-section"><div class="card" style="margin-top: 16px;"><h4 style="margin-bottom: 16px;">修改密码</h4><form id="passwordForm"><div class="form-group"><label>当前密码</label><input type="password" name="current_password" required></div><div class="form-group"><label>新密码</label><input type="password" name="new_password" minlength="8" required placeholder="至少8位"></div><div class="form-group"><label>确认新密码</label><input type="password" name="confirm_password" minlength="8" required></div><button type="submit" class="btn btn-primary btn-block">修改密码</button></form></div></div>';
+        
+        document.getElementById('profileForm').addEventListener('submit', async function(e) {
+          e.preventDefault();
+          var formData = new FormData(e.target);
+          try {
+            await api('/api/v1/profile/me', {
+              method: 'PATCH',
+              body: JSON.stringify({
+                display_name: formData.get('display_name')
+              })
+            });
+            showToast('资料已保存');
+          } catch (err) {
+            showToast(err.message, 'error');
+          }
+        });
+        
+        document.getElementById('passwordForm').addEventListener('submit', async function(e) {
+          e.preventDefault();
+          var formData = new FormData(e.target);
+          if (formData.get('new_password') !== formData.get('confirm_password')) {
+            showToast('两次输入的密码不一致', 'error');
+            return;
+          }
+          try {
+            await api('/api/v1/profile/me/change-password', {
+              method: 'POST',
+              body: JSON.stringify({
+                current_password: formData.get('current_password'),
+                new_password: formData.get('new_password')
+              })
+            });
+            showToast('密码修改成功');
+            e.target.reset();
+          } catch (err) {
+            showToast(err.message, 'error');
+          }
+        });
+      } catch (err) {
+        content.innerHTML = '<p style="color: var(--error);">加载失败: ' + err.message + '</p>';
+      }
+    }
+
+    function showSettingsSection(section, btn) {
+      document.querySelectorAll('.settings-nav-btn').forEach(function(b) { b.classList.remove('active'); });
+      document.querySelectorAll('.settings-section').forEach(function(s) { s.classList.remove('active'); });
+      btn.classList.add('active');
+      document.getElementById('settings' + section.charAt(0).toUpperCase() + section.slice(1) + 'Section').classList.add('active');
+    }
+
+    function selectTxType(type) {
+      document.querySelectorAll('.type-btn').forEach(function(btn) { btn.classList.remove('active'); });
+      document.querySelector('.type-btn.' + type).classList.add('active');
+      document.getElementById('txTypeInput').value = type;
+    }
+
+    function setQuickAmount(amount) {
+      document.querySelector('input[name="amount"]').value = amount;
+    }
+
+    async function showLedgerDetail(ledgerId) {
+      var modal = document.getElementById('ledgerModal');
+      var content = document.getElementById('ledgerModalContent');
+      document.getElementById('ledgerModalTitle').textContent = '账本详情';
+      
+      modal.classList.add('active');
+      content.innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
+      
+      try {
+        var ledger = state.ledgers.find(function(l) { return l.ledger_id === ledgerId; });
+        var transactions = await api('/api/v1/read/ledgers/' + ledgerId + '/transactions?limit=10');
+        state.transactions = Array.isArray(transactions) ? transactions : [];
+        
+        var txListHtml = '';
+        if (state.transactions.length === 0) {
+          txListHtml = '<p style="color: var(--text-muted); text-align: center; padding: 20px;">暂无交易记录</p>';
+        } else {
+          txListHtml = '<div class="transaction-list">' + state.transactions.map(function(tx) {
+            return '<div class="transaction-item"><div class="transaction-icon ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '📈' : '📉') + '</div><div class="transaction-info"><h4>' + (tx.note || tx.category_name || '未分类') + '</h4><p>' + formatDate(tx.happened_at) + '</p></div><div class="transaction-amount ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '+' : '-') + formatMoney(tx.amount) + '</div></div>';
+          }).join('') + '</div>';
+        }
+        
+        content.innerHTML = '<h4 style="margin-bottom: 16px;">' + (ledger ? ledger.ledger_name : '账本') + '</h4><div style="margin-bottom: 20px;"><button class="btn btn-primary btn-block" onclick="openCreateTxForLedger(\\'' + ledgerId + '\\')">+ 记一笔</button></div>' + txListHtml + '<div style="margin-top: 20px;"><button class="btn btn-secondary btn-block" onclick="closeModal(\\'ledgerModal\\')">关闭</button></div>';
+      } catch (err) {
+        content.innerHTML = '<p style="color: var(--error);">加载失败: ' + err.message + '</p>';
+      }
+    }
+
+    function openCreateTxForLedger(ledgerId) {
+      state.currentLedgerForTx = ledgerId;
+      closeModal('ledgerModal');
+      document.getElementById('createTxForm').reset();
+      selectTxType('expense');
+      document.getElementById('createTxModal').classList.add('active');
     }
 
     document.addEventListener('DOMContentLoaded', render);

@@ -18,6 +18,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import { hashPassword, verifyPassword } from '../auth';
 
 // ===========================
 // 辅助函数
@@ -291,6 +292,47 @@ profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => 
 // ---------------------------------------------------------------------------
 // POST /profile/me/avatar - 上传头像
 // ---------------------------------------------------------------------------
+
+/**
+ * 修改密码
+ *
+ * 请求字段：
+ * - current_password: 当前密码
+ * - new_password: 新密码（至少8位）
+ */
+profileRouter.post('/me/change-password', zValidator('json', z.object({
+  current_password: z.string(),
+  new_password: z.string().min(8)
+})), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const { current_password, new_password } = c.req.valid('json');
+
+  // 获取当前密码哈希
+  const user = await db
+    .prepare('SELECT password_hash FROM users WHERE id = ?')
+    .bind(userId)
+    .first<{ password_hash: string }>();
+
+  if (!user) {
+    return c.json({ error: 'User not found' }, 404);
+  }
+
+  // 验证当前密码
+  const passwordValid = await verifyPassword(user.password_hash, current_password);
+  if (!passwordValid) {
+    return c.json({ error: 'Current password is incorrect' }, 400);
+  }
+
+  // 哈希新密码并更新
+  const newPasswordHash = await hashPassword(new_password);
+  await db
+    .prepare('UPDATE users SET password_hash = ? WHERE id = ?')
+    .bind(newPasswordHash, userId)
+    .run();
+
+  return c.json({ success: true, message: 'Password changed successfully' });
+});
 
 /**
  * 上传用户头像
