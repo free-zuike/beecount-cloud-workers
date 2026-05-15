@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { sha256 } from '@noble/hashes/sha256';
+import { sha256 } from '@noble/hashes';
 import { randomUUID } from 'crypto';
 
 const JWT_ALG = 'HS256';
