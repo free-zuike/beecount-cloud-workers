@@ -244,6 +244,8 @@ readRouter.get('/ledgers', async (c) => {
   const db = c.env.DB;
   const now = nowUtc();
 
+  console.log('[READ] /ledgers called, userId:', userId);
+
   // 查询用户账本
   const ledgers = await db
     .prepare(
@@ -261,9 +263,13 @@ readRouter.get('/ledgers', async (c) => {
       created_at: string;
     }>();
 
+  console.log('[READ] Found ledgers:', ledgers.results.length);
+
   const result: ReadLedgerOut[] = [];
 
   for (const ledger of ledgers.results) {
+    console.log('[READ] Processing ledger:', ledger.external_id, ledger.name);
+
     // 检查账本是否软删除（存在 ledger_snapshot delete tombstone）
     const tombstone = await db
       .prepare(
@@ -275,6 +281,7 @@ readRouter.get('/ledgers', async (c) => {
       .first<{ action: string }>();
 
     if (tombstone?.action === 'delete') {
+      console.log('[READ] Ledger is soft deleted, skipping:', ledger.external_id);
       continue; // 跳过软删除的账本
     }
 
@@ -311,6 +318,7 @@ readRouter.get('/ledgers', async (c) => {
     });
   }
 
+  console.log('[READ] Returning result:', result.length, 'ledgers');
   return c.json(result);
 });
 

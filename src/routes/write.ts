@@ -51,7 +51,7 @@ function safeJsonStringify(obj: unknown): string {
 
 /** 创建账本请求 */
 const WriteLedgerCreateSchema = z.object({
-  ledger_id: z.string().min(3).max(128).optional().default('default'),
+  ledger_id: z.string().min(3).max(128).optional(),
   ledger_name: z.string().min(1).max(255),
   currency: z.string().min(1).max(16).default('CNY'),
 });
@@ -241,7 +241,16 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
-  const ledgerExternalId = req.ledger_id ?? 'default';
+  console.log('[WRITE] /ledgers POST called, userId:', userId, 'req:', JSON.stringify(req));
+
+  // 如果没有提供 ledger_id，生成一个唯一的
+  let ledgerExternalId = req.ledger_id;
+  if (!ledgerExternalId) {
+    // 生成一个友好的唯一 ID
+    ledgerExternalId = 'ledger_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    console.log('[WRITE] Generated new ledgerExternalId:', ledgerExternalId);
+  }
+
   const syncId = randomUUID();
 
   // 检查是否已存在
@@ -250,7 +259,10 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
     .bind(userId, ledgerExternalId)
     .first<{ id: string; external_id: string }>();
 
+  console.log('[WRITE] Existing ledger check:', existing);
+
   if (existing) {
+    console.log('[WRITE] Ledger already exists, returning existing');
     return c.json({
       ledger_id: existing.external_id,
       base_change_id: 0,
@@ -263,6 +275,8 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
 
   // 创建账本
   const ledgerId = randomUUID();
+  console.log('[WRITE] Creating ledger, ledgerId:', ledgerId, 'externalId:', ledgerExternalId, 'name:', req.ledger_name);
+  
   await db
     .prepare(
       `INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
@@ -291,6 +305,7 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
     .run();
 
   const newChangeId = changeResult.meta.last_row_id as number;
+  console.log('[WRITE] Ledger created successfully, changeId:', newChangeId);
 
   return c.json({
     ledger_id: ledgerExternalId,
