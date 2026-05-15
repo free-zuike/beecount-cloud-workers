@@ -45,11 +45,12 @@ authRouter.post('/register', zValidator('json', z.object({
 authRouter.post('/login', zValidator('json', z.object({
   email: z.string().email(),
   password: z.string(),
-  device_id: z.string().optional().default(randomUUID()),
+  device_id: z.string().optional(),
   device_name: z.string().optional().default('Unknown Device'),
   platform: z.string().optional().default('unknown')
 })), async (c) => {
   const { email, password, device_id: deviceId, device_name: deviceName, platform } = c.req.valid('json');
+  const resolvedDeviceId = deviceId || randomUUID();
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
 
@@ -72,22 +73,22 @@ authRouter.post('/login', zValidator('json', z.object({
   }
 
   // Create or update device
-  const existingDevice = await db.prepare('SELECT id FROM devices WHERE id = ? AND user_id = ?').bind(deviceId, user.id).first();
+  const existingDevice = await db.prepare('SELECT id FROM devices WHERE id = ? AND user_id = ?').bind(resolvedDeviceId, user.id).first();
   if (!existingDevice) {
     await db.prepare(`
       INSERT INTO devices (id, user_id, name, platform, last_ip, last_seen_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(deviceId, user.id, deviceName, platform, c.req.header('CF-Connecting-IP'), new Date().toISOString()).run();
+    `).bind(resolvedDeviceId, user.id, deviceName, platform, c.req.header('CF-Connecting-IP'), new Date().toISOString()).run();
   } else {
     await db.prepare(`
       UPDATE devices
       SET last_seen_at = ?, last_ip = ?, name = ?
       WHERE id = ?
-    `).bind(new Date().toISOString(), c.req.header('CF-Connecting-IP'), deviceName, deviceId).run();
+    `).bind(new Date().toISOString(), c.req.header('CF-Connecting-IP'), deviceName, resolvedDeviceId).run();
   }
 
   const accessToken = await createAccessToken(user.id, jwtSecret);
-  const refreshToken = await createRefreshToken(user.id, deviceId, db);
+  const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db);
 
   return c.json({
     access_token: accessToken,

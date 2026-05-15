@@ -26,9 +26,6 @@ jobs:
       contents: read
       deployments: write
       id-token: write
-    env:
-      CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
-      JWT_SECRET: ${{ secrets.JWT_SECRET }}
 
     steps:
       - name: 检出仓库代码
@@ -49,39 +46,13 @@ jobs:
       - name: 运行测试
         run: npm test || true
 
-      - name: 创建 D1 数据库（如果不存在）
-        run: |
-          npx wrangler d1 create beecount-cloud 2>/dev/null || true
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-      - name: 获取 D1 数据库 ID
-        id: get-db-id
-        run: |
-          DB_ID=$(npx wrangler d1 list --json | jq -r '.[] | select(.name == "beecount-cloud") | .id')
-          echo "db_id=$DB_ID" >> $GITHUB_OUTPUT
-          echo "CLOUDFLARE_D1_DATABASE_ID=$DB_ID" >> $GITHUB_ENV
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-      - name: 推送 Schema 到 D1
-        run: |
-          npx wrangler d1 execute beecount-cloud --file=./schema.sql --remote --yes
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
       - name: 部署到 Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy --env=production
-          wranglerVersion: '3'
+          command: deploy
         env:
-          CLOUDFLARE_D1_DATABASE_ID: ${{ steps.get-db-id.outputs.db_id }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
 
   deploy-preview:
@@ -111,4 +82,3 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --env=preview --dry-run
-          wranglerVersion: '3'
