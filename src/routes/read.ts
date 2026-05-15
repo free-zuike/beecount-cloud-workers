@@ -585,7 +585,20 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
     return c.json({ error: 'Ledger not found' }, 404);
   }
 
-  console.log('[READ] Found ledger:', ledger.id, ledger.name);
+  console.log('[READ] Found ledger:', ledger.id, ledger.name, 'external_id:', ledger.external_id);
+
+  // 先检查数据库中实际有什么数据
+  const allLedgers = await db
+    .prepare('SELECT id, external_id, name FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .all<{ id: string; external_id: string; name: string | null }>();
+  console.log('[READ] All user ledgers:', JSON.stringify(allLedgers.results));
+
+  const allTx = await db
+    .prepare('SELECT ledger_id, sync_id, tx_type, amount FROM read_tx_projection WHERE ledger_id = ?')
+    .bind(ledger.id)
+    .all<{ ledger_id: string; sync_id: string; tx_type: string; amount: number }>();
+  console.log('[READ] All transactions for ledger_id:', ledger.id, JSON.stringify(allTx.results));
 
   // 构建查询
   const rows = await db

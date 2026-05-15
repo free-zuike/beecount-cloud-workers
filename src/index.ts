@@ -674,13 +674,15 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         var formData = new FormData(e.target);
         var ledgerId = state.currentLedgerForTx || (state.ledgers.length > 0 ? state.ledgers[0].ledger_id : null);
         
+        console.log('Creating transaction for ledger:', ledgerId);
+        
         if (!ledgerId) {
           showToast('请先创建账本', 'error');
           return;
         }
         
         try {
-          await api('/api/v1/write/transactions', {
+          var result = await api('/api/v1/write/transactions', {
             method: 'POST',
             body: JSON.stringify({
               tx_type: formData.get('tx_type'),
@@ -690,10 +692,12 @@ const FRONTEND_HTML = `<!DOCTYPE html>
               happened_at: new Date().toISOString()
             })
           });
+          console.log('Transaction created:', result);
           closeModal('createTxModal');
           showToast('记账成功');
           loadLedgers();
         } catch (err) {
+          console.error('Transaction error:', err);
           showToast(err.message, 'error');
         }
       });

@@ -413,11 +413,15 @@ writeRouter.post('/transactions', zValidator('json', WriteTransactionCreateSchem
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
+  console.log('[WRITE] /transactions POST called, userId:', userId, 'req:', JSON.stringify(req));
+
   // 查找账本
   const ledger = await db
     .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
     .bind(userId)
     .first<{ id: string; external_id: string }>();
+
+  console.log('[WRITE] Found ledger:', ledger);
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
@@ -494,6 +498,8 @@ writeRouter.post('/transactions', zValidator('json', WriteTransactionCreateSchem
       newChangeId,
     )
     .run();
+
+  console.log('[WRITE] Transaction created successfully, syncId:', syncId, 'ledger.id:', ledger.id);
 
   return c.json({
     ledger_id: ledger.external_id,
