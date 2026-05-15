@@ -592,7 +592,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
           await api('/api/v1/write/ledgers', {
             method: 'POST',
             body: JSON.stringify({
-              name: formData.get('name'),
+              ledger_name: formData.get('name'),
               currency: formData.get('currency')
             })
           });
