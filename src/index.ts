@@ -157,6 +157,23 @@ app.use('*', cors());
 // ===========================
 
 /**
+ * 根路径 - API 信息
+ */
+app.get('/', (c) =>
+  c.json({
+    name: 'BeeCount Cloud Workers',
+    version: '1.0.0',
+    description: '蜜蜂记账 Cloudflare Workers 版本',
+    endpoints: {
+      health: '/healthz',
+      version: '/api/v1/version',
+      auth: '/api/v1/auth',
+      docs: 'https://github.com/free-zuike/beecount-cloud-workers'
+    }
+  })
+);
+
+/**
  * 健康检查端点
  */
 app.get('/healthz', (c) => c.json({ status: 'ok' }));
