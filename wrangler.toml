@@ -6,18 +6,18 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "beecount-cloud"
-database_id = "your-database-id-here"
+database_id = "${CLOUDFLARE_D1_DATABASE_ID}"
 
 [vars]
 API_PREFIX = "/api/v1"
-JWT_SECRET = "your-jwt-secret-here-change-in-production"
+JWT_SECRET = "${JWT_SECRET}"
 
 # External S3 configuration (optional)
-# S3_ENDPOINT = "https://your-s3-endpoint"
-# S3_REGION = "us-east-1"
-# S3_ACCESS_KEY_ID = "your-access-key-id"
-# S3_SECRET_ACCESS_KEY = "your-secret-access-key"
-# S3_BUCKET_NAME = "beecount-attachments"
+# S3_ENDPOINT = "${S3_ENDPOINT}"
+# S3_REGION = "${S3_REGION}"
+# S3_ACCESS_KEY_ID = "${S3_ACCESS_KEY_ID}"
+# S3_SECRET_ACCESS_KEY = "${S3_SECRET_ACCESS_KEY}"
+# S3_BUCKET_NAME = "${S3_BUCKET_NAME}"
 
 [observability]
 enabled = true
@@ -28,6 +28,8 @@ name = "beecount-cloud"
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "beecount-cloud"
+database_id = "${CLOUDFLARE_D1_DATABASE_ID}"
 
 [env.production.vars]
 API_PREFIX = "/api/v1"
+JWT_SECRET = "${JWT_SECRET}"
