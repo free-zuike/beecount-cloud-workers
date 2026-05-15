@@ -611,16 +611,19 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       ledgerList.innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
       
       try {
-        var data = await api('/api/v1/read/workspace/ledger-counts');
-        state.ledgers = data.ledgers || [];
+        var ledgersData = await api('/api/v1/read/ledgers');
+        state.ledgers = ledgersData || [];
         
-        statsGrid.innerHTML = '<div class="stat-card"><div class="stat-label">账本数量</div><div class="stat-value">' + state.ledgers.length + '</div></div><div class="stat-card"><div class="stat-label">本月收入</div><div class="stat-value income">' + formatMoney(data.monthly_income || 0) + '</div></div><div class="stat-card"><div class="stat-label">本月支出</div><div class="stat-value expense">' + formatMoney(data.monthly_expense || 0) + '</div></div><div class="stat-card"><div class="stat-label">本月结余</div><div class="stat-value ' + ((data.monthly_income - data.monthly_expense) >= 0 ? 'income' : 'expense') + '">' + formatMoney((data.monthly_income || 0) - (data.monthly_expense || 0)) + '</div></div>';
+        var monthlyIncome = 0;
+        var monthlyExpense = 0;
+        
+        statsGrid.innerHTML = '<div class="stat-card"><div class="stat-label">账本数量</div><div class="stat-value">' + state.ledgers.length + '</div></div><div class="stat-card"><div class="stat-label">本月收入</div><div class="stat-value income">' + formatMoney(monthlyIncome) + '</div></div><div class="stat-card"><div class="stat-label">本月支出</div><div class="stat-value expense">' + formatMoney(monthlyExpense) + '</div></div><div class="stat-card"><div class="stat-label">本月结余</div><div class="stat-value ' + ((monthlyIncome - monthlyExpense) >= 0 ? 'income' : 'expense') + '">' + formatMoney(monthlyIncome - monthlyExpense) + '</div></div>';
         
         if (state.ledgers.length === 0) {
           ledgerList.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📒</div><p>还没有账本</p><p>点击上方按钮创建您的第一个账本</p></div>';
         } else {
           ledgerList.innerHTML = state.ledgers.map(function(ledger) {
-            return '<div class="ledger-item" onclick="showLedgerDetail(\\'' + ledger.id + '\\')"><div class="ledger-info"><h3>' + ledger.name + '</h3><p>' + formatDate(ledger.created_at) + '</p></div><div class="ledger-stats"><div class="income">+' + formatMoney(ledger.monthly_income || 0) + '</div><div class="expense">-' + formatMoney(ledger.monthly_expense || 0) + '</div></div></div>';
+            return '<div class="ledger-item" onclick="showLedgerDetail(\\'' + ledger.ledger_id + '\\')"><div class="ledger-info"><h3>' + ledger.ledger_name + '</h3><p></p></div><div class="ledger-stats"><div class="income">+' + formatMoney(ledger.income_total || 0) + '</div><div class="expense">-' + formatMoney(ledger.expense_total || 0) + '</div></div></div>';
           }).join('');
         }
       } catch (err) {
