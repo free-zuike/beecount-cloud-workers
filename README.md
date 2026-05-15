@@ -1,80 +1,80 @@
 # BeeCount Cloud Workers
 
-A Cloudflare Workers implementation of BeeCount Cloud - a fast, edge-deployed personal finance tracking system.
+BeeCount Cloud 的 Cloudflare Workers 实现 - 一个快速的边缘部署个人财务管理系统。
 
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-## Features
+## 功能特性
 
-- 🚀 **Global Edge Deployment** - Deploy to 200+ edge locations worldwide
-- 💾 **D1 SQLite Database** - Free 5GB per account
-- 🔐 **JWT Authentication** - Secure token-based auth with 2FA support
-- 📎 **External S3 Storage** - Optional S3-compatible storage for attachments
-- 🤖 **AI Integration** - OpenAI-compatible API support (Zhipu, DeepSeek, etc.)
-- 📊 **Full API** - 60+ endpoints covering all BeeCount Cloud features
+- 🚀 **全球边缘部署** - 部署到全球 200+ 边缘节点
+- 💾 **D1 SQLite 数据库** - 免费 5GB 存储空间
+- 🔐 **JWT 认证** - 安全的基于令牌的认证，支持双因素认证
+- 📎 **外部 S3 存储** - 可选的 S3 兼容存储用于附件
+- 🤖 **AI 集成** - 支持 OpenAI 兼容 API（智谱、DeepSeek 等）
+- 📊 **完整 API** - 60+ 个端点覆盖所有 BeeCount Cloud 功能
 
-## Quick Deploy
+## 快速部署
 
-### Option 1: One-Click Deploy (Recommended)
+### 方式一：一键部署（推荐）
 
-1. Fork this repository to your GitHub account
-2. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/)
-3. Navigate to **Workers & Pages** → **Create Application** → **Connect to Git**
-4. Connect your forked repository
-5. Configure environment variables:
-   - `JWT_SECRET`: Your JWT signing secret (generate with `openssl rand -base64 32`)
-6. Click **Deploy**
+1. Fork 此仓库到您的 GitHub 账户
+2. 访问 [Cloudflare Dashboard](https://dash.cloudflare.com/)
+3. 导航到 **Workers & Pages** → **Create Application** → **Connect to Git**
+4. 连接您的仓库
+5. 配置环境变量：
+   - `JWT_SECRET`: 您的 JWT 签名密钥（使用 `openssl rand -base64 32` 生成）
+6. 点击 **Deploy**
 
-### Option 2: Manual Deploy
+### 方式二：手动部署
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-username/beecount-cloud-workers.git
+# 克隆仓库
+git clone https://github.com/free-zuike/beecount-cloud-workers.git
 cd beecount-cloud-workers
 
-# Install dependencies
+# 安装依赖
 npm install
 
-# Login to Cloudflare
+# 登录 Cloudflare
 npx wrangler login
 
-# Create D1 database
+# 创建 D1 数据库
 npx wrangler d1 create beecount-cloud
 
-# Update wrangler.toml with your database_id
-# Then apply the schema
+# 更新 wrangler.toml 中的 database_id
+# 然后应用 schema
 npx wrangler d1 migrations apply beecount-cloud --remote
 
-# Deploy
+# 部署
 npm run deploy
 ```
 
-## Configuration
+## 配置
 
-### Required Environment Variables
+### 必填环境变量
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `JWT_SECRET` | JWT signing secret (min 32 chars) | `openssl rand -base64 32` |
-| `CLOUDFLARE_D1_DATABASE_ID` | D1 database UUID | From `wrangler d1 create` output |
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `JWT_SECRET` | JWT 签名密钥（至少 32 字符） | `openssl rand -base64 32` |
+| `CLOUDFLARE_D1_DATABASE_ID` | D1 数据库 UUID | 来自 `wrangler d1 create` 输出 |
 
-### Optional S3 Configuration
+### 可选 S3 配置
 
-For external S3-compatible storage (attachments):
+用于外部 S3 兼容存储（附件）：
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `S3_ENDPOINT` | S3 API endpoint | `https://s3.us-east-1.amazonaws.com` |
-| `S3_REGION` | AWS region | `us-east-1` |
-| `S3_ACCESS_KEY_ID` | Access key ID | `AKIA...` |
-| `S3_SECRET_ACCESS_KEY` | Secret access key | `...` |
-| `S3_BUCKET_NAME` | Bucket for attachments | `beecount-attachments` |
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `S3_ENDPOINT` | S3 API 端点 | `https://s3.us-east-1.amazonaws.com` |
+| `S3_REGION` | AWS 区域 | `us-east-1` |
+| `S3_ACCESS_KEY_ID` | Access Key ID | `AKIA...` |
+| `S3_SECRET_ACCESS_KEY` | Secret Access Key | `...` |
+| `S3_BUCKET_NAME` | 附件存储桶 | `beecount-attachments` |
 
-### AI Configuration
+### AI 配置
 
-AI features require user-level configuration in their profile's `ai_config_json` field:
+AI 功能需要在用户资料的 `ai_config_json` 字段中配置：
 
 ```json
 {
@@ -92,86 +92,86 @@ AI features require user-level configuration in their profile's `ai_config_json`
 }
 ```
 
-## API Endpoints
+## API 端点
 
-### Authentication
-- `POST /api/v1/auth/register` - Register new user
-- `POST /api/v1/auth/login` - Login
-- `POST /api/v1/auth/refresh` - Refresh token
-- `POST /api/v1/two-factor/*` - 2FA management
+### 认证
+- `POST /api/v1/auth/register` - 注册新用户
+- `POST /api/v1/auth/login` - 登录
+- `POST /api/v1/auth/refresh` - 刷新令牌
+- `POST /api/v1/two-factor/*` - 双因素认证管理
 
-### Sync (Mobile App)
-- `POST /api/v1/sync/push` - Push changes
-- `POST /api/v1/sync/pull` - Pull changes
-- `GET /api/v1/sync/ledgers` - List ledgers for sync
-- `POST /api/v1/sync/full-sync` - Full sync
+### 同步（移动端）
+- `POST /api/v1/sync/push` - 推送更改
+- `POST /api/v1/sync/pull` - 拉取更改
+- `GET /api/v1/sync/ledgers` - 获取账本列表
+- `POST /api/v1/sync/full-sync` - 全量同步
 
-### CRUD Operations
-- `/api/v1/read/*` - Query data
-- `/api/v1/write/*` - Create/Update/Delete
-- `/api/v1/batch/*` - Batch operations
+### CRUD 操作
+- `/api/v1/read/*` - 查询数据
+- `/api/v1/write/*` - 创建/更新/删除
+- `/api/v1/batch/*` - 批量操作
 
-### Utilities
-- `/api/v1/attachments/*` - File uploads
-- `/api/v1/import/*` - CSV import
-- `/api/v1/ai/*` - AI features
-- `/api/v1/backup/*` - Snapshots & restore
+### 工具
+- `/api/v1/attachments/*` - 文件上传
+- `/api/v1/import/*` - CSV 导入
+- `/api/v1/ai/*` - AI 功能
+- `/api/v1/backup/*` - 快照与恢复
 
-## Database Schema
+## 数据库 Schema
 
-The schema is defined in `schema.sql`. To initialize:
+Schema 定义在 `schema.sql` 中。初始化方式：
 
 ```bash
-# Local development
+# 本地开发
 npx wrangler d1 migrations apply beecount-cloud --local
 
-# Production
+# 生产环境
 npx wrangler d1 migrations apply beecount-cloud --remote
 ```
 
-## Development
+## 开发
 
 ```bash
-# Install dependencies
+# 安装依赖
 npm install
 
-# Start local dev server (uses Miniflare)
+# 启动本地开发服务器（使用 Miniflare）
 npm run dev
 
-# Type check
+# 类型检查
 npm run typecheck
 
 # Lint
 npm run lint
 ```
 
-## Project Structure
+## 项目结构
 
 ```
 beecount-cloud-workers/
 ├── src/
-│   ├── index.ts           # Entry point, route registration
-│   ├── auth.ts            # JWT utilities
-│   └── routes/            # API route handlers
-│       ├── auth.ts        # Authentication
-│       ├── two_factor.ts  # 2FA/TOTP
-│       ├── sync.ts        # Mobile sync
-│       ├── read.ts        # Query endpoints
-│       ├── write.ts       # Write endpoints
-│       ├── workspace.ts   # Cross-ledger queries
-│       ├── batch_write.ts # Batch operations
-│       ├── attachments.ts # File uploads (S3)
-│       ├── ai.ts          # AI integration
-│       ├── import_data.ts # CSV import
-│       ├── backup.ts      # Snapshots
-│       ├── admin_backup.ts # Admin backup management
-│       └── admin.ts       # Admin endpoints
-├── schema.sql             # D1 database schema
-├── wrangler.toml          # Cloudflare config
-├── deploy.html            # One-click deploy page
+│   ├── index.ts           # 入口文件，路由注册
+│   ├── auth.ts            # JWT 工具函数
+│   └── routes/            # API 路由处理器
+│       ├── auth.ts        # 认证
+│       ├── two_factor.ts  # 双因素认证/TOTP
+│       ├── sync.ts        # 移动端同步
+│       ├── read.ts        # 查询端点
+│       ├── write.ts       # 写入端点
+│       ├── workspace.ts   # 跨账本查询
+│       ├── batch_write.ts # 批量操作
+│       ├── attachments.ts # 文件上传（S3）
+│       ├── ai.ts          # AI 集成
+│       ├── import_data.ts # CSV 导入
+│       ├── backup.ts      # 快照
+│       ├── admin_backup.ts # 管理员备份管理
+│       └── admin.ts       # 管理员端点
+├── schema.sql             # D1 数据库 Schema
+├── wrangler.toml          # Cloudflare 配置
+├── deploy.html            # 一键部署页面
 └── .github/workflows/     # CI/CD
 ```
 
-## License
+## 许可证
 
 MIT

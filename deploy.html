@@ -491,7 +491,21 @@
             </div>
             <div class="form-group full-width">
               <label for="jwtSecret">JWT 密钥</label>
-              <input type="text" id="jwtSecret" />
+              <div class="flex gap-2">
+                <Input
+                  id="jwtSecret"
+                  value={config.jwtSecret}
+                  onChange={e => updateConfig('jwtSecret', e.target.value)}
+                  className="font-mono text-sm"
+                />
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => updateConfig('jwtSecret', generateJwtSecret())}
+                >
+                  <Shield className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </div>
         </div>
@@ -501,7 +515,7 @@
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
-            S3 存储（可选）
+            外部 S3 存储（可选）
           </h2>
           <div class="form-grid">
             <div class="form-group full-width">
@@ -513,7 +527,7 @@
               <input type="text" id="s3Region" value="us-east-1" />
             </div>
             <div class="form-group">
-              <label for="s3Bucket">Bucket</label>
+              <label for="s3Bucket">Bucket 名称</label>
               <input type="text" id="s3Bucket" placeholder="beecount-attachments" />
             </div>
             <div class="form-group">
@@ -690,20 +704,20 @@
         `<span class="key">main</span> = <span class="string">"src/index.ts"</span>`,
         `<span class="key">compatibility_date</span> = <span class="string">"2025-01-24"</span>`,
         ``,
-        `<span class="comment"># D1 Database</span>`,
+        `<span class="comment"># D1 数据库</span>`,
         `<span class="key">[[d1_databases]]</span>`,
         `  <span class="key">binding</span> = <span class="string">"DB"</span>`,
         `  <span class="key">database_name</span> = <span class="string">"${state.dbName}"</span>`,
         `  <span class="key">database_id</span> = <span class="string">"${state.accountId ? '...' : 'your-database-id'}"</span>`,
         ``,
-        `<span class="comment"># JWT Secret</span>`,
+        `<span class="comment"># JWT 密钥</span>`,
         `<span class="key">[vars]</span>`,
         `  <span class="key">JWT_SECRET</span> = <span class="string">"${state.jwtSecret.slice(0, 8)}..."</span>`
       ];
       
       if (state.s3Endpoint) {
         lines.push(``);
-        lines.push(`<span class="comment"># S3 Configuration</span>`);
+        lines.push(`<span class="comment"># S3 配置</span>`);
         lines.push(`<span class="key">S3_ENDPOINT</span> = <span class="string">"${state.s3Endpoint}"</span>`);
         lines.push(`<span class="key">S3_REGION</span> = <span class="string">"${state.s3Region}"</span>`);
         lines.push(`<span class="key">S3_BUCKET_NAME</span> = <span class="string">"${state.s3Bucket}"</span>`);
@@ -723,7 +737,7 @@
       });
       const data = await response.json();
       if (!data.success) {
-        throw new Error(data.errors?.[0]?.message || 'API request failed');
+        throw new Error(data.errors?.[0]?.message || 'API 请求失败');
       }
       return data;
     }
@@ -755,12 +769,12 @@
       errorBox.classList.add('hidden');
 
       try {
-        // Step 1: Verify auth
+        // Step 1: 验证认证
         setStep(1, 'active');
         await cfApi(`/accounts/${state.accountId}`);
         setStep(1, 'done');
 
-        // Step 2: Create D1 database
+        // Step 2: 创建 D1 数据库
         setStep(2, 'active');
         let db;
         try {
@@ -778,25 +792,23 @@
         }
         setStep(2, 'done');
 
-        // Step 3: Deploy Worker (via wrangler)
+        // Step 3: 部署 Worker
         setStep(3, 'active');
         const workerUrl = `https://${state.workerName}.${state.accountId}.workers.dev`;
         
-        // Generate wrangler.toml with credentials
+        // 生成 wrangler.toml
         const wranglerConfig = generateWranglerToml(db.result.uuid);
         
-        // Show deployment instructions
         setStep(3, 'done');
 
-        // Step 4: Complete
+        // Step 4: 完成
         setStep(4, 'done');
-        setStep(4, 'active');
         
         document.getElementById('deployedUrl').textContent = workerUrl;
         document.getElementById('dashboardLink').href = `https://dash.cloudflare.com/${state.accountId}/workers`;
         successBox.classList.remove('hidden');
         
-        // Download config file
+        // 下载配置文件
         downloadFile('wrangler.toml', wranglerConfig);
         
       } catch (error) {
@@ -850,7 +862,7 @@ S3_BUCKET_NAME = "${state.s3Bucket}"
       URL.revokeObjectURL(url);
     }
 
-    // Initialize
+    // 初始化
     document.getElementById('jwtSecret').value = state.jwtSecret;
     document.querySelectorAll('input').forEach(input => {
       input.addEventListener('input', updateConfig);
