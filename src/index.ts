@@ -1122,7 +1122,11 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         if (date) url += '&start_at=' + date + '&end_at=' + date;
         
         let txs = await api(url);
-        if (!Array.isArray(txs)) txs = [];
+        if (txs && txs.items) {
+          txs = txs.items;
+        } else if (!Array.isArray(txs)) {
+          txs = [];
+        }
         
         if (txs.length === 0) {
           container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📝</div><p>暂无交易记录</p></div>';
