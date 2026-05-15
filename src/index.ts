@@ -685,6 +685,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
           var result = await api('/api/v1/write/transactions', {
             method: 'POST',
             body: JSON.stringify({
+              ledger_id: ledgerId,
               tx_type: formData.get('tx_type'),
               amount: parseInt(formData.get('amount')),
               category_name: formData.get('category_name') || null,

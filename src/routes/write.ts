@@ -70,6 +70,7 @@ const WriteBaseSchema = z.object({
 
 /** 创建交易请求 */
 const WriteTransactionCreateSchema = WriteBaseSchema.extend({
+  ledger_id: z.string().optional(),
   tx_type: z.enum(['expense', 'income', 'transfer']).default('expense'),
   amount: z.number(),
   happened_at: z.string().or(z.date()),
@@ -415,11 +416,22 @@ writeRouter.post('/transactions', zValidator('json', WriteTransactionCreateSchem
 
   console.log('[WRITE] /transactions POST called, userId:', userId, 'req:', JSON.stringify(req));
 
-  // 查找账本
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  // 查找账本 - 如果提供了 ledger_id，使用它；否则使用用户的第一个账本
+  let ledger;
+  if (req.ledger_id) {
+    ledger = await db
+      .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
+      .bind(userId, req.ledger_id)
+      .first<{ id: string; external_id: string }>();
+  }
+  
+  // 如果没有指定账本或找不到，使用用户的第一个账本
+  if (!ledger) {
+    ledger = await db
+      .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
+      .bind(userId)
+      .first<{ id: string; external_id: string }>();
+  }
 
   console.log('[WRITE] Found ledger:', ledger);
 
