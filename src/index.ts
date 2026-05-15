@@ -1410,13 +1410,6 @@ const FRONTEND_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-    app.get('/', (c) => {
-      c.header('Content-Type', 'text/html; charset=utf-8');
-      return c.body(FRONTEND_HTML);
-    });
-
-`;
-
 app.get('/', (c) => {
   c.header('Content-Type', 'text/html; charset=utf-8');
   return c.body(FRONTEND_HTML);
