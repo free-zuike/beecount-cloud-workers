@@ -1128,7 +1128,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
           container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📝</div><p>暂无交易记录</p></div>';
         } else {
           container.innerHTML = '<div class="transaction-list">' + txs.map(function(tx) {
-            return '<div class="transaction-item"><div class="transaction-icon ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '📈' : '📉') + '</div><div class="transaction-info"><h4>' + (tx.note || tx.category_name || '未分类') + '</h4><p>' + (tx.ledger_name ? tx.ledger_name + ' · ' : '') + formatDate(tx.happened_at) + '</p></div><div class="transaction-amount ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '+' : '-') + formatMoney(tx.amount) + '</div><div class="transaction-actions"><button class="tx-action-btn" onclick="editTransaction(\\'' + tx.tx_id + '\\')">编辑</button><button class="tx-action-btn delete" onclick="deleteTransaction(\\'' + tx.tx_id + '\\')">删除</button></div></div>';
+            return '<div class="transaction-item"><div class="transaction-icon ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '📈' : '📉') + '</div><div class="transaction-info"><h4>' + (tx.note || tx.category_name || '未分类') + '</h4><p>' + (tx.ledger_name ? tx.ledger_name + ' · ' : '') + formatDate(tx.happened_at) + '</p></div><div class="transaction-amount ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '+' : '-') + formatMoney(tx.amount) + '</div><div class="transaction-actions"><button class="tx-action-btn" onclick="editTransaction(\\'' + tx.id + '\\')">编辑</button><button class="tx-action-btn delete" onclick="deleteTransaction(\\'' + tx.id + '\\')">删除</button></div></div>';
           }).join('') + '</div>';
         }
       } catch (err) {
@@ -1281,7 +1281,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       try {
         const txs = await api('/api/v1/read/workspace/transactions?limit=100');
         const txArray = Array.isArray(txs) ? txs : [];
-        const tx = txArray.find(t => t.tx_id === txId);
+        const tx = txArray.find(t => t.id === txId);
         
         if (!tx) {
           showToast('未找到交易记录', 'error');
