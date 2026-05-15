@@ -978,8 +978,9 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         
         try {
           await api('/api/v1/write/transactions/' + txId, {
-            method: 'PUT',
+            method: 'PATCH',
             body: JSON.stringify({
+              base_change_id: 0,
               ledger_id: formData.get('ledger_id'),
               tx_type: formData.get('tx_type'),
               amount: parseInt(formData.get('amount')),
@@ -1283,7 +1284,10 @@ const FRONTEND_HTML = `<!DOCTYPE html>
 
     async function editTransaction(txId) {
       try {
-        const txs = await api('/api/v1/read/workspace/transactions?limit=100');
+        let txs = await api('/api/v1/read/workspace/transactions?limit=100');
+        if (txs && txs.items) {
+          txs = txs.items;
+        }
         const txArray = Array.isArray(txs) ? txs : [];
         const tx = txArray.find(t => t.id === txId);
         
@@ -1322,7 +1326,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       if (!confirm('确定要删除这条交易记录吗？')) return;
       
       try {
-        await api('/api/v1/write/transactions/' + txId, { method: 'DELETE' });
+        await api('/api/v1/write/transactions/' + txId, { method: 'DELETE', body: JSON.stringify({ base_change_id: 0 }) });
         showToast('删除成功');
         loadPageData();
       } catch (err) {
