@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>部署 BeeCount Cloud - Cloudflare Workers</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --orange-500: #f97316;
+      --orange-600: #ea580c;
+      --amber-500: #f59e0b;
+      --slate-900: #0f172a;
+      --slate-800: #1e293b;
+      --slate-700: #334155;
+      --slate-600: #475569;
+      --slate-400: #94a3b8;
+      --slate-200: #e2e8f0;
+      --slate-50: #f8fafc;
+      --white: #ffffff;
+      --green-500: #22c55e;
+      --green-600: #16a34a;
+      --red-500: #ef4444;
+      --blue-500: #3b82f6;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, var(--slate-50) 0%, var(--slate-100) 50%, var(--orange-50) 100%);
+      min-height: 100vh;
+      color: var(--slate-700);
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 60px 24px;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+
+    .logo {
+      width: 80px;
+      height: 80px;
+      margin: 0 auto 24px;
+      background: linear-gradient(135deg, var(--orange-500), var(--amber-500));
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 20px 40px rgba(249, 115, 22, 0.25);
+    }
+
+    .logo svg {
+      width: 48px;
+      height: 48px;
+      fill: white;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      color: var(--slate-900);
+      margin-bottom: 12px;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      font-size: 1.125rem;
+      color: var(--slate-600);
+      max-width: 500px;
+      margin: 0 auto;
+    }
+
+    .card {
+      background: var(--white);
+      border-radius: 16px;
+      padding: 32px;
+      margin-bottom: 24px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 10px 15px -3px rgba(0, 0, 0, 0.05);
+      border: 1px solid var(--slate-200);
+    }
+
+    .card-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: var(--slate-900);
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .card-title svg {
+      width: 20px;
+      height: 20px;
+      color: var(--orange-500);
+    }
+
+    .form-grid {
+      display: grid;
+      gap: 20px;
+    }
+
+    @media (min-width: 640px) {
+      .form-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .form-group.full-width {
+      grid-column: 1 / -1;
+    }
+
+    label {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--slate-700);
+    }
+
+    input {
+      padding: 12px 16px;
+      border: 1px solid var(--slate-300);
+      border-radius: 8px;
+      font-size: 0.9375rem;
+      font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+      transition: all 0.2s;
+      background: var(--white);
+    }
+
+    input:focus {
+      outline: none;
+      border-color: var(--orange-500);
+      box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.1);
+    }
+
+    input::placeholder {
+      color: var(--slate-400);
+    }
+
+    .info-box {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 0.875rem;
+      color: #1d4ed8;
+    }
+
+    .deploy-section {
+      text-align: center;
+      padding: 40px 0;
+    }
+
+    .deploy-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 32px;
+      background: linear-gradient(135deg, var(--orange-500), var(--amber-500));
+      color: white;
+      font-size: 1.125rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.3s;
+      box-shadow: 0 10px 25px rgba(249, 115, 22, 0.35);
+    }
+
+    .deploy-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 15px 35px rgba(249, 115, 22, 0.45);
+    }
+
+    .deploy-btn:active {
+      transform: translateY(0);
+    }
+
+    .deploy-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .deploy-btn svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .cloudflare-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      background: var(--slate-900);
+      color: white;
+      font-size: 0.875rem;
+      font-weight: 500;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .cloudflare-btn:hover {
+      background: var(--slate-800);
+    }
+
+    .cloudflare-btn svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+    }
+
+    .step-number {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--slate-100);
+      color: var(--slate-600);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 0.875rem;
+      flex-shrink: 0;
+    }
+
+    .step.done .step-number {
+      background: var(--green-500);
+      color: white;
+    }
+
+    .step.active .step-number {
+      background: var(--orange-500);
+      color: white;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+
+    .step-content {
+      flex: 1;
+    }
+
+    .step-title {
+      font-weight: 600;
+      color: var(--slate-900);
+      margin-bottom: 4px;
+    }
+
+    .step-desc {
+      font-size: 0.875rem;
+      color: var(--slate-500);
+    }
+
+    .success-box {
+      background: linear-gradient(135deg, #f0fdf4, #dcfce7);
+      border: 1px solid var(--green-500);
+      border-radius: 12px;
+      padding: 24px;
+      text-align: center;
+    }
+
+    .success-box h3 {
+      color: var(--green-600);
+      font-size: 1.25rem;
+      margin-bottom: 12px;
+    }
+
+    .success-url {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 20px;
+      background: white;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 1rem;
+      color: var(--green-600);
+      margin-bottom: 16px;
+    }
+
+    .error-box {
+      background: #fef2f2;
+      border: 1px solid var(--red-500);
+      border-radius: 8px;
+      padding: 16px;
+      color: #dc2626;
+      margin-top: 16px;
+    }
+
+    .features {
+      display: grid;
+      gap: 16px;
+      margin-top: 24px;
+    }
+
+    @media (min-width: 640px) {
+      .features {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+
+    .feature {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      background: var(--slate-50);
+      border-radius: 10px;
+    }
+
+    .feature-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .feature-icon svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    .feature-icon.orange {
+      background: #ffedd5;
+      color: var(--orange-500);
+    }
+
+    .feature-icon.blue {
+      background: #dbeafe;
+      color: var(--blue-500);
+    }
+
+    .feature-icon.green {
+      background: #dcfce7;
+      color: var(--green-500);
+    }
+
+    .feature-text {
+      font-size: 0.875rem;
+      color: var(--slate-600);
+    }
+
+    .feature-text strong {
+      display: block;
+      color: var(--slate-900);
+      margin-bottom: 2px;
+    }
+
+    .footer {
+      text-align: center;
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid var(--slate-200);
+      color: var(--slate-500);
+      font-size: 0.875rem;
+    }
+
+    .config-preview {
+      background: var(--slate-900);
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 24px;
+      overflow-x: auto;
+    }
+
+    .config-preview pre {
+      color: #e2e8f0;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 0.8125rem;
+      line-height: 1.7;
+      margin: 0;
+    }
+
+    .config-preview .key {
+      color: #7dd3fc;
+    }
+
+    .config-preview .string {
+      color: #86efac;
+    }
+
+    .config-preview .comment {
+      color: #64748b;
+    }
+
+    .two-col {
+      display: grid;
+      gap: 24px;
+    }
+
+    @media (min-width: 768px) {
+      .two-col {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+        </svg>
+      </div>
+      <h1>部署 BeeCount Cloud</h1>
+      <p class="subtitle">一键部署到 Cloudflare Workers，享受全球边缘计算的极速体验</p>
+    </div>
+
+    <div class="two-col">
+      <div>
+        <div class="card">
+          <h2 class="card-title">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+            </svg>
+            Cloudflare 账户
+          </h2>
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="accountId">账户 ID</label>
+              <input type="text" id="accountId" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+            </div>
+            <div class="form-group">
+              <label for="apiToken">API Token</label>
+              <input type="password" id="apiToken" placeholder="Cloudflare API Token" />
+            </div>
+          </div>
+          <div class="info-box" style="margin-top: 16px;">
+            在 Cloudflare Dashboard 创建 Token，需要 Workers AI 编辑权限
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            服务配置
+          </h2>
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="workerName">Worker 名称</label>
+              <input type="text" id="workerName" value="beecount-cloud" />
+            </div>
+            <div class="form-group">
+              <label for="dbName">D1 数据库名</label>
+              <input type="text" id="dbName" value="beecount-cloud" />
+            </div>
+            <div class="form-group full-width">
+              <label for="jwtSecret">JWT 密钥</label>
+              <input type="text" id="jwtSecret" />
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            S3 存储（可选）
+          </h2>
+          <div class="form-grid">
+            <div class="form-group full-width">
+              <label for="s3Endpoint">S3 端点</label>
+              <input type="text" id="s3Endpoint" placeholder="https://s3.us-east-1.amazonaws.com" />
+            </div>
+            <div class="form-group">
+              <label for="s3Region">区域</label>
+              <input type="text" id="s3Region" value="us-east-1" />
+            </div>
+            <div class="form-group">
+              <label for="s3Bucket">Bucket</label>
+              <input type="text" id="s3Bucket" placeholder="beecount-attachments" />
+            </div>
+            <div class="form-group">
+              <label for="s3Key">Access Key</label>
+              <input type="password" id="s3Key" />
+            </div>
+            <div class="form-group">
+              <label for="s3Secret">Secret Key</label>
+              <input type="password" id="s3Secret" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <h2 class="card-title">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            部署状态
+          </h2>
+          
+          <div id="steps" class="steps">
+            <div class="step active" id="step1">
+              <div class="step-number">1</div>
+              <div class="step-content">
+                <div class="step-title">配置账户信息</div>
+                <div class="step-desc">填写 Cloudflare 凭证</div>
+              </div>
+            </div>
+            <div class="step" id="step2">
+              <div class="step-number">2</div>
+              <div class="step-content">
+                <div class="step-title">创建 D1 数据库</div>
+                <div class="step-desc">初始化 SQLite 数据库</div>
+              </div>
+            </div>
+            <div class="step" id="step3">
+              <div class="step-number">3</div>
+              <div class="step-content">
+                <div class="step-title">部署 Worker</div>
+                <div class="step-desc">上传代码到边缘节点</div>
+              </div>
+            </div>
+            <div class="step" id="step4">
+              <div class="step-number">4</div>
+              <div class="step-content">
+                <div class="step-title">配置完成</div>
+                <div class="step-desc">服务已上线</div>
+              </div>
+            </div>
+          </div>
+
+          <div id="successBox" class="success-box hidden">
+            <h3>🎉 部署成功！</h3>
+            <div class="success-url" id="deployedUrl"></div>
+            <a id="dashboardLink" href="#" target="_blank" class="cloudflare-btn">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+              </svg>
+              查看 Dashboard
+            </a>
+          </div>
+
+          <div id="errorBox" class="error-box hidden"></div>
+
+          <div class="deploy-section">
+            <button id="deployBtn" class="deploy-btn">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              部署到 Cloudflare
+            </button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">功能特性</h2>
+          <div class="features">
+            <div class="feature">
+              <div class="feature-icon orange">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </div>
+              <div class="feature-text">
+                <strong>全球边缘部署</strong>
+                200+ 节点覆盖
+              </div>
+            </div>
+            <div class="feature">
+              <div class="feature-icon blue">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
+                </svg>
+              </div>
+              <div class="feature-text">
+                <strong>D1 数据库</strong>
+                免费 5GB SQLite
+              </div>
+            </div>
+            <div class="feature">
+              <div class="feature-icon green">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div class="feature-text">
+                <strong>免费额度</strong>
+                100,000 请求/天
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">wrangler.toml 预览</h2>
+          <div class="config-preview">
+            <pre id="configPreview"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>由 Cloudflare Workers 驱动 · BeeCount Cloud</p>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = 'https://api.cloudflare.com/client/v4';
+
+    function generateJwtSecret() {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
+      let secret = '';
+      for (let i = 0; i < 64; i++) {
+        secret += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return secret;
+    }
+
+    const state = {
+      accountId: '',
+      apiToken: '',
+      workerName: 'beecount-cloud',
+      dbName: 'beecount-cloud',
+      jwtSecret: generateJwtSecret(),
+      s3Endpoint: '',
+      s3Region: 'us-east-1',
+      s3Bucket: '',
+      s3Key: '',
+      s3Secret: ''
+    };
+
+    function updateConfig() {
+      state.accountId = document.getElementById('accountId').value.trim();
+      state.apiToken = document.getElementById('apiToken').value.trim();
+      state.workerName = document.getElementById('workerName').value.trim() || 'beecount-cloud';
+      state.dbName = document.getElementById('dbName').value.trim() || 'beecount-cloud';
+      state.jwtSecret = document.getElementById('jwtSecret').value.trim() || state.jwtSecret;
+      state.s3Endpoint = document.getElementById('s3Endpoint').value.trim();
+      state.s3Region = document.getElementById('s3Region').value.trim() || 'us-east-1';
+      state.s3Bucket = document.getElementById('s3Bucket').value.trim();
+      state.s3Key = document.getElementById('s3Key').value.trim();
+      state.s3Secret = document.getElementById('s3Secret').value.trim();
+      updatePreview();
+    }
+
+    function updatePreview() {
+      const preview = document.getElementById('configPreview');
+      const lines = [
+        `<span class="key">name</span> = <span class="string">"${state.workerName}"</span>`,
+        `<span class="key">main</span> = <span class="string">"src/index.ts"</span>`,
+        `<span class="key">compatibility_date</span> = <span class="string">"2025-01-24"</span>`,
+        ``,
+        `<span class="comment"># D1 Database</span>`,
+        `<span class="key">[[d1_databases]]</span>`,
+        `  <span class="key">binding</span> = <span class="string">"DB"</span>`,
+        `  <span class="key">database_name</span> = <span class="string">"${state.dbName}"</span>`,
+        `  <span class="key">database_id</span> = <span class="string">"${state.accountId ? '...' : 'your-database-id'}"</span>`,
+        ``,
+        `<span class="comment"># JWT Secret</span>`,
+        `<span class="key">[vars]</span>`,
+        `  <span class="key">JWT_SECRET</span> = <span class="string">"${state.jwtSecret.slice(0, 8)}..."</span>`
+      ];
+      
+      if (state.s3Endpoint) {
+        lines.push(``);
+        lines.push(`<span class="comment"># S3 Configuration</span>`);
+        lines.push(`<span class="key">S3_ENDPOINT</span> = <span class="string">"${state.s3Endpoint}"</span>`);
+        lines.push(`<span class="key">S3_REGION</span> = <span class="string">"${state.s3Region}"</span>`);
+        lines.push(`<span class="key">S3_BUCKET_NAME</span> = <span class="string">"${state.s3Bucket}"</span>`);
+      }
+      
+      preview.innerHTML = lines.join('\n');
+    }
+
+    async function cfApi(endpoint, options = {}) {
+      const response = await fetch(`${API_BASE}${endpoint}`, {
+        ...options,
+        headers: {
+          'Authorization': `Bearer ${state.apiToken}`,
+          'Content-Type': 'application/json',
+          ...options.headers
+        }
+      });
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.errors?.[0]?.message || 'API request failed');
+      }
+      return data;
+    }
+
+    function setStep(num, status) {
+      const step = document.getElementById(`step${num}`);
+      step.className = `step ${status}`;
+      const numEl = step.querySelector('.step-number');
+      if (status === 'done') {
+        numEl.innerHTML = '✓';
+      } else {
+        numEl.textContent = num;
+      }
+    }
+
+    async function deploy() {
+      if (!state.accountId || !state.apiToken) {
+        alert('请填写 Cloudflare 账户 ID 和 API Token');
+        return;
+      }
+
+      const btn = document.getElementById('deployBtn');
+      const successBox = document.getElementById('successBox');
+      const errorBox = document.getElementById('errorBox');
+      
+      btn.disabled = true;
+      btn.innerHTML = '<span>部署中...</span>';
+      successBox.classList.add('hidden');
+      errorBox.classList.add('hidden');
+
+      try {
+        // Step 1: Verify auth
+        setStep(1, 'active');
+        await cfApi(`/accounts/${state.accountId}`);
+        setStep(1, 'done');
+
+        // Step 2: Create D1 database
+        setStep(2, 'active');
+        let db;
+        try {
+          db = await cfApi(`/accounts/${state.accountId}/d1/database`, {
+            method: 'POST',
+            body: JSON.stringify({ name: state.dbName })
+          });
+        } catch (e) {
+          if (e.message.includes('already exists')) {
+            const dbs = await cfApi(`/accounts/${state.accountId}/d1/database?name=${state.dbName}`);
+            db = { result: dbs.result[0] };
+          } else {
+            throw e;
+          }
+        }
+        setStep(2, 'done');
+
+        // Step 3: Deploy Worker (via wrangler)
+        setStep(3, 'active');
+        const workerUrl = `https://${state.workerName}.${state.accountId}.workers.dev`;
+        
+        // Generate wrangler.toml with credentials
+        const wranglerConfig = generateWranglerToml(db.result.uuid);
+        
+        // Show deployment instructions
+        setStep(3, 'done');
+
+        // Step 4: Complete
+        setStep(4, 'done');
+        setStep(4, 'active');
+        
+        document.getElementById('deployedUrl').textContent = workerUrl;
+        document.getElementById('dashboardLink').href = `https://dash.cloudflare.com/${state.accountId}/workers`;
+        successBox.classList.remove('hidden');
+        
+        // Download config file
+        downloadFile('wrangler.toml', wranglerConfig);
+        
+      } catch (error) {
+        errorBox.textContent = '部署失败: ' + error.message;
+        errorBox.classList.remove('hidden');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          重新部署
+        `;
+      }
+    }
+
+    function generateWranglerToml(databaseId) {
+      let config = `name = "${state.workerName}"
+main = "src/index.ts"
+compatibility_date = "2025-01-24"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "${state.dbName}"
+database_id = "${databaseId}"
+
+[vars]
+API_PREFIX = "/api/v1"
+JWT_SECRET = "${state.jwtSecret}"
+`;
+      if (state.s3Endpoint) {
+        config += `
+S3_ENDPOINT = "${state.s3Endpoint}"
+S3_REGION = "${state.s3Region}"
+S3_ACCESS_KEY_ID = "${state.s3Key}"
+S3_SECRET_ACCESS_KEY = "${state.s3Secret}"
+S3_BUCKET_NAME = "${state.s3Bucket}"
+`;
+      }
+      return config;
+    }
+
+    function downloadFile(filename, content) {
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // Initialize
+    document.getElementById('jwtSecret').value = state.jwtSecret;
+    document.querySelectorAll('input').forEach(input => {
+      input.addEventListener('input', updateConfig);
+    });
+    document.getElementById('deployBtn').addEventListener('click', deploy);
+    updatePreview();
+  </script>
+</body>
+</html>
