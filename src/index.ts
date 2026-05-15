@@ -1262,7 +1262,9 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         ledgerHtml = '<div class="empty-state"><div class="empty-state-icon">📒</div><p>还没有账本</p><p>点击上方按钮创建您的第一个账本</p></div>';
       } else {
         ledgerHtml = '<div class="ledger-list">' + state.ledgers.map(function(ledger) {
-          return '<div class="ledger-item"><div class="ledger-info" onclick="showLedgerDetail(\'' + ledger.ledger_id + '\')"><h3>' + ledger.ledger_name + '</h3><p>' + (ledger.currency || 'CNY') + '</p></div><div class="ledger-stats"><div class="income">+' + formatMoney(ledger.income_total || 0) + '</div><div class="expense">-' + formatMoney(ledger.expense_total || 0) + '</div></div><div class="ledger-actions" style="display: flex; gap: 8px;"><button class="tx-action-btn" onclick="event.stopPropagation(); showEditLedgerModal(\'' + ledger.ledger_id + '\')">编辑</button><button class="tx-action-btn delete" onclick="event.stopPropagation(); deleteLedger(\'' + ledger.ledger_id + '\')">删除</button></div></div>';
+          const escapedName = (ledger.ledger_name || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+          const escapedId = ledger.ledger_id.replace(/'/g, "\\'");
+          return '<div class="ledger-item"><div class="ledger-info" onclick="showLedgerDetail(\'' + escapedId + '\')"><h3>' + escapedName + '</h3><p>' + (ledger.currency || 'CNY') + '</p></div><div class="ledger-stats"><div class="income">+' + formatMoney(ledger.income_total || 0) + '</div><div class="expense">-' + formatMoney(ledger.expense_total || 0) + '</div></div><div class="ledger-actions" style="display: flex; gap: 8px;"><button class="tx-action-btn" onclick="event.stopPropagation(); showEditLedgerModal(\'' + escapedId + '\')">编辑</button><button class="tx-action-btn delete" onclick="event.stopPropagation(); deleteLedger(\'' + escapedId + '\')">删除</button></div></div>';
         }).join('') + '</div>';
       }
 
@@ -1270,7 +1272,12 @@ const FRONTEND_HTML = `<!DOCTYPE html>
     }
 
     async function renderTransactionsPage(container) {
-      container.innerHTML = '<div class="page active"><div class="page-header"><h2>交易记录</h2><button class="btn btn-primary" onclick="openCreateTxModal()">+ 记一笔</button></div><div class="card"><div class="filter-bar"><select id="txLedgerFilter" onchange="loadTransactions()"><option value="">全部账本</option>' + state.ledgers.map(l => '<option value="' + l.ledger_id + '">' + l.ledger_name + '</option>').join('') + '</select><select id="txTypeFilter" onchange="loadTransactions()"><option value="">全部类型</option><option value="expense">支出</option><option value="income">收入</option></select><input type="date" id="txDateFilter" onchange="loadTransactions()" placeholder="日期"></div><div id="txListContainer"></div></div></div>';
+      const ledgerOptions = state.ledgers.map(l => {
+        const name = (l.ledger_name || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        const id = l.ledger_id.replace(/'/g, "\\'");
+        return '<option value="' + id + '">' + name + '</option>';
+      }).join('');
+      container.innerHTML = '<div class="page active"><div class="page-header"><h2>交易记录</h2><button class="btn btn-primary" onclick="openCreateTxModal()">+ 记一笔</button></div><div class="card"><div class="filter-bar"><select id="txLedgerFilter" onchange="loadTransactions()"><option value="">全部账本</option>' + ledgerOptions + '</select><select id="txTypeFilter" onchange="loadTransactions()"><option value="">全部类型</option><option value="expense">支出</option><option value="income">收入</option></select><input type="date" id="txDateFilter" onchange="loadTransactions()" placeholder="日期"></div><div id="txListContainer"></div></div></div>';
       
       await loadTransactions();
     }
@@ -1302,7 +1309,12 @@ const FRONTEND_HTML = `<!DOCTYPE html>
           container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📝</div><p>暂无交易记录</p></div>';
         } else {
           container.innerHTML = '<div class="transaction-list">' + txs.map(function(tx) {
-            return '<div class="transaction-item"><div class="transaction-icon ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '📈' : '📉') + '</div><div class="transaction-info"><h4>' + (tx.note || tx.category_name || '未分类') + '</h4><p>' + (tx.ledger_name ? tx.ledger_name + ' · ' : '') + formatDate(tx.happened_at) + '</p></div><div class="transaction-amount ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '+' : '-') + formatMoney(tx.amount) + '</div><div class="transaction-actions"><button class="tx-action-btn" onclick="editTransaction(\\'' + tx.id + '\\')">编辑</button><button class="tx-action-btn delete" onclick="deleteTransaction(\\'' + tx.id + '\\')">删除</button></div></div>';
+            const txId = String(tx.id || '').replace(/'/g, "\\'");
+            const note = (tx.note || tx.category_name || '未分类').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const ledgerName = (tx.ledger_name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const dateStr = formatDate(tx.happened_at);
+            const amount = formatMoney(tx.amount);
+            return '<div class="transaction-item"><div class="transaction-icon ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '📈' : '📉') + '</div><div class="transaction-info"><h4>' + note + '</h4><p>' + (ledgerName ? ledgerName + ' · ' : '') + dateStr + '</p></div><div class="transaction-amount ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '+' : '-') + amount + '</div><div class="transaction-actions"><button class="tx-action-btn" onclick="editTransaction(\'' + txId + '\')">编辑</button><button class="tx-action-btn delete" onclick="deleteTransaction(\'' + txId + '\')">删除</button></div></div>';
           }).join('') + '</div>';
         }
       } catch (err) {
@@ -1320,9 +1332,15 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       const expenseCats = state.categories.filter(c => c.kind === 'expense');
       const incomeCats = state.categories.filter(c => c.kind === 'income');
       
-      container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal(\'createCategoryModal\')">+ 新建分类</button></div><div class="card"><h4 class="section-title">支出分类</h4><div class="category-list">' + (expenseCats.length > 0 ? expenseCats.map(c => '<div class="category-item"><span class="category-icon">' + (c.icon || '📁') + '</span><span>' + c.name + '</span><div class="tag-actions" style="margin-left: auto; display: flex; gap: 4px;"><button class="tx-action-btn" onclick="showEditCategoryModal(\'' + (c.id || c.sync_id) + '\')">编辑</button><button class="tx-action-btn delete" onclick="showDeleteCategoryModal(\'' + (c.id || c.sync_id) + '\')">删除</button></div></div>').join('') : '<p style="color: var(--text-muted);">暂无支出分类</p>') + '</div></div><div class="card" style="margin-top: 16px;"><h4 class="section-title">收入分类</h4><div class="category-list">' + (incomeCats.length > 0 ? incomeCats.map(c => '<div class="category-item"><span class="category-icon">' + (c.icon || '📁') + '</span><span>' + c.name + '</span><div class="tag-actions" style="margin-left: auto; display: flex; gap: 4px;"><button class="tx-action-btn" onclick="showEditCategoryModal(\'' + (c.id || c.sync_id) + '\')">编辑</button><button class="tx-action-btn delete" onclick="showDeleteCategoryModal(\'' + (c.id || c.sync_id) + '\')">删除</button></div></div>').join('') : '<p style="color: var(--text-muted);">暂无收入分类</p>') + '</div></div></div>';
+      const catItemHtml = function(c) {
+        const name = (c.name || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        const syncId = (c.id || c.sync_id || '').replace(/'/g, "\\'");
+        return '<div class="category-item"><span class="category-icon">' + (c.icon || '📁') + '</span><span>' + name + '</span><div class="tag-actions" style="margin-left: auto; display: flex; gap: 4px;"><button class="tx-action-btn" onclick="showEditCategoryModal(\'' + syncId + '\')">编辑</button><button class="tx-action-btn delete" onclick="showDeleteCategoryModal(\'' + syncId + '\')">删除</button></div></div>';
+      };
+      
+      container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal(\'createCategoryModal\')">+ 新建分类</button></div><div class="card"><h4 class="section-title">支出分类</h4><div class="category-list">' + (expenseCats.length > 0 ? expenseCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无支出分类</p>') + '</div></div><div class="card" style="margin-top: 16px;"><h4 class="section-title">收入分类</h4><div class="category-list">' + (incomeCats.length > 0 ? incomeCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无收入分类</p>') + '</div></div></div>';
     }
-
+    
     async function renderAccountsPage(container) {
       try {
         state.accounts = await api('/api/v1/read/workspace/accounts') || [];
@@ -1332,7 +1350,13 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       
       const kindLabels = {cash: '💵 现金', bank: '🏦 银行卡', credit: '💳 信用卡', other: '📋 其他'};
       
-      container.innerHTML = '<div class="page active"><div class="page-header"><h2>账户管理</h2><button class="btn btn-primary" onclick="showModal(\'createAccountModal\')">+ 新建账户</button></div><div class="stats-grid" style="margin-bottom: 20px;"><div class="stat-card"><div class="stat-label">账户数量</div><div class="stat-value">' + state.accounts.length + '</div></div><div class="stat-card"><div class="stat-label">总余额</div><div class="stat-value">' + formatMoney(state.accounts.reduce((sum, a) => sum + (a.balance || 0), 0)) + '</div></div></div><div class="card"><div class="account-list">' + (state.accounts.length > 0 ? state.accounts.map(a => '<div class="account-item"><div><span style="font-size: 1.2rem; margin-right: 8px;">' + (kindLabels[a.kind] || '📋') + '</span><strong>' + a.name + '</strong></div><div class="transaction-amount ' + ((a.balance || 0) >= 0 ? 'income' : 'expense') + '">' + formatMoney(a.balance || 0) + '</div><div class="tag-actions" style="display: flex; gap: 4px;"><button class="tx-action-btn" onclick="showEditAccountModal(\'' + (a.id || a.sync_id) + '\')">编辑</button><button class="tx-action-btn delete" onclick="showDeleteAccountModal(\'' + (a.id || a.sync_id) + '\')">删除</button></div></div>').join('') : '<p style="color: var(--text-muted);">暂无账户</p>') + '</div></div></div>';
+      const accountItemHtml = function(a) {
+        const name = (a.name || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        const syncId = (a.id || a.sync_id || '').replace(/'/g, "\\'");
+        return '<div class="account-item"><div><span style="font-size: 1.2rem; margin-right: 8px;">' + (kindLabels[a.kind] || '📋') + '</span><strong>' + name + '</strong></div><div class="transaction-amount ' + ((a.balance || 0) >= 0 ? 'income' : 'expense') + '">' + formatMoney(a.balance || 0) + '</div><div class="tag-actions" style="display: flex; gap: 4px;"><button class="tx-action-btn" onclick="showEditAccountModal(\'' + syncId + '\')">编辑</button><button class="tx-action-btn delete" onclick="showDeleteAccountModal(\'' + syncId + '\')">删除</button></div></div>';
+      };
+      
+      container.innerHTML = '<div class="page active"><div class="page-header"><h2>账户管理</h2><button class="btn btn-primary" onclick="showModal(\'createAccountModal\')">+ 新建账户</button></div><div class="stats-grid" style="margin-bottom: 20px;"><div class="stat-card"><div class="stat-label">账户数量</div><div class="stat-value">' + state.accounts.length + '</div></div><div class="stat-card"><div class="stat-label">总余额</div><div class="stat-value">' + formatMoney(state.accounts.reduce((sum, a) => sum + (a.balance || 0), 0)) + '</div></div></div><div class="card"><div class="account-list">' + (state.accounts.length > 0 ? state.accounts.map(accountItemHtml).join('') : '<p style="color: var(--text-muted);">暂无账户</p>') + '</div></div></div>';
     }
 
     async function renderStatsPage(container) {
@@ -1382,7 +1406,13 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         state.tags = [];
       }
 
-      container.innerHTML = '<div class="page active"><div class="page-header"><h2>标签管理</h2><button class="btn btn-primary" onclick="showModal(\'createTagModal\')">+ 新建标签</button></div><div class="card"><div class="tag-list">' + (state.tags.length > 0 ? state.tags.map(t => '<div class="tag-item"><span class="tag-name">' + t.name + '</span><div class="tag-actions"><button class="tx-action-btn" onclick="editTag(\'' + (t.id || t.sync_id) + '\')">编辑</button><button class="tx-action-btn delete" onclick="deleteTag(\'' + (t.id || t.sync_id) + '\')">删除</button></div></div>').join('') : '<p style="color: var(--text-muted);">暂无标签</p>') + '</div></div></div>';
+      const tagItemHtml = function(t) {
+        const name = (t.name || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        const syncId = (t.id || t.sync_id || '').replace(/'/g, "\\'");
+        return '<div class="tag-item"><span class="tag-name">' + name + '</span><div class="tag-actions"><button class="tx-action-btn" onclick="editTag(\'' + syncId + '\')">编辑</button><button class="tx-action-btn delete" onclick="deleteTag(\'' + syncId + '\')">删除</button></div></div>';
+      };
+
+      container.innerHTML = '<div class="page active"><div class="page-header"><h2>标签管理</h2><button class="btn btn-primary" onclick="showModal(\'createTagModal\')">+ 新建标签</button></div><div class="card"><div class="tag-list">' + (state.tags.length > 0 ? state.tags.map(tagItemHtml).join('') : '<p style="color: var(--text-muted);">暂无标签</p>') + '</div></div></div>';
     }
 
     async function editTag(syncId) {
@@ -1423,7 +1453,17 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         const now = new Date();
         const currentMonth = now.toISOString().slice(0, 7);
 
-        container.innerHTML = '<div class="page active"><div class="page-header"><h2>预算管理</h2><button class="btn btn-primary" onclick="openCreateBudgetModal()">+ 设置预算</button></div><div class="card"><div class="budget-list">' + (budgets.length > 0 ? budgets.map(b => '<div class="budget-item"><div class="budget-info"><span class="budget-category">' + (categories.find(c => c.id === b.category_id)?.name || b.category_name || '未分类') + '</span><span class="budget-period">' + (b.period || currentMonth) + '</span></div><div class="budget-amount"><div class="budget-progress"><div class="progress-bar" style="width: ' + Math.min(100, (b.spent || 0) / b.amount * 100) + '%"></div></div><span>' + formatMoney(b.spent || 0) + ' / ' + formatMoney(b.amount) + '</span></div><div class="budget-actions"><button class="tx-action-btn" onclick="editBudget(\'' + b.id + '\')">编辑</button><button class="tx-action-btn delete" onclick="deleteBudget(\'' + b.id + '\')">删除</button></div></div>').join('') : '<p style="color: var(--text-muted);">暂无预算设置</p>') + '</div></div></div>';
+        const budgetItemHtml = function(b) {
+          const catName = (categories.find(c => c.id === b.category_id)?.name || b.category_name || '未分类').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const budgetId = (b.id || '').replace(/'/g, "\\'");
+          const period = (b.period || currentMonth).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const spent = formatMoney(b.spent || 0);
+          const amount = formatMoney(b.amount);
+          const progressWidth = Math.min(100, (b.spent || 0) / b.amount * 100);
+          return '<div class="budget-item"><div class="budget-info"><span class="budget-category">' + catName + '</span><span class="budget-period">' + period + '</span></div><div class="budget-amount"><div class="budget-progress"><div class="progress-bar" style="width: ' + progressWidth + '%"></div></div><span>' + spent + ' / ' + amount + '</span></div><div class="budget-actions"><button class="tx-action-btn" onclick="editBudget(\'' + budgetId + '\')">编辑</button><button class="tx-action-btn delete" onclick="deleteBudget(\'' + budgetId + '\')">删除</button></div></div>';
+        };
+        
+        container.innerHTML = '<div class="page active"><div class="page-header"><h2>预算管理</h2><button class="btn btn-primary" onclick="openCreateBudgetModal()">+ 设置预算</button></div><div class="card"><div class="budget-list">' + (budgets.length > 0 ? budgets.map(budgetItemHtml).join('') : '<p style="color: var(--text-muted);">暂无预算设置</p>') + '</div></div></div>';
       } catch (err) {
         container.innerHTML = '<div class="page active"><div class="page-header"><h2>预算管理</h2><button class="btn btn-primary" onclick="openCreateBudgetModal()">+ 设置预算</button></div><div class="card"><p style="color: var(--text-muted);">暂无预算设置</p></div></div>';
       }
@@ -1432,7 +1472,11 @@ const FRONTEND_HTML = `<!DOCTYPE html>
     function openCreateBudgetModal() {
       const categorySelect = document.getElementById('budgetCategorySelect');
       if (categorySelect && state.categories) {
-        categorySelect.innerHTML = '<option value="">选择分类</option>' + state.categories.map(c => '<option value="' + c.name + '">' + c.name + '</option>').join('');
+        const catOptions = state.categories.map(c => {
+          const name = (c.name || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+          return '<option value="' + name + '">' + name + '</option>';
+        }).join('');
+        categorySelect.innerHTML = '<option value="">选择分类</option>' + catOptions;
       }
       showModal('createBudgetModal');
     }
