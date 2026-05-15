@@ -1262,9 +1262,9 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         ledgerHtml = '<div class="empty-state"><div class="empty-state-icon">📒</div><p>还没有账本</p><p>点击上方按钮创建您的第一个账本</p></div>';
       } else {
         ledgerHtml = '<div class="ledger-list">' + state.ledgers.map(function(ledger) {
-          const escapedName = (ledger.ledger_name || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-          const escapedId = ledger.ledger_id.replace(/'/g, "\\'");
-          return '<div class="ledger-item"><div class="ledger-info" onclick="showLedgerDetail(\'' + escapedId + '\')"><h3>' + escapedName + '</h3><p>' + (ledger.currency || 'CNY') + '</p></div><div class="ledger-stats"><div class="income">+' + formatMoney(ledger.income_total || 0) + '</div><div class="expense">-' + formatMoney(ledger.expense_total || 0) + '</div></div><div class="ledger-actions" style="display: flex; gap: 8px;"><button class="tx-action-btn" onclick="event.stopPropagation(); showEditLedgerModal(\'' + escapedId + '\')">编辑</button><button class="tx-action-btn delete" onclick="event.stopPropagation(); deleteLedger(\'' + escapedId + '\')">删除</button></div></div>';
+          const escapedName = (ledger.ledger_name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const escapedId = ledger.ledger_id.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+          return '<div class="ledger-item"><div class="ledger-info" onclick="showLedgerDetail(\'' + escapedId.replace(/'/g, "\\'") + '\')"><h3>' + escapedName + '</h3><p>' + (ledger.currency || 'CNY') + '</p></div><div class="ledger-stats"><div class="income">+' + formatMoney(ledger.income_total || 0) + '</div><div class="expense">-' + formatMoney(ledger.expense_total || 0) + '</div></div><div class="ledger-actions" style="display: flex; gap: 8px;"><button class="tx-action-btn" onclick="event.stopPropagation(); showEditLedgerModal(\'' + escapedId.replace(/'/g, "\\'") + '\')">编辑</button><button class="tx-action-btn delete" onclick="event.stopPropagation(); deleteLedger(\'' + escapedId.replace(/'/g, "\\'") + '\')">删除</button></div></div>';
         }).join('') + '</div>';
       }
 
