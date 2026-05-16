@@ -75,15 +75,15 @@ const SyncChangeInSchema = z.object({
   entity_type: z.string(),
   entity_sync_id: z.string(),
   action: z.enum(['upsert', 'delete']),
-  payload: z.record(z.any()),
+  payload: z.any(),
   updated_at: z.string().or(z.date()),
-});
+}).passthrough();
 
 /** SyncPush 请求体 */
 const SyncPushRequestSchema = z.object({
   device_id: z.string().optional(),
   changes: z.array(SyncChangeInSchema),
-});
+}).passthrough();
 
 /** 单条 SyncChange 输出（服务端返回） */
 interface SyncChangeOut {
