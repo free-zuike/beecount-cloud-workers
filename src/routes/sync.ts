@@ -405,6 +405,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       .first();
 
     if (!device) {
+      console.log('[SYNC] Invalid device:', { device_id: req.device_id, userId });
       return c.json({ error: 'Invalid device' }, 401);
     }
 
@@ -426,7 +427,14 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
     // 处理每条变更
     for (const change of req.changes) {
-      const changeUpdatedAt = toUtcDate(change.updated_at);
+      let changeUpdatedAt: Date;
+      try {
+        changeUpdatedAt = toUtcDate(change.updated_at);
+      } catch (e) {
+        console.error('[SYNC] Date parse error:', { updated_at: change.updated_at, error: e });
+        rejected++;
+        continue;
+      }
       const maxAllowed = new Date(new Date(serverNow).getTime() + 5000); // 允许 5s 时钟偏移
       const clampedUpdatedAt =
         changeUpdatedAt > maxAllowed ? maxAllowed : changeUpdatedAt;
@@ -501,24 +509,36 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       }
 
       // 写入 SyncChange
-      const changeIdResult = await db
-        .prepare(
-          `INSERT INTO sync_changes
-           (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          userId,
-          ledgerRow.id,
-          change.entity_type,
-          change.entity_sync_id,
-          change.action,
-          safeJsonStringify(change.payload),
-          clampedUpdatedAt.toISOString(),
-          req.device_id,
-          userId,
-        )
-        .run();
+      let changeIdResult;
+      try {
+        changeIdResult = await db
+          .prepare(
+            `INSERT INTO sync_changes
+             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            userId,
+            ledgerRow.id,
+            change.entity_type,
+            change.entity_sync_id,
+            change.action,
+            safeJsonStringify(change.payload),
+            clampedUpdatedAt.toISOString(),
+            req.device_id,
+            userId,
+          )
+          .run();
+      } catch (dbError) {
+        console.error('[SYNC] DB insert error:', {
+          error: dbError instanceof Error ? dbError.message : String(dbError),
+          ledger_id: change.ledger_id,
+          entity_type: change.entity_type,
+          entity_sync_id: change.entity_sync_id,
+        });
+        rejected++;
+        continue;
+      }
 
       const newChangeId = changeIdResult.meta.last_row_id as number;
       accepted++;
