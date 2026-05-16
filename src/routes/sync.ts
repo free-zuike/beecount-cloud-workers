@@ -388,16 +388,32 @@ syncRouter.get('/full', async (c) => {
  * - server_cursor: 服务端最新游标
  * - server_timestamp: 服务端时间戳
  */
-syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) => {
+syncRouter.post('/push', async (c) => {
   try {
     const userId = c.get('userId');
     const db = c.env.DB;
-    const req = c.req.valid('json');
+    
+    // 记录原始请求体，用于调试
+    const rawBody = await c.req.text();
+    console.log('[SYNC] Raw request body:', rawBody);
+    
+    let req;
+    try {
+      req = await c.req.json();
+    } catch (jsonError) {
+      console.error('[SYNC] JSON parse error:', jsonError);
+      return c.json({ error: 'Invalid JSON', detail: jsonError instanceof Error ? jsonError.message : String(jsonError) }, 400);
+    }
+    
+    console.log('[SYNC] Parsed request:', req);
     const serverNow = nowUtc();
+    
+    // 安全检查 changes 字段
+    const changes = Array.isArray(req.changes) ? req.changes : [];
 
     // 处理 device_id - 如果未提供，尝试从 header 获取或使用默认值
     const deviceId = req.device_id || c.req.header('X-Device-ID') || 'unknown';
-    console.log('[SYNC] Push request:', { userId, deviceId, changesCount: req.changes.length });
+    console.log('[SYNC] Push request:', { userId, deviceId, changesCount: changes.length });
 
     // 验证设备有效性（设备必须属于当前用户且未被撤销）
     const device = await db
@@ -428,9 +444,11 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     const conflictSamples: Array<Record<string, unknown>> = [];
     let maxCursor = 0;
     const touchedLedgers: Record<string, string> = {};
+    
+    console.log('[SYNC] Processing', changes.length, 'changes');
 
     // 处理每条变更
-    for (const change of req.changes) {
+    for (const change of changes) {
       let changeUpdatedAt: Date;
       try {
         changeUpdatedAt = toUtcDate(change.updated_at);
