@@ -54,7 +54,7 @@ authRouter.post('/login', zValidator('json', z.object({
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
 
-  const user = await db.prepare('SELECT id, password_hash, is_enabled, totp_enabled FROM users WHERE email = ?').bind(email).first<{ id: string, password_hash: string, is_enabled: number, totp_enabled: number }>();
+  const user = await db.prepare('SELECT id, email, password_hash, is_enabled, totp_enabled FROM users WHERE email = ?').bind(email).first<{ id: string, email: string, password_hash: string, is_enabled: number, totp_enabled: number }>();
   if (!user) {
     return c.json({ error: 'Invalid credentials' }, 401);
   }
