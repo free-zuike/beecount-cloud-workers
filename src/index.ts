@@ -2416,6 +2416,7 @@ app.use('/api/v1/*', async (c, next) => {
 
 app.route('/api/v1/auth', authRouter);
 app.route('/api/v1/2fa', twoFactorRouter);
+app.route('/2fa', twoFactorRouter); // 蜜蜂记账 APP 使用的路径
 app.route('/api/v1/sync', syncRouter);
 app.route('/api/v1/read', readRouter);
 app.route('/api/v1/read/summary', summaryRouter);
