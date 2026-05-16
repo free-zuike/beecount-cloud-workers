@@ -393,19 +393,21 @@ syncRouter.post('/push', async (c) => {
     const userId = c.get('userId');
     const db = c.env.DB;
     
-    // 记录原始请求体，用于调试
-    const rawBody = await c.req.text();
-    console.log('[SYNC] Raw request body:', rawBody);
-    
+    // 记录原始请求体和解析后的请求，用于调试
     let req;
     try {
       req = await c.req.json();
+      console.log('[SYNC] Parsed request:', req);
     } catch (jsonError) {
       console.error('[SYNC] JSON parse error:', jsonError);
+      // 如果 JSON 解析失败，尝试读取原始内容用于调试
+      try {
+        const rawBody = await c.req.text();
+        console.error('[SYNC] Raw body on error:', rawBody);
+      } catch {}
       return c.json({ error: 'Invalid JSON', detail: jsonError instanceof Error ? jsonError.message : String(jsonError) }, 400);
     }
     
-    console.log('[SYNC] Parsed request:', req);
     const serverNow = nowUtc();
     
     // 安全检查 changes 字段
