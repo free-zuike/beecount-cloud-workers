@@ -116,7 +116,7 @@ devicesRouter.get('/', async (c) => {
     session_count: 1,
   }));
 
-  return c.json(result);
+  return c.json({ devices: result });
 });
 
 // ---------------------------------------------------------------------------

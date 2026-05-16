@@ -58,6 +58,7 @@ const WriteLedgerCreateSchema = z.object({
 
 /** 更新账本元信息请求 */
 const WriteLedgerMetaUpdateSchema = z.object({
+  base_change_id: z.number().int().min(0).default(0),
   ledger_name: z.string().min(1).max(255).optional(),
   currency: z.string().min(1).max(16).optional(),
 });
@@ -364,14 +365,12 @@ writeRouter.patch('/ledgers/:ledgerId', zValidator('json', WriteLedgerMetaUpdate
     ...(req.currency !== undefined && { currency: req.currency }),
   };
 
-  // 写入 SyncChange
-  const changeResult = await db
-    .prepare(
+  await db.batch([
+    db.prepare(
       `INSERT INTO sync_changes
        (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .bind(
+    ).bind(
       userId,
       ledger.id,
       'ledger_snapshot',
@@ -380,19 +379,61 @@ writeRouter.patch('/ledgers/:ledgerId', zValidator('json', WriteLedgerMetaUpdate
       safeJsonStringify(newPayload),
       serverNow,
       userId,
-    )
-    .run();
-
-  const newChangeId = changeResult.meta.last_row_id as number;
+    ),
+    db.prepare(
+      `UPDATE ledgers SET name = ?, currency = ? WHERE id = ?`
+    ).bind(
+      req.ledger_name ?? ledger.external_id,
+      req.currency ?? 'CNY',
+      ledger.id,
+    ),
+  ]);
 
   return c.json({
     ledger_id: ledgerId,
     base_change_id: 0,
-    new_change_id: newChangeId,
+    new_change_id: 0,
     server_timestamp: serverNow,
     idempotency_replayed: false,
     entity_id: ledger.id,
   } as WriteCommitMeta);
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /write/ledgers/:ledgerId - 删除账本
+// ---------------------------------------------------------------------------
+
+writeRouter.delete('/ledgers/:ledgerId', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerId = c.req.param('ledgerId');
+  const serverNow = nowUtc();
+
+  const ledger = await db
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerId)
+    .first<{ id: string; external_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found' }, 404);
+  }
+
+  const syncId = randomUUID();
+
+  await db.batch([
+    db.prepare(
+      `INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(userId, ledger.id, 'ledger_snapshot', syncId, 'delete', '{}', serverNow, userId),
+    db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id),
+    db.prepare('DELETE FROM read_account_projection WHERE ledger_id = ?').bind(ledger.id),
+    db.prepare('DELETE FROM read_category_projection WHERE ledger_id = ?').bind(ledger.id),
+    db.prepare('DELETE FROM read_tag_projection WHERE ledger_id = ?').bind(ledger.id),
+    db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').bind(ledger.id),
+    db.prepare('DELETE FROM ledgers WHERE id = ?').bind(ledger.id),
+  ]);
+
+  return c.json({ success: true, ledger_id: ledgerId });
 });
 
 // ---------------------------------------------------------------------------
@@ -520,6 +561,221 @@ writeRouter.post('/transactions', zValidator('json', WriteTransactionCreateSchem
     server_timestamp: serverNow,
     idempotency_replayed: false,
     entity_id: syncId,
+  } as WriteCommitMeta);
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /write/accounts/:id - 更新账户
+// ---------------------------------------------------------------------------
+
+writeRouter.patch('/accounts/:id', zValidator('json', WriteAccountCreateSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const req = c.req.valid('json');
+  const serverNow = nowUtc();
+  const accountSyncId = c.req.param('id');
+
+  const ledger = await db
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .first<{ id: string; external_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  const changeResult = await db
+    .prepare(
+      `INSERT INTO sync_changes
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(userId, ledger.id, 'account', accountSyncId, 'upsert', safeJsonStringify({
+      name: req.name,
+      account_type: req.account_type ?? null,
+      currency: req.currency ?? null,
+      initial_balance: req.initial_balance ?? 0,
+      note: req.note ?? null,
+      credit_limit: req.credit_limit ?? null,
+      billing_day: req.billing_day ?? null,
+      payment_due_day: req.payment_due_day ?? null,
+      bank_name: req.bank_name ?? null,
+      card_last_four: req.card_last_four ?? null,
+    }), serverNow, userId)
+    .run();
+
+  const newChangeId = changeResult.meta.last_row_id as number;
+
+  await db
+    .prepare(
+      `INSERT INTO read_account_projection
+       (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+        note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(ledger_id, sync_id) DO UPDATE SET name = ?, account_type = ?, currency = ?, initial_balance = ?,
+        note = ?, credit_limit = ?, billing_day = ?, payment_due_day = ?, bank_name = ?, card_last_four = ?, source_change_id = ?`
+    )
+    .bind(
+      ledger.id, accountSyncId, userId, req.name, req.account_type ?? null,
+      req.currency ?? null, req.initial_balance ?? 0, req.note ?? null,
+      req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
+      req.bank_name ?? null, req.card_last_four ?? null, newChangeId,
+      req.name, req.account_type ?? null, req.currency ?? null, req.initial_balance ?? 0, req.note ?? null,
+      req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
+      req.bank_name ?? null, req.card_last_four ?? null, newChangeId,
+    )
+    .run();
+
+  return c.json({
+    ledger_id: ledger.external_id,
+    base_change_id: req.base_change_id,
+    new_change_id: newChangeId,
+    server_timestamp: serverNow,
+    idempotency_replayed: false,
+    entity_id: accountSyncId,
+  } as WriteCommitMeta);
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /write/accounts/:id - 删除账户
+// ---------------------------------------------------------------------------
+
+writeRouter.delete('/accounts/:id', zValidator('json', WriteBaseSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const req = c.req.valid('json');
+  const serverNow = nowUtc();
+  const accountSyncId = c.req.param('id');
+
+  const ledger = await db
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .first<{ id: string; external_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  const changeResult = await db
+    .prepare(
+      `INSERT INTO sync_changes
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(userId, ledger.id, 'account', accountSyncId, 'delete', '{}', serverNow, userId)
+    .run();
+
+  const newChangeId = changeResult.meta.last_row_id as number;
+
+  await db
+    .prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND ledger_id = ?')
+    .bind(accountSyncId, ledger.id)
+    .run();
+
+  return c.json({
+    ledger_id: ledger.external_id,
+    base_change_id: req.base_change_id,
+    new_change_id: newChangeId,
+    server_timestamp: serverNow,
+    idempotency_replayed: false,
+    entity_id: accountSyncId,
+  } as WriteCommitMeta);
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /write/tags/:id - 更新标签
+// ---------------------------------------------------------------------------
+
+writeRouter.patch('/tags/:id', zValidator('json', WriteTagCreateSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const req = c.req.valid('json');
+  const serverNow = nowUtc();
+  const tagSyncId = c.req.param('id');
+
+  const ledger = await db
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .first<{ id: string; external_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  const changeResult = await db
+    .prepare(
+      `INSERT INTO sync_changes
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(userId, ledger.id, 'tag', tagSyncId, 'upsert', safeJsonStringify({ name: req.name, color: req.color ?? null }), serverNow, userId)
+    .run();
+
+  const newChangeId = changeResult.meta.last_row_id as number;
+
+  await db
+    .prepare(
+      `INSERT INTO read_tag_projection
+       (ledger_id, sync_id, user_id, name, color, source_change_id)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(ledger_id, sync_id) DO UPDATE SET name = ?, color = ?, source_change_id = ?`
+    )
+    .bind(ledger.id, tagSyncId, userId, req.name, req.color ?? null, newChangeId, req.name, req.color ?? null, newChangeId)
+    .run();
+
+  return c.json({
+    ledger_id: ledger.external_id,
+    base_change_id: req.base_change_id,
+    new_change_id: newChangeId,
+    server_timestamp: serverNow,
+    idempotency_replayed: false,
+    entity_id: tagSyncId,
+  } as WriteCommitMeta);
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /write/tags/:id - 删除标签
+// ---------------------------------------------------------------------------
+
+writeRouter.delete('/tags/:id', zValidator('json', WriteBaseSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const req = c.req.valid('json');
+  const serverNow = nowUtc();
+  const tagSyncId = c.req.param('id');
+
+  const ledger = await db
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .first<{ id: string; external_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  const changeResult = await db
+    .prepare(
+      `INSERT INTO sync_changes
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(userId, ledger.id, 'tag', tagSyncId, 'delete', '{}', serverNow, userId)
+    .run();
+
+  const newChangeId = changeResult.meta.last_row_id as number;
+
+  await db
+    .prepare('DELETE FROM read_tag_projection WHERE sync_id = ? AND ledger_id = ?')
+    .bind(tagSyncId, ledger.id)
+    .run();
+
+  return c.json({
+    ledger_id: ledger.external_id,
+    base_change_id: req.base_change_id,
+    new_change_id: newChangeId,
+    server_timestamp: serverNow,
+    idempotency_replayed: false,
+    entity_id: tagSyncId,
   } as WriteCommitMeta);
 });
 
@@ -834,6 +1090,127 @@ writeRouter.post('/categories', zValidator('json', WriteCategoryCreateSchema), a
 });
 
 // ---------------------------------------------------------------------------
+// PATCH /write/categories/:id - 更新分类
+// ---------------------------------------------------------------------------
+
+writeRouter.patch('/categories/:id', zValidator('json', WriteCategoryUpdateSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const req = c.req.valid('json');
+  const serverNow = nowUtc();
+  const categorySyncId = c.req.param('id');
+
+  const ledger = await db
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .first<{ id: string; external_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  const changeResult = await db
+    .prepare(
+      `INSERT INTO sync_changes
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(userId, ledger.id, 'category', categorySyncId, 'upsert', safeJsonStringify({
+      name: req.name,
+      kind: req.kind,
+      level: req.level ?? null,
+      sort_order: req.sort_order ?? null,
+      icon: req.icon ?? null,
+      icon_type: req.icon_type ?? null,
+      custom_icon_path: req.custom_icon_path ?? null,
+      icon_cloud_file_id: req.icon_cloud_file_id ?? null,
+      icon_cloud_sha256: req.icon_cloud_sha256 ?? null,
+      parent_name: req.parent_name ?? null,
+    }), serverNow, userId)
+    .run();
+
+  const newChangeId = changeResult.meta.last_row_id as number;
+
+  await db
+    .prepare(
+      `INSERT INTO read_category_projection
+       (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+        icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+        parent_name, source_change_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(ledger_id, sync_id) DO UPDATE SET name = ?, kind = ?, level = ?, sort_order = ?,
+        icon = ?, icon_type = ?, custom_icon_path = ?, icon_cloud_file_id = ?,
+        icon_cloud_sha256 = ?, parent_name = ?, source_change_id = ?`
+    )
+    .bind(
+      ledger.id, categorySyncId, userId, req.name, req.kind, req.level ?? null,
+      req.sort_order ?? null, req.icon ?? null, req.icon_type ?? null,
+      req.custom_icon_path ?? null, req.icon_cloud_file_id ?? null,
+      req.icon_cloud_sha256 ?? null, req.parent_name ?? null, newChangeId,
+      req.name, req.kind, req.level ?? null, req.sort_order ?? null,
+      req.icon ?? null, req.icon_type ?? null, req.custom_icon_path ?? null,
+      req.icon_cloud_file_id ?? null, req.icon_cloud_sha256 ?? null,
+      req.parent_name ?? null, newChangeId,
+    )
+    .run();
+
+  return c.json({
+    ledger_id: ledger.external_id,
+    base_change_id: req.base_change_id,
+    new_change_id: newChangeId,
+    server_timestamp: serverNow,
+    idempotency_replayed: false,
+    entity_id: categorySyncId,
+  } as WriteCommitMeta);
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /write/categories/:id - 删除分类
+// ---------------------------------------------------------------------------
+
+writeRouter.delete('/categories/:id', zValidator('json', WriteBaseSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const req = c.req.valid('json');
+  const serverNow = nowUtc();
+  const categorySyncId = c.req.param('id');
+
+  const ledger = await db
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .first<{ id: string; external_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  const changeResult = await db
+    .prepare(
+      `INSERT INTO sync_changes
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(userId, ledger.id, 'category', categorySyncId, 'delete', '{}', serverNow, userId)
+    .run();
+
+  const newChangeId = changeResult.meta.last_row_id as number;
+
+  await db
+    .prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND ledger_id = ?')
+    .bind(categorySyncId, ledger.id)
+    .run();
+
+  return c.json({
+    ledger_id: ledger.external_id,
+    base_change_id: req.base_change_id,
+    new_change_id: newChangeId,
+    server_timestamp: serverNow,
+    idempotency_replayed: false,
+    entity_id: categorySyncId,
+  } as WriteCommitMeta);
+});
+
+// ---------------------------------------------------------------------------
 // POST /write/tags - 创建标签
 // ---------------------------------------------------------------------------
 
@@ -948,6 +1325,117 @@ writeRouter.post('/budgets', zValidator('json', WriteBudgetCreateSchema), async 
     server_timestamp: serverNow,
     idempotency_replayed: false,
     entity_id: syncId,
+  } as WriteCommitMeta);
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /write/budgets/:id - 更新预算
+// ---------------------------------------------------------------------------
+
+writeRouter.patch('/budgets/:id', zValidator('json', WriteBudgetCreateSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const req = c.req.valid('json');
+  const serverNow = nowUtc();
+  const budgetSyncId = c.req.param('id');
+
+  const ledger = await db
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .first<{ id: string; external_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  const changeResult = await db
+    .prepare(
+      `INSERT INTO sync_changes
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(userId, ledger.id, 'budget', budgetSyncId, 'upsert', safeJsonStringify({
+      budget_type: req.type,
+      category_sync_id: req.category_id ?? null,
+      amount: req.amount,
+      period: req.period,
+      start_day: req.start_day,
+      enabled: req.enabled,
+    }), serverNow, userId)
+    .run();
+
+  const newChangeId = changeResult.meta.last_row_id as number;
+
+  await db
+    .prepare(
+      `INSERT INTO read_budget_projection
+       (ledger_id, sync_id, user_id, budget_type, category_sync_id, amount,
+        period, start_day, enabled, source_change_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(ledger_id, sync_id) DO UPDATE SET budget_type = ?, category_sync_id = ?, amount = ?,
+        period = ?, start_day = ?, enabled = ?, source_change_id = ?`
+    )
+    .bind(
+      ledger.id, budgetSyncId, userId, req.type, req.category_id ?? null,
+      req.amount, req.period, req.start_day, req.enabled ? 1 : 0, newChangeId,
+      req.type, req.category_id ?? null, req.amount, req.period,
+      req.start_day, req.enabled ? 1 : 0, newChangeId,
+    )
+    .run();
+
+  return c.json({
+    ledger_id: ledger.external_id,
+    base_change_id: req.base_change_id,
+    new_change_id: newChangeId,
+    server_timestamp: serverNow,
+    idempotency_replayed: false,
+    entity_id: budgetSyncId,
+  } as WriteCommitMeta);
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /write/budgets/:id - 删除预算
+// ---------------------------------------------------------------------------
+
+writeRouter.delete('/budgets/:id', zValidator('json', WriteBaseSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const req = c.req.valid('json');
+  const serverNow = nowUtc();
+  const budgetSyncId = c.req.param('id');
+
+  const ledger = await db
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .first<{ id: string; external_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  const changeResult = await db
+    .prepare(
+      `INSERT INTO sync_changes
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(userId, ledger.id, 'budget', budgetSyncId, 'delete', '{}', serverNow, userId)
+    .run();
+
+  const newChangeId = changeResult.meta.last_row_id as number;
+
+  await db
+    .prepare('DELETE FROM read_budget_projection WHERE sync_id = ? AND ledger_id = ?')
+    .bind(budgetSyncId, ledger.id)
+    .run();
+
+  return c.json({
+    ledger_id: ledger.external_id,
+    base_change_id: req.base_change_id,
+    new_change_id: newChangeId,
+    server_timestamp: serverNow,
+    idempotency_replayed: false,
+    entity_id: budgetSyncId,
   } as WriteCommitMeta);
 });
 

@@ -379,6 +379,70 @@ workspaceRouter.get('/tags', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /read/workspace/budgets - 跨账本预算聚合
+// ---------------------------------------------------------------------------
+
+workspaceRouter.get('/budgets', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerId = c.req.query('ledger_id') ?? null;
+  const q = c.req.query('q') ?? null;
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '500', 10), 5000);
+  const offset = parseInt(c.req.query('offset') ?? '0', 10);
+
+  let ledgerQuery = 'SELECT id, external_id, name FROM ledgers WHERE user_id = ?';
+  const ledgerParams: string[] = [userId];
+
+  if (ledgerId) {
+    ledgerQuery += ' AND external_id = ?';
+    ledgerParams.push(ledgerId);
+  }
+
+  const ledgers = await db.prepare(ledgerQuery).bind(...ledgerParams).all<{ id: string; external_id: string; name: string | null }>();
+
+  if (ledgers.results.length === 0) {
+    return c.json([]);
+  }
+
+  const ledgerInternalIds = ledgers.results.map((l) => l.id);
+  const ledgerMeta: Record<string, { external_id: string; name: string | null }> = {};
+  ledgers.results.forEach((l) => {
+    ledgerMeta[l.id] = { external_id: l.external_id, name: l.name };
+  });
+
+  let budgetQuery = `SELECT * FROM read_budget_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`;
+  const budgetParams: string[] = [...ledgerInternalIds];
+
+  budgetQuery += ' ORDER BY source_change_id DESC LIMIT ? OFFSET ?';
+  budgetParams.push(String(limit), String(offset));
+
+  const budgetRows = await db.prepare(budgetQuery).bind(...budgetParams).all<Record<string, unknown>>();
+
+  const items = budgetRows.results.map((row) => {
+    const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
+
+    return {
+      id: row.sync_id,
+      type: row.budget_type,
+      category_id: row.category_sync_id,
+      category_name: null,
+      amount: row.amount,
+      period: row.period,
+      start_day: row.start_day,
+      enabled: !!row.enabled,
+      spent: 0,
+      last_change_id: row.source_change_id,
+      ledger_id: ledExtId,
+      ledger_name: ledgerMeta[row.ledger_id as string]?.name ?? null,
+      created_by_user_id: null,
+      created_by_email: null,
+    };
+  });
+
+  return c.json(items);
+});
+
+// ---------------------------------------------------------------------------
 // GET /read/workspace/ledger-counts - 账本总览统计
 // ---------------------------------------------------------------------------
 

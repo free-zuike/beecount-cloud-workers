@@ -389,9 +389,11 @@ syncRouter.get('/full', async (c) => {
  * - server_timestamp: 服务端时间戳
  */
 syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) => {
+  console.log('[SYNC] /sync/push request received');
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
+  console.log('[SYNC] Request received:', JSON.stringify({ device_id: req.device_id, changes_count: req.changes?.length || 0 }, null, 2));
   const serverNow = nowUtc();
 
   // 验证设备有效性（设备必须属于当前用户且未被撤销）
@@ -425,6 +427,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
   // 处理每条变更
   for (const change of req.changes) {
+    console.log('[SYNC] Processing change:', { entity_type: change.entity_type, entity_sync_id: change.entity_sync_id, action: change.action, ledger_id: change.ledger_id });
     const changeUpdatedAt = toUtcDate(change.updated_at);
     const maxAllowed = new Date(new Date(serverNow).getTime() + 5000); // 允许 5s 时钟偏移
     const clampedUpdatedAt =
@@ -523,16 +526,16 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     maxCursor = Math.max(maxCursor, newChangeId);
     touchedLedgers[ledgerRow.external_id] = ledgerRow.id;
 
-    // 方案 B: projection 随 push 同事务刷新（简化实现）
-    // 完整实现需要 sync_applier.py 的 apply_change_to_projection 逻辑
-    await applyChangeToProjection(db, ledgerRow.id, userId, {
-      change_id: newChangeId,
-      entity_type: change.entity_type,
-      entity_sync_id: change.entity_sync_id,
-      action: change.action,
-      payload: change.payload,
-      ledger_id: ledgerRow.id,
-    });
+    // 暂时禁用projection更新以减少数据库压力，避免503错误
+    // 后续可以优化后再恢复
+    // await applyChangeToProjection(db, ledgerRow.id, userId, {
+    //   change_id: newChangeId,
+    //   entity_type: change.entity_type,
+    //   entity_sync_id: change.entity_sync_id,
+    //   action: change.action,
+    //   payload: change.payload,
+    //   ledger_id: ledgerRow.id,
+    // });
   }
 
   // 如果没有任何变更被接受，计算最大游标
@@ -566,6 +569,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     server_timestamp: serverNow,
   };
 
+  console.log('[SYNC] /sync/push response:', JSON.stringify({ accepted, rejected, conflictCount, server_cursor: maxCursor }, null, 2));
   return c.json(response);
 });
 
@@ -961,6 +965,7 @@ async function applyChangeToProjection(
  * - has_more: 是否还有更多变更未返回
  */
 syncRouter.get('/pull', async (c) => {
+  console.log('[SYNC] /sync/pull request received:', { since: c.req.query('since'), device_id: c.req.query('device_id') });
   const userId = c.get('userId');
   const db = c.env.DB;
   const since = parseInt(c.req.query('since') ?? '0', 10);
@@ -1045,6 +1050,12 @@ syncRouter.get('/pull', async (c) => {
 
   const hasMore = changes.results.length > limit;
   const changeRows = changes.results.slice(0, limit);
+  
+  // 计算正确的server_cursor - 应该是最后一条返回的change_id或since
+  let serverCursor = since;
+  if (changeRows.length > 0) {
+    serverCursor = Math.max(...changeRows.map(r => r.change_id));
+  }
 
   const response: SyncPullResponse = {
     changes: changeRows.map((row) => ({
@@ -1057,9 +1068,11 @@ syncRouter.get('/pull', async (c) => {
       updated_at: row.updated_at,
       updated_by_device_id: row.updated_by_device_id,
     })),
-    server_cursor: since,
+    server_cursor: serverCursor,
     has_more: hasMore,
   };
+  
+  console.log('[SYNC] /sync/pull response:', { changes_count: changeRows.length, server_cursor: serverCursor, has_more: hasMore });
 
   // 更新游标
   if (deviceId && changeRows.length > 0) {

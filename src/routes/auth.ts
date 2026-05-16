@@ -73,29 +73,42 @@ authRouter.post('/login', zValidator('json', z.object({
   }
 
   // Create or update device
-  const existingDevice = await db.prepare('SELECT id FROM devices WHERE id = ? AND user_id = ?').bind(resolvedDeviceId, user.id).first();
+  const existingDevice = await db.prepare('SELECT id, revoked_at FROM devices WHERE id = ? AND user_id = ?').bind(resolvedDeviceId, user.id).first<{ id: string, revoked_at: string | null }>();
   if (!existingDevice) {
     await db.prepare(`
       INSERT INTO devices (id, user_id, name, platform, last_ip, last_seen_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).bind(resolvedDeviceId, user.id, deviceName, platform, c.req.header('CF-Connecting-IP'), new Date().toISOString()).run();
   } else {
-    await db.prepare(`
-      UPDATE devices
-      SET last_seen_at = ?, last_ip = ?, name = ?
-      WHERE id = ?
-    `).bind(new Date().toISOString(), c.req.header('CF-Connecting-IP'), deviceName, resolvedDeviceId).run();
+    if (existingDevice.revoked_at) {
+      // 如果设备被撤销了，重新激活它
+      await db.prepare(`
+        UPDATE devices
+        SET last_seen_at = ?, last_ip = ?, name = ?, revoked_at = NULL
+        WHERE id = ?
+      `).bind(new Date().toISOString(), c.req.header('CF-Connecting-IP'), deviceName, resolvedDeviceId).run();
+    } else {
+      await db.prepare(`
+        UPDATE devices
+        SET last_seen_at = ?, last_ip = ?, name = ?
+        WHERE id = ?
+      `).bind(new Date().toISOString(), c.req.header('CF-Connecting-IP'), deviceName, resolvedDeviceId).run();
+    }
   }
 
   const accessToken = await createAccessToken(user.id, jwtSecret);
   const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db);
 
+  // 返回符合蜜蜂记账 APP 期望的格式
   return c.json({
+    user: {
+      id: user.id,
+      email: user.email || null
+    },
     access_token: accessToken,
     refresh_token: refreshToken.token,
     expires_in: 3600,
-    token_type: 'Bearer',
-    user_id: user.id
+    device_id: resolvedDeviceId
   });
 });
 

@@ -62,6 +62,9 @@ export async function createAccessToken(
   const header = JSON.stringify({ alg: JWT_ALG, typ: 'JWT' });
   const payload = JSON.stringify({
     sub: userId,
+    type: 'access',
+    client_type: 'app',
+    scopes: ['app_write', 'web_write'],
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + 60 * 60
   });
