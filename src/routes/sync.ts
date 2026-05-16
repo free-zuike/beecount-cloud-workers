@@ -426,159 +426,138 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
     // 处理每条变更
     for (const change of req.changes) {
-      try {
-        const changeUpdatedAt = toUtcDate(change.updated_at);
-        const maxAllowed = new Date(new Date(serverNow).getTime() + 5000); // 允许 5s 时钟偏移
-        const clampedUpdatedAt =
-          changeUpdatedAt > maxAllowed ? maxAllowed : changeUpdatedAt;
+      const changeUpdatedAt = toUtcDate(change.updated_at);
+      const maxAllowed = new Date(new Date(serverNow).getTime() + 5000); // 允许 5s 时钟偏移
+      const clampedUpdatedAt =
+        changeUpdatedAt > maxAllowed ? maxAllowed : changeUpdatedAt;
 
-        // 查找或创建账本
-        let ledgerRow = await db
+      // 查找或创建账本
+      let ledgerRow = await db
+        .prepare(
+          `SELECT id, user_id, external_id FROM ledgers
+           WHERE user_id = ? AND external_id = ?`
+        )
+        .bind(userId, change.ledger_id)
+        .first<{ id: string; user_id: string; external_id: string }>();
+
+      if (!ledgerRow) {
+        // 账本不存在，自动创建（用户隔离，external_id 在用户内唯一）
+        const newLedgerId = randomUUID();
+        await db
           .prepare(
-            `SELECT id, user_id, external_id FROM ledgers
-             WHERE user_id = ? AND external_id = ?`
+            `INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
+             VALUES (?, ?, ?, ?, 'CNY', ?)`
           )
-          .bind(userId, change.ledger_id)
-          .first<{ id: string; user_id: string; external_id: string }>();
-
-        if (!ledgerRow) {
-          // 账本不存在，自动创建（用户隔离，external_id 在用户内唯一）
-          const newLedgerId = randomUUID();
-          await db
-            .prepare(
-              `INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
-               VALUES (?, ?, ?, ?, 'CNY', ?)`
-            )
-            .bind(newLedgerId, userId, change.ledger_id, change.ledger_id, serverNow)
-            .run();
-          ledgerRow = { id: newLedgerId, user_id: userId, external_id: change.ledger_id };
-        }
-
-        // 查询该实体的最新变更
-        const latestChange = await db
-          .prepare(
-            `SELECT change_id, updated_at, updated_by_device_id
-             FROM sync_changes
-             WHERE ledger_id = ? AND entity_type = ? AND entity_sync_id = ?
-             ORDER BY change_id DESC LIMIT 1`
-          )
-          .bind(ledgerRow.id, change.entity_type, change.entity_sync_id)
-          .first<{ change_id: number; updated_at: string; updated_by_device_id: string | null }>();
-
-        // LWW 决胜逻辑
-        // 比较 (updated_at, device_id) 元组字典序
-        const incomingDeviceId = req.device_id;
-        const incomingTuple = { ts: clampedUpdatedAt.getTime(), deviceId: incomingDeviceId };
-
-        let existingTuple: { ts: number; deviceId: string } | null = null;
-        if (latestChange) {
-          existingTuple = {
-            ts: new Date(latestChange.updated_at).getTime(),
-            deviceId: latestChange.updated_by_device_id ?? '',
-          };
-        }
-
-        // 已有变更且更新更新 → 冲突拒绝
-        if (existingTuple && existingTuple.ts > incomingTuple.ts) {
-          rejected++;
-          conflictCount++;
-          if (conflictSamples.length < 20) {
-            conflictSamples.push({
-              reason: 'lww_rejected_older_change',
-              ledgerId: change.ledger_id,
-              entityType: change.entity_type,
-              entitySyncId: change.entity_sync_id,
-              existingChangeId: latestChange.change_id,
-            });
-          }
-          continue;
-        }
-
-        // 完全相同的 (ts, device_id) → 幂等重放，接受但不重复写
-        if (existingTuple && existingTuple.ts === incomingTuple.ts && existingTuple.deviceId === incomingTuple.deviceId) {
-          accepted++;
-          continue;
-        }
-
-        // 写入 SyncChange
-        const changeIdResult = await db
-          .prepare(
-            `INSERT INTO sync_changes
-             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            userId,
-            ledgerRow.id,
-            change.entity_type,
-            change.entity_sync_id,
-            change.action,
-            safeJsonStringify(change.payload),
-            clampedUpdatedAt.toISOString(),
-            req.device_id,
-            userId,
-          )
+          .bind(newLedgerId, userId, change.ledger_id, change.ledger_id, serverNow)
           .run();
+        ledgerRow = { id: newLedgerId, user_id: userId, external_id: change.ledger_id };
+      }
 
-        const newChangeId = changeIdResult.meta.last_row_id as number;
+      // 查询该实体的最新变更
+      const latestChange = await db
+        .prepare(
+          `SELECT change_id, updated_at, updated_by_device_id
+           FROM sync_changes
+           WHERE ledger_id = ? AND entity_type = ? AND entity_sync_id = ?
+           ORDER BY change_id DESC LIMIT 1`
+        )
+        .bind(ledgerRow.id, change.entity_type, change.entity_sync_id)
+        .first<{ change_id: number; updated_at: string; updated_by_device_id: string | null }>();
+
+      // LWW 决胜逻辑
+      // 比较 (updated_at, device_id) 元组字典序
+      const incomingDeviceId = req.device_id;
+      const incomingTuple = { ts: clampedUpdatedAt.getTime(), deviceId: incomingDeviceId };
+
+      let existingTuple: { ts: number; deviceId: string; changeId: number } | null = null;
+      if (latestChange) {
+        existingTuple = {
+          ts: new Date(latestChange.updated_at).getTime(),
+          deviceId: latestChange.updated_by_device_id ?? '',
+          changeId: latestChange.change_id,
+        };
+      }
+
+      // 已有变更且更新更新 → 冲突拒绝
+      if (existingTuple && existingTuple.ts > incomingTuple.ts) {
+        rejected++;
+        conflictCount++;
+        if (conflictSamples.length < 20) {
+          conflictSamples.push({
+            reason: 'lww_rejected_older_change',
+            ledgerId: change.ledger_id,
+            entityType: change.entity_type,
+            entitySyncId: change.entity_sync_id,
+            existingChangeId: existingTuple.changeId,
+          });
+        }
+        continue;
+      }
+
+      // 完全相同的 (ts, device_id) → 幂等重放，接受但不重复写
+      if (existingTuple && existingTuple.ts === incomingTuple.ts && existingTuple.deviceId === incomingTuple.deviceId) {
         accepted++;
-        maxCursor = Math.max(maxCursor, newChangeId);
-        touchedLedgers[ledgerRow.external_id] = ledgerRow.id;
-      } catch (changeError) {
-        console.error('[SYNC] Error processing change:', {
-          entity_type: change.entity_type,
-          entity_sync_id: change.entity_sync_id,
-          ledger_id: change.ledger_id,
-          error: changeError instanceof Error ? changeError.message : String(changeError),
-        });
-        throw changeError; // 重新抛出，让外层捕获
+        continue;
+      }
+
+      // 写入 SyncChange
+      const changeIdResult = await db
+        .prepare(
+          `INSERT INTO sync_changes
+           (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          userId,
+          ledgerRow.id,
+          change.entity_type,
+          change.entity_sync_id,
+          change.action,
+          safeJsonStringify(change.payload),
+          clampedUpdatedAt.toISOString(),
+          req.device_id,
+          userId,
+        )
+        .run();
+
+      const newChangeId = changeIdResult.meta.last_row_id as number;
+      accepted++;
+      maxCursor = Math.max(maxCursor, newChangeId);
+      touchedLedgers[ledgerRow.external_id] = ledgerRow.id;
+    }
+
+    // 如果没有任何变更被接受，计算最大游标
+    if (maxCursor === 0) {
+      const allLedgers = await db
+        .prepare(
+          `SELECT id FROM ledgers WHERE user_id = ?`
+        )
+        .bind(userId)
+        .all<{ id: string }>();
+
+      const ledgerIds = allLedgers.results.map((l) => l.id);
+      if (ledgerIds.length > 0) {
+        const placeholders = ledgerIds.map(() => '?').join(',');
+        const maxRow = await db
+          .prepare(
+            `SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id IN (${placeholders})`
+          )
+          .bind(...ledgerIds)
+          .first<{ max_id: number | null }>();
+        maxCursor = maxRow?.max_id ?? 0;
       }
     }
 
-    // 暂时禁用projection更新以减少数据库压力，避免503错误
-    // 后续可以优化后再恢复
-    // await applyChangeToProjection(db, ledgerRow.id, userId, {
-    //   change_id: newChangeId,
-    //   entity_type: change.entity_type,
-    //   entity_sync_id: change.entity_sync_id,
-    //   action: change.action,
-    //   payload: change.payload,
-    //   ledger_id: ledgerRow.id,
-    // });
-  }
+    const response: SyncPushResponse = {
+      accepted,
+      rejected,
+      conflict_count: conflictCount,
+      conflict_samples: conflictSamples,
+      server_cursor: maxCursor,
+      server_timestamp: serverNow,
+    };
 
-  // 如果没有任何变更被接受，计算最大游标
-  if (maxCursor === 0) {
-    const allLedgers = await db
-      .prepare(
-        `SELECT id FROM ledgers WHERE user_id = ?`
-      )
-      .bind(userId)
-      .all<{ id: string }>();
-
-    const ledgerIds = allLedgers.results.map((l) => l.id);
-    if (ledgerIds.length > 0) {
-      const placeholders = ledgerIds.map(() => '?').join(',');
-      const maxRow = await db
-        .prepare(
-          `SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id IN (${placeholders})`
-        )
-        .bind(...ledgerIds)
-        .first<{ max_id: number | null }>();
-      maxCursor = maxRow?.max_id ?? 0;
-    }
-  }
-
-  const response: SyncPushResponse = {
-    accepted,
-    rejected,
-    conflict_count: conflictCount,
-    conflict_samples: conflictSamples,
-    server_cursor: maxCursor,
-    server_timestamp: serverNow,
-  };
-
-  return c.json(response);
+    return c.json(response);
   } catch (error) {
     console.error('[SYNC] /sync/push error:', {
       error: error instanceof Error ? error.message : String(error),
