@@ -2360,62 +2360,13 @@ app.get('/api/v1/version', (c) =>
 // 认证中间件
 // ===========================
 
-app.use('/api/v1/*', async (c, next) => {
-  if (c.req.path.startsWith('/api/v1/auth')) {
-    return await next();
-  }
-
-  const authHeader = c.req.header('Authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    console.log('[AUTH] Missing Authorization header');
-    return c.json({ error: 'Unauthorized', detail: 'Missing Authorization header' }, 401);
-  }
-
-  const token = authHeader.slice(7);
-  
-  // 解码并验证 JWT token 格式和 type
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) {
-      console.log('[AUTH] Invalid token format: not 3 parts');
-      return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
+// 通用认证中间件处理函数
+const authMiddleware = async (c: any, next: () => Promise<void>, skipPaths: string[] = []) => {
+  // 检查是否有需要跳过的路径
+  for (const skipPath of skipPaths) {
+    if (c.req.path.startsWith(skipPath)) {
+      return await next();
     }
-    
-    const payloadB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const payload = JSON.parse(atob(payloadB64));
-    
-    if (payload.type !== 'access') {
-      console.log('[AUTH] Invalid token type:', payload.type);
-      return c.json({ error: 'Invalid token type', detail: 'Token must be type=access' }, 401);
-    }
-  } catch (e) {
-    console.log('[AUTH] Failed to decode token:', e);
-    return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
-  }
-  
-  const userId = await validateAccessToken(token, c.env.JWT_SECRET);
-  if (!userId) {
-    console.log('[AUTH] Token validation failed');
-    return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
-  }
-
-  // 从 header 获取 device_id (仅用于 last_seen_at 更新)，与原版一致
-  const deviceId = c.req.header('X-Device-ID') || c.req.header('x-device-id');
-  
-  // 如果有 device_id，不频繁更新 last_seen_at，避免数据库过载
-  // 简化：完全跳过中间件的 last_seen_at 更新，让 sync 端点自己处理
-  // 这样可以减少503错误
-
-  c.set('userId', userId);
-  c.set('deviceId', deviceId ?? null);
-  await next();
-});
-
-// /2fa 路由也使用相同的认证中间件（蜜蜂记账 APP 使用 /2fa 路径）
-app.use('/2fa/*', async (c, next) => {
-  // /2fa/verify 不需要认证，它处理自己的认证流程
-  if (c.req.path.startsWith('/2fa/verify')) {
-    return await next();
   }
 
   const authHeader = c.req.header('Authorization');
@@ -2446,9 +2397,35 @@ app.use('/2fa/*', async (c, next) => {
     return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
   }
 
+  // 从 header 获取 device_id (仅用于 last_seen_at 更新)，与原版一致
+  const deviceId = c.req.header('X-Device-ID') || c.req.header('x-device-id');
+
   c.set('userId', userId);
+  c.set('deviceId', deviceId ?? null);
   await next();
+};
+
+// /api/v1 前缀的路由认证
+app.use('/api/v1/*', async (c, next) => {
+  await authMiddleware(c, next, ['/api/v1/auth']);
 });
+
+// /2fa 前缀的路由认证（蜜蜂记账 APP 使用 /2fa 路径）
+app.use('/2fa/*', async (c, next) => {
+  await authMiddleware(c, next, ['/2fa/verify']);
+});
+
+// 其他蜜蜂记账 APP 兼容路由（没有 /api/v1 前缀）
+app.use('/sync/*', async (c, next) => authMiddleware(c, next));
+app.use('/read/*', async (c, next) => authMiddleware(c, next));
+app.use('/write/*', async (c, next) => authMiddleware(c, next));
+app.use('/devices/*', async (c, next) => authMiddleware(c, next));
+app.use('/profile/*', async (c, next) => authMiddleware(c, next));
+app.use('/attachments/*', async (c, next) => authMiddleware(c, next));
+app.use('/import/*', async (c, next) => authMiddleware(c, next));
+app.use('/ai/*', async (c, next) => authMiddleware(c, next));
+app.use('/backup/*', async (c, next) => authMiddleware(c, next));
+app.use('/notifications/*', async (c, next) => authMiddleware(c, next));
 
 // ===========================
 // 路由注册
@@ -2474,6 +2451,18 @@ app.route('/api/v1/notifications', notificationsRouter);
 app.route('/api/v1/mcp-calls', mcpCallsRouter);
 app.route('/api/v1/admin', adminRouter);
 app.route('/api/v1/admin/backup', adminBackupRouter);
+
+// 蜜蜂记账 APP 兼容：添加没有 /api/v1 前缀的路由
+app.route('/sync', syncRouter);
+app.route('/read', readRouter);
+app.route('/write', writeRouter);
+app.route('/devices', devicesRouter);
+app.route('/profile', profileRouter);
+app.route('/attachments', attachmentsRouter);
+app.route('/import', importRouter);
+app.route('/ai', aiRouter);
+app.route('/backup', backupRouter);
+app.route('/notifications', notificationsRouter);
 
 // ===========================
 // 错误处理
