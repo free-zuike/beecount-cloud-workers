@@ -81,7 +81,7 @@ const SyncChangeInSchema = z.object({
 
 /** SyncPush 请求体 */
 const SyncPushRequestSchema = z.object({
-  device_id: z.string(),
+  device_id: z.string().optional(),
   changes: z.array(SyncChangeInSchema),
 });
 
