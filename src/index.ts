@@ -146,6 +146,7 @@ type Bindings = {
 
 type Variables = {
   userId: string;
+  deviceId: string | null;
 };
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
@@ -2360,7 +2361,7 @@ app.get('/api/v1/version', (c) =>
 // ===========================
 
 app.use('/api/v1/*', async (c, next) => {
-  if (c.req.path.startsWith('/api/v1/auth') || c.req.path.startsWith('/api/v1/2fa/verify')) {
+  if (c.req.path.startsWith('/api/v1/auth')) {
     return await next();
   }
 
@@ -2406,7 +2407,46 @@ app.use('/api/v1/*', async (c, next) => {
   // 这样可以减少503错误
 
   c.set('userId', userId);
-  c.set('deviceId', deviceId);
+  c.set('deviceId', deviceId ?? null);
+  await next();
+});
+
+// /2fa 路由也使用相同的认证中间件（蜜蜂记账 APP 使用 /2fa 路径）
+app.use('/2fa/*', async (c, next) => {
+  // /2fa/verify 不需要认证，它处理自己的认证流程
+  if (c.req.path.startsWith('/2fa/verify')) {
+    return await next();
+  }
+
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json({ error: 'Unauthorized', detail: 'Missing Authorization header' }, 401);
+  }
+
+  const token = authHeader.slice(7);
+  
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
+    }
+    
+    const payloadB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(payloadB64));
+    
+    if (payload.type !== 'access') {
+      return c.json({ error: 'Invalid token type', detail: 'Token must be type=access' }, 401);
+    }
+  } catch {
+    return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
+  }
+  
+  const userId = await validateAccessToken(token, c.env.JWT_SECRET);
+  if (!userId) {
+    return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
+  }
+
+  c.set('userId', userId);
   await next();
 });
 
