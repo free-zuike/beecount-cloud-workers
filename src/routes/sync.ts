@@ -395,17 +395,21 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     const req = c.req.valid('json');
     const serverNow = nowUtc();
 
+    // 处理 device_id - 如果未提供，尝试从 header 获取或使用默认值
+    const deviceId = req.device_id || c.req.header('X-Device-ID') || 'unknown';
+    console.log('[SYNC] Push request:', { userId, deviceId, changesCount: req.changes.length });
+
     // 验证设备有效性（设备必须属于当前用户且未被撤销）
     const device = await db
       .prepare(
         `SELECT id FROM devices
          WHERE id = ? AND user_id = ? AND revoked_at IS NULL`
       )
-      .bind(req.device_id, userId)
+      .bind(deviceId, userId)
       .first();
 
     if (!device) {
-      console.log('[SYNC] Invalid device:', { device_id: req.device_id, userId });
+      console.log('[SYNC] Invalid device:', { deviceId, userId });
       return c.json({ error: 'Invalid device' }, 401);
     }
 
@@ -415,7 +419,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         `UPDATE devices SET last_seen_at = ?, last_ip = ?
          WHERE id = ?`
       )
-      .bind(serverNow, c.req.header('CF-Connecting-IP') ?? null, req.device_id)
+      .bind(serverNow, c.req.header('CF-Connecting-IP') ?? null, deviceId)
       .run();
 
     let accepted = 0;
@@ -474,7 +478,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
       // LWW 决胜逻辑
       // 比较 (updated_at, device_id) 元组字典序
-      const incomingDeviceId = req.device_id;
+      const incomingDeviceId = deviceId;
       const incomingTuple = { ts: clampedUpdatedAt.getTime(), deviceId: incomingDeviceId };
 
       let existingTuple: { ts: number; deviceId: string; changeId: number } | null = null;
@@ -525,7 +529,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
             change.action,
             safeJsonStringify(change.payload),
             clampedUpdatedAt.toISOString(),
-            req.device_id,
+            deviceId,
             userId,
           )
           .run();
