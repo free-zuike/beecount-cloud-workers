@@ -390,6 +390,8 @@ const FRONTEND_HTML = `<!DOCTYPE html>
 
     .ledger-info h3 { font-size: 1.1rem; margin-bottom: 4px; }
     .ledger-info p { font-size: 0.85rem; color: var(--text-muted); }
+    .ledger-info .ledger-id { font-size: 0.75rem; color: var(--text-muted); font-family: monospace; word-break: break-all; }
+    .ledger-info .ledger-balance { color: var(--success); font-weight: 500; }
     .ledger-stats { text-align: right; }
     .ledger-stats .income { color: var(--success); font-size: 0.95rem; }
     .ledger-stats .expense { color: var(--error); font-size: 0.95rem; }
@@ -957,7 +959,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
     }
 
     function renderMainLayout() {
-      return '<header class="header"><div class="container header-content"><div class="logo"><div class="logo-icon">🐝</div><span>蜜蜂记账</span></div><div class="nav-tabs"><button class="nav-tab active" data-page="home">首页</button><button class="nav-tab" data-page="transactions">交易</button><button class="nav-tab" data-page="categories">分类</button><button class="nav-tab" data-page="accounts">账户</button><button class="nav-tab" data-page="stats">统计</button><button class="nav-tab" data-page="tags">🏷️ 标签</button><button class="nav-tab" data-page="budgets">💰 预算</button><button class="nav-tab" data-page="backup">☁️ 备份</button></div><div class="header-actions"><button class="header-btn" onclick="showSettingsModal()">⚙️</button><button class="header-btn" onclick="logout()">退出</button></div></div></header><main class="container" id="mainContent"></main>' + renderAllModals();
+      return '<header class="header"><div class="container header-content"><div class="logo"><div class="logo-icon">🐝</div><span>蜜蜂记账</span></div><div class="nav-tabs"><button class="nav-tab active" data-page="home">首页</button><button class="nav-tab" data-page="transactions">交易</button><button class="nav-tab" data-page="categories">分类</button><button class="nav-tab" data-page="accounts">账户</button><button class="nav-tab" data-page="stats">统计</button><button class="nav-tab" data-page="tags">🏷️ 标签</button><button class="nav-tab" data-page="budgets">💰 预算</button><button class="nav-tab" data-page="backup">☁️ 备份</button><button class="nav-tab" data-page="debug">🔍 调试</button></div><div class="header-actions"><button class="header-btn" onclick="showSettingsModal()">⚙️</button><button class="header-btn" onclick="logout()">退出</button></div></div></header><main class="container" id="mainContent"></main>' + renderAllModals();
     }
 
     function renderAllModals() {
@@ -1375,6 +1377,9 @@ const FRONTEND_HTML = `<!DOCTYPE html>
           case 'backup':
             await renderBackupPage(mainContent);
             break;
+          case 'debug':
+            await renderDebugPage(mainContent);
+            break;
         }
       } catch (err) {
         mainContent.innerHTML = '<div class="empty-state"><p>加载失败: ' + err.message + '</p><button class="btn btn-primary" onclick="loadPageData()">重试</button></div>';
@@ -1396,7 +1401,10 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         ledgerHtml = '<div class="ledger-list">' + state.ledgers.map(function(ledger) {
           const escapedName = (ledger.ledger_name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
           const escapedId = ledger.ledger_id.replace(/"/g, '&quot;');
-          return '<div class="ledger-item" data-id="' + escapedId + '"><div class="ledger-info" onclick="showLedgerDetail(this.closest(&apos;[data-id]&apos;).dataset.id)"><h3>' + escapedName + '</h3><p>' + (ledger.currency || 'CNY') + '</p></div><div class="ledger-stats"><div class="income">+' + formatMoney(ledger.income_total || 0) + '</div><div class="expense">-' + formatMoney(ledger.expense_total || 0) + '</div></div><div class="ledger-actions" style="display: flex; gap: 8px;"><button class="tx-action-btn" onclick="event.stopPropagation(); showEditLedgerModal(this.closest(&apos;[data-id]&apos;).dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="event.stopPropagation(); deleteLedger(this.closest(&apos;[data-id]&apos;).dataset.id)">删除</button></div></div>';
+          const txCount = ledger.transaction_count || 0;
+          const balance = (ledger.income_total || 0) - (ledger.expense_total || 0);
+          const currency = ledger.currency || 'CNY';
+          return '<div class="ledger-item" data-id="' + escapedId + '"><div class="ledger-info" onclick="showLedgerDetail(this.closest(&apos;[data-id]&apos;).dataset.id)"><h3>' + escapedName + ' (ID:' + escapedId + ')</h3><p>币种：' + currency + '</p><p>笔数：' + txCount + '</p><p class="ledger-balance">余额：' + formatMoney(balance) + '</p></div><div class="ledger-actions" style="display: flex; gap: 8px;"><button class="tx-action-btn" onclick="event.stopPropagation(); showEditLedgerModal(this.closest(&apos;[data-id]&apos;).dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="event.stopPropagation(); deleteLedger(this.closest(&apos;[data-id]&apos;).dataset.id)">删除</button></div></div>';
         }).join('') + '</div>';
       }
 
@@ -1636,6 +1644,56 @@ const FRONTEND_HTML = `<!DOCTYPE html>
 
     async function renderBackupPage(container) {
       container.innerHTML = '<div class="page active"><div class="page-header"><h2>备份与恢复</h2></div><div class="card"><h4>导出备份</h4><p style="color: var(--text-muted); margin-bottom: 16px;">将您的所有数据导出为 JSON 文件</p><button class="btn btn-primary" onclick="exportBackup()">📤 导出数据</button></div><div class="card" style="margin-top: 16px;"><h4>导入数据</h4><p style="color: var(--text-muted); margin-bottom: 16px;">从 JSON、CSV、Excel 文件导入交易记录</p><button class="btn btn-secondary" onclick="showImportModal()">📥 导入数据</button></div><div class="card" style="margin-top: 16px;"><h4>危险操作</h4><p style="color: var(--text-muted); margin-bottom: 16px;">此操作不可恢复</p><button class="btn btn-danger" onclick="clearAllData()">🗑️ 清空所有数据</button></div></div>';
+    }
+
+    async function renderDebugPage(container) {
+      container.innerHTML = '<div class="page active"><div class="page-header"><h2>调试工具</h2></div><div class="card"><h4>数据库数据查看</h4><p style="color: var(--text-muted); margin-bottom: 16px;">点击下方按钮查看数据库中的原始数据</p></div><div id="debugActions"></div><div id="debugOutput" style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: monospace; font-size: 12px; max-height: 600px; overflow: auto; white-space: pre-wrap;"></div></div>';
+      
+      const actions = document.getElementById('debugActions');
+      const btn1 = document.createElement('button');
+      btn1.className = 'btn btn-primary';
+      btn1.textContent = '查看账本';
+      btn1.onclick = function() { loadDebugData('ledgers'); };
+      actions.appendChild(btn1);
+      
+      const btn2 = document.createElement('button');
+      btn2.className = 'btn btn-primary';
+      btn2.textContent = '查看交易';
+      btn2.onclick = function() { loadDebugData('transactions'); };
+      actions.appendChild(btn2);
+      
+      const btn3 = document.createElement('button');
+      btn3.className = 'btn btn-primary';
+      btn3.textContent = '查看同步变更';
+      btn3.onclick = function() { loadDebugData('sync-changes'); };
+      actions.appendChild(btn3);
+      
+      actions.style.cssText = 'display: flex; gap: 10px; margin-bottom: 16px;';
+    }
+
+    async function loadDebugData(type) {
+      const output = document.getElementById('debugOutput');
+      if (!output) {
+        alert('Debug element not found');
+        return;
+      }
+      output.textContent = '加载中...';
+      
+      try {
+        let url;
+        if (type === 'ledgers') {
+          url = '/api/v1/read/debug/ledgers';
+        } else if (type === 'transactions') {
+          url = '/api/v1/read/debug/transactions';
+        } else if (type === 'sync-changes') {
+          url = '/api/v1/read/debug/sync-changes';
+        }
+        
+        const data = await api(url);
+        output.textContent = JSON.stringify(data);
+      } catch(err) {
+        output.textContent = 'Error: ' + (err.message || 'unknown');
+      }
     }
 
     async function exportBackup() {

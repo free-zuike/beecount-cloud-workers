@@ -426,10 +426,10 @@
     async function api(endpoint, options = {}) {
       const headers = { 'Content-Type': 'application/json' };
       if (state.token) {
-        headers['Authorization'] = `Bearer ${state.token}`;
+        headers['Authorization'] = 'Bearer ' + (state.token) + '';
       }
       
-      const response = await fetch(`${API_BASE}${endpoint}`, {
+      const response = await fetch('' + (API_BASE) + '' + (endpoint) + '', {
         ...options,
         headers: { ...headers, ...options.headers }
       });
@@ -444,7 +444,7 @@
     // 提示消息
     function showToast(message, type = 'success') {
       const toast = document.createElement('div');
-      toast.className = `toast ${type}`;
+      toast.className = 'toast ' + (type) + '';
       toast.textContent = message;
       document.body.appendChild(toast);
       setTimeout(() => toast.remove(), 3000);
@@ -479,7 +479,7 @@
 
     // 渲染登录/注册页面
     function renderAuth() {
-      return `
+      return '
         <header class="header">
           <div class="container header-content">
             <div class="logo">
@@ -521,7 +521,7 @@
             </form>
           </div>
         </div>
-      `;
+      ';
     }
 
     // 绑定登录/注册事件
@@ -531,7 +531,7 @@
           document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
           document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
           tab.classList.add('active');
-          document.getElementById(`${tab.dataset.tab}Form`).classList.add('active');
+          document.getElementById('' + (tab.dataset.tab) + 'Form').classList.add('active');
         });
       });
 
@@ -576,7 +576,7 @@
 
     // 渲染仪表盘
     function renderDashboard() {
-      return `
+      return '
         <header class="header">
           <div class="container header-content">
             <div class="logo">
@@ -632,7 +632,7 @@
             </form>
           </div>
         </div>
-      `;
+      ';
     }
 
     // 绑定仪表盘事件
@@ -664,54 +664,61 @@
       ledgerList.innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
       
       try {
-        const data = await api('/api/v1/read/ledger-counts');
-        state.ledgers = data.ledgers || [];
+        const ledgers = await api('/api/v1/read/ledgers');
+        state.ledgers = Array.isArray(ledgers) ? ledgers : [];
         
-        statsGrid.innerHTML = `
+        let totalIncome = 0;
+        let totalExpense = 0;
+        for (const ledger of state.ledgers) {
+          totalIncome += ledger.income_total || 0;
+          totalExpense += ledger.expense_total || 0;
+        }
+        
+        statsGrid.innerHTML = '
           <div class="stat-card">
             <div class="stat-label">账本数量</div>
-            <div class="stat-value">${state.ledgers.length}</div>
+            <div class="stat-value">' + (state.ledgers.length) + '</div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">本月收入</div>
-            <div class="stat-value income">${formatMoney(data.monthly_income || 0)}</div>
+            <div class="stat-label">总收入</div>
+            <div class="stat-value income">' + (formatMoney(totalIncome)) + '</div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">本月支出</div>
-            <div class="stat-value expense">${formatMoney(data.monthly_expense || 0)}</div>
+            <div class="stat-label">总支出</div>
+            <div class="stat-value expense">' + (formatMoney(totalExpense)) + '</div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">本月结余</div>
-            <div class="stat-value ${(data.monthly_income - data.monthly_expense) >= 0 ? 'income' : 'expense'}">
-              ${formatMoney((data.monthly_income || 0) - (data.monthly_expense || 0))}
+            <div class="stat-label">总余额</div>
+            <div class="stat-value ' + ((totalIncome - totalExpense) >= 0 ? 'income' : 'expense') + '">
+              ' + (formatMoney(totalIncome - totalExpense)) + '
             </div>
           </div>
-        `;
+        ';
         
         if (state.ledgers.length === 0) {
-          ledgerList.innerHTML = `
+          ledgerList.innerHTML = '
             <div class="empty-state">
               <div class="empty-state-icon">📒</div>
               <p>还没有账本</p>
               <p>点击上方按钮创建您的第一个账本</p>
             </div>
-          `;
+          ';
         } else {
-          ledgerList.innerHTML = state.ledgers.map(ledger => `
-            <div class="ledger-item" onclick="showLedgerDetail('${ledger.id}')">
+          ledgerList.innerHTML = state.ledgers.map(ledger => '
+            <div class="ledger-item" onclick="showLedgerDetail('' + (ledger.ledger_id) + '')">
               <div class="ledger-info">
-                <h3>${ledger.name}</h3>
-                <p>${formatDate(ledger.created_at)}</p>
+                <h3>' + (ledger.ledger_name) + '</h3>
+                <p>币种：' + (ledger.currency || 'CNY') + ' | 笔数：' + (ledger.transaction_count || 0) + '</p>
               </div>
               <div class="ledger-stats">
-                <div class="income">+${formatMoney(ledger.monthly_income || 0)}</div>
-                <div class="expense">-${formatMoney(ledger.monthly_expense || 0)}</div>
+                <div class="income">+' + (formatMoney(ledger.income_total || 0)) + '</div>
+                <div class="expense">-' + (formatMoney(ledger.expense_total || 0)) + '</div>
               </div>
             </div>
-          `).join('');
+          ').join('');
         }
       } catch (err) {
-        ledgerList.innerHTML = `<div class="empty-state"><p>加载失败: ${err.message}</p></div>`;
+        ledgerList.innerHTML = '<div class="empty-state"><p>加载失败: ' + (err.message) + '</p></div>';
       }
     }
 
@@ -726,19 +733,19 @@
       
       try {
         const [ledger, transactions] = await Promise.all([
-          api(`/api/v1/read/ledgers/${ledgerId}`),
-          api(`/api/v1/read/ledgers/${ledgerId}/transactions?limit=10`)
+          api('/api/v1/read/ledgers/' + (ledgerId) + ''),
+          api('/api/v1/read/ledgers/' + (ledgerId) + '/transactions?limit=10')
         ]);
         
         state.currentLedger = ledger;
         state.transactions = transactions.transactions || [];
         
-        content.innerHTML = `
-          <h4 style="margin-bottom: 16px;">${ledger.name}</h4>
+        content.innerHTML = '
+          <h4 style="margin-bottom: 16px;">' + (ledger.name) + '</h4>
           <div class="transaction-list">
             ${state.transactions.length === 0 ? 
               '<p style="color: var(--text-muted); text-align: center; padding: 20px;">暂无交易记录</p>' :
-              state.transactions.map(tx => `
+              state.transactions.map(tx => '
                 <div class="transaction-item">
                   <div class="transaction-icon ${tx.type}">${tx.type === 'income' ? '📈' : '📉'}</div>
                   <div class="transaction-info">
@@ -749,15 +756,15 @@
                     ${tx.type === 'income' ? '+' : '-'}${formatMoney(tx.amount)}
                   </div>
                 </div>
-              `).join('')
+              ').join('')
             }
           </div>
           <div style="margin-top: 20px;">
             <button class="btn btn-secondary btn-block" onclick="closeModal('ledgerModal')">关闭</button>
           </div>
-        `;
+        ';
       } catch (err) {
-        content.innerHTML = `<p style="color: var(--error);">加载失败: ${err.message}</p>`;
+        content.innerHTML = '<p style="color: var(--error);">加载失败: ' + (err.message) + '</p>';
       }
     }
 
