@@ -979,4 +979,59 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets', async (c) => {
   return c.json(result);
 });
 
+// ---------------------------------------------------------------------------
+// 调试端点 - 查看数据库原始数据
+// ---------------------------------------------------------------------------
+
+/** 调试端点 - 查看所有账本 */
+readRouter.get('/debug/ledgers', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+
+  const ledgers = await db
+    .prepare('SELECT * FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .all();
+
+  return c.json({ ledgers: ledgers.results });
+});
+
+/** 调试端点 - 查看所有交易 */
+readRouter.get('/debug/transactions', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+
+  const ledgers = await db
+    .prepare('SELECT id FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .all();
+
+  const ledgerIds = ledgers.results.map((l: any) => l.id);
+
+  if (ledgerIds.length === 0) {
+    return c.json({ transactions: [] });
+  }
+
+  const placeholders = ledgerIds.map(() => '?').join(',');
+  const transactions = await db
+    .prepare(`SELECT * FROM read_tx_projection WHERE ledger_id IN (${placeholders})`)
+    .bind(...ledgerIds)
+    .all();
+
+  return c.json({ transactions: transactions.results });
+});
+
+/** 调试端点 - 查看所有同步变更 */
+readRouter.get('/debug/sync-changes', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+
+  const changes = await db
+    .prepare('SELECT * FROM sync_changes WHERE user_id = ? ORDER BY change_id DESC LIMIT 50')
+    .bind(userId)
+    .all();
+
+  return c.json({ changes: changes.results });
+});
+
 export default readRouter;
