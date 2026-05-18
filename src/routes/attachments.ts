@@ -19,7 +19,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { randomUUID, createHmac } from 'crypto';
+import { randomUUID } from 'crypto';
 
 // ===========================
 // S3 客户端工具类
@@ -114,25 +114,45 @@ class S3Client {
     const stringToSign = `${algorithm}\n${date}\n${credentialScope}\n${canonicalRequestHash}`;
 
     // 计算签名
-    const kDate = this.hmacBuffer('AWS4' + this.secretAccessKey, dateStamp);
-    const kRegion = this.hmacBuffer(kDate, this.region);
-    const kService = this.hmacBuffer(kRegion, 's3');
-    const kSigning = this.hmacBuffer(kService, 'aws4_request');
-    const signature = this.hmacHex(kSigning, stringToSign);
+    const kDate = await this.hmacBuffer('AWS4' + this.secretAccessKey, dateStamp);
+    const kRegion = await this.hmacBuffer(kDate, this.region);
+    const kService = await this.hmacBuffer(kRegion, 's3');
+    const kSigning = await this.hmacBuffer(kService, 'aws4_request');
+    const signature = await this.hmacHex(kSigning, stringToSign);
 
     return signature;
   }
 
-  private hmacHex(key: string | Buffer, data: string): string {
-    const hmac = createHmac('sha256', key);
-    hmac.update(data);
-    return hmac.digest('hex');
+  private async hmacHex(key: string | ArrayBuffer, data: string): Promise<string> {
+    const keyBuffer = typeof key === 'string' ? new TextEncoder().encode(key) : new Uint8Array(key);
+    const dataBuffer = new TextEncoder().encode(data);
+    
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw',
+      keyBuffer,
+      { name: 'HMAC', hash: { name: 'SHA-256' } },
+      false,
+      ['sign']
+    );
+    
+    const signature = await crypto.subtle.sign('HMAC', cryptoKey, dataBuffer);
+    const signatureArray = Array.from(new Uint8Array(signature));
+    return signatureArray.map((b) => b.toString(16).padStart(2, '0')).join('');
   }
 
-  private hmacBuffer(key: string | Buffer, data: string): Buffer {
-    const hmac = createHmac('sha256', key);
-    hmac.update(data);
-    return hmac.digest();
+  private async hmacBuffer(key: string | ArrayBuffer, data: string): Promise<ArrayBuffer> {
+    const keyBuffer = typeof key === 'string' ? new TextEncoder().encode(key) : new Uint8Array(key);
+    const dataBuffer = new TextEncoder().encode(data);
+    
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw',
+      keyBuffer,
+      { name: 'HMAC', hash: { name: 'SHA-256' } },
+      false,
+      ['sign']
+    );
+    
+    return await crypto.subtle.sign('HMAC', cryptoKey, dataBuffer);
   }
 
   private async sha256(data: string): Promise<string> {
@@ -211,11 +231,14 @@ class S3Client {
       return null;
     }
 
+    const endpointUrl = new URL(this.endpoint);
+    const host = endpointUrl.hostname;
+
     const now = new Date();
     const date = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
     const dateStamp = date.slice(0, 8);
 
-    const signature = this.generateSignature('GET', key, '', date, dateStamp);
+    const signature = await this.generateSignature('GET', key, '', date, dateStamp, host);
     const credential = `${this.accessKeyId}/${dateStamp}/${this.region}/s3/aws4_request`;
 
     const url = `${this.endpoint}/${this.bucketName}/${key}`;
@@ -238,11 +261,14 @@ class S3Client {
       return false;
     }
 
+    const endpointUrl = new URL(this.endpoint);
+    const host = endpointUrl.hostname;
+
     const now = new Date();
     const date = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
     const dateStamp = date.slice(0, 8);
 
-    const signature = this.generateSignature('DELETE', key, '', date, dateStamp);
+    const signature = await this.generateSignature('DELETE', key, '', date, dateStamp, host);
     const credential = `${this.accessKeyId}/${dateStamp}/${this.region}/s3/aws4_request`;
 
     const url = `${this.endpoint}/${this.bucketName}/${key}`;
