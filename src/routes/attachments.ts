@@ -100,7 +100,7 @@ class S3Client {
     const credentialScope = `${dateStamp}/${this.region}/s3/aws4_request`;
 
     // 构建规范请求
-    const canonicalUri = `/${key}`;
+    const canonicalUri = `/${this.bucketName}/${key}`;
     const canonicalQuerystring = '';
     const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-date:${date}\n`;
     const signedHeaders = 'content-type;host;x-amz-date';
@@ -173,8 +173,8 @@ class S3Client {
     const signature = await this.generateSignature('PUT', key, contentType, date, dateStamp, host);
     const credential = `${this.accessKeyId}/${dateStamp}/${this.region}/s3/aws4_request`;
 
-    // 使用 bucket 作为子域名的方式
-    const url = `https://${this.bucketName}.${host}/${key}`;
+    // 使用 endpoint/bucket/key 的方式
+    const url = `${this.endpoint}/${this.bucketName}/${key}`;
     console.log('[S3] Upload URL:', url);
     
     try {
