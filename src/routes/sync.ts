@@ -543,7 +543,8 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       }
     }
 
-    // 应用变更到 projection
+    // 应用变更到 projection - 暂时禁用以避免错误
+    /*
     for (const externalLedgerId in touchedLedgers) {
       const internalLedgerId = touchedLedgers[externalLedgerId];
       // 查找这个账本的所有新变更并应用
@@ -579,6 +580,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         }
       }
     }
+    */
 
     // 如果没有任何变更被接受，计算最大游标
     if (maxCursor === 0) {
