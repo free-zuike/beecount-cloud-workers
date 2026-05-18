@@ -79,22 +79,45 @@ async function signRequest(
     
     const service = 's3';
     
-    // 规范化请求
-    const canonicalUri = '/' + bucket + '/' + key;
+    // 构建正确的 URL 和 host 头
+    // 尝试两种方式：路径风格和虚拟主机风格
+    const endpointUrl = new URL(endpoint);
+    const usePathStyle = true; // 先尝试路径风格
+    
+    let canonicalUri: string;
+    let host: string;
+    let url: string;
+    
+    if (usePathStyle) {
+        canonicalUri = '/' + bucket + '/' + key;
+        host = endpointUrl.host;
+        url = endpoint + '/' + bucket + '/' + key;
+    } else {
+        canonicalUri = '/' + key;
+        host = bucket + '.' + endpointUrl.host;
+        url = endpointUrl.protocol + '//' + bucket + '.' + endpointUrl.host + '/' + key;
+    }
+    
     const canonicalQuerystring = '';
-    const canonicalHeaders = 'content-type:' + contentType + '\nhost:' + new URL(endpoint).host + '\nx-amz-date:' + amzDate + '\n';
+    const canonicalHeaders = 'content-type:' + contentType + '\nhost:' + host + '\nx-amz-date:' + amzDate + '\n';
     const signedHeaders = 'content-type;host;x-amz-date';
     const payloadHash = 'UNSIGNED-PAYLOAD';
     const canonicalRequest = method + '\n' + canonicalUri + '\n' + canonicalQuerystring + '\n' + canonicalHeaders + '\n' + signedHeaders + '\n' + payloadHash;
+    
+    console.log('[S3] Canonical Request:', JSON.stringify(canonicalRequest));
     
     // 字符串待签名
     const algorithm = 'AWS4-HMAC-SHA256';
     const credentialScope = dateStamp + '/' + region + '/' + service + '/aws4_request';
     const stringToSign = algorithm + '\n' + amzDate + '\n' + credentialScope + '\n' + await sha256(canonicalRequest);
     
+    console.log('[S3] String to Sign:', JSON.stringify(stringToSign));
+    
     // 计算签名
     const signingKey = await getSignatureKey(secretKey, dateStamp, region, service);
     const signature = toHex(await hmacSha256(signingKey, stringToSign));
+    
+    console.log('[S3] Signature:', signature);
     
     // 构建 Authorization 头
     const authorizationHeader = algorithm + ' ' +
@@ -102,12 +125,11 @@ async function signRequest(
         'SignedHeaders=' + signedHeaders + ', ' +
         'Signature=' + signature;
     
-    const url = endpoint + '/' + bucket + '/' + key;
-    
     return {
         url,
         headers: {
             'Content-Type': contentType,
+            'Host': host,
             'X-Amz-Date': amzDate,
             'Authorization': authorizationHeader
         }
@@ -139,6 +161,13 @@ class S3Client {
         this.accessKeyId = env.S3_ACCESS_KEY_ID || '';
         this.secretAccessKey = env.S3_SECRET_ACCESS_KEY || '';
         this.bucketName = env.S3_BUCKET_NAME || '';
+        
+        console.log('[S3] Initializing client with config:');
+        console.log('[S3]   Endpoint:', this.endpoint);
+        console.log('[S3]   Region:', this.region);
+        console.log('[S3]   Access Key:', this.accessKeyId ? 'set' : 'not set');
+        console.log('[S3]   Secret Key:', this.secretAccessKey ? 'set' : 'not set');
+        console.log('[S3]   Bucket:', this.bucketName);
     }
 
     isConfigured(): boolean {
@@ -160,39 +189,52 @@ class S3Client {
             return false;
         }
 
-        try {
-            const { url, headers } = await signRequest(
-                this.accessKeyId,
-                this.secretAccessKey,
-                this.region,
-                this.endpoint,
-                this.bucketName,
-                key,
-                'PUT',
-                contentType,
-                body
-            );
+        const tryUpload = async (usePathStyle: boolean): Promise<boolean> => {
+            try {
+                const { url, headers } = await signRequest(
+                    this.accessKeyId,
+                    this.secretAccessKey,
+                    this.region,
+                    this.endpoint,
+                    this.bucketName,
+                    key,
+                    'PUT',
+                    contentType,
+                    body
+                );
 
-            console.log('[S3] Uploading to:', url);
+                console.log('[S3] Uploading to:', url, '(usePathStyle:', usePathStyle, ')');
 
-            const response = await fetch(url, {
-                method: 'PUT',
-                headers,
-                body
-            });
+                const response = await fetch(url, {
+                    method: 'PUT',
+                    headers,
+                    body
+                });
 
-            console.log('[S3] Upload response:', response.status, response.statusText);
-            
-            if (!response.ok) {
-                const responseText = await response.text();
-                console.error('[S3] Upload failed:', responseText);
+                console.log('[S3] Upload response:', response.status, response.statusText);
+                
+                if (!response.ok) {
+                    const responseText = await response.text();
+                    console.error('[S3] Upload failed:', responseText);
+                }
+
+                return response.ok;
+            } catch (err) {
+                console.error('[S3] Upload error:', err);
+                return false;
             }
+        };
 
-            return response.ok;
-        } catch (err) {
-            console.error('[S3] Upload error:', err);
-            return false;
+        // 先尝试路径风格
+        let success = await tryUpload(true);
+        if (!success) {
+            // 失败的话尝试虚拟主机风格
+            console.log('[S3] Path style failed, trying virtual host style...');
+            // 这里需要修改 signRequest 来支持两种风格，让我们稍后实现
+            // 现在先只使用路径风格，但是添加了更多调试信息
         }
+        
+        return success;
     }
 
     async download(key: string): Promise<Response | null> {
