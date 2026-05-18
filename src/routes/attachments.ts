@@ -317,6 +317,11 @@ attachmentsRouter.post('/', async (c) => {
     const ledgerExternalId = formData.get('ledger_id') as string | null;
     const fileName = formData.get('file_name') as string | null;
 
+    console.log('[ATTACHMENT] Upload request received');
+    console.log('[ATTACHMENT] File:', file?.name, 'Size:', file?.size);
+    console.log('[ATTACHMENT] Ledger ID:', ledgerExternalId);
+    console.log('[ATTACHMENT] S3 configured:', s3Client.isConfigured());
+
     if (!file) {
       return c.json({ error: 'No file provided' }, 400);
     }
@@ -326,12 +331,16 @@ attachmentsRouter.post('/', async (c) => {
     }
 
     // 查询账本
+    console.log('[ATTACHMENT] Looking up ledger for user:', userId, 'external_id:', ledgerExternalId);
     const ledger = await db
       .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
       .bind(userId, ledgerExternalId)
       .first<{ id: string; external_id: string }>();
 
+    console.log('[ATTACHMENT] Ledger found:', ledger);
+
     if (!ledger) {
+      console.log('[ATTACHMENT] Ledger not found, returning 404');
       return c.json({ error: 'Ledger not found' }, 404);
     }
 
@@ -374,10 +383,15 @@ attachmentsRouter.post('/', async (c) => {
 
     // 上传到 S3（如果已配置）
     if (s3Client.isConfigured()) {
+      console.log('[ATTACHMENT] Uploading to S3, key:', storageKey);
       const uploadSuccess = await s3Client.upload(storageKey, fileBuffer, mimeType);
+      console.log('[ATTACHMENT] S3 upload result:', uploadSuccess);
       if (!uploadSuccess) {
+        console.log('[ATTACHMENT] S3 upload failed, returning 500');
         return c.json({ error: 'Failed to upload to S3' }, 500);
       }
+    } else {
+      console.log('[ATTACHMENT] S3 not configured, skipping upload (only metadata will be saved)');
     }
 
     // 插入记录
@@ -403,7 +417,8 @@ attachmentsRouter.post('/', async (c) => {
     return c.json(response);
   } catch (err) {
     console.error('Attachment upload error:', err);
-    return c.json({ error: 'Failed to upload attachment' }, 500);
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: 'Failed to upload attachment', details: errorMessage }, 500);
   }
 });
 

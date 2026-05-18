@@ -811,7 +811,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
     };
 
     async function api(endpoint, options = {}) {
-      const headers = { 'Content-Type': 'application/json' };
+      const headers = {};
       if (state.token) {
         headers['Authorization'] = 'Bearer ' + state.token;
       }
@@ -822,10 +822,19 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         headers['X-Device-ID'] = deviceId;
       }
       
-      const response = await fetch(API_BASE + endpoint, {
+      const fetchOptions = {
         ...options,
         headers: { ...headers, ...options.headers }
-      });
+      };
+      
+      // 如果 body 是 FormData，不设置 Content-Type，让浏览器自动设置
+      if (options.body instanceof FormData) {
+        delete fetchOptions.headers['Content-Type'];
+      } else if (!fetchOptions.headers['Content-Type']) {
+        fetchOptions.headers['Content-Type'] = 'application/json';
+      }
+      
+      const response = await fetch(API_BASE + endpoint, fetchOptions);
       
       if (response.status === 401) {
         localStorage.removeItem('token');
@@ -837,7 +846,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || '请求失败');
+        throw new Error(data.error || data.details || '请求失败');
       }
       return data;
     }
