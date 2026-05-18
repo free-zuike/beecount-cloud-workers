@@ -182,9 +182,10 @@ class S3Service {
         return config !== null;
     }
 
-    getStorageKey(ledgerId: string, fileId: string, fileName: string): string {
+    getStorageKey(ledgerId: string, fileId: string, fileName: string, savePath?: string): string {
         const encodedFileName = encodeURIComponent(fileName);
-        return `attachments/${ledgerId}/${fileId}/${encodedFileName}`;
+        const basePath = savePath && savePath !== 'custom' ? savePath.replace(/^\/+|\/+$/g, '') : 'attachments';
+        return `${basePath}/${ledgerId}/${fileId}/${encodedFileName}`;
     }
 
     async upload(key: string, body: ArrayBuffer, contentType: string): Promise<boolean> {
@@ -392,10 +393,13 @@ attachmentsRouter.post('/', async (c) => {
         }
 
         const fileId = randomUUID();
-        const storageKey = s3.getStorageKey(ledger.external_id, fileId, actualFileName);
+        
+        const s3Config = await s3.getS3Config();
+        const savePath = s3Config?.savePath || 'attachments';
+        const storageKey = s3.getStorageKey(ledger.external_id, fileId, actualFileName, savePath);
 
         if (await s3.isConfigured()) {
-            console.log('[ATTACHMENT] Uploading to S3, key:', storageKey);
+            console.log('[ATTACHMENT] Uploading to S3, key:', storageKey, 'savePath:', savePath);
             const uploadSuccess = await s3.upload(storageKey, fileBuffer, mimeType);
             console.log('[ATTACHMENT] S3 upload result:', uploadSuccess);
             if (!uploadSuccess) {
