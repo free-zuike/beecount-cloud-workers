@@ -20,6 +20,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import { S3Client as AwsS3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 
 // ===========================
 // S3 客户端工具类
@@ -27,13 +28,10 @@ import { randomUUID } from 'crypto';
 
 /**
  * S3 客户端 - 支持外部 S3 兼容服务
- * 使用 AWS Signature Version 4 进行身份验证
+ * 使用 AWS SDK for JavaScript v3
  */
 class S3Client {
-  private endpoint: string;
-  private region: string;
-  private accessKeyId: string;
-  private secretAccessKey: string;
+  private client: AwsS3Client | null = null;
   private bucketName: string;
 
   constructor(env: {
@@ -43,38 +41,37 @@ class S3Client {
     S3_SECRET_ACCESS_KEY?: string;
     S3_BUCKET_NAME?: string;
   }) {
+    this.bucketName = env.S3_BUCKET_NAME || '';
+    
     let endpoint = env.S3_ENDPOINT || 'https://s3.amazonaws.com';
     if (endpoint && !endpoint.startsWith('http://') && !endpoint.startsWith('https://')) {
       endpoint = 'https://' + endpoint;
     }
-    this.endpoint = endpoint;
-    this.region = env.S3_REGION || 'us-east-1';
-    this.accessKeyId = env.S3_ACCESS_KEY_ID || '';
-    this.secretAccessKey = env.S3_SECRET_ACCESS_KEY || '';
-    this.bucketName = env.S3_BUCKET_NAME || '';
+
+    // 检查是否所有必要的配置都存在
+    if (env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY && this.bucketName) {
+      try {
+        this.client = new AwsS3Client({
+          region: env.S3_REGION || 'auto',
+          endpoint: endpoint,
+          credentials: {
+            accessKeyId: env.S3_ACCESS_KEY_ID,
+            secretAccessKey: env.S3_SECRET_ACCESS_KEY
+          },
+          forcePathStyle: true // 使用路径风格，兼容性更好
+        });
+      } catch (e) {
+        console.error('[S3] Failed to initialize client:', e);
+        this.client = null;
+      }
+    }
   }
 
   /**
    * 检查是否已配置 S3
    */
   isConfigured(): boolean {
-    const missing: string[] = [];
-    if (!this.accessKeyId) missing.push('accessKeyId');
-    if (!this.secretAccessKey) missing.push('secretAccessKey');
-    if (!this.bucketName) missing.push('bucketName');
-    
-    if (missing.length > 0) {
-      console.log('[S3] Missing required config:', missing);
-      return false;
-    }
-    
-    try {
-      new URL(this.endpoint);
-      return true;
-    } catch (e) {
-      console.log('[S3] Invalid endpoint URL:', this.endpoint, 'Error:', e);
-      return false;
-    }
+    return this.client !== null;
   }
 
   /**
@@ -86,83 +83,6 @@ class S3Client {
   }
 
   /**
-   * 生成 AWS Signature Version 4
-   */
-  private async generateSignature(
-    method: string,
-    key: string,
-    contentType: string,
-    date: string,
-    dateStamp: string,
-    host: string
-  ): Promise<string> {
-    const algorithm = 'AWS4-HMAC-SHA256';
-    const credentialScope = `${dateStamp}/${this.region}/s3/aws4_request`;
-
-    // 构建规范请求
-    const canonicalUri = `/${this.bucketName}/${key}`;
-    const canonicalQuerystring = '';
-    const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-date:${date}\n`;
-    const signedHeaders = 'content-type;host;x-amz-date';
-
-    const payloadHash = 'UNSIGNED-PAYLOAD';
-    const canonicalRequest = `${method}\n${canonicalUri}\n${canonicalQuerystring}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
-
-    const canonicalRequestHash = await this.sha256(canonicalRequest);
-    
-    // 构建字符串签名
-    const stringToSign = `${algorithm}\n${date}\n${credentialScope}\n${canonicalRequestHash}`;
-
-    // 计算签名
-    const kDate = await this.hmacBuffer('AWS4' + this.secretAccessKey, dateStamp);
-    const kRegion = await this.hmacBuffer(kDate, this.region);
-    const kService = await this.hmacBuffer(kRegion, 's3');
-    const kSigning = await this.hmacBuffer(kService, 'aws4_request');
-    const signature = await this.hmacHex(kSigning, stringToSign);
-
-    return signature;
-  }
-
-  private async hmacHex(key: string | ArrayBuffer, data: string): Promise<string> {
-    const keyBuffer = typeof key === 'string' ? new TextEncoder().encode(key) : new Uint8Array(key);
-    const dataBuffer = new TextEncoder().encode(data);
-    
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      keyBuffer,
-      { name: 'HMAC', hash: { name: 'SHA-256' } },
-      false,
-      ['sign']
-    );
-    
-    const signature = await crypto.subtle.sign('HMAC', cryptoKey, dataBuffer);
-    const signatureArray = Array.from(new Uint8Array(signature));
-    return signatureArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  private async hmacBuffer(key: string | ArrayBuffer, data: string): Promise<ArrayBuffer> {
-    const keyBuffer = typeof key === 'string' ? new TextEncoder().encode(key) : new Uint8Array(key);
-    const dataBuffer = new TextEncoder().encode(data);
-    
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      keyBuffer,
-      { name: 'HMAC', hash: { name: 'SHA-256' } },
-      false,
-      ['sign']
-    );
-    
-    return await crypto.subtle.sign('HMAC', cryptoKey, dataBuffer);
-  }
-
-  private async sha256(data: string): Promise<string> {
-    const encoder = new TextEncoder();
-    const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(data));
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  /**
    * 上传文件到 S3
    */
   async upload(
@@ -170,53 +90,25 @@ class S3Client {
     body: ArrayBuffer,
     contentType: string
   ): Promise<boolean> {
-    if (!this.isConfigured()) {
+    if (!this.isConfigured() || !this.client) {
       console.log('[S3] Not configured, skipping upload');
       return false;
     }
 
-    const endpointUrl = new URL(this.endpoint);
-    const host = endpointUrl.hostname;
-    
-    console.log('[S3] Upload config:', {
-      endpoint: this.endpoint,
-      bucket: this.bucketName,
-      region: this.region,
-      key: key,
-      host: host
-    });
+    console.log('[S3] Uploading file:', { bucket: this.bucketName, key, contentType });
 
-    const now = new Date();
-    const date = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
-    const dateStamp = date.slice(0, 8);
-
-    const signature = await this.generateSignature('PUT', key, contentType, date, dateStamp, host);
-    const credential = `${this.accessKeyId}/${dateStamp}/${this.region}/s3/aws4_request`;
-
-    // 使用 endpoint/bucket/key 的方式
-    const url = `${this.endpoint}/${this.bucketName}/${key}`;
-    console.log('[S3] Upload URL:', url);
-    
     try {
-      const response = await fetch(url, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': contentType,
-          'x-amz-date': date,
-          'Authorization': `AWS4-HMAC-SHA256 Credential=${credential}, SignedHeaders=content-type;host;x-amz-date, Signature=${signature}`,
-        },
-        body: body,
+      const uint8Array = new Uint8Array(body);
+      const command = new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        Body: uint8Array,
+        ContentType: contentType
       });
-
-      console.log('[S3] Upload response status:', response.status);
-      console.log('[S3] Upload response ok:', response.ok);
       
-      if (!response.ok) {
-        const text = await response.text();
-        console.log('[S3] Upload response body:', text);
-      }
-      
-      return response.ok;
+      await this.client.send(command);
+      console.log('[S3] Upload successful');
+      return true;
     } catch (err) {
       console.error('[S3] Upload error:', err);
       return false;
@@ -227,60 +119,56 @@ class S3Client {
    * 从 S3 下载文件
    */
   async download(key: string): Promise<Response | null> {
-    if (!this.isConfigured()) {
+    if (!this.isConfigured() || !this.client) {
       return null;
     }
 
-    const endpointUrl = new URL(this.endpoint);
-    const host = endpointUrl.hostname;
-
-    const now = new Date();
-    const date = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
-    const dateStamp = date.slice(0, 8);
-
-    const signature = await this.generateSignature('GET', key, '', date, dateStamp, host);
-    const credential = `${this.accessKeyId}/${dateStamp}/${this.region}/s3/aws4_request`;
-
-    const url = `${this.endpoint}/${this.bucketName}/${key}`;
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'x-amz-date': date,
-        'Authorization': `AWS4-HMAC-SHA256 Credential=${credential}, SignedHeaders=host;x-amz-date, Signature=${signature}`,
-      },
-    });
-
-    return response.ok ? response : null;
+    try {
+      const command = new GetObjectCommand({
+        Bucket: this.bucketName,
+        Key: key
+      });
+      
+      const result = await this.client.send(command);
+      
+      // 转换为 Response 对象
+      if (result.Body) {
+        const body = await result.Body.transformToByteArray();
+        return new Response(body, {
+          headers: {
+            'Content-Type': result.ContentType || 'application/octet-stream',
+            'Content-Length': result.ContentLength?.toString() || '0'
+          }
+        });
+      }
+      
+      return null;
+    } catch (err) {
+      console.error('[S3] Download error:', err);
+      return null;
+    }
   }
 
   /**
    * 从 S3 删除文件
    */
   async delete(key: string): Promise<boolean> {
-    if (!this.isConfigured()) {
+    if (!this.isConfigured() || !this.client) {
       return false;
     }
 
-    const endpointUrl = new URL(this.endpoint);
-    const host = endpointUrl.hostname;
-
-    const now = new Date();
-    const date = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
-    const dateStamp = date.slice(0, 8);
-
-    const signature = await this.generateSignature('DELETE', key, '', date, dateStamp, host);
-    const credential = `${this.accessKeyId}/${dateStamp}/${this.region}/s3/aws4_request`;
-
-    const url = `${this.endpoint}/${this.bucketName}/${key}`;
-    const response = await fetch(url, {
-      method: 'DELETE',
-      headers: {
-        'x-amz-date': date,
-        'Authorization': `AWS4-HMAC-SHA256 Credential=${credential}, SignedHeaders=host;x-amz-date, Signature=${signature}`,
-      },
-    });
-
-    return response.ok;
+    try {
+      const command = new DeleteObjectCommand({
+        Bucket: this.bucketName,
+        Key: key
+      });
+      
+      await this.client.send(command);
+      return true;
+    } catch (err) {
+      console.error('[S3] Delete error:', err);
+      return false;
+    }
   }
 }
 

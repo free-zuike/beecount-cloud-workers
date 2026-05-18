@@ -3,6 +3,9 @@ main = "src/index.ts"
 compatibility_date = "2025-01-24"
 compatibility_flags = ["nodejs_compat"]
 
+[alias]
+tslib = "tslib"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "beecount-cloud"
