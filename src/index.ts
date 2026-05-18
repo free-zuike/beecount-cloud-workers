@@ -1806,7 +1806,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
           '</div>';
       });
       
-      html += '<button class="btn btn-success" style="margin-top: 16px;" onclick="renderS3Form(document.getElementById(\'s3ConfigForm\'), null)">+ 添加新的 S3 配置</button>';
+      html += `<button class="btn btn-success" style="margin-top: 16px;" onclick="renderS3Form(document.getElementById('s3ConfigForm'), null)">+ 添加新的 S3 配置</button>`;
       
       container.innerHTML = html;
     }
