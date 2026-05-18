@@ -21,6 +21,9 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 
+// 从 sys_config 模块导入获取配置的函数
+import { getFirstEnabledS3Config } from './sys_config';
+
 // 简化的 S3 签名算法实现
 async function signRequest(
     accessKey: string,
@@ -90,16 +93,16 @@ async function getSignatureKey(key: string, dateStamp: string, regionName: strin
 }
 
 async function hmac(key: Uint8Array | ArrayBuffer, data: string): Promise<Uint8Array> {
-    const encoder = new TextEncoder();
-    const cryptoKey = await crypto.subtle.importKey(
-        'raw',
-        key instanceof ArrayBuffer ? key : key.buffer,
-        { name: 'HMAC', hash: { name: 'SHA-256' } },
-        false,
-        ['sign']
-    );
-    const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(data));
-    return new Uint8Array(signature);
+  const encoder = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    (key as ArrayBuffer),
+    { name: 'HMAC', hash: { name: 'SHA-256' } },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(data));
+  return new Uint8Array(signature);
 }
 
 async function sha256Hex(data: string): Promise<string> {
@@ -115,31 +118,68 @@ async function hmacHex(key: Uint8Array, data: string): Promise<string> {
 }
 
 class S3Service {
-    private env: {
-        S3_ENDPOINT?: string;
-        S3_REGION?: string;
-        S3_ACCESS_KEY_ID?: string;
-        S3_SECRET_ACCESS_KEY?: string;
-        S3_BUCKET_NAME?: string;
-    };
+    private db: D1Database;
+    private env: Bindings;
+    private s3ConfigCache: any = null;
+    private s3ConfigCacheTime: number = 0;
+    private CACHE_TTL_MS = 60000; // 缓存 1 分钟
 
-    constructor(env: {
-        S3_ENDPOINT?: string;
-        S3_REGION?: string;
-        S3_ACCESS_KEY_ID?: string;
-        S3_SECRET_ACCESS_KEY?: string;
-        S3_BUCKET_NAME?: string;
-    }) {
+    constructor(db: D1Database, env: Bindings) {
+        this.db = db;
         this.env = env;
     }
 
-    isConfigured(): boolean {
-        return !!(
-            this.env.S3_ACCESS_KEY_ID &&
-            this.env.S3_SECRET_ACCESS_KEY &&
-            this.env.S3_BUCKET_NAME &&
-            this.env.S3_ENDPOINT
-        );
+    // 从数据库或环境变量获取 S3 配置
+    private async getS3Config(): Promise<any> {
+        const now = Date.now();
+        
+        // 检查缓存是否有效
+        if (this.s3ConfigCache && (now - this.s3ConfigCacheTime) < this.CACHE_TTL_MS) {
+            return this.s3ConfigCache;
+        }
+
+        try {
+            // 尝试从数据库获取配置
+            const dbConfig = await getFirstEnabledS3Config(this.db, this.env);
+            if (dbConfig) {
+                this.s3ConfigCache = dbConfig;
+                this.s3ConfigCacheTime = now;
+                console.log('[S3] Using config from database:', dbConfig.name);
+                return dbConfig;
+            }
+        } catch (error) {
+            console.error('[S3] Error getting config from database:', error);
+        }
+
+        // 回退到环境变量配置
+        if (this.env.S3_ACCESS_KEY_ID) {
+            const envConfig = {
+                id: 1,
+                name: 'S3_env',
+                type: 's3',
+                savePath: 'environment variable',
+                accessKeyId: this.env.S3_ACCESS_KEY_ID,
+                secretAccessKey: this.env.S3_SECRET_ACCESS_KEY,
+                region: this.env.S3_REGION || 'us-east-1',
+                bucketName: this.env.S3_BUCKET_NAME,
+                endpoint: this.env.S3_ENDPOINT,
+                pathStyle: true,
+                cdnDomain: '',
+                enabled: true,
+                fixed: true
+            };
+            this.s3ConfigCache = envConfig;
+            this.s3ConfigCacheTime = now;
+            console.log('[S3] Using config from environment variables');
+            return envConfig;
+        }
+
+        return null;
+    }
+
+    async isConfigured(): Promise<boolean> {
+        const config = await this.getS3Config();
+        return config !== null;
     }
 
     getStorageKey(ledgerId: string, fileId: string, fileName: string): string {
@@ -148,25 +188,26 @@ class S3Service {
     }
 
     async upload(key: string, body: ArrayBuffer, contentType: string): Promise<boolean> {
-        if (!this.isConfigured()) {
+        const config = await this.getS3Config();
+        if (!config) {
             console.log('[S3] Not configured, skipping upload');
             return false;
         }
 
         console.log('[S3] Initializing upload with config:');
-        console.log('[S3]   Endpoint:', this.env.S3_ENDPOINT);
-        console.log('[S3]   Region:', this.env.S3_REGION || 'us-east-1');
-        console.log('[S3]   Bucket:', this.env.S3_BUCKET_NAME);
+        console.log('[S3]   Endpoint:', config.endpoint);
+        console.log('[S3]   Region:', config.region || 'us-east-1');
+        console.log('[S3]   Bucket:', config.bucketName);
         console.log('[S3]   Key:', key);
 
         try {
             console.log('[S3] Signing request');
             const { url, headers } = await signRequest(
-                this.env.S3_ACCESS_KEY_ID!,
-                this.env.S3_SECRET_ACCESS_KEY!,
-                this.env.S3_REGION || 'us-east-1',
-                this.env.S3_ENDPOINT!,
-                this.env.S3_BUCKET_NAME!,
+                config.accessKeyId,
+                config.secretAccessKey,
+                config.region || 'us-east-1',
+                config.endpoint,
+                config.bucketName,
                 key,
                 'PUT',
                 contentType,
@@ -202,17 +243,18 @@ class S3Service {
     }
 
     async download(key: string): Promise<Response | null> {
-        if (!this.isConfigured()) {
+        const config = await this.getS3Config();
+        if (!config) {
             return null;
         }
 
         try {
             const { url, headers } = await signRequest(
-                this.env.S3_ACCESS_KEY_ID!,
-                this.env.S3_SECRET_ACCESS_KEY!,
-                this.env.S3_REGION || 'us-east-1',
-                this.env.S3_ENDPOINT!,
-                this.env.S3_BUCKET_NAME!,
+                config.accessKeyId,
+                config.secretAccessKey,
+                config.region || 'us-east-1',
+                config.endpoint,
+                config.bucketName,
                 key,
                 'GET',
                 'application/octet-stream',
@@ -236,17 +278,18 @@ class S3Service {
     }
 
     async delete(key: string): Promise<boolean> {
-        if (!this.isConfigured()) {
+        const config = await this.getS3Config();
+        if (!config) {
             return false;
         }
 
         try {
             const { url, headers } = await signRequest(
-                this.env.S3_ACCESS_KEY_ID!,
-                this.env.S3_SECRET_ACCESS_KEY!,
-                this.env.S3_REGION || 'us-east-1',
-                this.env.S3_ENDPOINT!,
-                this.env.S3_BUCKET_NAME!,
+                config.accessKeyId,
+                config.secretAccessKey,
+                config.region || 'us-east-1',
+                config.endpoint,
+                config.bucketName,
                 key,
                 'DELETE',
                 'application/octet-stream',
@@ -274,6 +317,8 @@ type Bindings = {
     S3_ACCESS_KEY_ID?: string;
     S3_SECRET_ACCESS_KEY?: string;
     S3_BUCKET_NAME?: string;
+    S3_PATH_STYLE?: string;
+    S3_CDN_DOMAIN?: string;
 };
 
 type Variables = {
@@ -287,13 +332,7 @@ attachmentsRouter.post('/', async (c) => {
     const userId = c.get('userId');
     const db = c.env.DB;
 
-    const s3 = new S3Service({
-        S3_ENDPOINT: c.env.S3_ENDPOINT,
-        S3_REGION: c.env.S3_REGION,
-        S3_ACCESS_KEY_ID: c.env.S3_ACCESS_KEY_ID,
-        S3_SECRET_ACCESS_KEY: c.env.S3_SECRET_ACCESS_KEY,
-        S3_BUCKET_NAME: c.env.S3_BUCKET_NAME,
-    });
+    const s3 = new S3Service(db, c.env);
 
     try {
         const formData = await c.req.formData();
@@ -355,7 +394,7 @@ attachmentsRouter.post('/', async (c) => {
         const fileId = randomUUID();
         const storageKey = s3.getStorageKey(ledger.external_id, fileId, actualFileName);
 
-        if (s3.isConfigured()) {
+        if (await s3.isConfigured()) {
             console.log('[ATTACHMENT] Uploading to S3, key:', storageKey);
             const uploadSuccess = await s3.upload(storageKey, fileBuffer, mimeType);
             console.log('[ATTACHMENT] S3 upload result:', uploadSuccess);
@@ -397,13 +436,7 @@ attachmentsRouter.get('/:id', async (c) => {
     const db = c.env.DB;
     const fileId = c.req.param('id');
 
-    const s3 = new S3Service({
-        S3_ENDPOINT: c.env.S3_ENDPOINT,
-        S3_REGION: c.env.S3_REGION,
-        S3_ACCESS_KEY_ID: c.env.S3_ACCESS_KEY_ID,
-        S3_SECRET_ACCESS_KEY: c.env.S3_SECRET_ACCESS_KEY,
-        S3_BUCKET_NAME: c.env.S3_BUCKET_NAME,
-    });
+    const s3 = new S3Service(db, c.env);
 
     const row = await db
         .prepare(
@@ -428,7 +461,7 @@ attachmentsRouter.get('/:id', async (c) => {
         return c.json({ error: 'Attachment not found' }, 404);
     }
 
-    if (s3.isConfigured()) {
+    if (await s3.isConfigured()) {
         const s3Response = await s3.download(row.storage_path);
         if (s3Response) {
             return new Response(s3Response.body, {
@@ -459,13 +492,7 @@ attachmentsRouter.delete('/:id', async (c) => {
     const db = c.env.DB;
     const fileId = c.req.param('id');
 
-    const s3 = new S3Service({
-        S3_ENDPOINT: c.env.S3_ENDPOINT,
-        S3_REGION: c.env.S3_REGION,
-        S3_ACCESS_KEY_ID: c.env.S3_ACCESS_KEY_ID,
-        S3_SECRET_ACCESS_KEY: c.env.S3_SECRET_ACCESS_KEY,
-        S3_BUCKET_NAME: c.env.S3_BUCKET_NAME,
-    });
+    const s3 = new S3Service(db, c.env);
 
     const row = await db
         .prepare(
@@ -480,7 +507,7 @@ attachmentsRouter.delete('/:id', async (c) => {
         return c.json({ error: 'Attachment not found' }, 404);
     }
 
-    if (s3.isConfigured()) {
+    if (await s3.isConfigured()) {
         await s3.delete(row.storage_path);
     }
 

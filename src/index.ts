@@ -137,11 +137,19 @@ import adminBackupRouter from './routes/admin_backup';
 import notificationsRouter from './routes/notifications';
 import mcpCallsRouter from './routes/mcp_calls';
 import adminRouter from './routes/admin';
+import sysConfigRouter from './routes/sys_config';
 
 type Bindings = {
   DB: D1Database;
   API_PREFIX: string;
   JWT_SECRET: string;
+  S3_ENDPOINT?: string;
+  S3_REGION?: string;
+  S3_ACCESS_KEY_ID?: string;
+  S3_SECRET_ACCESS_KEY?: string;
+  S3_BUCKET_NAME?: string;
+  S3_PATH_STYLE?: string;
+  S3_CDN_DOMAIN?: string;
 };
 
 type Variables = {
@@ -1656,7 +1664,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
     }
 
     async function renderDebugPage(container) {
-      container.innerHTML = '<div class="page active"><div class="page-header"><h2>调试工具</h2></div><div class="card"><h4>数据库数据查看</h4><p style="color: var(--text-muted); margin-bottom: 16px;">点击下方按钮查看数据库中的原始数据</p></div><div id="debugActions"></div><div id="debugOutput" style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: monospace; font-size: 12px; max-height: 600px; overflow: auto; white-space: pre-wrap;"></div><div class="card" style="margin-top: 24px;"><h4>附件上传测试</h4><p style="color: var(--text-muted); margin-bottom: 16px;">测试附件上传功能</p><div id="attachmentUploadStatus"></div><input type="file" id="attachmentFileInput" accept="image/*" style="margin-bottom: 16px;"><select id="attachmentLedgerSelect" style="margin-bottom: 16px; padding: 8px; border: 1px solid var(--border); border-radius: 4px; width: 100%;"><option value="">选择账本</option></select><button class="btn btn-primary" onclick="testUploadAttachment()">上传附件</button></div></div>';
+      container.innerHTML = '<div class="page active"><div class="page-header"><h2>调试工具</h2></div><div class="card"><h4>数据库数据查看</h4><p style="color: var(--text-muted); margin-bottom: 16px;">点击下方按钮查看数据库中的原始数据</p></div><div id="debugActions"></div><div id="debugOutput" style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: monospace; font-size: 12px; max-height: 600px; overflow: auto; white-space: pre-wrap;"></div><div class="card" style="margin-top: 24px;"><h4>S3 配置管理</h4><p style="color: var(--text-muted); margin-bottom: 16px;">配置 S3 存储以用于附件上传</p><div id="s3ConfigStatus" style="margin-bottom: 16px;"></div><button class="btn btn-primary" style="margin-bottom: 16px;" onclick="loadS3Config()">刷新 S3 配置</button><div id="s3ConfigForm" style="margin-top: 16px;"></div></div><div class="card" style="margin-top: 24px;"><h4>附件上传测试</h4><p style="color: var(--text-muted); margin-bottom: 16px;">测试附件上传功能</p><div id="attachmentUploadStatus"></div><input type="file" id="attachmentFileInput" accept="image/*" style="margin-bottom: 16px;"><select id="attachmentLedgerSelect" style="margin-bottom: 16px; padding: 8px; border: 1px solid var(--border); border-radius: 4px; width: 100%;"><option value="">选择账本</option></select><button class="btn btn-primary" onclick="testUploadAttachment()">上传附件</button></div></div>';
       
       const actions = document.getElementById('debugActions');
       const btn1 = document.createElement('button');
@@ -1678,6 +1686,9 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       actions.appendChild(btn3);
       
       actions.style.cssText = 'display: flex; gap: 10px; margin-bottom: 16px;';
+      
+      // 加载 S3 配置
+      await loadS3Config();
       
       // 加载账本列表到选择框
       loadLedgerSelectForAttachment();
@@ -1757,6 +1768,180 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         output.textContent = JSON.stringify(data);
       } catch(err) {
         output.textContent = 'Error: ' + (err.message || 'unknown');
+      }
+    }
+
+    async function loadS3Config() {
+      const statusDiv = document.getElementById('s3ConfigStatus');
+      const formDiv = document.getElementById('s3ConfigForm');
+      
+      if (!statusDiv || !formDiv) return;
+      
+      statusDiv.innerHTML = '<p>正在加载 S3 配置...</p>';
+      
+      try {
+        const configs = await api('/api/v1/sys-config/s3') || [];
+        renderS3Configs(configs, formDiv);
+        statusDiv.innerHTML = '<p style="color: var(--success);">加载成功！</p>';
+      } catch (err) {
+        statusDiv.innerHTML = '<p style="color: var(--error);">加载失败: ' + (err.message || err) + '</p>';
+        renderS3Form(formDiv, null);
+      }
+    }
+
+    function renderS3Configs(configs, container) {
+      let html = '';
+      
+      configs.forEach(config => {
+        const isEnabled = config.enabled;
+        html += '<div class="card" style="margin-bottom: 16px; padding: 16px; border: ' + (isEnabled ? '2px solid var(--success)' : '1px solid var(--border)') + ';">' +
+          '<h4 style="margin-bottom: 8px;">' + (config.name || 'S3 配置') + ' ' + (isEnabled ? '🟢' : '🔴') + '</h4>' +
+          '<p style="margin-bottom: 8px; font-size: 14px; color: var(--text-muted);">Endpoint: ' + (config.endpoint || '') + '</p>' +
+          '<p style="margin-bottom: 8px; font-size: 14px; color: var(--text-muted);">Bucket: ' + (config.bucket_name || '') + '</p>' +
+          '<div style="margin-top: 12px; display: flex; gap: 8px;">' +
+          '<button class="btn btn-primary" onclick="toggleS3Config(' + config.id + ')">' + (isEnabled ? '禁用' : '启用') + '</button>' +
+          '<button class="btn btn-secondary" onclick="editS3Config(' + config.id + ')">编辑</button>' +
+          '<button class="btn btn-danger" onclick="deleteS3Config(' + config.id + ')">删除</button>' +
+          '</div>' +
+          '</div>';
+      });
+      
+      html += '<button class="btn btn-success" style="margin-top: 16px;" onclick="renderS3Form(document.getElementById(\'s3ConfigForm\'), null)">+ 添加新的 S3 配置</button>';
+      
+      container.innerHTML = html;
+    }
+
+    function renderS3Form(container, config) {
+      const isEdit = config !== null;
+      const title = isEdit ? '编辑 S3 配置' : '添加 S3 配置';
+      
+      container.innerHTML = '<div class="card" style="padding: 16px;">' +
+        '<h4 style="margin-bottom: 16px;">' + title + '</h4>' +
+        '<form id="s3ConfigFormInner">' +
+        (isEdit ? '<input type="hidden" name="id" value="' + config.id + '">' : '') +
+        '<div class="form-group">' +
+        '<label>配置名称</label>' +
+        '<input type="text" name="name" placeholder="例如：我的 S3 存储" required ' + (isEdit && config.name ? 'value="' + config.name.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '</div>' +
+        '<div class="form-group">' +
+        '<label>Endpoint</label>' +
+        '<input type="text" name="endpoint" placeholder="例如：https://s3.amazonaws.com" required ' + (isEdit && config.endpoint ? 'value="' + config.endpoint.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '</div>' +
+        '<div class="form-group">' +
+        '<label>Region</label>' +
+        '<input type="text" name="region" placeholder="例如：us-east-1" ' + (isEdit && config.region ? 'value="' + config.region.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '</div>' +
+        '<div class="form-group">' +
+        '<label>Bucket Name</label>' +
+        '<input type="text" name="bucket_name" placeholder="例如：my-bucket" required ' + (isEdit && config.bucket_name ? 'value="' + config.bucket_name.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '</div>' +
+        '<div class="form-group">' +
+        '<label>Access Key ID</label>' +
+        '<input type="text" name="access_key_id" placeholder="Access Key ID" required ' + (isEdit && config.access_key_id ? 'value="' + config.access_key_id.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '</div>' +
+        '<div class="form-group">' +
+        '<label>Secret Access Key</label>' +
+        '<input type="password" name="secret_access_key" placeholder="Secret Access Key" required>' +
+        (isEdit ? '<small style="color: var(--text-muted);">留空表示不修改</small>' : '') +
+        '</div>' +
+        '<div class="form-group">' +
+        '<label>路径风格</label>' +
+        '<select name="path_style">' +
+        '<option value="true" ' + (isEdit && config.path_style ? 'selected' : '') + '>启用</option>' +
+        '<option value="false" ' + (isEdit && !config.path_style ? 'selected' : '') + '>禁用</option>' +
+        '</select>' +
+        '</div>' +
+        '<div class="form-group">' +
+        '<label>CDN 域名（可选）</label>' +
+        '<input type="text" name="cdn_domain" placeholder="例如：https://cdn.example.com" ' + (isEdit && config.cdn_domain ? 'value="' + config.cdn_domain.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '</div>' +
+        '<div class="form-group">' +
+        '<label>保存路径（可选）</label>' +
+        '<input type="text" name="save_path" placeholder="例如：/attachments" ' + (isEdit && config.save_path ? 'value="' + config.save_path.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '</div>' +
+        '<div style="display: flex; gap: 8px;">' +
+        '<button type="submit" class="btn btn-primary">' + (isEdit ? '保存修改' : '添加配置') + '</button>' +
+        '<button type="button" class="btn btn-secondary" onclick="loadS3Config()">取消</button>' +
+        '</div>' +
+        '</form>' +
+        '</div>';
+      
+      // 绑定表单事件
+      const form = document.getElementById('s3ConfigFormInner');
+      if (form) {
+        form.addEventListener('submit', async function(e) {
+          e.preventDefault();
+          const formData = new FormData(e.target);
+          const data = {};
+          formData.forEach((value, key) => {
+            data[key] = value;
+          });
+          
+          // 转换布尔值
+          if (data.path_style) {
+            data.path_style = data.path_style === 'true';
+          }
+          
+          const statusDiv = document.getElementById('s3ConfigStatus');
+          statusDiv.innerHTML = '<p>正在保存...</p>';
+          
+          try {
+            let result;
+            if (isEdit) {
+              result = await api('/api/v1/sys-config/s3/' + data.id, {
+                method: 'PUT',
+                body: JSON.stringify(data)
+              });
+            } else {
+              result = await api('/api/v1/sys-config/s3', {
+                method: 'POST',
+                body: JSON.stringify(data)
+              });
+            }
+            
+            statusDiv.innerHTML = '<p style="color: var(--success);">保存成功！</p>';
+            await loadS3Config();
+          } catch (err) {
+            statusDiv.innerHTML = '<p style="color: var(--error);">保存失败: ' + (err.message || err) + '</p>';
+          }
+        });
+      }
+    }
+
+    async function editS3Config(configId) {
+      try {
+        const configs = await api('/api/v1/sys-config/s3') || [];
+        const config = configs.find(c => c.id === configId);
+        if (config) {
+          const formDiv = document.getElementById('s3ConfigForm');
+          renderS3Form(formDiv, config);
+        }
+      } catch (err) {
+        alert('获取配置失败: ' + (err.message || err));
+      }
+    }
+
+    async function toggleS3Config(configId) {
+      try {
+        await api('/api/v1/sys-config/s3/' + configId + '/toggle', {
+          method: 'POST'
+        });
+        await loadS3Config();
+      } catch (err) {
+        alert('切换状态失败: ' + (err.message || err));
+      }
+    }
+
+    async function deleteS3Config(configId) {
+      if (!confirm('确定要删除这个配置吗？')) return;
+      
+      try {
+        await api('/api/v1/sys-config/s3/' + configId, {
+          method: 'DELETE'
+        });
+        await loadS3Config();
+      } catch (err) {
+        alert('删除失败: ' + (err.message || err));
       }
     }
 
@@ -2573,6 +2758,7 @@ app.route('/api/v1/notifications', notificationsRouter);
 app.route('/api/v1/mcp-calls', mcpCallsRouter);
 app.route('/api/v1/admin', adminRouter);
 app.route('/api/v1/admin/backup', adminBackupRouter);
+app.route('/api/v1/sys-config', sysConfigRouter);
 
 // 蜜蜂记账 APP 兼容：添加没有 /api/v1 前缀的路由
 app.route('/sync', syncRouter);
