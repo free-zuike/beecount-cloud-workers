@@ -49,18 +49,26 @@ async function signRequest(
     
     const canonicalRequest = `${method}\n/${bucket}/${key}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
     
+    console.log('[S3] Canonical Request:', JSON.stringify(canonicalRequest));
+    
     // 计算字符串到签名
     const algorithm = 'AWS4-HMAC-SHA256';
     const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
     const hashedCanonicalRequest = await sha256Hex(canonicalRequest);
     const stringToSign = `${algorithm}\n${amzDate}\n${credentialScope}\n${hashedCanonicalRequest}`;
     
+    console.log('[S3] String to Sign:', JSON.stringify(stringToSign));
+    
     // 计算签名
     const signingKey = await getSignatureKey(secretKey, dateStamp, region, service);
     const signature = await hmacHex(signingKey, stringToSign);
     
+    console.log('[S3] Signature:', signature);
+    
     // 构建授权头
     const authorizationHeader = `${algorithm} Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+    
+    console.log('[S3] Authorization:', authorizationHeader);
     
     return {
         url,
