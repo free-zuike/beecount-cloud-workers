@@ -1806,9 +1806,14 @@ const FRONTEND_HTML = `<!DOCTYPE html>
           '</div>';
       });
       
-      html += `<button class="btn btn-success" style="margin-top: 16px;" onclick="renderS3Form(document.getElementById('s3ConfigForm'), null)">+ 添加新的 S3 配置</button>`;
-      
       container.innerHTML = html;
+      
+      const addBtn = document.createElement('button');
+      addBtn.className = 'btn btn-success';
+      addBtn.style.marginTop = '16px';
+      addBtn.textContent = '+ 添加新的 S3 配置';
+      addBtn.onclick = function() { renderS3Form(document.getElementById('s3ConfigForm'), null); };
+      container.appendChild(addBtn);
     }
 
     function renderS3Form(container, config) {
