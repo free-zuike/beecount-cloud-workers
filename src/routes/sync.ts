@@ -52,6 +52,17 @@ function safeJsonStringify(obj: unknown): string {
   return JSON.stringify(obj);
 }
 
+/**
+ * 将数组拆分成更小的批次
+ */
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
 // ===========================
 // Schema 定义
 // ===========================
@@ -206,32 +217,49 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     }
     console.log('[SYNC] ledgerMap keys:', Object.keys(ledgerMap));
 
-    // ====================== 优化2：批量获取现有变更 ======================
+    // ====================== 优化2：批量获取现有变更（分批次避免变量过多） ======================
     const existingChangeMap = new Map<string, { change_id: number; updated_at: string; updated_by_device_id: string | null }>();
     
     if (changes.length > 0) {
-      // 构建批量查询
-      let query = `SELECT ledger_id, entity_type, entity_sync_id, change_id, updated_at, updated_by_device_id FROM sync_changes WHERE (`;
-      const params: (string | number)[] = [];
-      
-      for (let i = 0; i < changes.length; i++) {
-        if (i > 0) query += ' OR ';
-        const ledgerId = ledgerMap[changes[i].ledger_id]?.id;
-        if (!ledgerId) continue;
-        query += `(ledger_id = ? AND entity_type = ? AND entity_sync_id = ?)`;
-        params.push(ledgerId, changes[i].entity_type, changes[i].entity_sync_id);
-      }
-      query += ')';
-      
-      // 只有当有参数时才执行查询
-      if (params.length > 0) {
-        console.log('[SYNC] Querying existing changes with params count:', params.length);
+      // 准备有效的变更查询参数
+      const validChangeEntries = changes
+        .map(c => ({
+          ledgerId: ledgerMap[c.ledger_id]?.id,
+          entity_type: c.entity_type,
+          entity_sync_id: c.entity_sync_id,
+        }))
+        .filter(Boolean) as Array<{
+          ledgerId: string;
+          entity_type: string;
+          entity_sync_id: string;
+        }>;
+
+      // 分成更小的批次（每批 50 个，每批 150 个变量，避免超过 SQLite 限制）
+      const batches = chunkArray(validChangeEntries, 50);
+      console.log('[SYNC] Split valid entries into', batches.length, 'batches');
+
+      for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+        const batch = batches[batchIdx];
+        if (batch.length === 0) continue;
+
+        let query = `SELECT ledger_id, entity_type, entity_sync_id, change_id, updated_at, updated_by_device_id FROM sync_changes WHERE (`;
+        const params: (string | number)[] = [];
+        
+        for (let i = 0; i < batch.length; i++) {
+          if (i > 0) query += ' OR ';
+          const entry = batch[i];
+          query += `(ledger_id = ? AND entity_type = ? AND entity_sync_id = ?)`;
+          params.push(entry.ledgerId, entry.entity_type, entry.entity_sync_id);
+        }
+        query += ')';
+        
+        console.log('[SYNC] Querying batch', batchIdx + 1, '/', batches.length, 'with', params.length, 'params');
         const existingChanges = await db
           .prepare(query)
           .bind(...params)
           .all<{ ledger_id: string; entity_type: string; entity_sync_id: string; change_id: number; updated_at: string; updated_by_device_id: string | null }>();
         
-        console.log('[SYNC] existingChanges found:', existingChanges.results.length);
+        console.log('[SYNC] Batch', batchIdx + 1, 'found', existingChanges.results.length, 'changes');
         for (const change of existingChanges.results) {
           const key = `${change.ledger_id}:${change.entity_type}:${change.entity_sync_id}`;
           existingChangeMap.set(key, change);
@@ -240,89 +268,94 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     }
     console.log('[SYNC] existingChangeMap size:', existingChangeMap.size);
 
-    // ====================== 优化3：批量写入变更 ======================
-    const insertPromises: Promise<{ meta: { last_row_id: number } }>[] = [];
+    // ====================== 优化3：批量写入变更（分批次避免 CPU 超时） ======================
     const conflictList: typeof conflictSamples = [];
+    const BATCH_INSERT_SIZE = 20; // 每批处理 20 个插入
 
-    for (const change of changes) {
-      const ledgerRow = ledgerMap[change.ledger_id];
-      if (!ledgerRow) continue;
-
-      const changeUpdatedAt = toUtcDate(change.updated_at);
-      const maxAllowed = new Date(new Date(serverNow).getTime() + 5000);
-      const clampedUpdatedAt = changeUpdatedAt > maxAllowed ? maxAllowed : changeUpdatedAt;
-
-      const key = `${ledgerRow.id}:${change.entity_type}:${change.entity_sync_id}`;
-      const latestChange = existingChangeMap.get(key);
-
-      const incomingTuple = { ts: clampedUpdatedAt.getTime(), deviceId };
-      let existingTuple: { ts: number; deviceId: string; changeId: number } | null = null;
-
-      if (latestChange) {
-        existingTuple = {
-          ts: new Date(latestChange.updated_at).getTime(),
-          deviceId: latestChange.updated_by_device_id ?? '',
-          changeId: latestChange.change_id,
-        };
-      }
-
-      // 已有变更且更新更新 → 冲突拒绝
-      if (existingTuple && existingTuple.ts > incomingTuple.ts) {
-        rejected++;
-        conflictCount++;
-        if (conflictList.length < 20) {
-          conflictList.push({
-            reason: 'lww_rejected_older_change',
-            ledgerId: change.ledger_id,
-            entityType: change.entity_type,
-            entitySyncId: change.entity_sync_id,
-            existingChangeId: existingTuple.changeId,
-          });
-        }
-        continue;
-      }
-
-      // 完全相同的 (ts, device_id) → 幂等重放
-      if (existingTuple && existingTuple.ts === incomingTuple.ts && existingTuple.deviceId === incomingTuple.deviceId) {
-        accepted++;
-        continue;
-      }
-
-      // 添加到批量插入
-      insertPromises.push(
-        db.prepare(
-          `INSERT INTO sync_changes
-           (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          userId,
-          ledgerRow.id,
-          change.entity_type,
-          change.entity_sync_id,
-          change.action,
-          safeJsonStringify(change.payload),
-          clampedUpdatedAt.toISOString(),
-          deviceId,
-          userId,
-        )
-        .run()
-      );
-
-      touchedLedgers[ledgerRow.external_id] = ledgerRow.id;
-    }
-
-    console.log('[SYNC] insertPromises count:', insertPromises.length);
-
-    // 执行批量插入
-    if (insertPromises.length > 0) {
-      const results = await Promise.all(insertPromises);
-      accepted += results.length;
+    for (let startIdx = 0; startIdx < changes.length; startIdx += BATCH_INSERT_SIZE) {
+      const batchChanges = changes.slice(startIdx, startIdx + BATCH_INSERT_SIZE);
+      console.log('[SYNC] Processing insertion batch', Math.floor(startIdx / BATCH_INSERT_SIZE) + 1, 'with', batchChanges.length, 'changes');
       
-      // 获取最大 cursor
-      for (const result of results) {
-        const changeId = result.meta.last_row_id as number;
-        maxCursor = Math.max(maxCursor, changeId);
+      const insertPromises: Promise<{ meta: { last_row_id: number } }>[] = [];
+
+      for (const change of batchChanges) {
+        const ledgerRow = ledgerMap[change.ledger_id];
+        if (!ledgerRow) continue;
+
+        const changeUpdatedAt = toUtcDate(change.updated_at);
+        const maxAllowed = new Date(new Date(serverNow).getTime() + 5000);
+        const clampedUpdatedAt = changeUpdatedAt > maxAllowed ? maxAllowed : changeUpdatedAt;
+
+        const key = `${ledgerRow.id}:${change.entity_type}:${change.entity_sync_id}`;
+        const latestChange = existingChangeMap.get(key);
+
+        const incomingTuple = { ts: clampedUpdatedAt.getTime(), deviceId };
+        let existingTuple: { ts: number; deviceId: string; changeId: number } | null = null;
+
+        if (latestChange) {
+          existingTuple = {
+            ts: new Date(latestChange.updated_at).getTime(),
+            deviceId: latestChange.updated_by_device_id ?? '',
+            changeId: latestChange.change_id,
+          };
+        }
+
+        // 已有变更且更新更新 → 冲突拒绝
+        if (existingTuple && existingTuple.ts > incomingTuple.ts) {
+          rejected++;
+          conflictCount++;
+          if (conflictList.length < 20) {
+            conflictList.push({
+              reason: 'lww_rejected_older_change',
+              ledgerId: change.ledger_id,
+              entityType: change.entity_type,
+              entitySyncId: change.entity_sync_id,
+              existingChangeId: existingTuple.changeId,
+            });
+          }
+          continue;
+        }
+
+        // 完全相同的 (ts, device_id) → 幂等重放
+        if (existingTuple && existingTuple.ts === incomingTuple.ts && existingTuple.deviceId === incomingTuple.deviceId) {
+          accepted++;
+          continue;
+        }
+
+        // 添加到批量插入
+        insertPromises.push(
+          db.prepare(
+            `INSERT INTO sync_changes
+             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            userId,
+            ledgerRow.id,
+            change.entity_type,
+            change.entity_sync_id,
+            change.action,
+            safeJsonStringify(change.payload),
+            clampedUpdatedAt.toISOString(),
+            deviceId,
+            userId,
+          )
+          .run()
+        );
+
+        touchedLedgers[ledgerRow.external_id] = ledgerRow.id;
+      }
+
+      // 执行这一批次的插入
+      if (insertPromises.length > 0) {
+        const results = await Promise.all(insertPromises);
+        accepted += results.length;
+        
+        // 获取最大 cursor
+        for (const result of results) {
+          const changeId = result.meta.last_row_id as number;
+          maxCursor = Math.max(maxCursor, changeId);
+        }
       }
     }
 
