@@ -54,7 +54,15 @@ class S3Client {
    * 检查是否已配置 S3
    */
   isConfigured(): boolean {
-    return !!(this.accessKeyId && this.secretAccessKey && this.bucketName);
+    if (!this.accessKeyId || !this.secretAccessKey || !this.bucketName) {
+      return false;
+    }
+    try {
+      new URL(this.endpoint);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
