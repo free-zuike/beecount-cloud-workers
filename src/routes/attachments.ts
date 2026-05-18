@@ -19,7 +19,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHmac } from 'crypto';
 import { S3Client as AwsS3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 
 // ===========================
@@ -101,7 +101,7 @@ class S3Client {
   }
 
   /**
-   * 上传文件到 S3（使用 fetch 直接发送请求）
+   * 上传文件到 S3（使用 AWS SDK）
    */
   async upload(
     key: string,
@@ -117,44 +117,51 @@ class S3Client {
     console.log('[S3] File size:', body.byteLength);
     console.log('[S3] Endpoint:', this.endpoint);
 
-    const url = `${this.endpoint}/${this.bucketName}/${key}`;
-    console.log('[S3] Final upload URL:', url);
-
     try {
       const uint8Array = new Uint8Array(body);
-      
-      // 使用 fetch 直接发送请求，以便更好地调试
-      const response = await fetch(url, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': contentType,
-          'Content-Length': body.byteLength.toString()
-        },
-        body: uint8Array
+      const command = new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        Body: uint8Array,
+        ContentType: contentType
       });
-
-      console.log('[S3] Fetch response status:', response.status);
-      console.log('[S3] Fetch response status text:', response.statusText);
       
-      if (!response.ok) {
-        const responseText = await response.text();
-        console.error('[S3] Fetch response body:', responseText);
-        
-        // 尝试解析 JSON 错误
-        try {
-          const responseJson = JSON.parse(responseText);
-          console.error('[S3] Parsed error:', JSON.stringify(responseJson));
-        } catch (e) {
-          console.log('[S3] Response is not JSON');
-        }
-      }
+      console.log('[S3] Sending PutObjectCommand...');
+      console.log('[S3] Command params:', { Bucket: this.bucketName, Key: key, ContentType: contentType });
       
-      return response.ok;
+      const result = await this.client.send(command);
+      
+      console.log('[S3] Upload successful');
+      console.log('[S3] Result:', JSON.stringify(result));
+      return true;
     } catch (err: any) {
       console.error('[S3] Upload error:', err);
       console.error('[S3] Error name:', err.name);
       console.error('[S3] Error message:', err.message);
-      console.error('[S3] Error stack:', err.stack);
+      console.error('[S3] Error code:', err.code);
+      
+      // 尝试获取更详细的错误信息
+      if (err.$metadata) {
+        console.error('[S3] Error metadata:', JSON.stringify(err.$metadata));
+      }
+      if (err.response) {
+        console.error('[S3] Error response:', JSON.stringify(err.response));
+      }
+      if (err.message) {
+        // 尝试解析 XML 错误响应
+        if (err.message.includes('<Error>')) {
+          console.log('[S3] Parsing XML error response...');
+          try {
+            const codeMatch = err.message.match(/<Code>([^<]+)<\/Code>/);
+            const messageMatch = err.message.match(/<Message>([^<]+)<\/Message>/);
+            if (codeMatch) console.error('[S3] AWS Error Code:', codeMatch[1]);
+            if (messageMatch) console.error('[S3] AWS Error Message:', messageMatch[1]);
+          } catch (e) {
+            console.log('[S3] Failed to parse XML error');
+          }
+        }
+      }
+      
       return false;
     }
   }
