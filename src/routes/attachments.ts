@@ -88,27 +88,30 @@ class S3Client {
   /**
    * 生成 AWS Signature Version 4
    */
-  private generateSignature(
+  private async generateSignature(
     method: string,
     key: string,
     contentType: string,
     date: string,
-    dateStamp: string
-  ): string {
+    dateStamp: string,
+    host: string
+  ): Promise<string> {
     const algorithm = 'AWS4-HMAC-SHA256';
     const credentialScope = `${dateStamp}/${this.region}/s3/aws4_request`;
 
     // 构建规范请求
-    const canonicalUri = `/${this.bucketName}/${key}`;
+    const canonicalUri = `/${key}`;
     const canonicalQuerystring = '';
-    const canonicalHeaders = `content-type:${contentType}\nhost:${new URL(this.endpoint).hostname}\nx-amz-date:${date}\n`;
+    const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-date:${date}\n`;
     const signedHeaders = 'content-type;host;x-amz-date';
 
     const payloadHash = 'UNSIGNED-PAYLOAD';
     const canonicalRequest = `${method}\n${canonicalUri}\n${canonicalQuerystring}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
 
+    const canonicalRequestHash = await this.sha256(canonicalRequest);
+    
     // 构建字符串签名
-    const stringToSign = `${algorithm}\n${date}\n${credentialScope}\n${this.sha256(canonicalRequest)}`;
+    const stringToSign = `${algorithm}\n${date}\n${credentialScope}\n${canonicalRequestHash}`;
 
     // 计算签名
     const kDate = this.hmacBuffer('AWS4' + this.secretAccessKey, dateStamp);
@@ -132,8 +135,11 @@ class S3Client {
     return hmac.digest();
   }
 
-  private sha256(data: string): string {
-    return createHmac('sha256', '').update(data).digest('hex');
+  private async sha256(data: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(data));
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
   }
 
   /**
@@ -149,21 +155,26 @@ class S3Client {
       return false;
     }
 
+    const endpointUrl = new URL(this.endpoint);
+    const host = endpointUrl.hostname;
+    
     console.log('[S3] Upload config:', {
       endpoint: this.endpoint,
       bucket: this.bucketName,
       region: this.region,
-      key: key
+      key: key,
+      host: host
     });
 
     const now = new Date();
     const date = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
     const dateStamp = date.slice(0, 8);
 
-    const signature = this.generateSignature('PUT', key, contentType, date, dateStamp);
+    const signature = await this.generateSignature('PUT', key, contentType, date, dateStamp, host);
     const credential = `${this.accessKeyId}/${dateStamp}/${this.region}/s3/aws4_request`;
 
-    const url = `${this.endpoint}/${this.bucketName}/${key}`;
+    // 使用 bucket 作为子域名的方式
+    const url = `https://${this.bucketName}.${host}/${key}`;
     console.log('[S3] Upload URL:', url);
     
     try {
