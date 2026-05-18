@@ -52,91 +52,35 @@ function safeJsonStringify(obj: unknown): string {
   return JSON.stringify(obj);
 }
 
-/**
- * 解析 JSON 字符串（安全处理失败情况）
- * @param jsonStr - JSON 字符串
- * @returns 解析后的对象，失败返回空对象
- */
-function safeJsonParse<T = Record<string, unknown>>(jsonStr: string): T {
-  try {
-    return JSON.parse(jsonStr) as T;
-  } catch {
-    return {} as T;
-  }
-}
-
 // ===========================
-// 类型定义（对应原版 Pydantic Schema）
+// Schema 定义
 // ===========================
 
-/** 单条 SyncChange 输入（mobile push 时发送） - 完全宽松验证 */
-const SyncChangeInSchema = z.object({
-  ledger_id: z.string().or(z.number()).transform(val => String(val)),
-  entity_type: z.string(),
-  entity_sync_id: z.string().or(z.number()).transform(val => String(val)),
-  action: z.enum(['upsert', 'delete']).or(z.string()).transform(val => val as 'upsert' | 'delete'),
-  payload: z.any().transform(val => typeof val === 'object' && val !== null ? val : {}),
-  updated_at: z.string().or(z.date()).or(z.number()).transform(val => {
-    if (typeof val === 'number') return new Date(val).toISOString();
-    if (val instanceof Date) return val.toISOString();
-    return val;
-  }),
-}).passthrough();
-
-/** SyncPush 请求体 - 完全宽松验证 */
 const SyncPushRequestSchema = z.object({
-  device_id: z.string().optional().or(z.number()).transform(val => val ? String(val) : undefined),
-  changes: z.array(SyncChangeInSchema).or(z.any()).transform(val => Array.isArray(val) ? val : []),
-}).passthrough();
+  device_id: z.string().optional(),
+  changes: z.array(
+    z.object({
+      ledger_id: z.string(),
+      entity_type: z.string(),
+      entity_sync_id: z.string(),
+      action: z.enum(['upsert', 'delete']),
+      payload: z.record(z.any()),
+      updated_at: z.string().or(z.date()),
+    })
+  ),
+});
 
-/** 单条 SyncChange 输出（服务端返回） */
-interface SyncChangeOut {
-  change_id: number;
-  ledger_id: string;
-  entity_type: string;
-  entity_sync_id: string;
-  action: 'upsert' | 'delete';
-  payload: Record<string, unknown>;
-  updated_at: string;
-  updated_by_device_id: string | null;
-}
-
-/** SyncPush 响应体 */
-interface SyncPushResponse {
+type SyncPushResponse = {
   accepted: number;
   rejected: number;
   conflict_count: number;
   conflict_samples: Array<Record<string, unknown>>;
   server_cursor: number;
   server_timestamp: string;
-}
-
-/** SyncPull 响应体 */
-interface SyncPullResponse {
-  changes: SyncChangeOut[];
-  server_cursor: number;
-  has_more: boolean;
-}
-
-/** SyncFull 响应体 */
-interface SyncFullResponse {
-  ledger_id: string;
-  snapshot: SyncChangeOut | null;
-  latest_cursor: number;
-}
-
-/** 账本元信息输出 */
-interface SyncLedgerOut {
-  ledger_id: string;
-  path: string;
-  updated_at: string | null;
-  size: number;
-  metadata: Record<string, unknown>;
-  role: 'owner' | 'editor' | 'viewer';
-}
+};
 
 // ===========================
-// 路由定义
+// 类型定义
 // ===========================
 
 type Bindings = {
@@ -148,250 +92,16 @@ type Variables = {
   userId: string;
 };
 
+// ===========================
+// 路由定义
+// ===========================
+
 const syncRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // ---------------------------------------------------------------------------
-// GET /sync/ledgers - 列出用户可访问的账本
+// POST /sync/push - 增量推送：客户端推送变更到服务端
 // ---------------------------------------------------------------------------
 
-/**
- * 获取用户所有可访问账本的元信息列表
- *
- * 功能说明：
- * - 返回 ledger_id / path / updated_at / size(估算) / role
- * - 自动跳过软删除的账本（检测 ledger_snapshot delete tombstone）
- * - mobile 启动时用来做账本差异比对
- *
- * 响应字段：
- * - ledger_id: 外部账本 ID（客户端使用的 ID）
- * - path: 同 ledger_id（路径兼容性）
- * - updated_at: 最后一次变更时间
- * - size: 估算大小（512 + tx_count * 300 字节）
- * - role: 用户在账本中的角色（owner/editor/viewer）
- */
-syncRouter.get('/ledgers', async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-
-  // 查询用户拥有的所有账本（排除软删除）
-  const ledgers = await db
-    .prepare(
-      `SELECT l.id, l.external_id, l.name, l.currency, l.created_at,
-              (SELECT MAX(change_id) FROM sync_changes WHERE ledger_id = l.id) as latest_change_id,
-              (SELECT MAX(updated_at) FROM sync_changes WHERE ledger_id = l.id) as latest_updated_at
-       FROM ledgers l
-       WHERE l.user_id = ? AND l.id NOT IN (
-         SELECT ledger_id FROM sync_changes
-         WHERE entity_type = 'ledger_snapshot' AND action = 'delete'
-         GROUP BY ledger_id
-         HAVING MAX(change_id) > COALESCE(
-           (SELECT MAX(change_id) FROM sync_changes sc2
-            WHERE sc2.ledger_id = sync_changes.ledger_id AND sc2.entity_type != 'ledger_snapshot'), 0)
-       )
-       ORDER BY l.created_at DESC`
-    )
-    .bind(userId)
-    .all<{
-      id: string;
-      external_id: string;
-      name: string | null;
-      currency: string;
-      created_at: string;
-      latest_change_id: number | null;
-      latest_updated_at: string | null;
-    }>();
-
-  const result: SyncLedgerOut[] = [];
-
-  for (const ledger of ledgers.results) {
-    // 跳过没有任何变更的账本
-    if (!ledger.latest_change_id || ledger.latest_change_id === 0) {
-      continue;
-    }
-
-    // 估算大小：tx 数量 * 300 字节 + 基础元数据 512 字节
-    const txCount = await db
-      .prepare('SELECT COUNT(*) as cnt FROM read_tx_projection WHERE ledger_id = ?')
-      .bind(ledger.id)
-      .first<{ cnt: number }>();
-
-    const size = 512 + (txCount?.cnt ?? 0) * 300;
-
-    result.push({
-      ledger_id: ledger.external_id,
-      path: ledger.external_id,
-      updated_at: ledger.latest_updated_at ?? null,
-      size,
-      metadata: { source: 'lazy_rebuild' },
-      role: 'owner',
-    });
-  }
-
-  return c.json(result);
-});
-
-// ---------------------------------------------------------------------------
-// GET /sync/full - 全量同步
-// ---------------------------------------------------------------------------
-
-/**
- * 按需构建并返回账本的完整快照
- *
- * 功能说明：
- * - 用于 mobile 首次同步或重装时一次性获取完整数据
- * - 方案 B 后不再持续写 ledger_snapshot，只有这条路径按需从 projection 懒构建
- * - 返回格式兼容老 mobile 协议：{content: json_str, metadata: {...}}
- * - 按 change_id 缓存，同版本所有请求复用
- *
- * 查询参数：
- * - ledger_id: 账本外部 ID（必填）
- *
- * 响应字段：
- * - ledger_id: 请求的账本 ID
- * - snapshot: SyncChangeOut 格式的快照，change_id=latest_change_id
- * - latest_cursor: 所有可访问账本的最大 change_id
- */
-syncRouter.get('/full', async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-  const ledgerExternalId = c.req.query('ledger_id');
-
-  if (!ledgerExternalId) {
-    return c.json({ error: 'ledger_id is required' }, 400);
-  }
-
-  // 获取用户可访问账本的最大游标
-  const maxCursorRow = await db
-    .prepare(
-      `SELECT MAX(sc.change_id) as max_id
-       FROM sync_changes sc
-       JOIN ledgers l ON sc.ledger_id = l.id
-       WHERE l.user_id = ?`
-    )
-    .bind(userId)
-    .first<{ max_id: number | null }>();
-
-  const latestCursor = maxCursorRow?.max_id ?? 0;
-
-  // 查找账本（用户必须有访问权限）
-  const ledgerRow = await db
-    .prepare(
-      `SELECT l.id, l.external_id, l.name, l.currency
-       FROM ledgers l
-       WHERE l.user_id = ? AND l.external_id = ?`
-    )
-    .bind(userId, ledgerExternalId)
-    .first<{ id: string; external_id: string; name: string | null; currency: string }>();
-
-  if (!ledgerRow) {
-    return c.json({
-      ledger_id: ledgerExternalId,
-      snapshot: null,
-      latest_cursor: latestCursor,
-    });
-  }
-
-  // 获取账本最新变更 ID
-  const latestChangeIdRow = await db
-    .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id = ?')
-    .bind(ledgerRow.id)
-    .first<{ max_id: number | null }>();
-
-  const latestChangeId = latestChangeIdRow?.max_id ?? 0;
-
-  if (latestChangeId === 0) {
-    return c.json({
-      ledger_id: ledgerExternalId,
-      snapshot: null,
-      latest_cursor: latestCursor,
-    });
-  }
-
-  // 从 projection 表懒构建快照（简化版：直接返回 projection 数据）
-  // 完整实现需要 snapshot_builder.py 的逻辑，这里返回结构化数据
-  const snapshotData = {
-    ledger: {
-      id: ledgerRow.external_id,
-      name: ledgerRow.name,
-      currency: ledgerRow.currency,
-    },
-    transactions: await db
-      .prepare('SELECT * FROM read_tx_projection WHERE ledger_id = ?')
-      .bind(ledgerRow.id)
-      .all(),
-    accounts: await db
-      .prepare('SELECT * FROM read_account_projection WHERE ledger_id = ?')
-      .bind(ledgerRow.id)
-      .all(),
-    categories: await db
-      .prepare('SELECT * FROM read_category_projection WHERE ledger_id = ?')
-      .bind(ledgerRow.id)
-      .all(),
-    tags: await db
-      .prepare('SELECT * FROM read_tag_projection WHERE ledger_id = ?')
-      .bind(ledgerRow.id)
-      .all(),
-    budgets: await db
-      .prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?')
-      .bind(ledgerRow.id)
-      .all(),
-  };
-
-  const payloadJson = {
-    content: safeJsonStringify(snapshotData),
-    metadata: { source: 'lazy_rebuild' },
-  };
-
-  const snapshot: SyncChangeOut = {
-    change_id: latestChangeId,
-    ledger_id: ledgerExternalId,
-    entity_type: 'ledger_snapshot',
-    entity_sync_id: ledgerRow.external_id,
-    action: 'upsert',
-    payload: payloadJson,
-    updated_at: nowUtc(),
-    updated_by_device_id: null,
-  };
-
-  return c.json({
-    ledger_id: ledgerExternalId,
-    snapshot,
-    latest_cursor: latestCursor,
-  });
-});
-
-// ---------------------------------------------------------------------------
-// POST /sync/push - 增量推送
-// ---------------------------------------------------------------------------
-
-/**
- * mobile 批量推送本地变更到服务端
- *
- * 功能说明：
- * - 核心同步协议：mobile 本地 Drift DB 变更后推送到服务端
- * - LWW 冲突解决：比较 updated_at + device_id 决定谁胜出
- * - 单事务提交：整批原子提交，一条坏 change 失败则回滚整批
- * - 幂等性：相同 idempotency_key + device_id 的请求返回缓存响应
- * - 方案 B：individual entity types 同时刷新 projection 表
- *
- * 请求体：
- * - device_id: 设备 ID（必须）
- * - changes[]: 变更数组，每条包含：
- *   - ledger_id: 账本外部 ID（不存在则自动创建）
- *   - entity_type: 实体类型（transaction/account/category/tag/budget/ledger_snapshot）
- *   - entity_sync_id: 实体同步 ID
- *   - action: upsert/delete
- *   - payload: 变更数据 JSON
- *   - updated_at: 变更时间（UTC）
- *
- * 响应字段：
- * - accepted: 接受的变更数
- * - rejected: 拒绝的变更数
- * - conflict_count: 冲突数
- * - conflict_samples: 冲突样本（前 20 条）
- * - server_cursor: 服务端最新游标
- * - server_timestamp: 服务端时间戳
- */
 syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) => {
   try {
     const userId = c.get('userId');
@@ -431,177 +141,185 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     let maxCursor = 0;
     const touchedLedgers: Record<string, string> = {};
 
-    // 处理每条变更
-    for (const change of req.changes) {
-      try {
-        const changeUpdatedAt = toUtcDate(change.updated_at);
-        const maxAllowed = new Date(new Date(serverNow).getTime() + 5000); // 允许 5s 时钟偏移
-        const clampedUpdatedAt =
-          changeUpdatedAt > maxAllowed ? maxAllowed : changeUpdatedAt;
+    const changes = req.changes;
+    
+    // 空变更快速返回
+    if (changes.length === 0) {
+      const maxRow = await db
+        .prepare(`SELECT MAX(change_id) as max_id FROM sync_changes WHERE user_id = ?`)
+        .bind(userId)
+        .first<{ max_id: number | null }>();
+      maxCursor = maxRow?.max_id ?? 0;
+      
+      return c.json({
+        accepted: 0,
+        rejected: 0,
+        conflict_count: 0,
+        conflict_samples: [],
+        server_cursor: maxCursor,
+        server_timestamp: serverNow,
+      });
+    }
 
-        // 查找或创建账本
-        let ledgerRow = await db
-          .prepare(
-            `SELECT id, user_id, external_id FROM ledgers
-             WHERE user_id = ? AND external_id = ?`
-          )
-          .bind(userId, change.ledger_id)
-          .first<{ id: string; user_id: string; external_id: string }>();
-
-        if (!ledgerRow) {
-          // 账本不存在，自动创建（用户隔离，external_id 在用户内唯一）
+    // ====================== 优化1：批量预加载账本 ======================
+    const ledgerExternalIds = [...new Set(changes.map(c => c.ledger_id))];
+    const ledgerMap: Record<string, { id: string; user_id: string; external_id: string }> = {};
+    
+    if (ledgerExternalIds.length > 0) {
+      const ledgerPlaceholders = ledgerExternalIds.map(() => '?').join(',');
+      const existingLedgers = await db
+        .prepare(
+          `SELECT id, user_id, external_id FROM ledgers
+           WHERE user_id = ? AND external_id IN (${ledgerPlaceholders})`
+        )
+        .bind(userId, ...ledgerExternalIds)
+        .all<{ id: string; user_id: string; external_id: string }>();
+      
+      for (const ledger of existingLedgers.results) {
+        ledgerMap[ledger.external_id] = ledger;
+      }
+      
+      // 创建不存在的账本（批量）
+      for (const externalId of ledgerExternalIds) {
+        if (!ledgerMap[externalId]) {
           const newLedgerId = randomUUID();
           await db
             .prepare(
               `INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
                VALUES (?, ?, ?, ?, 'CNY', ?)`
             )
-            .bind(newLedgerId, userId, change.ledger_id, change.ledger_id, serverNow)
+            .bind(newLedgerId, userId, externalId, externalId, serverNow)
             .run();
-          ledgerRow = { id: newLedgerId, user_id: userId, external_id: change.ledger_id };
+          ledgerMap[externalId] = { id: newLedgerId, user_id: userId, external_id: externalId };
         }
-
-        // 查询该实体的最新变更
-        const latestChange = await db
-          .prepare(
-            `SELECT change_id, updated_at, updated_by_device_id
-             FROM sync_changes
-             WHERE ledger_id = ? AND entity_type = ? AND entity_sync_id = ?
-             ORDER BY change_id DESC LIMIT 1`
-          )
-          .bind(ledgerRow.id, change.entity_type, change.entity_sync_id)
-          .first<{ change_id: number; updated_at: string; updated_by_device_id: string | null }>();
-
-        // LWW 决胜逻辑
-        // 比较 (updated_at, device_id) 元组字典序
-        const incomingTuple = { ts: clampedUpdatedAt.getTime(), deviceId: deviceId };
-
-        // 修复 TypeScript 类型错误 - 在 existingTuple 里存储 changeId
-        let existingTuple: { ts: number; deviceId: string; changeId: number } | null = null;
-        if (latestChange) {
-          existingTuple = {
-            ts: new Date(latestChange.updated_at).getTime(),
-            deviceId: latestChange.updated_by_device_id ?? '',
-            changeId: latestChange.change_id,
-          };
-        }
-
-        // 已有变更且更新更新 → 冲突拒绝
-        if (existingTuple && existingTuple.ts > incomingTuple.ts) {
-          rejected++;
-          conflictCount++;
-          if (conflictSamples.length < 20) {
-            conflictSamples.push({
-              reason: 'lww_rejected_older_change',
-              ledgerId: change.ledger_id,
-              entityType: change.entity_type,
-              entitySyncId: change.entity_sync_id,
-              existingChangeId: existingTuple.changeId,
-            });
-          }
-          continue;
-        }
-
-        // 完全相同的 (ts, device_id) → 幂等重放，接受但不重复写
-        if (existingTuple && existingTuple.ts === incomingTuple.ts && existingTuple.deviceId === incomingTuple.deviceId) {
-          accepted++;
-          continue;
-        }
-
-        // 写入 SyncChange
-        const changeIdResult = await db
-          .prepare(
-            `INSERT INTO sync_changes
-             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            userId,
-            ledgerRow.id,
-            change.entity_type,
-            change.entity_sync_id,
-            change.action,
-            safeJsonStringify(change.payload),
-            clampedUpdatedAt.toISOString(),
-            deviceId,
-            userId,
-          )
-          .run();
-
-        const newChangeId = changeIdResult.meta.last_row_id as number;
-        accepted++;
-        maxCursor = Math.max(maxCursor, newChangeId);
-        touchedLedgers[ledgerRow.external_id] = ledgerRow.id;
-      } catch (changeError) {
-        console.error('[SYNC] Error processing change:', {
-          entity_type: change.entity_type,
-          entity_sync_id: change.entity_sync_id,
-          ledger_id: change.ledger_id,
-          error: changeError instanceof Error ? changeError.message : String(changeError),
-        });
-        throw changeError; // 重新抛出，让外层捕获
       }
     }
 
-    // 应用变更到 projection - 暂时禁用以避免错误
-    /*
-    for (const externalLedgerId in touchedLedgers) {
-      const internalLedgerId = touchedLedgers[externalLedgerId];
-      // 查找这个账本的所有新变更并应用
-      const ledgerChanges = await db
-        .prepare(
-          `SELECT change_id, entity_type, entity_sync_id, action, payload_json as payload
-           FROM sync_changes
-           WHERE ledger_id = ?
-           ORDER BY change_id ASC`
-        )
-        .bind(internalLedgerId)
-        .all<{
-          change_id: number;
-          entity_type: string;
-          entity_sync_id: string;
-          action: string;
-          payload: string;
-        }>();
+    // ====================== 优化2：批量获取现有变更 ======================
+    const existingChangeMap = new Map<string, { change_id: number; updated_at: string; updated_by_device_id: string | null }>();
+    
+    if (changes.length > 0) {
+      // 构建批量查询
+      let query = `SELECT ledger_id, entity_type, entity_sync_id, change_id, updated_at, updated_by_device_id FROM sync_changes WHERE (`;
+      const params: (string | number)[] = [];
       
-      for (const change of ledgerChanges.results) {
-        try {
-          const payload = change.payload ? JSON.parse(change.payload) : {};
-          await applyChangeToProjection(db, internalLedgerId, userId, {
-            change_id: change.change_id,
-            entity_type: change.entity_type,
-            entity_sync_id: change.entity_sync_id,
-            action: change.action,
-            payload: payload,
-            ledger_id: internalLedgerId,
-          });
-        } catch (err) {
-          console.error('[SYNC] Error applying change to projection:', err);
+      for (let i = 0; i < changes.length; i++) {
+        if (i > 0) query += ' OR ';
+        const ledgerId = ledgerMap[changes[i].ledger_id]?.id;
+        if (!ledgerId) continue;
+        query += `(ledger_id = ? AND entity_type = ? AND entity_sync_id = ?)`;
+        params.push(ledgerId, changes[i].entity_type, changes[i].entity_sync_id);
+      }
+      query += ')';
+      
+      // 只有当有参数时才执行查询
+      if (params.length > 0) {
+        const existingChanges = await db
+          .prepare(query)
+          .bind(...params)
+          .all<{ ledger_id: string; entity_type: string; entity_sync_id: string; change_id: number; updated_at: string; updated_by_device_id: string | null }>();
+        
+        for (const change of existingChanges.results) {
+          const key = `${change.ledger_id}:${change.entity_type}:${change.entity_sync_id}`;
+          existingChangeMap.set(key, change);
         }
       }
     }
-    */
+
+    // ====================== 优化3：批量写入变更 ======================
+    const insertPromises: Promise<{ meta: { last_row_id: number } }>[] = [];
+    const conflictList: typeof conflictSamples = [];
+
+    for (const change of changes) {
+      const ledgerRow = ledgerMap[change.ledger_id];
+      if (!ledgerRow) continue;
+
+      const changeUpdatedAt = toUtcDate(change.updated_at);
+      const maxAllowed = new Date(new Date(serverNow).getTime() + 5000);
+      const clampedUpdatedAt = changeUpdatedAt > maxAllowed ? maxAllowed : changeUpdatedAt;
+
+      const key = `${ledgerRow.id}:${change.entity_type}:${change.entity_sync_id}`;
+      const latestChange = existingChangeMap.get(key);
+
+      const incomingTuple = { ts: clampedUpdatedAt.getTime(), deviceId };
+      let existingTuple: { ts: number; deviceId: string; changeId: number } | null = null;
+
+      if (latestChange) {
+        existingTuple = {
+          ts: new Date(latestChange.updated_at).getTime(),
+          deviceId: latestChange.updated_by_device_id ?? '',
+          changeId: latestChange.change_id,
+        };
+      }
+
+      // 已有变更且更新更新 → 冲突拒绝
+      if (existingTuple && existingTuple.ts > incomingTuple.ts) {
+        rejected++;
+        conflictCount++;
+        if (conflictList.length < 20) {
+          conflictList.push({
+            reason: 'lww_rejected_older_change',
+            ledgerId: change.ledger_id,
+            entityType: change.entity_type,
+            entitySyncId: change.entity_sync_id,
+            existingChangeId: existingTuple.changeId,
+          });
+        }
+        continue;
+      }
+
+      // 完全相同的 (ts, device_id) → 幂等重放
+      if (existingTuple && existingTuple.ts === incomingTuple.ts && existingTuple.deviceId === incomingTuple.deviceId) {
+        accepted++;
+        continue;
+      }
+
+      // 添加到批量插入
+      insertPromises.push(
+        db.prepare(
+          `INSERT INTO sync_changes
+           (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          userId,
+          ledgerRow.id,
+          change.entity_type,
+          change.entity_sync_id,
+          change.action,
+          safeJsonStringify(change.payload),
+          clampedUpdatedAt.toISOString(),
+          deviceId,
+          userId,
+        )
+        .run()
+      );
+
+      touchedLedgers[ledgerRow.external_id] = ledgerRow.id;
+    }
+
+    // 执行批量插入
+    if (insertPromises.length > 0) {
+      const results = await Promise.all(insertPromises);
+      accepted += results.length;
+      
+      // 获取最大 cursor
+      for (const result of results) {
+        const changeId = result.meta.last_row_id as number;
+        maxCursor = Math.max(maxCursor, changeId);
+      }
+    }
+
+    // 合并冲突样本
+    conflictSamples.push(...conflictList);
 
     // 如果没有任何变更被接受，计算最大游标
     if (maxCursor === 0) {
-      const allLedgers = await db
-        .prepare(
-          `SELECT id FROM ledgers WHERE user_id = ?`
-        )
+      const maxRow = await db
+        .prepare(`SELECT MAX(change_id) as max_id FROM sync_changes WHERE user_id = ?`)
         .bind(userId)
-        .all<{ id: string }>();
-
-      const ledgerIds = allLedgers.results.map((l) => l.id);
-      if (ledgerIds.length > 0) {
-        const placeholders = ledgerIds.map(() => '?').join(',');
-        const maxRow = await db
-          .prepare(
-            `SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id IN (${placeholders})`
-          )
-          .bind(...ledgerIds)
-          .first<{ max_id: number | null }>();
-        maxCursor = maxRow?.max_id ?? 0;
-      }
+        .first<{ max_id: number | null }>();
+      maxCursor = maxRow?.max_id ?? 0;
     }
 
     const response: SyncPushResponse = {
@@ -626,594 +344,154 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
   }
 });
 
-/**
- * 简化版 projection 刷新逻辑
- *
- * 完整实现参考 src/sync_applier.py
- * 这里处理最常见的几种 entity_type 到对应 projection 表的映射
- */
-async function applyChangeToProjection(
-  db: D1Database,
-  ledgerId: string,
-  userId: string,
-  change: {
-    change_id: number;
-    entity_type: string;
-    entity_sync_id: string;
-    action: string;
-    payload: Record<string, unknown>;
-    ledger_id: string;
-  }
-): Promise<void> {
-  // 处理 ledger_snapshot delete - 删除整个账本
-  if (change.entity_type === 'ledger_snapshot' && change.action === 'delete') {
-    await db.batch([
-      db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledgerId),
-      db.prepare('DELETE FROM read_account_projection WHERE ledger_id = ?').bind(ledgerId),
-      db.prepare('DELETE FROM read_category_projection WHERE ledger_id = ?').bind(ledgerId),
-      db.prepare('DELETE FROM read_tag_projection WHERE ledger_id = ?').bind(ledgerId),
-      db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').bind(ledgerId),
-      db.prepare('DELETE FROM ledgers WHERE id = ?').bind(ledgerId),
-    ]);
-    return;
-  }
-
-  // 处理 ledger_snapshot upsert - 创建或更新账本
-  if (change.entity_type === 'ledger_snapshot' && change.action === 'upsert') {
-    const payload = change.payload as Record<string, unknown>;
-    const name = (payload.ledgerName ?? payload.name ?? change.entity_sync_id) as string;
-    const currency = (payload.currency ?? 'CNY') as string;
-    
-    // 检查账本是否存在
-    const existing = await db
-      .prepare('SELECT id FROM ledgers WHERE id = ?')
-      .bind(ledgerId)
-      .first();
-    
-    if (existing) {
-      // 更新账本
-      await db
-        .prepare('UPDATE ledgers SET name = ?, currency = ? WHERE id = ?')
-        .bind(name, currency, ledgerId)
-        .run();
-    } else {
-      // 查找账本的 external_id
-      const ledgerInfo = await db
-        .prepare('SELECT external_id FROM ledgers WHERE id = ?')
-        .bind(ledgerId)
-        .first<{ external_id: string }>();
-      
-      const externalId = ledgerInfo?.external_id ?? change.entity_sync_id;
-      
-      // 创建账本（如果不存在）
-      await db
-        .prepare(
-          `INSERT OR IGNORE INTO ledgers (id, user_id, external_id, name, currency, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`
-        )
-        .bind(ledgerId, userId, externalId, name, currency, nowUtc())
-        .run();
-    }
-    return;
-  }
-
-  const INDIVIDUAL_ENTITY_TYPES = [
-    'transaction',
-    'account',
-    'category',
-    'tag',
-    'budget',
-    'recurring_transaction',
-  ];
-
-  if (!INDIVIDUAL_ENTITY_TYPES.includes(change.entity_type)) {
-    return;
-  }
-
-  const payload = change.payload as Record<string, unknown>;
-
-  switch (change.entity_type) {
-    case 'transaction': {
-      if (change.action === 'delete') {
-        await db
-          .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .run();
-      } else {
-        const existing = await db
-          .prepare('SELECT sync_id FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .first();
-
-        if (existing) {
-          await db
-            .prepare(
-              `UPDATE read_tx_projection SET
-               tx_type = ?, amount = ?, happened_at = ?, note = ?,
-               category_sync_id = ?, category_name = ?, category_kind = ?,
-               account_sync_id = ?, account_name = ?,
-               from_account_sync_id = ?, from_account_name = ?,
-               to_account_sync_id = ?, to_account_name = ?,
-               tags_csv = ?, tag_sync_ids_json = ?, attachments_json = ?,
-               tx_index = ?, source_change_id = ?
-               WHERE ledger_id = ? AND sync_id = ?`
-            )
-            .bind(
-              payload.tx_type ?? 'expense',
-              payload.amount ?? 0,
-              payload.happened_at ?? nowUtc(),
-              payload.note ?? null,
-              payload.categoryId ?? null,
-              payload.categoryName ?? null,
-              payload.categoryKind ?? null,
-              payload.accountId ?? null,
-              payload.accountName ?? null,
-              payload.fromAccountId ?? null,
-              payload.fromAccountName ?? null,
-              payload.toAccountId ?? null,
-              payload.toAccountName ?? null,
-              payload.tags ?? null,
-              payload.tagIds ? safeJsonStringify(payload.tagIds) : null,
-              payload.attachments ? safeJsonStringify(payload.attachments) : null,
-              payload.tx_index ?? 0,
-              change.change_id,
-              ledgerId,
-              change.entity_sync_id,
-            )
-            .run();
-        } else {
-          await db
-            .prepare(
-              `INSERT INTO read_tx_projection
-               (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
-                category_sync_id, category_name, category_kind,
-                account_sync_id, account_name,
-                from_account_sync_id, from_account_name,
-                to_account_sync_id, to_account_name,
-                tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            )
-            .bind(
-              ledgerId,
-              change.entity_sync_id,
-              userId,
-              payload.tx_type ?? 'expense',
-              payload.amount ?? 0,
-              payload.happened_at ?? nowUtc(),
-              payload.note ?? null,
-              payload.categoryId ?? null,
-              payload.categoryName ?? null,
-              payload.categoryKind ?? null,
-              payload.accountId ?? null,
-              payload.accountName ?? null,
-              payload.fromAccountId ?? null,
-              payload.fromAccountName ?? null,
-              payload.toAccountId ?? null,
-              payload.toAccountName ?? null,
-              payload.tags ?? null,
-              payload.tagIds ? safeJsonStringify(payload.tagIds) : null,
-              payload.attachments ? safeJsonStringify(payload.attachments) : null,
-              payload.tx_index ?? 0,
-              change.change_id,
-            )
-            .run();
-        }
-      }
-      break;
-    }
-
-    case 'account': {
-      if (change.action === 'delete') {
-        await db
-          .prepare('DELETE FROM read_account_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .run();
-      } else {
-        const existing = await db
-          .prepare('SELECT sync_id FROM read_account_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .first();
-
-        if (existing) {
-          await db
-            .prepare(
-              `UPDATE read_account_projection SET
-               name = ?, account_type = ?, currency = ?, initial_balance = ?,
-               note = ?, credit_limit = ?, billing_day = ?, payment_due_day = ?,
-               bank_name = ?, card_last_four = ?, source_change_id = ?
-               WHERE ledger_id = ? AND sync_id = ?`
-            )
-            .bind(
-              payload.name ?? null,
-              payload.account_type ?? null,
-              payload.currency ?? null,
-              payload.initial_balance ?? 0,
-              payload.note ?? null,
-              payload.credit_limit ?? null,
-              payload.billing_day ?? null,
-              payload.payment_due_day ?? null,
-              payload.bank_name ?? null,
-              payload.card_last_four ?? null,
-              change.change_id,
-              ledgerId,
-              change.entity_sync_id,
-            )
-            .run();
-        } else {
-          await db
-            .prepare(
-              `INSERT INTO read_account_projection
-               (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
-                note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            )
-            .bind(
-              ledgerId,
-              change.entity_sync_id,
-              userId,
-              payload.name ?? null,
-              payload.account_type ?? null,
-              payload.currency ?? null,
-              payload.initial_balance ?? 0,
-              payload.note ?? null,
-              payload.credit_limit ?? null,
-              payload.billing_day ?? null,
-              payload.payment_due_day ?? null,
-              payload.bank_name ?? null,
-              payload.card_last_four ?? null,
-              change.change_id,
-            )
-            .run();
-        }
-      }
-      break;
-    }
-
-    case 'category': {
-      if (change.action === 'delete') {
-        await db
-          .prepare('DELETE FROM read_category_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .run();
-      } else {
-        const existing = await db
-          .prepare('SELECT sync_id FROM read_category_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .first();
-
-        if (existing) {
-          await db
-            .prepare(
-              `UPDATE read_category_projection SET
-               name = ?, kind = ?, level = ?, sort_order = ?,
-               icon = ?, icon_type = ?, custom_icon_path = ?,
-               icon_cloud_file_id = ?, icon_cloud_sha256 = ?,
-               parent_name = ?, source_change_id = ?
-               WHERE ledger_id = ? AND sync_id = ?`
-            )
-            .bind(
-              payload.name ?? null,
-              payload.kind ?? null,
-              payload.level ?? null,
-              payload.sort_order ?? null,
-              payload.icon ?? null,
-              payload.icon_type ?? null,
-              payload.custom_icon_path ?? null,
-              payload.icon_cloud_file_id ?? null,
-              payload.icon_cloud_sha256 ?? null,
-              payload.parent_name ?? null,
-              change.change_id,
-              ledgerId,
-              change.entity_sync_id,
-            )
-            .run();
-        } else {
-          await db
-            .prepare(
-              `INSERT INTO read_category_projection
-               (ledger_id, sync_id, user_id, name, kind, level, sort_order,
-                icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
-                parent_name, source_change_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            )
-            .bind(
-              ledgerId,
-              change.entity_sync_id,
-              userId,
-              payload.name ?? null,
-              payload.kind ?? null,
-              payload.level ?? null,
-              payload.sort_order ?? null,
-              payload.icon ?? null,
-              payload.icon_type ?? null,
-              payload.custom_icon_path ?? null,
-              payload.icon_cloud_file_id ?? null,
-              payload.icon_cloud_sha256 ?? null,
-              payload.parent_name ?? null,
-              change.change_id,
-            )
-            .run();
-        }
-      }
-      break;
-    }
-
-    case 'tag': {
-      if (change.action === 'delete') {
-        await db
-          .prepare('DELETE FROM read_tag_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .run();
-      } else {
-        const existing = await db
-          .prepare('SELECT sync_id FROM read_tag_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .first();
-
-        if (existing) {
-          await db
-            .prepare(
-              `UPDATE read_tag_projection SET
-               name = ?, color = ?, source_change_id = ?
-               WHERE ledger_id = ? AND sync_id = ?`
-            )
-            .bind(
-              payload.name ?? null,
-              payload.color ?? null,
-              change.change_id,
-              ledgerId,
-              change.entity_sync_id,
-            )
-            .run();
-        } else {
-          await db
-            .prepare(
-              `INSERT INTO read_tag_projection
-               (ledger_id, sync_id, user_id, name, color, source_change_id)
-               VALUES (?, ?, ?, ?, ?, ?)`
-            )
-            .bind(
-              ledgerId,
-              change.entity_sync_id,
-              userId,
-              payload.name ?? null,
-              payload.color ?? null,
-              change.change_id,
-            )
-            .run();
-        }
-      }
-      break;
-    }
-
-    case 'budget': {
-      if (change.action === 'delete') {
-        await db
-          .prepare('DELETE FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .run();
-      } else {
-        const existing = await db
-          .prepare('SELECT sync_id FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .first();
-
-        if (existing) {
-          await db
-            .prepare(
-              `UPDATE read_budget_projection SET
-               budget_type = ?, category_sync_id = ?, amount = ?,
-               period = ?, start_day = ?, enabled = ?, source_change_id = ?
-               WHERE ledger_id = ? AND sync_id = ?`
-            )
-            .bind(
-              payload.budget_type ?? 'total',
-              payload.category_sync_id ?? null,
-              payload.amount ?? 0,
-              payload.period ?? 'monthly',
-              payload.start_day ?? 1,
-              payload.enabled ?? true,
-              change.change_id,
-              ledgerId,
-              change.entity_sync_id,
-            )
-            .run();
-        } else {
-          await db
-            .prepare(
-              `INSERT INTO read_budget_projection
-               (ledger_id, sync_id, user_id, budget_type, category_sync_id, amount,
-                period, start_day, enabled, source_change_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            )
-            .bind(
-              ledgerId,
-              change.entity_sync_id,
-              userId,
-              payload.budget_type ?? 'total',
-              payload.category_sync_id ?? null,
-              payload.amount ?? 0,
-              payload.period ?? 'monthly',
-              payload.start_day ?? 1,
-              payload.enabled ?? true,
-              change.change_id,
-            )
-            .run();
-        }
-      }
-      break;
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------
-// GET /sync/pull - 增量拉取
+// GET /sync/pull - 增量拉取：客户端按游标拉取服务端变更
 // ---------------------------------------------------------------------------
 
-/**
- * 按游标拉取服务端变更
- *
- * 功能说明：
- * - 用于 mobile 增量同步（已知本地游标，只拉取更新的变更）
- * - 用于 web 的 WebSocket 推送掉线后的 catch-up
- * - 更新设备心跳（last_seen_at）
- * - 可选更新 SyncCursor（设备级账本游标）
- *
- * 查询参数：
- * - since: 起始游标（默认 0，表示从头拉取）
- * - device_id: 设备 ID（可选，用于心跳和游标更新）
- * - limit: 返回条数上限（默认 1000，最大 5000）
- *
- * 响应字段：
- * - changes: 变更数组
- * - server_cursor: 本次返回的最大 change_id
- * - has_more: 是否还有更多变更未返回
- */
 syncRouter.get('/pull', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
-  const since = parseInt(c.req.query('since') ?? '0', 10);
-  const deviceId = c.req.query('device_id') ?? null;
-  const limit = Math.min(parseInt(c.req.query('limit') ?? '1000', 10), 5000);
-  const serverNow = nowUtc();
+  
+  const cursor = parseInt(c.req.query('cursor') || '0');
+  const limit = parseInt(c.req.query('limit') || '100');
+  const ledgerId = c.req.query('ledger_id');
 
-  // 如果提供了 device_id，更新设备心跳
-  if (deviceId) {
-    const device = await db
-      .prepare(
-        `SELECT id FROM devices
-         WHERE id = ? AND user_id = ? AND revoked_at IS NULL`
-      )
-      .bind(deviceId, userId)
-      .first();
+  try {
+    let query = `
+      SELECT c.change_id, c.entity_type, c.entity_sync_id, c.action, c.payload_json, c.updated_at, l.external_id as ledger_id
+      FROM sync_changes c
+      JOIN ledgers l ON c.ledger_id = l.id
+      WHERE c.user_id = ? AND c.change_id > ?
+    `;
+    
+    const params: (string | number)[] = [userId, cursor];
+    
+    if (ledgerId) {
+      query += ' AND l.external_id = ?';
+      params.push(ledgerId);
+    }
+    
+    query += ' ORDER BY c.change_id ASC LIMIT ?';
+    params.push(limit);
 
-    if (!device) {
-      return c.json({ error: 'Invalid device' }, 401);
+    const changes = await db
+      .prepare(query)
+      .bind(...params)
+      .all<{
+        change_id: number;
+        entity_type: string;
+        entity_sync_id: string;
+        action: string;
+        payload_json: string;
+        updated_at: string;
+        ledger_id: string;
+      }>();
+
+    const maxRow = await db
+      .prepare(`SELECT MAX(change_id) as max_id FROM sync_changes WHERE user_id = ?`)
+      .bind(userId)
+      .first<{ max_id: number | null }>();
+
+    return c.json({
+      changes: changes.results.map(c => ({
+        ledger_id: c.ledger_id,
+        entity_type: c.entity_type,
+        entity_sync_id: c.entity_sync_id,
+        action: c.action,
+        payload: c.payload_json ? JSON.parse(c.payload_json) : {},
+        updated_at: c.updated_at,
+      })),
+      server_cursor: maxRow?.max_id ?? 0,
+      server_timestamp: nowUtc(),
+    });
+  } catch (error) {
+    console.error('[SYNC] /sync/pull error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /sync/ledgers - 列出用户可访问的账本元信息
+// ---------------------------------------------------------------------------
+
+syncRouter.get('/ledgers', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+
+  try {
+    const ledgers = await db
+      .prepare(`SELECT external_id, name, currency, created_at FROM ledgers WHERE user_id = ?`)
+      .bind(userId)
+      .all<{ external_id: string; name: string; currency: string; created_at: string }>();
+
+    return c.json({
+      ledgers: ledgers.results.map(l => ({
+        ledger_id: l.external_id,
+        name: l.name,
+        currency: l.currency,
+        created_at: l.created_at,
+      })),
+    });
+  } catch (error) {
+    console.error('[SYNC] /sync/ledgers error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /sync/full - 全量同步：返回账本完整快照
+// ---------------------------------------------------------------------------
+
+syncRouter.get('/full', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  
+  const ledgerId = c.req.query('ledger_id');
+
+  try {
+    // 查找账本
+    let query = `SELECT id, external_id FROM ledgers WHERE user_id = ?`;
+    const params: (string | number)[] = [userId];
+    
+    if (ledgerId) {
+      query += ' AND external_id = ?';
+      params.push(ledgerId);
+    }
+    
+    const ledgers = await db
+      .prepare(query)
+      .bind(...params)
+      .all<{ id: string; external_id: string }>();
+
+    const result: Record<string, any> = {
+      server_timestamp: nowUtc(),
+    };
+
+    for (const ledger of ledgers.results) {
+      // 获取账本下的所有变更
+      const changes = await db
+        .prepare(`
+          SELECT entity_type, entity_sync_id, action, payload_json
+          FROM sync_changes
+          WHERE ledger_id = ?
+          ORDER BY change_id ASC
+        `)
+        .bind(ledger.id)
+        .all<{ entity_type: string; entity_sync_id: string; action: string; payload_json: string }>();
+
+      result[ledger.external_id] = changes.results.map(c => ({
+        entity_type: c.entity_type,
+        entity_sync_id: c.entity_sync_id,
+        action: c.action,
+        payload: c.payload_json ? JSON.parse(c.payload_json) : {},
+      }));
     }
 
-    await db
-      .prepare('UPDATE devices SET last_seen_at = ? WHERE id = ?')
-      .bind(serverNow, deviceId)
-      .run();
+    return c.json(result);
+  } catch (error) {
+    console.error('[SYNC] /sync/full error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
   }
-
-  // 获取用户所有可访问账本 ID
-  const ledgers = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .all<{ id: string; external_id: string }>();
-
-  if (ledgers.results.length === 0) {
-    return c.json({ changes: [], server_cursor: since, has_more: false });
-  }
-
-  const ledgerIds = ledgers.results.map((l) => l.id);
-  const ledgerIdMap: Record<string, string> = {};
-  ledgers.results.forEach((l) => {
-    ledgerIdMap[l.id] = l.external_id;
-  });
-
-  const placeholders = ledgerIds.map(() => '?').join(',');
-
-  // 查询变更（过滤掉发起 push 的同一设备，避免回音）
-  let query = db
-    .prepare(
-      `SELECT sc.change_id, sc.ledger_id, sc.entity_type, sc.entity_sync_id,
-              sc.action, sc.payload_json, sc.updated_at, sc.updated_by_device_id
-       FROM sync_changes sc
-       WHERE sc.ledger_id IN (${placeholders}) AND sc.change_id > ?
-       ORDER BY sc.change_id ASC
-       LIMIT ?`
-    )
-    .bind(...ledgerIds, since, limit + 1);
-
-  if (deviceId) {
-    // 过滤掉同一设备产生的变更（避免回音）
-    query = db
-      .prepare(
-        `SELECT sc.change_id, sc.ledger_id, sc.entity_type, sc.entity_sync_id,
-                sc.action, sc.payload_json, sc.updated_at, sc.updated_by_device_id
-         FROM sync_changes sc
-         WHERE sc.ledger_id IN (${placeholders}) AND sc.change_id > ? AND sc.updated_by_device_id != ?
-         ORDER BY sc.change_id ASC
-         LIMIT ?`
-      )
-      .bind(...ledgerIds, since, deviceId, limit + 1);
-  }
-
-  const changes = await query.all<{
-    change_id: number;
-    ledger_id: string;
-    entity_type: string;
-    entity_sync_id: string;
-    action: string;
-    payload_json: string;
-    updated_at: string;
-    updated_by_device_id: string | null;
-  }>();
-
-  const hasMore = changes.results.length > limit;
-  const changeRows = changes.results.slice(0, limit);
-  
-  // 计算正确的server_cursor - 应该是最后一条返回的change_id或since
-  let serverCursor = since;
-  if (changeRows.length > 0) {
-    serverCursor = Math.max(...changeRows.map(r => r.change_id));
-  }
-
-  const response: SyncPullResponse = {
-    changes: changeRows.map((row) => ({
-      change_id: row.change_id,
-      ledger_id: ledgerIdMap[row.ledger_id],
-      entity_type: row.entity_type,
-      entity_sync_id: row.entity_sync_id,
-      action: row.action as 'upsert' | 'delete',
-      payload: safeJsonParse(row.payload_json),
-      updated_at: row.updated_at,
-      updated_by_device_id: row.updated_by_device_id,
-    })),
-    server_cursor: serverCursor,
-    has_more: hasMore,
-  };
-  
-  // 更新游标
-  if (deviceId && changeRows.length > 0) {
-    for (const row of changeRows) {
-      const ledgerExternalId = ledgerIdMap[row.ledger_id];
-      const existing = await db
-        .prepare(
-          `SELECT id, last_cursor FROM sync_cursors
-           WHERE user_id = ? AND device_id = ? AND ledger_external_id = ?`
-        )
-        .bind(userId, deviceId, ledgerExternalId)
-        .first<{ id: number; last_cursor: number }>();
-
-      if (existing) {
-        await db
-          .prepare(
-            `UPDATE sync_cursors SET last_cursor = ?, updated_at = ?
-             WHERE id = ?`
-          )
-          .bind(
-            Math.max(existing.last_cursor, row.change_id),
-            serverNow,
-            existing.id,
-          )
-          .run();
-      } else {
-        await db
-          .prepare(
-            `INSERT INTO sync_cursors
-             (user_id, device_id, ledger_external_id, last_cursor, updated_at)
-             VALUES (?, ?, ?, ?, ?)`
-          )
-          .bind(userId, deviceId, ledgerExternalId, row.change_id, serverNow)
-          .run();
-      }
-    }
-  }
-
-  return c.json(response);
 });
 
 export default syncRouter;
