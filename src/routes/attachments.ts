@@ -54,13 +54,21 @@ class S3Client {
    * 检查是否已配置 S3
    */
   isConfigured(): boolean {
-    if (!this.accessKeyId || !this.secretAccessKey || !this.bucketName) {
+    const missing: string[] = [];
+    if (!this.accessKeyId) missing.push('accessKeyId');
+    if (!this.secretAccessKey) missing.push('secretAccessKey');
+    if (!this.bucketName) missing.push('bucketName');
+    
+    if (missing.length > 0) {
+      console.log('[S3] Missing required config:', missing);
       return false;
     }
+    
     try {
       new URL(this.endpoint);
       return true;
-    } catch {
+    } catch (e) {
+      console.log('[S3] Invalid endpoint URL:', this.endpoint, 'Error:', e);
       return false;
     }
   }
@@ -340,6 +348,15 @@ attachmentsRouter.post('/', async (c) => {
     S3_ACCESS_KEY_ID: c.env.S3_ACCESS_KEY_ID,
     S3_SECRET_ACCESS_KEY: c.env.S3_SECRET_ACCESS_KEY,
     S3_BUCKET_NAME: c.env.S3_BUCKET_NAME,
+  });
+    
+  console.log('[ATTACHMENT] S3 env vars:', {
+    hasEndpoint: !!c.env.S3_ENDPOINT,
+    hasRegion: !!c.env.S3_REGION,
+    hasAccessKey: !!c.env.S3_ACCESS_KEY_ID,
+    hasSecretKey: !!c.env.S3_SECRET_ACCESS_KEY,
+    hasBucket: !!c.env.S3_BUCKET_NAME,
+    endpoint: c.env.S3_ENDPOINT ? 'set' : 'not set',
   });
 
   try {
