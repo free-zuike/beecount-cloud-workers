@@ -43,7 +43,11 @@ class S3Client {
     S3_SECRET_ACCESS_KEY?: string;
     S3_BUCKET_NAME?: string;
   }) {
-    this.endpoint = env.S3_ENDPOINT || 'https://s3.amazonaws.com';
+    let endpoint = env.S3_ENDPOINT || 'https://s3.amazonaws.com';
+    if (endpoint && !endpoint.startsWith('http://') && !endpoint.startsWith('https://')) {
+      endpoint = 'https://' + endpoint;
+    }
+    this.endpoint = endpoint;
     this.region = env.S3_REGION || 'us-east-1';
     this.accessKeyId = env.S3_ACCESS_KEY_ID || '';
     this.secretAccessKey = env.S3_SECRET_ACCESS_KEY || '';
