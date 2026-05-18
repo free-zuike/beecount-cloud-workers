@@ -28,19 +28,31 @@ sysConfig.post('/s3', async (c) => {
     const body = await c.req.json();
     
     try {
-        const settings = await getUploadConfig(db, c.env);
+        // 获取现有配置
+        let settings;
+        try {
+            settings = await getUploadConfig(db, c.env);
+        } catch (e) {
+            console.error('[S3] Error getting upload config:', e);
+            settings = { s3: { channels: [], loadBalance: { enabled: false, channels: [] } } };
+        }
+        
         const s3Channels = settings.s3?.channels || [];
         
-        const newId = Math.max(...s3Channels.map((c: any) => c.id || 0), 0) + 1;
-        const newConfig = {
+        // 计算新 ID
+        const existingIds = s3Channels.map((c: any) => c.id || 0);
+        const newId = existingIds.length > 0 ? Math.max(...existingIds) + 1 : 1;
+        
+        // 构建新配置
+        const newConfig: any = {
             id: newId,
-            name: body.name,
+            name: body.name || '未命名配置',
             type: 's3',
-            accessKeyId: body.access_key_id,
-            secretAccessKey: body.secret_access_key,
+            accessKeyId: body.access_key_id || '',
+            secretAccessKey: body.secret_access_key || '',
             region: body.region || 'auto',
-            bucketName: body.bucket_name,
-            endpoint: body.endpoint,
+            bucketName: body.bucket_name || '',
+            endpoint: body.endpoint || '',
             pathStyle: body.path_style === 'true' || body.path_style === true,
             cdnDomain: body.cdn_domain || '',
             savePath: body.save_path || 'custom',
@@ -49,19 +61,23 @@ sysConfig.post('/s3', async (c) => {
         
         s3Channels.push(newConfig);
         
-        await db.prepare(
-            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime("now")) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
-        ).bind('manage@sysConfig@upload', JSON.stringify({
+        // 保存到数据库
+        const saveData = {
             s3: {
                 channels: s3Channels,
                 loadBalance: settings.s3?.loadBalance || { enabled: false, channels: [] }
             }
-        })).run();
+        };
         
+        await db.prepare(
+            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime("now")) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+        ).bind('manage@sysConfig@upload', JSON.stringify(saveData)).run();
+        
+        console.log('[S3] Config created successfully:', newConfig.id);
         return c.json(newConfig);
-    } catch (error) {
-        console.error('Failed to create S3 config:', error);
-        return c.json({ error: 'Failed to create configuration' }, 500);
+    } catch (error: any) {
+        console.error('[S3] Failed to create config:', error);
+        return c.json({ error: 'Failed to create configuration: ' + (error?.message || 'Unknown error') }, 500);
     }
 });
 
