@@ -49,9 +49,21 @@ class S3Client {
       this.endpoint = 'https://' + this.endpoint;
     }
 
+    console.log('[S3] Constructor called with:', {
+      hasEndpoint: !!env.S3_ENDPOINT,
+      hasRegion: !!env.S3_REGION,
+      hasAccessKey: !!env.S3_ACCESS_KEY_ID,
+      hasSecretKey: !!env.S3_SECRET_ACCESS_KEY,
+      hasBucket: !!env.S3_BUCKET_NAME,
+      endpoint: env.S3_ENDPOINT,
+      region: env.S3_REGION,
+      bucket: env.S3_BUCKET_NAME
+    });
+
     // 检查是否所有必要的配置都存在
     if (env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY && this.bucketName) {
       try {
+        console.log('[S3] Creating S3 client...');
         this.client = new AwsS3Client({
           region: env.S3_REGION || 'auto',
           endpoint: this.endpoint,
@@ -61,10 +73,13 @@ class S3Client {
           },
           forcePathStyle: true // 使用路径风格，兼容性更好
         });
+        console.log('[S3] Client created successfully');
       } catch (e) {
         console.error('[S3] Failed to initialize client:', e);
         this.client = null;
       }
+    } else {
+      console.log('[S3] Missing required config, client not created');
     }
   }
 
