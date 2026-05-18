@@ -1820,29 +1820,40 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       const isEdit = config !== null;
       const title = isEdit ? '编辑 S3 配置' : '添加 S3 配置';
       
+      // 将 camelCase 转换为 snake_case 用于表单
+      const formConfig = config ? {
+        ...config,
+        bucket_name: config.bucketName,
+        access_key_id: config.accessKeyId,
+        secret_access_key: config.secretAccessKey,
+        path_style: config.pathStyle,
+        cdn_domain: config.cdnDomain,
+        save_path: config.savePath
+      } : null;
+      
       container.innerHTML = '<div class="card" style="padding: 16px;">' +
         '<h4 style="margin-bottom: 16px;">' + title + '</h4>' +
         '<form id="s3ConfigFormInner">' +
-        (isEdit ? '<input type="hidden" name="id" value="' + config.id + '">' : '') +
+        (isEdit ? '<input type="hidden" name="id" value="' + formConfig.id + '">' : '') +
         '<div class="form-group">' +
         '<label>配置名称</label>' +
-        '<input type="text" name="name" placeholder="例如：我的 S3 存储" required ' + (isEdit && config.name ? 'value="' + config.name.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '<input type="text" name="name" placeholder="例如：我的 S3 存储" required ' + (isEdit && formConfig.name ? 'value="' + formConfig.name.replace(/"/g, '&quot;') + '"' : '') + '>' +
         '</div>' +
         '<div class="form-group">' +
         '<label>Endpoint</label>' +
-        '<input type="text" name="endpoint" placeholder="例如：https://s3.amazonaws.com" required ' + (isEdit && config.endpoint ? 'value="' + config.endpoint.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '<input type="text" name="endpoint" placeholder="例如：https://s3.amazonaws.com" required ' + (isEdit && formConfig.endpoint ? 'value="' + formConfig.endpoint.replace(/"/g, '&quot;') + '"' : '') + '>' +
         '</div>' +
         '<div class="form-group">' +
         '<label>Region</label>' +
-        '<input type="text" name="region" placeholder="例如：us-east-1" ' + (isEdit && config.region ? 'value="' + config.region.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '<input type="text" name="region" placeholder="例如：us-east-1" ' + (isEdit && formConfig.region ? 'value="' + formConfig.region.replace(/"/g, '&quot;') + '"' : '') + '>' +
         '</div>' +
         '<div class="form-group">' +
         '<label>Bucket Name</label>' +
-        '<input type="text" name="bucket_name" placeholder="例如：my-bucket" required ' + (isEdit && config.bucket_name ? 'value="' + config.bucket_name.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '<input type="text" name="bucket_name" placeholder="例如：my-bucket" required ' + (isEdit && formConfig.bucket_name ? 'value="' + formConfig.bucket_name.replace(/"/g, '&quot;') + '"' : '') + '>' +
         '</div>' +
         '<div class="form-group">' +
         '<label>Access Key ID</label>' +
-        '<input type="text" name="access_key_id" placeholder="Access Key ID" required ' + (isEdit && config.access_key_id ? 'value="' + config.access_key_id.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '<input type="text" name="access_key_id" placeholder="Access Key ID" required ' + (isEdit && formConfig.access_key_id ? 'value="' + formConfig.access_key_id.replace(/"/g, '&quot;') + '"' : '') + '>' +
         '</div>' +
         '<div class="form-group">' +
         '<label>Secret Access Key</label>' +
@@ -1852,17 +1863,17 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         '<div class="form-group">' +
         '<label>路径风格</label>' +
         '<select name="path_style">' +
-        '<option value="true" ' + (isEdit && config.path_style ? 'selected' : '') + '>启用</option>' +
-        '<option value="false" ' + (isEdit && !config.path_style ? 'selected' : '') + '>禁用</option>' +
+        '<option value="true" ' + (isEdit && formConfig.path_style ? 'selected' : '') + '>启用</option>' +
+        '<option value="false" ' + (isEdit && !formConfig.path_style ? 'selected' : '') + '>禁用</option>' +
         '</select>' +
         '</div>' +
         '<div class="form-group">' +
         '<label>CDN 域名（可选）</label>' +
-        '<input type="text" name="cdn_domain" placeholder="例如：https://cdn.example.com" ' + (isEdit && config.cdn_domain ? 'value="' + config.cdn_domain.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '<input type="text" name="cdn_domain" placeholder="例如：https://cdn.example.com" ' + (isEdit && formConfig.cdn_domain ? 'value="' + formConfig.cdn_domain.replace(/"/g, '&quot;') + '"' : '') + '>' +
         '</div>' +
         '<div class="form-group">' +
         '<label>保存路径（可选）</label>' +
-        '<input type="text" name="save_path" placeholder="例如：/attachments" ' + (isEdit && config.save_path ? 'value="' + config.save_path.replace(/"/g, '&quot;') + '"' : '') + '>' +
+        '<input type="text" name="save_path" placeholder="例如：/attachments" ' + (isEdit && formConfig.save_path ? 'value="' + formConfig.save_path.replace(/"/g, '&quot;') + '"' : '') + '>' +
         '</div>' +
         '<div style="display: flex; gap: 8px;">' +
         '<button type="submit" class="btn btn-primary">' + (isEdit ? '保存修改' : '添加配置') + '</button>' +

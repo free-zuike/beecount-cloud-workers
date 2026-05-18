@@ -13,6 +13,162 @@ type Bindings = {
 
 const sysConfig = new Hono<{ Bindings: Bindings }>();
 
+// ===================== S3 配置管理端点 =====================
+
+// 获取所有 S3 配置
+sysConfig.get('/s3', async (c) => {
+    const db = c.env.DB;
+    const settings = await getUploadConfig(db, c.env);
+    return c.json(settings.s3?.channels || []);
+});
+
+// 创建 S3 配置
+sysConfig.post('/s3', async (c) => {
+    const db = c.env.DB;
+    const body = await c.req.json();
+    
+    try {
+        const settings = await getUploadConfig(db, c.env);
+        const s3Channels = settings.s3?.channels || [];
+        
+        const newId = Math.max(...s3Channels.map((c: any) => c.id || 0), 0) + 1;
+        const newConfig = {
+            id: newId,
+            name: body.name,
+            type: 's3',
+            accessKeyId: body.access_key_id,
+            secretAccessKey: body.secret_access_key,
+            region: body.region || 'auto',
+            bucketName: body.bucket_name,
+            endpoint: body.endpoint,
+            pathStyle: body.path_style === 'true' || body.path_style === true,
+            cdnDomain: body.cdn_domain || '',
+            savePath: body.save_path || 'custom',
+            enabled: true
+        };
+        
+        s3Channels.push(newConfig);
+        
+        await db.prepare(
+            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime("now")) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+        ).bind('manage@sysConfig@upload', JSON.stringify({
+            s3: {
+                channels: s3Channels,
+                loadBalance: settings.s3?.loadBalance || { enabled: false, channels: [] }
+            }
+        })).run();
+        
+        return c.json(newConfig);
+    } catch (error) {
+        console.error('Failed to create S3 config:', error);
+        return c.json({ error: 'Failed to create configuration' }, 500);
+    }
+});
+
+// 更新 S3 配置
+sysConfig.put('/s3/:id', async (c) => {
+    const db = c.env.DB;
+    const id = parseInt(c.req.param('id'));
+    const body = await c.req.json();
+    
+    try {
+        const settings = await getUploadConfig(db, c.env);
+        const s3Channels = settings.s3?.channels || [];
+        const index = s3Channels.findIndex((c: any) => c.id === id);
+        
+        if (index === -1) {
+            return c.json({ error: 'Config not found' }, 404);
+        }
+        
+        s3Channels[index] = {
+            ...s3Channels[index],
+            name: body.name || s3Channels[index].name,
+            accessKeyId: body.access_key_id || s3Channels[index].accessKeyId,
+            secretAccessKey: body.secret_access_key || s3Channels[index].secretAccessKey,
+            region: body.region || s3Channels[index].region,
+            bucketName: body.bucket_name || s3Channels[index].bucketName,
+            endpoint: body.endpoint || s3Channels[index].endpoint,
+            pathStyle: body.path_style !== undefined ? (body.path_style === 'true' || body.path_style === true) : s3Channels[index].pathStyle,
+            cdnDomain: body.cdn_domain !== undefined ? body.cdn_domain : s3Channels[index].cdnDomain,
+            savePath: body.save_path || s3Channels[index].savePath
+        };
+        
+        await db.prepare(
+            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime("now")) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+        ).bind('manage@sysConfig@upload', JSON.stringify({
+            s3: {
+                channels: s3Channels,
+                loadBalance: settings.s3?.loadBalance || { enabled: false, channels: [] }
+            }
+        })).run();
+        
+        return c.json(s3Channels[index]);
+    } catch (error) {
+        console.error('Failed to update S3 config:', error);
+        return c.json({ error: 'Failed to update configuration' }, 500);
+    }
+});
+
+// 切换 S3 配置启用状态
+sysConfig.post('/s3/:id/toggle', async (c) => {
+    const db = c.env.DB;
+    const id = parseInt(c.req.param('id'));
+    
+    try {
+        const settings = await getUploadConfig(db, c.env);
+        const s3Channels = settings.s3?.channels || [];
+        const index = s3Channels.findIndex((c: any) => c.id === id);
+        
+        if (index === -1) {
+            return c.json({ error: 'Config not found' }, 404);
+        }
+        
+        s3Channels[index].enabled = !s3Channels[index].enabled;
+        
+        await db.prepare(
+            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime("now")) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+        ).bind('manage@sysConfig@upload', JSON.stringify({
+            s3: {
+                channels: s3Channels,
+                loadBalance: settings.s3?.loadBalance || { enabled: false, channels: [] }
+            }
+        })).run();
+        
+        return c.json(s3Channels[index]);
+    } catch (error) {
+        console.error('Failed to toggle S3 config:', error);
+        return c.json({ error: 'Failed to toggle configuration' }, 500);
+    }
+});
+
+// 删除 S3 配置
+sysConfig.delete('/s3/:id', async (c) => {
+    const db = c.env.DB;
+    const id = parseInt(c.req.param('id'));
+    
+    try {
+        const settings = await getUploadConfig(db, c.env);
+        let s3Channels = settings.s3?.channels || [];
+        s3Channels = s3Channels.filter((c: any) => c.id !== id);
+        
+        await db.prepare(
+            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime("now")) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+        ).bind('manage@sysConfig@upload', JSON.stringify({
+            s3: {
+                channels: s3Channels,
+                loadBalance: settings.s3?.loadBalance || { enabled: false, channels: [] }
+            }
+        })).run();
+        
+        return c.json({ success: true });
+    } catch (error) {
+        console.error('Failed to delete S3 config:', error);
+        return c.json({ error: 'Failed to delete configuration' }, 500);
+    }
+});
+
+// ===================== 原有的上传配置端点 =====================
+
 // 获取上传配置（包括 S3 配置）
 sysConfig.get('/upload', async (c) => {
     const db = c.env.DB;
