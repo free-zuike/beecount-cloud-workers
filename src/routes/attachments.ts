@@ -72,7 +72,9 @@ class S3Client {
    * 检查是否已配置 S3
    */
   isConfigured(): boolean {
-    return this.client !== null;
+    const configured = this.client !== null;
+    console.log('[S3] isConfigured:', configured, 'client:', this.client ? 'exists' : 'null');
+    return configured;
   }
 
   /**
@@ -98,6 +100,17 @@ class S3Client {
 
     console.log('[S3] Uploading file:', { bucket: this.bucketName, key, contentType });
     console.log('[S3] File size:', body.byteLength);
+    console.log('[S3] Endpoint:', this.endpoint);
+    
+    // 检查客户端配置
+    try {
+      const config = this.client.config;
+      console.log('[S3] Client config - region:', config.region);
+      console.log('[S3] Client config - credentials:', config.credentials ? 'set' : 'not set');
+      console.log('[S3] Client config - forcePathStyle:', config.forcePathStyle);
+    } catch (e) {
+      console.log('[S3] Error accessing client config:', e);
+    }
 
     try {
       const uint8Array = new Uint8Array(body);
@@ -120,6 +133,9 @@ class S3Client {
       console.error('[S3] Error stack:', err.stack);
       if (err.$metadata) {
         console.error('[S3] Error metadata:', JSON.stringify(err.$metadata));
+      }
+      if (err.response) {
+        console.error('[S3] Error response:', JSON.stringify(err.response));
       }
       return false;
     }
