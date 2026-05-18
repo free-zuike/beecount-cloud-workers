@@ -71,7 +71,8 @@ async function signRequest(
     key: string,
     method: string,
     contentType: string,
-    payload: ArrayBuffer
+    payload: ArrayBuffer,
+    usePathStyle: boolean = true
 ): Promise<{ url: string; headers: Record<string, string> }> {
     const now = new Date();
     const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
@@ -80,9 +81,7 @@ async function signRequest(
     const service = 's3';
     
     // 构建正确的 URL 和 host 头
-    // 尝试两种方式：路径风格和虚拟主机风格
     const endpointUrl = new URL(endpoint);
-    const usePathStyle = true; // 先尝试路径风格
     
     let canonicalUri: string;
     let host: string;
@@ -200,7 +199,8 @@ class S3Client {
                     key,
                     'PUT',
                     contentType,
-                    body
+                    body,
+                    usePathStyle
                 );
 
                 console.log('[S3] Uploading to:', url, '(usePathStyle:', usePathStyle, ')');
@@ -230,8 +230,7 @@ class S3Client {
         if (!success) {
             // 失败的话尝试虚拟主机风格
             console.log('[S3] Path style failed, trying virtual host style...');
-            // 这里需要修改 signRequest 来支持两种风格，让我们稍后实现
-            // 现在先只使用路径风格，但是添加了更多调试信息
+            success = await tryUpload(false);
         }
         
         return success;
