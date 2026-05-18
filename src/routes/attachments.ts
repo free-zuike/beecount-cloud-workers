@@ -101,7 +101,7 @@ class S3Client {
   }
 
   /**
-   * 上传文件到 S3
+   * 上传文件到 S3（使用 fetch 直接发送请求）
    */
   async upload(
     key: string,
@@ -116,42 +116,45 @@ class S3Client {
     console.log('[S3] Uploading file:', { bucket: this.bucketName, key, contentType });
     console.log('[S3] File size:', body.byteLength);
     console.log('[S3] Endpoint:', this.endpoint);
-    
-    // 检查客户端配置
-    try {
-      const config = this.client.config;
-      console.log('[S3] Client config - region:', config.region);
-      console.log('[S3] Client config - credentials:', config.credentials ? 'set' : 'not set');
-      console.log('[S3] Client config - forcePathStyle:', config.forcePathStyle);
-    } catch (e) {
-      console.log('[S3] Error accessing client config:', e);
-    }
+
+    const url = `${this.endpoint}/${this.bucketName}/${key}`;
+    console.log('[S3] Final upload URL:', url);
 
     try {
       const uint8Array = new Uint8Array(body);
-      const command = new PutObjectCommand({
-        Bucket: this.bucketName,
-        Key: key,
-        Body: uint8Array,
-        ContentType: contentType
-      });
       
-      console.log('[S3] Sending command to endpoint:', this.endpoint);
-      await this.client.send(command);
-      console.log('[S3] Upload successful');
-      return true;
+      // 使用 fetch 直接发送请求，以便更好地调试
+      const response = await fetch(url, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': contentType,
+          'Content-Length': body.byteLength.toString()
+        },
+        body: uint8Array
+      });
+
+      console.log('[S3] Fetch response status:', response.status);
+      console.log('[S3] Fetch response status text:', response.statusText);
+      
+      if (!response.ok) {
+        const responseText = await response.text();
+        console.error('[S3] Fetch response body:', responseText);
+        
+        // 尝试解析 JSON 错误
+        try {
+          const responseJson = JSON.parse(responseText);
+          console.error('[S3] Parsed error:', JSON.stringify(responseJson));
+        } catch (e) {
+          console.log('[S3] Response is not JSON');
+        }
+      }
+      
+      return response.ok;
     } catch (err: any) {
       console.error('[S3] Upload error:', err);
       console.error('[S3] Error name:', err.name);
       console.error('[S3] Error message:', err.message);
-      console.error('[S3] Error code:', err.code);
       console.error('[S3] Error stack:', err.stack);
-      if (err.$metadata) {
-        console.error('[S3] Error metadata:', JSON.stringify(err.$metadata));
-      }
-      if (err.response) {
-        console.error('[S3] Error response:', JSON.stringify(err.response));
-      }
       return false;
     }
   }
