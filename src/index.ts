@@ -1647,7 +1647,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
     }
 
     async function renderDebugPage(container) {
-      container.innerHTML = '<div class="page active"><div class="page-header"><h2>调试工具</h2></div><div class="card"><h4>数据库数据查看</h4><p style="color: var(--text-muted); margin-bottom: 16px;">点击下方按钮查看数据库中的原始数据</p></div><div id="debugActions"></div><div id="debugOutput" style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: monospace; font-size: 12px; max-height: 600px; overflow: auto; white-space: pre-wrap;"></div></div>';
+      container.innerHTML = '<div class="page active"><div class="page-header"><h2>调试工具</h2></div><div class="card"><h4>数据库数据查看</h4><p style="color: var(--text-muted); margin-bottom: 16px;">点击下方按钮查看数据库中的原始数据</p></div><div id="debugActions"></div><div id="debugOutput" style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: monospace; font-size: 12px; max-height: 600px; overflow: auto; white-space: pre-wrap;"></div><div class="card" style="margin-top: 24px;"><h4>附件上传测试</h4><p style="color: var(--text-muted); margin-bottom: 16px;">测试附件上传功能</p><div id="attachmentUploadStatus"></div><input type="file" id="attachmentFileInput" accept="image/*" style="margin-bottom: 16px;"><select id="attachmentLedgerSelect" style="margin-bottom: 16px; padding: 8px; border: 1px solid var(--border); border-radius: 4px; width: 100%;"><option value="">选择账本</option></select><button class="btn btn-primary" onclick="testUploadAttachment()">上传附件</button></div></div>';
       
       const actions = document.getElementById('debugActions');
       const btn1 = document.createElement('button');
@@ -1669,6 +1669,61 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       actions.appendChild(btn3);
       
       actions.style.cssText = 'display: flex; gap: 10px; margin-bottom: 16px;';
+      
+      // 加载账本列表到选择框
+      loadLedgerSelectForAttachment();
+    }
+    
+    async function loadLedgerSelectForAttachment() {
+      const select = document.getElementById('attachmentLedgerSelect');
+      if (!select) return;
+      
+      try {
+        const ledgers = await api('/api/v1/read/ledgers') || [];
+        ledgers.forEach(ledger => {
+          const option = document.createElement('option');
+          option.value = ledger.ledger_id || '';
+          option.textContent = (ledger.ledger_name || '') + ' (' + (ledger.ledger_id || '') + ')';
+          select.appendChild(option);
+        });
+      } catch (err) {
+        console.error('Failed to load ledgers:', err);
+      }
+    }
+    
+    async function testUploadAttachment() {
+      const fileInput = document.getElementById('attachmentFileInput');
+      const ledgerSelect = document.getElementById('attachmentLedgerSelect');
+      const statusDiv = document.getElementById('attachmentUploadStatus');
+      
+      if (!fileInput.files || !fileInput.files[0]) {
+        statusDiv.innerHTML = '<p style="color: var(--error);">请选择文件</p>';
+        return;
+      }
+      
+      if (!ledgerSelect.value) {
+        statusDiv.innerHTML = '<p style="color: var(--error);">请选择账本</p>';
+        return;
+      }
+      
+      statusDiv.innerHTML = '<p>正在上传...</p>';
+      
+      try {
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+        formData.append('ledger_id', ledgerSelect.value);
+        formData.append('file_name', fileInput.files[0].name);
+        
+        const result = await api('/attachments', {
+          method: 'POST',
+          body: formData,
+          headers: {} // 不设置 Content-Type，让浏览器自动设置
+        });
+        
+        statusDiv.innerHTML = '<p style="color: var(--success);">上传成功！<br>File ID: ' + (result.file_id || '') + '<br>SHA256: ' + (result.sha256 || '') + '<br>Size: ' + (result.size || 0) + ' bytes</p>';
+      } catch (err) {
+        statusDiv.innerHTML = '<p style="color: var(--error);">上传失败: ' + (err.message || err) + '</p>';
+      }
     }
 
     async function loadDebugData(type) {

@@ -585,6 +585,7 @@
             </div>
             <div class="user-info">
               <button class="btn btn-secondary" onclick="logout()">退出</button>
+            <button class="btn btn-secondary" onclick="openDebugPage()">调试</button>
             </div>
           </div>
         </header>
@@ -785,6 +786,14 @@
       localStorage.removeItem('token');
       showToast('已退出登录');
       render();
+    }
+
+    // 打开调试页面
+    function openDebugPage() {
+      const debugUrl = window.location.pathname === '/' 
+        ? '/debug' 
+        : window.location.pathname.replace(/\/$/, '') + '/debug';
+      window.location.href = debugUrl;
     }
 
     // 初始化
