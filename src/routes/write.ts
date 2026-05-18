@@ -418,20 +418,14 @@ writeRouter.delete('/ledgers/:ledgerId', async (c) => {
     return c.json({ error: 'Ledger not found' }, 404);
   }
 
-  const syncId = randomUUID();
-
-  await db.batch([
-    db.prepare(
+  // 只添加 ledger_snapshot delete 变更，不直接删除账本
+  // 让同步和 projection 应用逻辑处理实际删除
+  await db
+    .prepare(
       `INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(userId, ledger.id, 'ledger_snapshot', syncId, 'delete', '{}', serverNow, userId),
-    db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id),
-    db.prepare('DELETE FROM read_account_projection WHERE ledger_id = ?').bind(ledger.id),
-    db.prepare('DELETE FROM read_category_projection WHERE ledger_id = ?').bind(ledger.id),
-    db.prepare('DELETE FROM read_tag_projection WHERE ledger_id = ?').bind(ledger.id),
-    db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').bind(ledger.id),
-    db.prepare('DELETE FROM ledgers WHERE id = ?').bind(ledger.id),
-  ]);
+    ).bind(userId, ledger.id, 'ledger_snapshot', ledger.external_id, 'delete', '{}', serverNow, userId)
+    .run();
 
   return c.json({ success: true, ledger_id: ledgerId });
 });

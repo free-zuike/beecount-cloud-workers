@@ -270,21 +270,20 @@ readRouter.get('/ledgers', async (c) => {
   for (const ledger of ledgers.results) {
     console.log('[READ] Processing ledger:', ledger.external_id, ledger.name);
 
-    // 暂时禁用软删除检查，确保账本能显示
     // 检查账本是否软删除（存在 ledger_snapshot delete tombstone）
-    // const tombstone = await db
-    //   .prepare(
-    //     `SELECT action FROM sync_changes
-    //      WHERE ledger_id = ? AND entity_type = 'ledger_snapshot' AND action = 'delete'
-    //      ORDER BY change_id DESC LIMIT 1`
-    //   )
-    //   .bind(ledger.id)
-    //   .first<{ action: string }>();
+    const tombstone = await db
+      .prepare(
+        `SELECT action FROM sync_changes
+         WHERE ledger_id = ? AND entity_type = 'ledger_snapshot' AND action = 'delete'
+         ORDER BY change_id DESC LIMIT 1`
+      )
+      .bind(ledger.id)
+      .first<{ action: string }>();
 
-    // if (tombstone?.action === 'delete') {
-    //   console.log('[READ] Ledger is soft deleted, skipping:', ledger.external_id);
-    //   continue; // 跳过软删除的账本
-    // }
+    if (tombstone?.action === 'delete') {
+      console.log('[READ] Ledger is soft deleted, skipping:', ledger.external_id);
+      continue; // 跳过软删除的账本
+    }
 
     // 从 projection 计算汇总统计
     const totals = await db
@@ -362,20 +361,19 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
     return c.json({ error: 'Ledger not found' }, 404);
   }
 
-  // 暂时禁用软删除检查，确保账本能显示
   // 检查软删除
-  // const tombstone = await db
-  //   .prepare(
-  //     `SELECT action FROM sync_changes
-  //      WHERE ledger_id = ? AND entity_type = 'ledger_snapshot' AND action = 'delete'
-  //      ORDER BY change_id DESC LIMIT 1`
-  //   )
-  //   .bind(ledger.id)
-  //   .first<{ action: string }>();
+  const tombstone = await db
+    .prepare(
+      `SELECT action FROM sync_changes
+       WHERE ledger_id = ? AND entity_type = 'ledger_snapshot' AND action = 'delete'
+       ORDER BY change_id DESC LIMIT 1`
+    )
+    .bind(ledger.id)
+    .first<{ action: string }>();
 
-  // if (tombstone?.action === 'delete') {
-  //   return c.json({ error: 'Ledger not found' }, 404);
-  // }
+  if (tombstone?.action === 'delete') {
+    return c.json({ error: 'Ledger not found' }, 404);
+  }
 
   // 获取最新 change_id
   const latestChangeId = await db

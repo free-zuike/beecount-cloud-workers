@@ -543,16 +543,42 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       }
     }
 
-    // 暂时禁用projection更新以减少数据库压力，避免503错误
-    // 后续可以优化后再恢复
-    // await applyChangeToProjection(db, ledgerRow.id, userId, {
-    //   change_id: newChangeId,
-    //   entity_type: change.entity_type,
-    //   entity_sync_id: change.entity_sync_id,
-    //   action: change.action,
-    //   payload: change.payload,
-    //   ledger_id: ledgerRow.id,
-    // });
+    // 应用变更到 projection
+    for (const externalLedgerId in touchedLedgers) {
+      const internalLedgerId = touchedLedgers[externalLedgerId];
+      // 查找这个账本的所有新变更并应用
+      const ledgerChanges = await db
+        .prepare(
+          `SELECT change_id, entity_type, entity_sync_id, action, payload_json as payload
+           FROM sync_changes
+           WHERE ledger_id = ?
+           ORDER BY change_id ASC`
+        )
+        .bind(internalLedgerId)
+        .all<{
+          change_id: number;
+          entity_type: string;
+          entity_sync_id: string;
+          action: string;
+          payload: string;
+        }>();
+      
+      for (const change of ledgerChanges.results) {
+        try {
+          const payload = change.payload ? JSON.parse(change.payload) : {};
+          await applyChangeToProjection(db, internalLedgerId, userId, {
+            change_id: change.change_id,
+            entity_type: change.entity_type,
+            entity_sync_id: change.entity_sync_id,
+            action: change.action,
+            payload: payload,
+            ledger_id: internalLedgerId,
+          });
+        } catch (err) {
+          console.error('[SYNC] Error applying change to projection:', err);
+        }
+      }
+    }
 
     // 如果没有任何变更被接受，计算最大游标
     if (maxCursor === 0) {
@@ -617,6 +643,58 @@ async function applyChangeToProjection(
     ledger_id: string;
   }
 ): Promise<void> {
+  // 处理 ledger_snapshot delete - 删除整个账本
+  if (change.entity_type === 'ledger_snapshot' && change.action === 'delete') {
+    await db.batch([
+      db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM read_account_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM read_category_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM read_tag_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM ledgers WHERE id = ?').bind(ledgerId),
+    ]);
+    return;
+  }
+
+  // 处理 ledger_snapshot upsert - 创建或更新账本
+  if (change.entity_type === 'ledger_snapshot' && change.action === 'upsert') {
+    const payload = change.payload as Record<string, unknown>;
+    const name = (payload.ledgerName ?? payload.name ?? change.entity_sync_id) as string;
+    const currency = (payload.currency ?? 'CNY') as string;
+    
+    // 检查账本是否存在
+    const existing = await db
+      .prepare('SELECT id FROM ledgers WHERE id = ?')
+      .bind(ledgerId)
+      .first();
+    
+    if (existing) {
+      // 更新账本
+      await db
+        .prepare('UPDATE ledgers SET name = ?, currency = ? WHERE id = ?')
+        .bind(name, currency, ledgerId)
+        .run();
+    } else {
+      // 查找账本的 external_id
+      const ledgerInfo = await db
+        .prepare('SELECT external_id FROM ledgers WHERE id = ?')
+        .bind(ledgerId)
+        .first<{ external_id: string }>();
+      
+      const externalId = ledgerInfo?.external_id ?? change.entity_sync_id;
+      
+      // 创建账本（如果不存在）
+      await db
+        .prepare(
+          `INSERT OR IGNORE INTO ledgers (id, user_id, external_id, name, currency, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .bind(ledgerId, userId, externalId, name, currency, nowUtc())
+        .run();
+    }
+    return;
+  }
+
   const INDIVIDUAL_ENTITY_TYPES = [
     'transaction',
     'account',
