@@ -20,7 +20,91 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+
+// 简化的 S3 签名算法实现
+async function signRequest(
+    accessKey: string,
+    secretKey: string,
+    region: string,
+    endpoint: string,
+    bucket: string,
+    key: string,
+    method: string,
+    contentType: string,
+    bodyLength: number
+): Promise<{ url: string; headers: Record<string, string> }> {
+    const now = new Date();
+    const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
+    const dateStamp = amzDate.slice(0, 8);
+    const service = 's3';
+    
+    // 使用路径风格
+    const url = `${endpoint}/${bucket}/${key}`;
+    const host = new URL(endpoint).host;
+    
+    // 创建规范请求
+    const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:${amzDate}\n`;
+    const signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date';
+    const payloadHash = 'UNSIGNED-PAYLOAD';
+    
+    const canonicalRequest = `${method}\n/${bucket}/${key}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+    
+    // 计算字符串到签名
+    const algorithm = 'AWS4-HMAC-SHA256';
+    const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+    const hashedCanonicalRequest = await sha256Hex(canonicalRequest);
+    const stringToSign = `${algorithm}\n${amzDate}\n${credentialScope}\n${hashedCanonicalRequest}`;
+    
+    // 计算签名
+    const signingKey = await getSignatureKey(secretKey, dateStamp, region, service);
+    const signature = await hmacHex(signingKey, stringToSign);
+    
+    // 构建授权头
+    const authorizationHeader = `${algorithm} Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+    
+    return {
+        url,
+        headers: {
+            'Content-Type': contentType,
+            'X-Amz-Date': amzDate,
+            'X-Amz-Content-SHA256': payloadHash,
+            'Authorization': authorizationHeader
+        }
+    };
+}
+
+async function getSignatureKey(key: string, dateStamp: string, regionName: string, serviceName: string): Promise<Uint8Array> {
+    const kDate = await hmac(new TextEncoder().encode(`AWS4${key}`), dateStamp);
+    const kRegion = await hmac(kDate, regionName);
+    const kService = await hmac(kRegion, serviceName);
+    const kSigning = await hmac(kService, 'aws4_request');
+    return kSigning;
+}
+
+async function hmac(key: Uint8Array | ArrayBuffer, data: string): Promise<Uint8Array> {
+    const encoder = new TextEncoder();
+    const cryptoKey = await crypto.subtle.importKey(
+        'raw',
+        key instanceof ArrayBuffer ? key : key.buffer,
+        { name: 'HMAC', hash: { name: 'SHA-256' } },
+        false,
+        ['sign']
+    );
+    const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(data));
+    return new Uint8Array(signature);
+}
+
+async function sha256Hex(data: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(data));
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function hmacHex(key: Uint8Array, data: string): Promise<string> {
+    const signature = await hmac(key, data);
+    return Array.from(signature).map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 class S3Service {
     private env: {
@@ -50,18 +134,6 @@ class S3Service {
         );
     }
 
-    private getClient(forcePathStyle: boolean): S3Client {
-        return new S3Client({
-            region: this.env.S3_REGION || 'auto',
-            endpoint: this.env.S3_ENDPOINT,
-            credentials: {
-                accessKeyId: this.env.S3_ACCESS_KEY_ID!,
-                secretAccessKey: this.env.S3_SECRET_ACCESS_KEY!,
-            },
-            forcePathStyle: forcePathStyle
-        });
-    }
-
     getStorageKey(ledgerId: string, fileId: string, fileName: string): string {
         const encodedFileName = encodeURIComponent(fileName);
         return `attachments/${ledgerId}/${fileId}/${encodedFileName}`;
@@ -75,57 +147,49 @@ class S3Service {
 
         console.log('[S3] Initializing upload with config:');
         console.log('[S3]   Endpoint:', this.env.S3_ENDPOINT);
-        console.log('[S3]   Region:', this.env.S3_REGION || 'auto');
+        console.log('[S3]   Region:', this.env.S3_REGION || 'us-east-1');
         console.log('[S3]   Bucket:', this.env.S3_BUCKET_NAME);
         console.log('[S3]   Key:', key);
 
-        const uint8Array = new Uint8Array(body);
-
-        // 先尝试路径风格
-        let client = this.getClient(true);
         try {
-            console.log('[S3] Trying path-style upload');
-            const command = new PutObjectCommand({
-                Bucket: this.env.S3_BUCKET_NAME,
-                Key: key,
-                Body: uint8Array,
-                ContentType: contentType
+            console.log('[S3] Signing request');
+            const { url, headers } = await signRequest(
+                this.env.S3_ACCESS_KEY_ID!,
+                this.env.S3_SECRET_ACCESS_KEY!,
+                this.env.S3_REGION || 'us-east-1',
+                this.env.S3_ENDPOINT!,
+                this.env.S3_BUCKET_NAME!,
+                key,
+                'PUT',
+                contentType,
+                body.byteLength
+            );
+
+            console.log('[S3] Sending request to:', url);
+            const response = await fetch(url, {
+                method: 'PUT',
+                headers,
+                body
             });
-            await client.send(command);
-            console.log('[S3] Path-style upload succeeded');
-            return true;
-        } catch (error: any) {
-            console.error('[S3] Path-style upload failed:', error);
-            console.error('[S3] Error details:', JSON.stringify({
-                name: error.name,
-                message: error.message,
-                $metadata: error.$metadata,
-                cause: error.cause
-            }, null, 2));
+
+            console.log('[S3] Response status:', response.status, response.statusText);
             
-            // 失败的话尝试虚拟主机风格
-            console.log('[S3] Trying virtual-host-style upload');
-            client = this.getClient(false);
-            try {
-                const command = new PutObjectCommand({
-                    Bucket: this.env.S3_BUCKET_NAME,
-                    Key: key,
-                    Body: uint8Array,
-                    ContentType: contentType
-                });
-                await client.send(command);
-                console.log('[S3] Virtual-host-style upload succeeded');
-                return true;
-            } catch (error2: any) {
-                console.error('[S3] Virtual-host-style upload also failed:', error2);
-                console.error('[S3] Error 2 details:', JSON.stringify({
-                    name: error2.name,
-                    message: error2.message,
-                    $metadata: error2.$metadata,
-                    cause: error2.cause
-                }, null, 2));
+            if (!response.ok) {
+                let responseText = '';
+                try {
+                    responseText = await response.text();
+                } catch (e) {
+                    responseText = '(unable to read response body)';
+                }
+                console.error('[S3] Upload failed:', response.status, response.statusText, responseText);
                 return false;
             }
+
+            console.log('[S3] Upload successful');
+            return true;
+        } catch (error: any) {
+            console.error('[S3] Upload error:', error);
+            return false;
         }
     }
 
@@ -134,39 +198,32 @@ class S3Service {
             return null;
         }
 
-        // 先尝试路径风格
-        let client = this.getClient(true);
         try {
-            const command = new GetObjectCommand({
-                Bucket: this.env.S3_BUCKET_NAME,
-                Key: key
+            const { url, headers } = await signRequest(
+                this.env.S3_ACCESS_KEY_ID!,
+                this.env.S3_SECRET_ACCESS_KEY!,
+                this.env.S3_REGION || 'us-east-1',
+                this.env.S3_ENDPOINT!,
+                this.env.S3_BUCKET_NAME!,
+                key,
+                'GET',
+                'application/octet-stream',
+                0
+            );
+
+            const response = await fetch(url, {
+                method: 'GET',
+                headers
             });
-            const response = await client.send(command);
-            if (response.Body) {
-                const arrayBuffer = await response.Body.transformToByteArray();
-                return new Response(arrayBuffer);
+
+            if (!response.ok) {
+                return null;
             }
-            return null;
+
+            return response;
         } catch (error) {
-            console.error('[S3] Path-style download failed:', error);
-            
-            // 失败的话尝试虚拟主机风格
-            client = this.getClient(false);
-            try {
-                const command = new GetObjectCommand({
-                    Bucket: this.env.S3_BUCKET_NAME,
-                    Key: key
-                });
-                const response = await client.send(command);
-                if (response.Body) {
-                    const arrayBuffer = await response.Body.transformToByteArray();
-                    return new Response(arrayBuffer);
-                }
-                return null;
-            } catch (error2) {
-                console.error('[S3] Virtual-host-style download also failed:', error2);
-                return null;
-            }
+            console.error('[S3] Download error:', error);
+            return null;
         }
     }
 
@@ -175,31 +232,28 @@ class S3Service {
             return false;
         }
 
-        // 先尝试路径风格
-        let client = this.getClient(true);
         try {
-            const command = new DeleteObjectCommand({
-                Bucket: this.env.S3_BUCKET_NAME,
-                Key: key
+            const { url, headers } = await signRequest(
+                this.env.S3_ACCESS_KEY_ID!,
+                this.env.S3_SECRET_ACCESS_KEY!,
+                this.env.S3_REGION || 'us-east-1',
+                this.env.S3_ENDPOINT!,
+                this.env.S3_BUCKET_NAME!,
+                key,
+                'DELETE',
+                'application/octet-stream',
+                0
+            );
+
+            const response = await fetch(url, {
+                method: 'DELETE',
+                headers
             });
-            await client.send(command);
-            return true;
+
+            return response.ok;
         } catch (error) {
-            console.error('[S3] Path-style delete failed:', error);
-            
-            // 失败的话尝试虚拟主机风格
-            client = this.getClient(false);
-            try {
-                const command = new DeleteObjectCommand({
-                    Bucket: this.env.S3_BUCKET_NAME,
-                    Key: key
-                });
-                await client.send(command);
-                return true;
-            } catch (error2) {
-                console.error('[S3] Virtual-host-style delete also failed:', error2);
-                return false;
-            }
+            console.error('[S3] Delete error:', error);
+            return false;
         }
     }
 }
