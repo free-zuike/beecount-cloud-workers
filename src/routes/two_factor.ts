@@ -226,11 +226,20 @@ const twoFactorRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 twoFactorRouter.get('/status', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
+  
+  console.log('[2FA] Status request - userId:', userId);
+
+  if (!userId) {
+    console.log('[2FA] No userId found in context');
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
 
   const user = await db
     .prepare('SELECT totp_enabled, totp_enabled_at FROM users WHERE id = ?')
     .bind(userId)
     .first<{ totp_enabled: number; totp_enabled_at: string | null }>();
+
+  console.log('[2FA] User query result:', user);
 
   if (!user) {
     return c.json({ error: 'User not found' }, 404);
