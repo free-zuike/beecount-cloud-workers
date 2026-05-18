@@ -94,8 +94,14 @@ class S3Service {
             await client.send(command);
             console.log('[S3] Path-style upload succeeded');
             return true;
-        } catch (error) {
+        } catch (error: any) {
             console.error('[S3] Path-style upload failed:', error);
+            console.error('[S3] Error details:', JSON.stringify({
+                name: error.name,
+                message: error.message,
+                $metadata: error.$metadata,
+                cause: error.cause
+            }, null, 2));
             
             // 失败的话尝试虚拟主机风格
             console.log('[S3] Trying virtual-host-style upload');
@@ -110,8 +116,14 @@ class S3Service {
                 await client.send(command);
                 console.log('[S3] Virtual-host-style upload succeeded');
                 return true;
-            } catch (error2) {
+            } catch (error2: any) {
                 console.error('[S3] Virtual-host-style upload also failed:', error2);
+                console.error('[S3] Error 2 details:', JSON.stringify({
+                    name: error2.name,
+                    message: error2.message,
+                    $metadata: error2.$metadata,
+                    cause: error2.cause
+                }, null, 2));
                 return false;
             }
         }
