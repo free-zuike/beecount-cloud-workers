@@ -328,8 +328,8 @@ type Variables = {
 
 const attachmentsRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
-// POST /attachments - 上传附件
-attachmentsRouter.post('/', async (c) => {
+// 上传附件处理函数（供 / 和 /upload 共用）
+const handleUpload = async (c: any) => {
     const userId = c.get('userId');
     const db = c.env.DB;
 
@@ -432,6 +432,75 @@ attachmentsRouter.post('/', async (c) => {
         console.error('[ATTACHMENT] Upload error:', error);
         return c.json({ error: 'Failed to upload attachment' }, 500);
     }
+};
+
+// POST /attachments/upload - APP 兼容端点
+attachmentsRouter.post('/upload', async (c) => {
+    return handleUpload(c);
+});
+
+// POST /attachments/batch-exists - 批量检查附件是否存在
+attachmentsRouter.post('/batch-exists', async (c) => {
+    const userId = c.get('userId');
+    const db = c.env.DB;
+
+    try {
+        const body = await c.req.json();
+        const ledgerExternalId = body.ledger_id as string;
+        const sha256List = body.sha256_list as string[];
+
+        if (!ledgerExternalId || !sha256List || !Array.isArray(sha256List)) {
+            return c.json({ error: 'Invalid request' }, 400);
+        }
+
+        const ledger = await db
+            .prepare('SELECT id FROM ledgers WHERE user_id = ? AND external_id = ?')
+            .bind(userId, ledgerExternalId)
+            .first<{ id: string }>();
+
+        if (!ledger) {
+            return c.json({ exists: [] });
+        }
+
+        const results: any[] = [];
+        for (const sha256 of sha256List) {
+            const existing = await db
+                .prepare(
+                    `SELECT id, file_name, mime_type, size_bytes, created_at 
+                     FROM attachment_files 
+                     WHERE sha256 = ? AND ledger_id = ? AND attachment_kind = 'transaction'`
+                )
+                .bind(sha256, ledger.id)
+                .first<{ id: string; file_name: string; mime_type: string; size_bytes: number; created_at: string }>();
+
+            if (existing) {
+                results.push({
+                    sha256,
+                    exists: true,
+                    file_id: existing.id,
+                    file_name: existing.file_name,
+                    mime_type: existing.mime_type,
+                    size: existing.size_bytes,
+                    created_at: existing.created_at
+                });
+            } else {
+                results.push({
+                    sha256,
+                    exists: false
+                });
+            }
+        }
+
+        return c.json({ exists: results });
+    } catch (error) {
+        console.error('[ATTACHMENT] Batch exists error:', error);
+        return c.json({ error: 'Failed to check attachments' }, 500);
+    }
+});
+
+// POST /attachments - Web 端上传附件
+attachmentsRouter.post('/', async (c) => {
+    return handleUpload(c);
 });
 
 // GET /attachments/:id - 下载附件
