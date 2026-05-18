@@ -33,6 +33,7 @@ import { S3Client as AwsS3Client, PutObjectCommand, GetObjectCommand, DeleteObje
 class S3Client {
   private client: AwsS3Client | null = null;
   private bucketName: string;
+  private endpoint: string;
 
   constructor(env: {
     S3_ENDPOINT?: string;
@@ -42,10 +43,10 @@ class S3Client {
     S3_BUCKET_NAME?: string;
   }) {
     this.bucketName = env.S3_BUCKET_NAME || '';
+    this.endpoint = env.S3_ENDPOINT || 'https://s3.amazonaws.com';
     
-    let endpoint = env.S3_ENDPOINT || 'https://s3.amazonaws.com';
-    if (endpoint && !endpoint.startsWith('http://') && !endpoint.startsWith('https://')) {
-      endpoint = 'https://' + endpoint;
+    if (this.endpoint && !this.endpoint.startsWith('http://') && !this.endpoint.startsWith('https://')) {
+      this.endpoint = 'https://' + this.endpoint;
     }
 
     // 检查是否所有必要的配置都存在
@@ -53,7 +54,7 @@ class S3Client {
       try {
         this.client = new AwsS3Client({
           region: env.S3_REGION || 'auto',
-          endpoint: endpoint,
+          endpoint: this.endpoint,
           credentials: {
             accessKeyId: env.S3_ACCESS_KEY_ID,
             secretAccessKey: env.S3_SECRET_ACCESS_KEY
@@ -96,6 +97,7 @@ class S3Client {
     }
 
     console.log('[S3] Uploading file:', { bucket: this.bucketName, key, contentType });
+    console.log('[S3] File size:', body.byteLength);
 
     try {
       const uint8Array = new Uint8Array(body);
@@ -106,11 +108,19 @@ class S3Client {
         ContentType: contentType
       });
       
+      console.log('[S3] Sending command to endpoint:', this.endpoint);
       await this.client.send(command);
       console.log('[S3] Upload successful');
       return true;
-    } catch (err) {
+    } catch (err: any) {
       console.error('[S3] Upload error:', err);
+      console.error('[S3] Error name:', err.name);
+      console.error('[S3] Error message:', err.message);
+      console.error('[S3] Error code:', err.code);
+      console.error('[S3] Error stack:', err.stack);
+      if (err.$metadata) {
+        console.error('[S3] Error metadata:', JSON.stringify(err.$metadata));
+      }
       return false;
     }
   }
