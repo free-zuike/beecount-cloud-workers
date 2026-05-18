@@ -133,8 +133,16 @@ class S3Client {
     contentType: string
   ): Promise<boolean> {
     if (!this.isConfigured()) {
+      console.log('[S3] Not configured, skipping upload');
       return false;
     }
+
+    console.log('[S3] Upload config:', {
+      endpoint: this.endpoint,
+      bucket: this.bucketName,
+      region: this.region,
+      key: key
+    });
 
     const now = new Date();
     const date = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
@@ -144,17 +152,32 @@ class S3Client {
     const credential = `${this.accessKeyId}/${dateStamp}/${this.region}/s3/aws4_request`;
 
     const url = `${this.endpoint}/${this.bucketName}/${key}`;
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': contentType,
-        'x-amz-date': date,
-        'Authorization': `AWS4-HMAC-SHA256 Credential=${credential}, SignedHeaders=content-type;host;x-amz-date, Signature=${signature}`,
-      },
-      body: body,
-    });
+    console.log('[S3] Upload URL:', url);
+    
+    try {
+      const response = await fetch(url, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': contentType,
+          'x-amz-date': date,
+          'Authorization': `AWS4-HMAC-SHA256 Credential=${credential}, SignedHeaders=content-type;host;x-amz-date, Signature=${signature}`,
+        },
+        body: body,
+      });
 
-    return response.ok;
+      console.log('[S3] Upload response status:', response.status);
+      console.log('[S3] Upload response ok:', response.ok);
+      
+      if (!response.ok) {
+        const text = await response.text();
+        console.log('[S3] Upload response body:', text);
+      }
+      
+      return response.ok;
+    } catch (err) {
+      console.error('[S3] Upload error:', err);
+      return false;
+    }
   }
 
   /**
