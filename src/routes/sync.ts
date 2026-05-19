@@ -698,7 +698,7 @@ async function applyChangeToProjection(
                WHERE ledger_id = ? AND sync_id = ?`
             )
             .bind(
-              payload.tx_type ?? 'expense',
+              payload.tx_type ?? payload.txType ?? payload.type ?? 'expense',
               payload.amount ?? 0,
               payload.happened_at ?? nowUtc(),
               payload.note ?? null,
@@ -736,7 +736,7 @@ async function applyChangeToProjection(
               ledgerId,
               change.entity_sync_id,
               userId,
-              payload.tx_type ?? 'expense',
+              payload.tx_type ?? payload.txType ?? payload.type ?? 'expense',
               payload.amount ?? 0,
               payload.happened_at ?? nowUtc(),
               payload.note ?? null,
