@@ -120,4 +120,21 @@ authRouter.post('/refresh', zValidator('json', z.object({
   return c.json({ error: 'Not implemented' }, 501);
 });
 
+// Get current user (Web UI 使用)
+authRouter.get('/me', async (c) => {
+  const db = c.env.DB;
+  const userId = c.get('userId');
+  
+  const user = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string, email: string }>();
+  
+  if (!user) {
+    return c.json({ error: 'User not found' }, 404);
+  }
+  
+  return c.json({
+    id: user.id,
+    email: user.email
+  });
+});
+
 export default authRouter;

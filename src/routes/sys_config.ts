@@ -15,6 +15,17 @@ const sysConfig = new Hono<{ Bindings: Bindings }>();
 
 // ===================== S3 配置管理端点 =====================
 
+// 获取系统配置 (Web UI 使用)
+sysConfig.get('/get', async (c) => {
+    const db = c.env.DB;
+    const settings = await getUploadConfig(db, c.env);
+    
+    // 返回 Web UI 需要的格式
+    return c.json({
+        s3: settings.s3 || { channels: [], loadBalance: { enabled: false, channels: [] } }
+    });
+});
+
 // 获取所有 S3 配置
 sysConfig.get('/s3', async (c) => {
     const db = c.env.DB;
