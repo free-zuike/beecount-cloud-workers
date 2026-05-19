@@ -1,4 +1,4 @@
-name = "beecount-cloud-workers"
+name = "beecount-cloud"
 main = "src/index.ts"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
@@ -15,13 +15,6 @@ database_id = "b0da0464-f186-4114-a291-9dd7d0b7a1d5"
 API_PREFIX = "/api/v1"
 JWT_SECRET = "YBt6MxIcvuWIA3kE/MPHuWPCFEcaCBPB80YxZM5hBaw="
 
-# External S3 configuration (optional)
-# S3_ENDPOINT = "https://your-s3-endpoint"
-# S3_REGION = "us-east-1"
-# S3_ACCESS_KEY_ID = "your-access-key-id"
-# S3_SECRET_ACCESS_KEY = "your-secret-access-key"
-# S3_BUCKET_NAME = "beecount-attachments"
-
 [observability]
 enabled = true
 
@@ -29,15 +22,3 @@ enabled = true
 [pages]
 build = { command = "cd frontend && npm install && npm run build" }
 output_dir = "frontend/dist"
-
-[env.production]
-name = "beecount-cloud"
-
-[[env.production.d1_databases]]
-binding = "DB"
-database_name = "beecount-cloud"
-database_id = "b0da0464-f186-4114-a291-9dd7d0b7a1d5"
-
-[env.production.vars]
-API_PREFIX = "/api/v1"
-JWT_SECRET = "YBt6MxIcvuWIA3kE/MPHuWPCFEcaCBPB80YxZM5hBaw="
