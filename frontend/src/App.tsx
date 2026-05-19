@@ -471,8 +471,8 @@ function App() {
       })
       
       const data = await res.json()
-      if (res.ok && data.qr_code) {
-        if (confirm(`请使用 Authenticator 应用扫描二维码，然后点击确定继续验证。\n\n恢复码（请保存）：\n${data.recovery_codes?.join('\n')}`)) {
+      if (res.ok && data.qr_code_uri) {
+        if (confirm(`请使用 Authenticator 应用扫描二维码，然后点击确定继续验证。\n\n二维码链接：${data.qr_code_uri}`)) {
           const code = prompt('请输入 Authenticator 应用中的验证码：')
           if (code) {
             const confirmRes = await fetch('/api/v1/2fa/confirm', {
@@ -485,7 +485,8 @@ function App() {
             })
             
             if (confirmRes.ok) {
-              alert('2FA 已成功启用！')
+              const confirmData = await confirmRes.json()
+              alert('2FA 已成功启用！\n\n恢复码（请保存）：\n' + confirmData.recovery_codes?.join('\n'))
               fetchTwoFAStatus(token)
             } else {
               const confirmData = await confirmRes.json()
