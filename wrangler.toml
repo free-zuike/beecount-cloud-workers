@@ -18,11 +18,11 @@ JWT_SECRET = "YBt6MxIcvuWIA3kE/MPHuWPCFEcaCBPB80YxZM5hBaw="
 [observability]
 enabled = true
 
-# 自动构建前端
+# 自动构建前端 (使用 pnpm)
 [build]
-command = "cd frontend && npm install && npm run build"
+command = "cd frontend && pnpm install && pnpm build"
 
-# 静态资产配置
+# 静态资产配置 - 官方前端构建输出在 apps/web/dist
 [assets]
-directory = "./frontend/dist"
+directory = "./frontend/apps/web/dist"
 binding = "ASSETS"
