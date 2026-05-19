@@ -585,16 +585,6 @@ function App() {
     }).format(amount / 100)
   }
 
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-  }
-
   const getParentCategories = () => {
     return categories.filter(c => !c.parent_id)
   }
@@ -602,8 +592,6 @@ function App() {
   const getChildCategories = (parentId: string) => {
     return categories.filter(c => c.parent_id === parentId)
   }
-
-  const totalBalance = accounts.reduce((sum, a) => sum + a.balance, 0)
 
   if (loading) {
     return <div className="loading">加载中...</div>
@@ -650,6 +638,88 @@ function App() {
   const totalIncome = transactions
     .filter(t => t.tx_type === 'income')
     .reduce((sum, t) => sum + t.amount, 0)
+
+  const categoryColors = ['#e74c3c', '#3498db', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#34495e']
+  
+  const getCategoryColor = (index: number) => categoryColors[index % categoryColors.length]
+  
+  const getCategoryStats = () => {
+    const expenseTx = transactions.filter(t => t.tx_type === 'expense')
+    const categoryMap: Record<string, number> = {}
+    expenseTx.forEach(tx => {
+      categoryMap[tx.category_name] = (categoryMap[tx.category_name] || 0) + tx.amount
+    })
+    const total = Object.values(categoryMap).reduce((a, b) => a + b, 0)
+    return Object.entries(categoryMap)
+      .map(([name, amount]) => ({
+        name,
+        amount,
+        percent: total > 0 ? ((amount / total) * 100).toFixed(1) : '0'
+      }))
+      .sort((a, b) => b.amount - a.amount)
+  }
+  
+  const getTopExpenses = () => {
+    return getCategoryStats().slice(0, 5).map(item => ({
+      ...item,
+      percent: totalExpense > 0 ? ((item.amount / totalExpense) * 100).toFixed(1) : '0'
+    }))
+  }
+  
+  const getTopIncomes = () => {
+    const incomeTx = transactions.filter(t => t.tx_type === 'income')
+    const categoryMap: Record<string, number> = {}
+    incomeTx.forEach(tx => {
+      categoryMap[tx.category_name] = (categoryMap[tx.category_name] || 0) + tx.amount
+    })
+    const total = Object.values(categoryMap).reduce((a, b) => a + b, 0)
+    return Object.entries(categoryMap)
+      .map(([name, amount]) => ({
+        name,
+        amount,
+        percent: total > 0 ? ((amount / total) * 100).toFixed(1) : '0'
+      }))
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 5)
+  }
+  
+  const getPieChartGradient = () => {
+    const stats = getCategoryStats().slice(0, 5)
+    if (stats.length === 0) return '#333'
+    if (stats.length === 1) return stats[0].amount > 0 ? getCategoryColor(0) : '#333'
+    
+    let gradient = 'conic-gradient('
+    let currentAngle = 0
+    stats.forEach((stat, index) => {
+      const percent = parseFloat(stat.percent)
+      gradient += `${getCategoryColor(index)} ${currentAngle}deg ${currentAngle + percent * 3.6}deg`
+      currentAngle += percent * 3.6
+      if (index < stats.length - 1) gradient += ', '
+    })
+    gradient += ')'
+    return gradient
+  }
+  
+  const categoryIcons: Record<string, string> = {
+    '餐饮': '🍜', '美食': '🍔', '外卖': '🥡', '超市': '🛒', '购物': '🛍️',
+    '交通': '🚗', '加油': '⛽', '公交': '🚌', '地铁': '🚇', '打车': '🚕',
+    '娱乐': '🎮', '电影': '🎬', '游戏': '🎲', '运动': '⚽', '旅游': '✈️',
+    '医疗': '🏥', '药品': '💊', '美容': '💄', '理发': '💇',
+    '教育': '📚', '学习': '📖', '培训': '🎓', '书籍': '📕',
+    '工资': '💼', '奖金': '🎁', '投资': '📈', '理财': '💰',
+    '红包': '🧧', '礼物': '🎁', '其他': '📦'
+  }
+  
+  const getCategoryIcon = (name: string) => {
+    return categoryIcons[name] || '🏷️'
+  }
+  
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr)
+    const month = date.getMonth() + 1
+    const day = date.getDate()
+    return `${month}月${day}日`
+  }
 
   return (
     <div className="app-container">
@@ -705,27 +775,139 @@ function App() {
       <main className="main-content">
         {currentPage === 'dashboard' && (
           <div className="dashboard">
-            <div className="stats-grid">
+            <div className="stats-cards">
+              <div className="stat-card header">
+                <div className="stat-label">📊 当前账本 · 本月</div>
+                <div className={`stat-value ${totalIncome - totalExpense >= 0 ? 'positive' : 'negative'}`}>
+                  {totalIncome - totalExpense >= 0 ? '+' : ''}{formatMoney(totalIncome - totalExpense)}
+                </div>
+                <div className="stat-sub">本月结余</div>
+              </div>
               <div className="stat-card expense">
-                <h3>总支出</h3>
-                <p className="amount">{formatMoney(totalExpense)}</p>
+                <div className="stat-label">📉 本月支出</div>
+                <div className="stat-value negative">{formatMoney(totalExpense)}</div>
               </div>
-              <div className="stat-card income">
-                <h3>总收入</h3>
-                <p className="amount">{formatMoney(totalIncome)}</p>
+              <div className="stat-card revenue">
+                <div className="stat-label">📈 本月收入</div>
+                <div className="stat-value positive">{formatMoney(totalIncome)}</div>
               </div>
-              <div className="stat-card balance">
-                <h3>结余</h3>
-                <p className="amount">{formatMoney(totalIncome - totalExpense)}</p>
-              </div>
-              <div className="stat-card assets">
-                <h3>总资产</h3>
-                <p className="amount">{formatMoney(totalBalance)}</p>
+              <div className="stat-card count">
+                <div className="stat-label">📝 记账笔数</div>
+                <div className="stat-value">{transactions.length} 笔</div>
               </div>
             </div>
 
-            <div className="ledger-selector">
-              <label>选择账本：</label>
+            <div className="charts-grid">
+              <div className="chart-card">
+                <div className="chart-header">
+                  <h3>📈 本月支出分类</h3>
+                  <div className="chart-tabs">
+                    <div className="chart-tab active">本月</div>
+                    <div className="chart-tab">今年</div>
+                    <div className="chart-tab">汇总</div>
+                  </div>
+                </div>
+                <div className="pie-chart-container">
+                  <div className="pie-chart-wrapper">
+                    <div className="pie-chart" style={{ background: getPieChartGradient() }}>
+                      <div className="pie-center">
+                        <div className="value">{formatMoney(totalExpense)}</div>
+                        <div className="label">本月支出</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="pie-legend">
+                    {getCategoryStats().slice(0, 5).map((cat, index) => (
+                      <div key={index} className="legend-item">
+                        <div className="legend-item-left">
+                          <div className="legend-color" style={{ backgroundColor: getCategoryColor(index) }}></div>
+                          <span className="legend-label">{cat.name}</span>
+                        </div>
+                        <div>
+                          <span className="legend-value">{formatMoney(cat.amount)}</span>
+                          <span className="legend-percent">({cat.percent}%)</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="chart-card">
+                <h3>🔥 月度支出热力</h3>
+                <div className="heatmap-container">
+                  {Array.from({ length: 12 }).map((_, i) => (
+                    <div key={i} className={`heatmap-item level-${Math.floor(Math.random() * 5)}`}>
+                      <div className="heatmap-tooltip">
+                        {['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'][i]}: {Math.floor(Math.random() * 2000) + 100}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="chart-card">
+                <h3>📊 今年支出 Top 5</h3>
+                <div className="bar-chart-container">
+                  {getTopExpenses().map((item, index) => (
+                    <div key={index} className="bar-item">
+                      <span className="bar-label">{item.name}</span>
+                      <div className="bar-wrapper">
+                        <div className="bar-fill expense" style={{ width: `${item.percent}%` }}>
+                          <span className="bar-value">{formatMoney(item.amount)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="chart-card">
+                <h3>📊 今年收入 Top 5</h3>
+                <div className="bar-chart-container">
+                  {getTopIncomes().map((item, index) => (
+                    <div key={index} className="bar-item">
+                      <span className="bar-label">{item.name}</span>
+                      <div className="bar-wrapper">
+                        <div className="bar-fill income" style={{ width: `${item.percent}%` }}>
+                          <span className="bar-value">{formatMoney(item.amount)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="recent-transactions">
+              <h3>📋 最近交易</h3>
+              <div className="transaction-list">
+                {transactions.slice(0, 10).map(tx => (
+                  <div key={tx.id} className="transaction-item">
+                    <div className="transaction-left">
+                      <div className="transaction-icon">
+                        {getCategoryIcon(tx.category_name)}
+                      </div>
+                      <div className="transaction-info">
+                        <div className="transaction-name">{tx.category_name}</div>
+                        <div className="transaction-meta">{tx.account_name} · {tx.note || '无备注'}</div>
+                      </div>
+                    </div>
+                    <div className="transaction-right">
+                      <div className={`transaction-amount ${tx.tx_type}`}>
+                        {tx.tx_type === 'expense' ? '-' : '+'}{formatMoney(tx.amount)}
+                      </div>
+                      <div className="transaction-date">{formatDate(tx.happened_at)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <button className="quick-add-btn" onClick={() => setShowTxForm(true)}>+</button>
+
+            <div className="ledger-selector-wrapper">
+              <label className="ledger-select-label">选择账本：</label>
               <select 
                 value={currentLedger?.id || ''}
                 onChange={(e) => {
