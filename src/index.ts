@@ -1875,9 +1875,9 @@ const FRONTEND_HTML = `<!DOCTYPE html>
           '<p style="margin-bottom: 8px; font-size: 14px; color: var(--text-muted);">Endpoint: ' + (config.endpoint || '') + '</p>' +
           '<p style="margin-bottom: 8px; font-size: 14px; color: var(--text-muted);">Bucket: ' + (config.bucket_name || '') + '</p>' +
           '<div style="margin-top: 12px; display: flex; gap: 8px;">' +
-          '<button class="btn btn-primary" onclick="toggleS3Config(' + config.id + ')">' + (isEnabled ? '禁用' : '启用') + '</button>' +
-          '<button class="btn btn-secondary" onclick="editS3Config(' + config.id + ')">编辑</button>' +
-          '<button class="btn btn-danger" onclick="deleteS3Config(' + config.id + ')">删除</button>' +
+          '<button class="btn btn-primary" onclick=\"toggleS3Config(\' + config.id + \')\">' + (isEnabled ? '禁用' : '启用') + '</button>' +
+          '<button class="btn btn-secondary" onclick=\"editS3Config(\' + config.id + \')\">编辑</button>' +
+          '<button class="btn btn-danger" onclick=\"deleteS3Config(\' + config.id + \')\">删除</button>' +
           '</div>' +
           '</div>';
       });
