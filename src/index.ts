@@ -2810,7 +2810,22 @@ const FRONTEND_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-app.get('/', (c) => {
+app.get('/', async (c) => {
+  // Try to serve static React app if available
+  if (c.env && c.env.__STATIC_CONTENT) {
+    try {
+      const asset = await c.env.__STATIC_CONTENT.fetch('https://fake-host/index.html');
+      if (asset.status === 200) {
+        return new Response(asset.body, {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' }
+        });
+      }
+    } catch (e) {
+      console.error('Static content fetch error:', e);
+    }
+  }
+  
+  // Fallback to embedded HTML
   c.header('Content-Type', 'text/html; charset=utf-8');
   return c.body(FRONTEND_HTML);
 });
