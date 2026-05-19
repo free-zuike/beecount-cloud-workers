@@ -1019,8 +1019,20 @@ const FRONTEND_HTML = `<!DOCTYPE html>
             })
           });
           closeModal('createLedgerModal');
-          showToast('账本创建成功');
+          showToast('账本创建成功，正在初始化默认分类...');
           loadPageData();
+          
+          setTimeout(async function() {
+            try {
+              await api('/api/v1/write/categories/init-defaults', {
+                method: 'POST'
+              });
+              showToast('默认分类已初始化');
+              loadPageData();
+            } catch (err) {
+              console.error('Init default categories failed:', err);
+            }
+          }, 500);
         } catch (err) {
           showToast(err.message, 'error');
         }
@@ -1540,12 +1552,12 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         const expenseCats = state.categories.filter(c => c.kind === 'expense');
         const incomeCats = state.categories.filter(c => c.kind === 'income');
         
-        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="initDefaultCategories()">+ 初始化默认分类</button></div>' + renderCategoryGroup(expenseCats, '支出分类') + '<div style="margin-top: 16px;">' + renderCategoryGroup(incomeCats, '收入分类') + '</div></div>';
+        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal(\'createCategoryModal\')">+ 新建分类</button></div>' + renderCategoryGroup(expenseCats, '支出分类') + '<div style="margin-top: 16px;">' + renderCategoryGroup(incomeCats, '收入分类') + '</div></div>';
       } else {
         const expenseCats = state.categories.filter(c => c.kind === 'expense');
         const incomeCats = state.categories.filter(c => c.kind === 'income');
         
-        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="initDefaultCategories()">+ 初始化默认分类</button></div><div class="card"><h4 class="section-title">支出分类</h4><div class="category-list">' + (expenseCats.length > 0 ? expenseCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无支出分类，点击上方按钮初始化默认分类</p>') + '</div></div><div class="card" style="margin-top: 16px;"><h4 class="section-title">收入分类</h4><div class="category-list">' + (incomeCats.length > 0 ? incomeCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无收入分类</p>') + '</div></div></div>';
+        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal(\'createCategoryModal\')">+ 新建分类</button></div><div class="card"><h4 class="section-title">支出分类</h4><div class="category-list">' + (expenseCats.length > 0 ? expenseCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无支出分类</p>') + '</div></div><div class="card" style="margin-top: 16px;"><h4 class="section-title">收入分类</h4><div class="category-list">' + (incomeCats.length > 0 ? incomeCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无收入分类</p>') + '</div></div></div>';
       }
     }
     
@@ -2652,8 +2664,14 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       try {
         const profile = await api('/api/v1/profile/me');
         const devices = await api('/api/v1/devices').catch(() => ({ devices: [] }));
+        const twoFactorStatus = await api('/api/v1/2fa/status').catch(() => ({ enabled: false }));
+        const s3Configs = await api('/api/v1/sys-config/s3').catch(() => []);
         
-        content.innerHTML = '<div class="settings-nav"><button class="settings-nav-btn active" onclick="showSettingsSection(\&apos;profile\&apos;, this)">个人资料</button><button class="settings-nav-btn" onclick="showSettingsSection(\&apos;security\&apos;, this)">安全设置</button><button class="settings-nav-btn" onclick="showSettingsSection(\&apos;devices\&apos;, this)">设备管理</button></div><div id="settingsProfileSection" class="settings-section active"><div class="card" style="margin-top: 16px;"><h4 class="section-title">个人资料</h4><form id="profileForm"><div class="form-group"><label>邮箱</label><input type="email" value="' + profile.email + '" disabled></div><div class="form-group"><label>显示名称</label><input type="text" name="display_name" value="' + (profile.display_name || '') + '" placeholder="设置您的显示名称"></div><button type="submit" class="btn btn-primary btn-block">保存</button></form></div></div><div id="settingsSecuritySection" class="settings-section"><div class="card" style="margin-top: 16px;"><h4 class="section-title">修改密码</h4><form id="passwordForm"><div class="form-group"><label>当前密码</label><input type="password" name="current_password" required></div><div class="form-group"><label>新密码</label><input type="password" name="new_password" minlength="8" required placeholder="至少8位"></div><div class="form-group"><label>确认新密码</label><input type="password" name="confirm_password" minlength="8" required></div><button type="submit" class="btn btn-primary btn-block">修改密码</button></form></div></div><div id="settingsDevicesSection" class="settings-section"><div class="card" style="margin-top: 16px;"><h4 class="section-title">已登录设备</h4><div class="device-list">' + (devices.devices && devices.devices.length > 0 ? devices.devices.map(d => '<div class="device-item" data-id="' + d.id + '"><div class="device-info"><span class="device-icon">💻</span><div><div class="device-name">' + (d.name || '未知设备') + '</div><div class="device-meta">' + formatDateTime(d.last_active_at || d.created_at) + '</div></div></div><button class="btn btn-danger" onclick="revokeDevice(this.closest(&apos;[data-id]&apos;).dataset.id)">撤销</button></div>').join('') : '<p style="color: var(--text-muted);">暂无设备记录</p>') + '</div></div></div>';
+        content.innerHTML = '<div class="settings-nav"><button class="settings-nav-btn active" onclick="showSettingsSection(\'profile\', this)">个人资料</button><button class="settings-nav-btn" onclick="showSettingsSection(\'security\', this)">安全设置</button><button class="settings-nav-btn" onclick="showSettingsSection(\'devices\', this)">设备管理</button><button class="settings-nav-btn" onclick="showSettingsSection(\'storage\', this)">存储配置</button></div>' +
+          '<div id="settingsProfileSection" class="settings-section active"><div class="card" style="margin-top: 16px;"><h4 class="section-title">个人资料</h4><form id="profileForm"><div class="form-group"><label>邮箱</label><input type="email" value="' + profile.email + '" disabled></div><div class="form-group"><label>显示名称</label><input type="text" name="display_name" value="' + (profile.display_name || '') + '" placeholder="设置您的显示名称"></div><button type="submit" class="btn btn-primary btn-block">保存</button></form></div></div>' +
+          '<div id="settingsSecuritySection" class="settings-section"><div class="card" style="margin-top: 16px;"><h4 class="section-title">两步验证 (2FA)</h4><div class="two-fa-status ' + (twoFactorStatus.enabled ? 'enabled' : 'disabled') + '"><span>' + (twoFactorStatus.enabled ? '🟢 已启用' : '🔴 未启用') + '</span></div>' + (twoFactorStatus.enabled ? '<p style="color: var(--text-muted); margin-bottom: 16px;">您的账户已启用两步验证，安全性更高。</p><button class="btn btn-danger" onclick="disable2FA()">禁用 2FA</button>' : '<p style="color: var(--text-muted); margin-bottom: 16px;">启用两步验证提高账户安全性。</p><button class="btn btn-primary" onclick="setup2FA()">启用 2FA</button>') + '</div><div class="card" style="margin-top: 16px;"><h4 class="section-title">修改密码</h4><form id="passwordForm"><div class="form-group"><label>当前密码</label><input type="password" name="current_password" required></div><div class="form-group"><label>新密码</label><input type="password" name="new_password" minlength="8" required placeholder="至少8位"></div><div class="form-group"><label>确认新密码</label><input type="password" name="confirm_password" minlength="8" required></div><button type="submit" class="btn btn-primary btn-block">修改密码</button></form></div></div>' +
+          '<div id="settingsDevicesSection" class="settings-section"><div class="card" style="margin-top: 16px;"><h4 class="section-title">已登录设备</h4><div class="device-list">' + (devices.devices && devices.devices.length > 0 ? devices.devices.map(d => '<div class="device-item" data-id="' + d.id + '"><div class="device-info"><span class="device-icon">💻</span><div><div class="device-name">' + (d.name || '未知设备') + '</div><div class="device-meta">' + formatDateTime(d.last_active_at || d.created_at) + '</div></div></div><button class="btn btn-danger" onclick="revokeDevice(this.closest(\'[data-id]\').dataset.id)">撤销</button></div>').join('') : '<p style="color: var(--text-muted);">暂无设备记录</p>') + '</div></div></div>' +
+          '<div id="settingsStorageSection" class="settings-section"><div class="card" style="margin-top: 16px;"><h4 class="section-title">S3 存储配置</h4><p style="color: var(--text-muted); margin-bottom: 16px;">配置 S3 兼容存储（AWS S3、MinIO、Cloudflare R2 等）用于存储附件和图片。</p><div id="s3ConfigList" style="margin-bottom: 16px;">' + (Array.isArray(s3Configs) && s3Configs.length > 0 ? s3Configs.map(cfg => '<div style="padding: 12px; background: var(--background); border-radius: 8px; margin-bottom: 8px;"><strong>' + (cfg.name || 'S3 配置') + '</strong> ' + (cfg.enabled ? '<span style="color: var(--success);">🟢</span>' : '<span style="color: var(--error);">🔴</span>') + '<br><small style="color: var(--text-muted);">' + (cfg.endpoint || '') + ' / ' + (cfg.bucket_name || '') + '</small></div>').join('') : '<p style="color: var(--text-muted);">暂无 S3 配置</p>') + '</div><button class="btn btn-primary" onclick="showAddS3ConfigModal()">+ 添加 S3 配置</button></div></div>';<button class="settings-nav-btn active" onclick="showSettingsSection(\&apos;profile\&apos;, this)">个人资料</button><button class="settings-nav-btn" onclick="showSettingsSection(\&apos;security\&apos;, this)">安全设置</button><button class="settings-nav-btn" onclick="showSettingsSection(\&apos;devices\&apos;, this)">设备管理</button></div><div id="settingsProfileSection" class="settings-section active"><div class="card" style="margin-top: 16px;"><h4 class="section-title">个人资料</h4><form id="profileForm"><div class="form-group"><label>邮箱</label><input type="email" value="' + profile.email + '" disabled></div><div class="form-group"><label>显示名称</label><input type="text" name="display_name" value="' + (profile.display_name || '') + '" placeholder="设置您的显示名称"></div><button type="submit" class="btn btn-primary btn-block">保存</button></form></div></div><div id="settingsSecuritySection" class="settings-section"><div class="card" style="margin-top: 16px;"><h4 class="section-title">修改密码</h4><form id="passwordForm"><div class="form-group"><label>当前密码</label><input type="password" name="current_password" required></div><div class="form-group"><label>新密码</label><input type="password" name="new_password" minlength="8" required placeholder="至少8位"></div><div class="form-group"><label>确认新密码</label><input type="password" name="confirm_password" minlength="8" required></div><button type="submit" class="btn btn-primary btn-block">修改密码</button></form></div></div><div id="settingsDevicesSection" class="settings-section"><div class="card" style="margin-top: 16px;"><h4 class="section-title">已登录设备</h4><div class="device-list">' + (devices.devices && devices.devices.length > 0 ? devices.devices.map(d => '<div class="device-item" data-id="' + d.id + '"><div class="device-info"><span class="device-icon">💻</span><div><div class="device-name">' + (d.name || '未知设备') + '</div><div class="device-meta">' + formatDateTime(d.last_active_at || d.created_at) + '</div></div></div><button class="btn btn-danger" onclick="revokeDevice(this.closest(&apos;[data-id]&apos;).dataset.id)">撤销</button></div>').join('') : '<p style="color: var(--text-muted);">暂无设备记录</p>') + '</div></div></div>';
         
         document.getElementById('profileForm').addEventListener('submit', async function(e) {
           e.preventDefault();
@@ -2707,6 +2725,80 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       }
     }
 
+    async function setup2FA() {
+      try {
+        const result = await api('/api/v1/2fa/setup', { method: 'POST' });
+        if (result.qr_code_url) {
+          if (confirm('请使用身份验证器 APP 扫描二维码，然后点击确定输入验证码。\n\n如果您无法扫描二维码，密钥是：' + (result.manual_entry_key || 'N/A'))) {
+            const code = prompt('请输入验证码：');
+            if (code) {
+              await api('/api/v1/2fa/confirm', {
+                method: 'POST',
+                body: JSON.stringify({ code: code })
+              });
+              showToast('2FA 已启用');
+              showSettingsModal();
+            }
+          }
+        } else {
+          showToast('2FA 设置失败', 'error');
+        }
+      } catch (err) {
+        showToast('2FA 设置失败: ' + err.message, 'error');
+      }
+    }
+    
+    async function disable2FA() {
+      if (!confirm('确定要禁用两步验证吗？这会降低账户安全性。')) return;
+      try {
+        const code = prompt('请输入验证码以确认禁用：');
+        if (code) {
+          await api('/api/v1/2fa/disable', {
+            method: 'POST',
+            body: JSON.stringify({ code: code })
+          });
+          showToast('2FA 已禁用');
+          showSettingsModal();
+        }
+      } catch (err) {
+        showToast('禁用失败: ' + err.message, 'error');
+      }
+    }
+    
+    function showAddS3ConfigModal() {
+      const modal = document.createElement('div');
+      modal.id = 's3ConfigModal';
+      modal.className = 'modal active';
+      modal.innerHTML = '<div class="modal-content"><div class="modal-header"><h3 class="modal-title">添加 S3 配置</h3><button class="modal-close" onclick="closeModal(\'s3ConfigModal\')">×</button></div>' +
+        '<form id="s3ConfigForm" style="padding: 16px 0;"><div class="form-group"><label>配置名称</label><input type="text" name="name" placeholder="例如：我的 S3" required></div>' +
+        '<div class="form-group"><label>Endpoint</label><input type="text" name="endpoint" placeholder="https://s3.amazonaws.com" required></div>' +
+        '<div class="form-group"><label>Region</label><input type="text" name="region" placeholder="us-east-1"></div>' +
+        '<div class="form-group"><label>Bucket</label><input type="text" name="bucket_name" placeholder="my-bucket" required></div>' +
+        '<div class="form-group"><label>Access Key ID</label><input type="text" name="access_key_id" required></div>' +
+        '<div class="form-group"><label>Secret Access Key</label><input type="password" name="secret_access_key" required></div>' +
+        '<button type="submit" class="btn btn-primary btn-block">保存</button></form></div>';
+      document.body.appendChild(modal);
+      
+      document.getElementById('s3ConfigForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const data = {};
+        formData.forEach((v, k) => data[k] = v);
+        try {
+          await api('/api/v1/sys-config/s3', {
+            method: 'POST',
+            body: JSON.stringify(data)
+          });
+          showToast('S3 配置已添加');
+          closeModal('s3ConfigModal');
+          modal.remove();
+          showSettingsModal();
+        } catch (err) {
+          showToast('添加失败: ' + err.message, 'error');
+        }
+      });
+    }
+    
     function showSettingsSection(section, btn) {
       document.querySelectorAll('.settings-nav-btn').forEach(function(b) { b.classList.remove('active'); });
       document.querySelectorAll('.settings-section').forEach(function(s) { s.classList.remove('active'); });
