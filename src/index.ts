@@ -260,12 +260,25 @@ app.get('/ws', async (c) => {
 // ===========================
 app.get('*', async (c) => {
   const url = new URL(c.req.url);
+  const pathname = url.pathname;
+  
+  // 静态资源文件 (assets, branding, icons, manifest.webmanifest, sw.js)
+  // 这些文件应该直接从 ASSETS 获取
+  const isStaticAsset = pathname.startsWith('/assets/') || 
+                       pathname.startsWith('/branding/') || 
+                       pathname.startsWith('/icons/') ||
+                       pathname === '/manifest.webmanifest' ||
+                       pathname === '/sw.js';
   
   // 获取请求的文件
   const res = await c.env.ASSETS.fetch(c.req.raw);
   
-  // 如果文件不存在，返回 index.html (SPA 路由)
-  // 这处理 React Router 的客户端路由
+  if (isStaticAsset) {
+    // 静态资源文件直接返回
+    return res;
+  }
+  
+  // 对于其他路径，如果文件不存在，返回 index.html (SPA 路由)
   if (res.status === 404) {
     const indexRes = await c.env.ASSETS.fetch(new Request(`${url.origin}/index.html`, { method: 'GET' }));
     return indexRes;
