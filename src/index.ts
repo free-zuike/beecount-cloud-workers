@@ -32,6 +32,7 @@ import sysConfigRouter from './routes/sys_config';
 
 type Bindings = {
   DB: D1Database;
+  ASSETS: { fetch: (request: Request) => Promise<Response> };
   API_PREFIX: string;
   JWT_SECRET: string;
   S3_ENDPOINT?: string;
@@ -176,6 +177,14 @@ app.route('/import', importRouter);
 app.route('/ai', aiRouter);
 app.route('/backup', backupRouter);
 app.route('/notifications', notificationsRouter);
+
+// ===========================
+// 前端静态文件服务
+// ===========================
+app.get('*', async (c) => {
+  const res = await c.env.ASSETS.fetch(c.req.raw);
+  return res;
+});
 
 // ===========================
 // 错误处理

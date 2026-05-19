@@ -18,7 +18,5 @@ JWT_SECRET = "YBt6MxIcvuWIA3kE/MPHuWPCFEcaCBPB80YxZM5hBaw="
 [observability]
 enabled = true
 
-# Cloudflare Pages 配置 - 自动构建并服务静态文件
-[pages]
-build = { command = "cd frontend && npm install && npm run build" }
-output_dir = "frontend/dist"
+# 静态资产配置
+assets = { directory = "./frontend/dist", binding = "ASSETS" }
