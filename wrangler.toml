@@ -18,5 +18,7 @@ JWT_SECRET = "YBt6MxIcvuWIA3kE/MPHuWPCFEcaCBPB80YxZM5hBaw="
 [observability]
 enabled = true
 
-# 静态资产配置
-assets = { directory = "./frontend/dist", binding = "ASSETS" }
+# 静态资产配置 - wrangler 4.x 格式
+[assets]
+directory = "./frontend/dist"
+binding = "ASSETS"
