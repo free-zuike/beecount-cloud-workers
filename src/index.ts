@@ -2,115 +2,6 @@
  * BeeCount Cloud Workers - 入口文件
  *
  * 完整实现 BeeCount Cloud API 协议的 Cloudflare Workers 版本
- *
- * 路由结构：
- * - /                                     - 前端页面 (React SPA)
- * - /healthz                              - 健康检查
- * - /api/v1/version                       - API 版本
- *
- * === 认证 (无需登录) ===
- * - /api/v1/auth/register                 - 用户注册
- * - /api/v1/auth/login                   - 用户登录
- * - /api/v1/auth/refresh                 - 刷新令牌
- *
- * === 2FA (需登录) ===
- * - /api/v1/2fa/status                  - 获取 2FA 状态
- * - /api/v1/2fa/setup                   - 开启 2FA
- * - /api/v1/2fa/confirm                 - 确认 2FA 启用
- * - /api/v1/2fa/verify                  - 登录第二步验证
- * - /api/v1/2fa/disable                 - 关闭 2FA
- * - /api/v1/2fa/recovery-codes/regenerate - 重新生成恢复码
- *
- * === 同步 (需登录) ===
- * - /api/v1/sync/ledgers                - 列出账本
- * - /api/v1/sync/full                   - 全量同步
- * - /api/v1/sync/push                   - 增量推送
- * - /api/v1/sync/pull                   - 增量拉取
- *
- * === 读 (需登录) ===
- * - /api/v1/read/ledgers                - 账本列表
- * - /api/v1/read/ledgers/:id            - 账本详情
- * - /api/v1/read/ledgers/:id/stats      - 账本统计
- * - /api/v1/read/ledgers/:id/transactions - 交易列表
- * - /api/v1/read/ledgers/:id/accounts   - 账户列表
- * - /api/v1/read/ledgers/:id/categories  - 分类列表
- * - /api/v1/read/ledgers/:id/tags       - 标签列表
- * - /api/v1/read/ledgers/:id/budgets    - 预算列表
- * - /api/v1/read/summary                - 单账本快速统计
- *
- * === Workspace 聚合 (需登录) ===
- * - /api/v1/read/workspace/transactions - 跨账本交易列表
- * - /api/v1/read/workspace/accounts     - 跨账本账户聚合
- * - /api/v1/read/workspace/categories   - 跨账本分类聚合
- * - /api/v1/read/workspace/tags         - 跨账本标签聚合
- * - /api/v1/read/workspace/ledger-counts - 账本总览统计
- * - /api/v1/read/workspace/analytics    - 收支分析
- *
- * === 写 (需登录) ===
- * - /api/v1/write/ledgers               - 创建账本
- * - /api/v1/write/ledgers/:id           - 更新账本
- * - /api/v1/write/transactions          - 创建交易
- * - /api/v1/write/transactions/:id     - 更新交易
- * - /api/v1/write/transactions/:id     - 删除交易
- * - /api/v1/write/transactions/batch   - 批量创建交易
- * - /api/v1/write/transactions/batch-delete - 批量删除交易
- * - /api/v1/write/accounts             - 创建账户
- * - /api/v1/write/categories           - 创建分类
- * - /api/v1/write/tags                - 创建标签
- * - /api/v1/write/budgets             - 创建预算
- *
- * === 设备管理 (需登录) ===
- * - /api/v1/devices                   - 设备列表
- * - /api/v1/devices/:id               - 撤销设备
- *
- * === 个人资料 (需登录) ===
- * - /api/v1/profile/me                - 获取资料
- * - /api/v1/profile/me/avatar         - 上传头像
- *
- * === PAT 管理 (需登录) ===
- * - /api/v1/profile/pats              - PAT 列表
- * - /api/v1/profile/pats/:id          - 撤销 PAT
- *
- * === 附件管理 (需登录) ===
- * - /api/v1/attachments               - 上传附件
- * - /api/v1/attachments/:id           - 下载附件
- * - /api/v1/attachments/exists        - 检查附件是否存在
- *
- * === 导入 (需登录) ===
- * - /api/v1/import/upload             - 上传文件
- * - /api/v1/import/:token/preview    - 预览字段映射
- * - /api/v1/import/:token/execute     - 执行导入
- * - /api/v1/import/:token             - 取消导入
- *
- * === AI (需登录) ===
- * - /api/v1/ai/ask                   - 文档 Q&A (SSE)
- * - /api/v1/ai/parse-tx-image        - 图片记账
- * - /api/v1/ai/parse-tx-text         - 文字记账
- * - /api/v1/ai/test-provider          - 测试 AI provider
- *
- * === 备份 (需登录) ===
- * - /api/v1/backup/snapshots          - 创建备份
- * - /api/v1/backup/snapshots          - 备份列表
- * - /api/v1/backup/snapshots/:id/restore - 恢复备份
- *
- * === 实时通知 (需登录) ===
- * - /api/v1/notifications/subscribe   - SSE 订阅
- * - /api/v1/notifications/poll        - 短轮询
- *
- * === MCP 调用日志 (需登录) ===
- * - /api/v1/mcp-calls                 - 调用历史查询
- *
- * === 管理员 (需 admin) ===
- * - /api/v1/admin/overview             - 系统概览
- * - /api/v1/admin/users               - 用户列表
- * - /api/v1/admin/users/:id           - 更新用户
- * - /api/v1/admin/devices             - 设备列表
- * - /api/v1/admin/logs                - 日志查询
- * - /api/v1/admin/backup/remotes      - 备份远程配置
- * - /api/v1/admin/backup/schedules    - 备份调度
- * - /api/v1/admin/backup/runs         - 备份运行记录
- *
- * @module index
  */
 
 import { Hono } from 'hono';
@@ -141,7 +32,6 @@ import sysConfigRouter from './routes/sys_config';
 
 type Bindings = {
   DB: D1Database;
-  ASSETS: { fetch: (request: Request) => Promise<Response> };
   API_PREFIX: string;
   JWT_SECRET: string;
   S3_ENDPOINT?: string;
@@ -162,15 +52,6 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // 全局中间件
 app.use('*', cors());
-
-// ===========================
-// 前端页面 - 使用 Cloudflare Workers Assets
-// ===========================
-app.get('/*', async (c) => {
-  // 使用 Workers Assets 服务静态文件
-  const res = await c.env.ASSETS.fetch(c.req.raw);
-  return res;
-});
 
 /**
  * 健康检查端点
@@ -297,12 +178,100 @@ app.route('/backup', backupRouter);
 app.route('/notifications', notificationsRouter);
 
 // ===========================
+// 前端页面 - 最后注册
+// ===========================
+app.get('*', (c) => {
+  const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>🐝 BeeCount Cloud</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+      .container {
+        background: white;
+        border-radius: 16px;
+        padding: 40px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        text-align: center;
+        max-width: 400px;
+        width: 100%;
+      }
+      .logo {
+        font-size: 48px;
+        margin-bottom: 16px;
+      }
+      h1 {
+        color: #333;
+        margin-bottom: 8px;
+        font-size: 28px;
+      }
+      p {
+        color: #666;
+        margin-bottom: 24px;
+        line-height: 1.6;
+      }
+      .status {
+        display: inline-block;
+        padding: 8px 16px;
+        background: #dcfce7;
+        color: #166534;
+        border-radius: 8px;
+        font-weight: 500;
+        margin-bottom: 16px;
+      }
+      .info {
+        background: #f8fafc;
+        padding: 16px;
+        border-radius: 8px;
+        margin-bottom: 16px;
+        text-align: left;
+        font-size: 14px;
+      }
+      .info code {
+        background: #e2e8f0;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="logo">🐝</div>
+      <h1>BeeCount Cloud</h1>
+      <p>个人记账云服务</p>
+      
+      <div class="status">✅ 服务正常运行</div>
+      
+      <div class="info">
+        <p><strong>API 健康检查:</strong> <code>/healthz</code></p>
+        <p><strong>API 版本:</strong> <code>/api/v1/version</code></p>
+      </div>
+      
+      <p style="font-size: 13px; color: #999;">
+        蜜蜂记账 APP 可连接此服务
+      </p>
+    </div>
+  </body>
+</html>`;
+  return c.html(html);
+});
+
+// ===========================
 // 错误处理
 // ===========================
-
-app.notFound((c) => {
-  return c.html('<html><body><h1>404 - Not Found</h1><p>页面不存在</p><a href="/">返回首页</a></body></html>');
-});
 
 app.onError((err, c) => {
   console.error('Unhandled error:', err);
