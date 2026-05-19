@@ -18,9 +18,9 @@ JWT_SECRET = "YBt6MxIcvuWIA3kE/MPHuWPCFEcaCBPB80YxZM5hBaw="
 [observability]
 enabled = true
 
-# 自动构建前端 (使用 pnpm)
+# 自动构建前端 (使用 pnpm，禁用 frozen-lockfile)
 [build]
-command = "cd frontend && pnpm install && pnpm build"
+command = "cd frontend && pnpm install --no-frozen-lockfile && pnpm build"
 
 # 静态资产配置 - 官方前端构建输出在 apps/web/dist
 [assets]
