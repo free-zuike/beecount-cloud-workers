@@ -1433,7 +1433,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
           const txCount = ledger.transaction_count || 0;
           const balance = (ledger.income_total || 0) - (ledger.expense_total || 0);
           const currency = ledger.currency || 'CNY';
-          return '<div class="ledger-item" data-id="' + escapedId + '"><div class="ledger-info" onclick="showLedgerDetail(this.closest('[data-id]').dataset.id)"><h3>' + escapedName + ' (ID:' + escapedId + ')</h3><p>币种：' + currency + '</p><p>笔数：' + txCount + '</p><p class="ledger-balance">余额：' + formatMoney(balance) + '</p></div><div class="ledger-actions" style="display: flex; gap: 8px;"><button class="tx-action-btn" onclick="event.stopPropagation(); showEditLedgerModal(this.closest('[data-id]').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="event.stopPropagation(); deleteLedger(this.closest('[data-id]').dataset.id)">删除</button></div></div>';
+          return '<div class="ledger-item" data-id="' + escapedId + '"><div class="ledger-info" onclick="showLedgerDetail(this.closest(\'[data-id]\').dataset.id)"><h3>' + escapedName + ' (ID:' + escapedId + ')</h3><p>币种：' + currency + '</p><p>笔数：' + txCount + '</p><p class="ledger-balance">余额：' + formatMoney(balance) + '</p></div><div class="ledger-actions" style="display: flex; gap: 8px;"><button class="tx-action-btn" onclick="event.stopPropagation(); showEditLedgerModal(this.closest(\'[data-id]\').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="event.stopPropagation(); deleteLedger(this.closest(\'[data-id]\').dataset.id)">删除</button></div></div>';
         }).join('') + '</div>';
       }
 
@@ -1483,7 +1483,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
             const ledgerName = (tx.ledger_name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             const dateStr = formatDate(tx.happened_at);
             const amount = formatMoney(tx.amount);
-            return '<div class="transaction-item" data-id="' + txId + '"><div class="transaction-icon ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '📈' : '📉') + '</div><div class="transaction-info"><h4>' + note + '</h4><p>' + (ledgerName ? ledgerName + ' · ' : '') + dateStr + '</p></div><div class="transaction-amount ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '+' : '-') + amount + '</div><div class="transaction-actions"><button class="tx-action-btn" onclick="editTransaction(this.closest('[data-id]').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="deleteTransaction(this.closest('[data-id]').dataset.id)">删除</button></div></div>';
+            return '<div class="transaction-item" data-id="' + txId + '"><div class="transaction-icon ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '📈' : '📉') + '</div><div class="transaction-info"><h4>' + note + '</h4><p>' + (ledgerName ? ledgerName + ' · ' : '') + dateStr + '</p></div><div class="transaction-amount ' + tx.tx_type + '">' + (tx.tx_type === 'income' ? '+' : '-') + amount + '</div><div class="transaction-actions"><button class="tx-action-btn" onclick="editTransaction(this.closest(\'[data-id]\').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="deleteTransaction(this.closest(\'[data-id]\').dataset.id)">删除</button></div></div>';
           }).join('') + '</div>';
         }
       } catch (err) {
@@ -1504,7 +1504,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         const name = (c.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const syncId = (c.id || c.sync_id || '').replace(/"/g, '&quot;');
         const indentStyle = c.level === 2 ? 'padding-left: 24px; border-left: 2px solid var(--border); margin-left: 8px;' : '';
-        const deleteBtn = showDelete ? '<button class="tx-action-btn" onclick="showEditCategoryModal(this.closest('[data-id]').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="showDeleteCategoryModal(this.closest('[data-id]').dataset.id)">删除</button>' : '';
+        const deleteBtn = showDelete ? '<button class="tx-action-btn" onclick="showEditCategoryModal(this.closest(\'[data-id]\').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="showDeleteCategoryModal(this.closest(\'[data-id]\').dataset.id)">删除</button>' : '';
         return '<div class="category-item" data-id="' + syncId + '" style="' + indentStyle + '"><span class="category-icon">' + (c.icon || '📁') + '</span><span>' + name + '</span><div class="tag-actions" style="margin-left: auto; display: flex; gap: 4px;">' + deleteBtn + '</div></div>';
       };
       
@@ -1586,7 +1586,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       const accountItemHtml = function(a) {
         const name = (a.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const syncId = (a.id || a.sync_id || '').replace(/"/g, '&quot;');
-        return '<div class="account-item" data-id="' + syncId + '"><div><span style="font-size: 1.2rem; margin-right: 8px;">' + (kindLabels[a.kind] || '📋') + '</span><strong>' + name + '</strong></div><div class="transaction-amount ' + ((a.balance || 0) >= 0 ? 'income' : 'expense') + '">' + formatMoney(a.balance || 0) + '</div><div class="tag-actions" style="display: flex; gap: 4px;"><button class="tx-action-btn" onclick="showEditAccountModal(this.closest('[data-id]').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="showDeleteAccountModal(this.closest('[data-id]').dataset.id)">删除</button></div></div>';
+        return '<div class="account-item" data-id="' + syncId + '"><div><span style="font-size: 1.2rem; margin-right: 8px;">' + (kindLabels[a.kind] || '📋') + '</span><strong>' + name + '</strong></div><div class="transaction-amount ' + ((a.balance || 0) >= 0 ? 'income' : 'expense') + '">' + formatMoney(a.balance || 0) + '</div><div class="tag-actions" style="display: flex; gap: 4px;"><button class="tx-action-btn" onclick="showEditAccountModal(this.closest(\'[data-id]\').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="showDeleteAccountModal(this.closest(\'[data-id]\').dataset.id)">删除</button></div></div>';
       };
       
       container.innerHTML = '<div class="page active"><div class="page-header"><h2>账户管理</h2><button class="btn btn-primary" onclick="showModal(\'createAccountModal\')">+ 新建账户</button></div><div class="stats-grid" style="margin-bottom: 20px;"><div class="stat-card"><div class="stat-label">账户数量</div><div class="stat-value">' + state.accounts.length + '</div></div><div class="stat-card"><div class="stat-label">总余额</div><div class="stat-value">' + formatMoney(state.accounts.reduce((sum, a) => sum + (a.balance || 0), 0)) + '</div></div></div><div class="card"><div class="account-list">' + (state.accounts.length > 0 ? state.accounts.map(accountItemHtml).join('') : '<p style="color: var(--text-muted);">暂无账户</p>') + '</div></div></div>';
@@ -1642,7 +1642,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
       const tagItemHtml = function(t) {
         const name = (t.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const syncId = (t.id || t.sync_id || '').replace(/"/g, '&quot;');
-        return '<div class="tag-item" data-id="' + syncId + '"><span class="tag-name">' + name + '</span><div class="tag-actions"><button class="tx-action-btn" onclick="editTag(this.closest('[data-id]').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="deleteTag(this.closest('[data-id]').dataset.id)">删除</button></div></div>';
+        return '<div class="tag-item" data-id="' + syncId + '"><span class="tag-name">' + name + '</span><div class="tag-actions"><button class="tx-action-btn" onclick="editTag(this.closest(\'[data-id]\').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="deleteTag(this.closest(\'[data-id]\').dataset.id)">删除</button></div></div>';
       };
 
       container.innerHTML = '<div class="page active"><div class="page-header"><h2>标签管理</h2><button class="btn btn-primary" onclick="showModal(\'createTagModal\')">+ 新建标签</button></div><div class="card"><div class="tag-list">' + (state.tags.length > 0 ? state.tags.map(tagItemHtml).join('') : '<p style="color: var(--text-muted);">暂无标签</p>') + '</div></div></div>';
@@ -1685,7 +1685,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
           const spent = formatMoney(b.spent || 0);
           const amount = formatMoney(b.amount);
           const progressWidth = Math.min(100, (b.spent || 0) / b.amount * 100);
-          return '<div class="budget-item" data-id="' + budgetId + '"><div class="budget-info"><span class="budget-category">' + catName + '</span><span class="budget-period">' + period + '</span></div><div class="budget-amount"><div class="budget-progress"><div class="progress-bar" style="width: ' + progressWidth + '%"></div></div><span>' + spent + ' / ' + amount + '</span></div><div class="budget-actions"><button class="tx-action-btn" onclick="editBudget(this.closest('[data-id]').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="deleteBudget(this.closest('[data-id]').dataset.id)">删除</button></div></div>';
+          return '<div class="budget-item" data-id="' + budgetId + '"><div class="budget-info"><span class="budget-category">' + catName + '</span><span class="budget-period">' + period + '</span></div><div class="budget-amount"><div class="budget-progress"><div class="progress-bar" style="width: ' + progressWidth + '%"></div></div><span>' + spent + ' / ' + amount + '</span></div><div class="budget-actions"><button class="tx-action-btn" onclick="editBudget(this.closest(\'[data-id]\').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="deleteBudget(this.closest(\'[data-id]\').dataset.id)">删除</button></div></div>';
         };
         
         container.innerHTML = '<div class="page active"><div class="page-header"><h2>预算管理</h2><button class="btn btn-primary" onclick="openCreateBudgetModal()">+ 设置预算</button></div><div class="card"><div class="budget-list">' + (budgets.length > 0 ? budgets.map(budgetItemHtml).join('') : '<p style="color: var(--text-muted);">暂无预算设置</p>') + '</div></div></div>';
