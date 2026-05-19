@@ -1552,12 +1552,12 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         const expenseCats = state.categories.filter(c => c.kind === 'expense');
         const incomeCats = state.categories.filter(c => c.kind === 'income');
         
-        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal('createCategoryModal')">+ 新建分类</button></div>' + renderCategoryGroup(expenseCats, '支出分类') + '<div style="margin-top: 16px;">' + renderCategoryGroup(incomeCats, '收入分类') + '</div></div>';
+        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal(\'createCategoryModal\')">+ 新建分类</button></div>' + renderCategoryGroup(expenseCats, '支出分类') + '<div style="margin-top: 16px;">' + renderCategoryGroup(incomeCats, '收入分类') + '</div></div>';
       } else {
         const expenseCats = state.categories.filter(c => c.kind === 'expense');
         const incomeCats = state.categories.filter(c => c.kind === 'income');
         
-        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal('createCategoryModal')">+ 新建分类</button></div><div class="card"><h4 class="section-title">支出分类</h4><div class="category-list">' + (expenseCats.length > 0 ? expenseCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无支出分类</p>') + '</div></div><div class="card" style="margin-top: 16px;"><h4 class="section-title">收入分类</h4><div class="category-list">' + (incomeCats.length > 0 ? incomeCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无收入分类</p>') + '</div></div></div>';
+        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal(\'createCategoryModal\')">+ 新建分类</button></div><div class="card"><h4 class="section-title">支出分类</h4><div class="category-list">' + (expenseCats.length > 0 ? expenseCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无支出分类</p>') + '</div></div><div class="card" style="margin-top: 16px;"><h4 class="section-title">收入分类</h4><div class="category-list">' + (incomeCats.length > 0 ? incomeCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无收入分类</p>') + '</div></div></div>';
       }
     }
     
@@ -1589,7 +1589,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         return '<div class="account-item" data-id="' + syncId + '"><div><span style="font-size: 1.2rem; margin-right: 8px;">' + (kindLabels[a.kind] || '📋') + '</span><strong>' + name + '</strong></div><div class="transaction-amount ' + ((a.balance || 0) >= 0 ? 'income' : 'expense') + '">' + formatMoney(a.balance || 0) + '</div><div class="tag-actions" style="display: flex; gap: 4px;"><button class="tx-action-btn" onclick="showEditAccountModal(this.closest('[data-id]').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="showDeleteAccountModal(this.closest('[data-id]').dataset.id)">删除</button></div></div>';
       };
       
-      container.innerHTML = '<div class="page active"><div class="page-header"><h2>账户管理</h2><button class="btn btn-primary" onclick="showModal('createAccountModal')">+ 新建账户</button></div><div class="stats-grid" style="margin-bottom: 20px;"><div class="stat-card"><div class="stat-label">账户数量</div><div class="stat-value">' + state.accounts.length + '</div></div><div class="stat-card"><div class="stat-label">总余额</div><div class="stat-value">' + formatMoney(state.accounts.reduce((sum, a) => sum + (a.balance || 0), 0)) + '</div></div></div><div class="card"><div class="account-list">' + (state.accounts.length > 0 ? state.accounts.map(accountItemHtml).join('') : '<p style="color: var(--text-muted);">暂无账户</p>') + '</div></div></div>';
+      container.innerHTML = '<div class="page active"><div class="page-header"><h2>账户管理</h2><button class="btn btn-primary" onclick="showModal(\'createAccountModal\')">+ 新建账户</button></div><div class="stats-grid" style="margin-bottom: 20px;"><div class="stat-card"><div class="stat-label">账户数量</div><div class="stat-value">' + state.accounts.length + '</div></div><div class="stat-card"><div class="stat-label">总余额</div><div class="stat-value">' + formatMoney(state.accounts.reduce((sum, a) => sum + (a.balance || 0), 0)) + '</div></div></div><div class="card"><div class="account-list">' + (state.accounts.length > 0 ? state.accounts.map(accountItemHtml).join('') : '<p style="color: var(--text-muted);">暂无账户</p>') + '</div></div></div>';
     }
 
     async function renderStatsPage(container) {
@@ -1645,7 +1645,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         return '<div class="tag-item" data-id="' + syncId + '"><span class="tag-name">' + name + '</span><div class="tag-actions"><button class="tx-action-btn" onclick="editTag(this.closest('[data-id]').dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="deleteTag(this.closest('[data-id]').dataset.id)">删除</button></div></div>';
       };
 
-      container.innerHTML = '<div class="page active"><div class="page-header"><h2>标签管理</h2><button class="btn btn-primary" onclick="showModal('createTagModal')">+ 新建标签</button></div><div class="card"><div class="tag-list">' + (state.tags.length > 0 ? state.tags.map(tagItemHtml).join('') : '<p style="color: var(--text-muted);">暂无标签</p>') + '</div></div></div>';
+      container.innerHTML = '<div class="page active"><div class="page-header"><h2>标签管理</h2><button class="btn btn-primary" onclick="showModal(\'createTagModal\')">+ 新建标签</button></div><div class="card"><div class="tag-list">' + (state.tags.length > 0 ? state.tags.map(tagItemHtml).join('') : '<p style="color: var(--text-muted);">暂无标签</p>') + '</div></div></div>';
     }
 
     function showEditTagModal(syncId) {
@@ -2566,7 +2566,7 @@ const FRONTEND_HTML = `<!DOCTYPE html>
           }).join('') + '</div>';
         }
         
-        content.innerHTML = '<div style="margin-bottom: 16px;"><button class="btn btn-primary btn-block" onclick="openCreateTxForLedger(this.dataset.ledgerId)" data-ledger-id="' + ledgerId + '">+ 记一笔</button></div>' + txListHtml + '<div style="margin-top: 16px;"><button class="btn btn-secondary btn-block" onclick="closeModal('ledgerModal')">关闭</button></div>';
+        content.innerHTML = '<div style="margin-bottom: 16px;"><button class="btn btn-primary btn-block" onclick="openCreateTxForLedger(this.dataset.ledgerId)" data-ledger-id="' + ledgerId + '">+ 记一笔</button></div>' + txListHtml + '<div style="margin-top: 16px;"><button class="btn btn-secondary btn-block" onclick="closeModal(\'ledgerModal\')">关闭</button></div>';
       } catch (err) {
         content.innerHTML = '<p style="color: var(--error);">加载失败: ' + err.message + '</p>';
       }
