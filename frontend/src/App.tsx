@@ -1304,8 +1304,15 @@ function App() {
                 </div>
                 <div className="modal-body">
                   <p>请使用 Authenticator 应用（如 Google Authenticator、Microsoft Authenticator）扫描下方的二维码。</p>
-                  <div className="qr-code-box">
-                    {modalData.qrCode}
+                  <div className="qr-code-container">
+                    {modalData.qrCode && (
+                      <img 
+                        src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(modalData.qrCode)}`}
+                        alt="QR Code"
+                        className="qr-code"
+                      />
+                    )}
+                    <div className="qr-uri">{modalData.qrCode}</div>
                   </div>
                   {modalData.error && <p className="error">{modalData.error}</p>}
                   <div className="form-group">

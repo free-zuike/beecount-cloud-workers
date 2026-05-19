@@ -318,6 +318,33 @@ body {
   white-space: pre-line;
 }
 
+.modal-body .qr-code-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.modal-body .qr-code {
+  width: 180px;
+  height: 180px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.modal-body .qr-uri {
+  background: #f8f9fa;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 11px;
+  color: #666;
+  word-break: break-all;
+  max-width: 100%;
+  text-align: center;
+}
+
 .modal-footer {
   padding: 16px 24px;
   background: #f8f9fa;
@@ -652,12 +679,16 @@ body {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  max-width: 700px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .settings-section {
-  padding: 20px;
-  background: #f8f9fa;
-  border-radius: 8px;
+  padding: 24px;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
 .settings-section.danger {
