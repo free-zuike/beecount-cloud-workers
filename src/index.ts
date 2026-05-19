@@ -256,10 +256,21 @@ app.get('/ws', async (c) => {
 });
 
 // ===========================
-// 前端静态文件服务
+// 前端静态文件服务 (SPA 支持)
 // ===========================
 app.get('*', async (c) => {
+  const url = new URL(c.req.url);
+  
+  // 获取请求的文件
   const res = await c.env.ASSETS.fetch(c.req.raw);
+  
+  // 如果文件不存在，返回 index.html (SPA 路由)
+  // 这处理 React Router 的客户端路由
+  if (res.status === 404) {
+    const indexRes = await c.env.ASSETS.fetch(new Request(`${url.origin}/index.html`, { method: 'GET' }));
+    return indexRes;
+  }
+  
   return res;
 });
 
