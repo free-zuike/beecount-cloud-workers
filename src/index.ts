@@ -1552,12 +1552,12 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         const expenseCats = state.categories.filter(c => c.kind === 'expense');
         const incomeCats = state.categories.filter(c => c.kind === 'income');
         
-        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal(\'createCategoryModal\')">+ 新建分类</button></div>' + renderCategoryGroup(expenseCats, '支出分类') + '<div style="margin-top: 16px;">' + renderCategoryGroup(incomeCats, '收入分类') + '</div></div>';
+        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal('createCategoryModal')">+ 新建分类</button></div>' + renderCategoryGroup(expenseCats, '支出分类') + '<div style="margin-top: 16px;">' + renderCategoryGroup(incomeCats, '收入分类') + '</div></div>';
       } else {
         const expenseCats = state.categories.filter(c => c.kind === 'expense');
         const incomeCats = state.categories.filter(c => c.kind === 'income');
         
-        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal(\'createCategoryModal\')">+ 新建分类</button></div><div class="card"><h4 class="section-title">支出分类</h4><div class="category-list">' + (expenseCats.length > 0 ? expenseCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无支出分类</p>') + '</div></div><div class="card" style="margin-top: 16px;"><h4 class="section-title">收入分类</h4><div class="category-list">' + (incomeCats.length > 0 ? incomeCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无收入分类</p>') + '</div></div></div>';
+        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal('createCategoryModal')">+ 新建分类</button></div><div class="card"><h4 class="section-title">支出分类</h4><div class="category-list">' + (expenseCats.length > 0 ? expenseCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无支出分类</p>') + '</div></div><div class="card" style="margin-top: 16px;"><h4 class="section-title">收入分类</h4><div class="category-list">' + (incomeCats.length > 0 ? incomeCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无收入分类</p>') + '</div></div></div>';
       }
     }
     
