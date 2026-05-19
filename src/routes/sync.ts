@@ -620,7 +620,7 @@ async function applyChangeToProjection(
   // 处理 ledger_snapshot upsert - 创建或更新账本
   if (change.entity_type === 'ledger_snapshot' && change.action === 'upsert') {
     const payload = change.payload as Record<string, unknown>;
-    const name = (payload.ledgerName ?? payload.name ?? change.entity_sync_id) as string;
+    const name = (payload.ledgerName ?? payload.ledger_name ?? payload.name ?? '账本') as string;
     const currency = (payload.currency ?? 'CNY') as string;
     
     // 检查账本是否存在
@@ -663,6 +663,7 @@ async function applyChangeToProjection(
     'tag',
     'budget',
     'recurring_transaction',
+    'attachment',
   ];
 
   if (!INDIVIDUAL_ENTITY_TYPES.includes(change.entity_type)) {
@@ -998,6 +999,16 @@ async function applyChangeToProjection(
             )
             .run();
         }
+      }
+      break;
+    }
+
+    case 'attachment': {
+      if (change.action === 'delete') {
+        await db
+          .prepare('DELETE FROM attachment_files WHERE id = ?')
+          .bind(change.entity_sync_id)
+          .run();
       }
       break;
     }

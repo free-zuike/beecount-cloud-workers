@@ -1,68 +1,11 @@
 /**
- * 备份路由模块 - 实现 BeeCount Cloud 备份接口
- *
- * 参考原版 BeeCount-Cloud (Python/FastAPI) 的 /admin/backup 端点：
- * - POST   /backup/snapshots            - 创建手动备份快照
- * - GET    /backup/snapshots           - 列出备份快照
- * - POST   /backup/snapshots/:id/restore - 恢复备份快照
- *
- * 功能说明：
- * - 备份快照包含账本的完整数据（用于灾难恢复）
- * - 快照存储为 JSON 格式
- * - 支持手动创建和自动定时备份
- *
- * @module routes/backup
+ * Backup & Data Management Routes
+ * 
+ * Implements data export/import and data cleanup endpoints
  */
-
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { randomUUID } from 'crypto';
-
-// ===========================
-// 辅助函数
-// ===========================
-
-/** 获取当前 UTC 时间 */
-function nowUtc(): string {
-  return new Date().toISOString();
-}
-
-/** 安全序列化 JSON */
-function safeJsonStringify(obj: unknown): string {
-  return JSON.stringify(obj);
-}
-
-// ===========================
-// Schema 定义
-// ===========================
-
-/** 创建备份请求 */
-const BackupCreateSchema = z.object({
-  ledger_id: z.string(),
-  note: z.string().optional(),
-});
-
-// ===========================
-// 类型定义
-// ===========================
-
-/** 备份快照输出 */
-interface BackupSnapshotOut {
-  id: string;
-  ledger_id: string;
-  note: string | null;
-  created_at: string;
-}
-
-/** 恢复备份请求 */
-const BackupRestoreSchema = z.object({
-  device_id: z.string().optional(),
-});
-
-// ===========================
-// 路由定义
-// ===========================
 
 type Bindings = {
   DB: D1Database;
@@ -75,348 +18,193 @@ type Variables = {
 
 const backupRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
-// ---------------------------------------------------------------------------
-// POST /backup/snapshots - 创建手动备份快照
-// ---------------------------------------------------------------------------
+// ===========================
+// 辅助函数
+// ===========================
+
+function nowUtc(): string {
+  return new Date().toISOString();
+}
+
+// ===========================
+// 备份路由
+// ===========================
 
 /**
- * 创建账本的手动备份快照
- *
- * 功能说明：
- * - 从 projection 表构建完整快照 JSON
- * - 存储到 backup_snapshots 表
- * - 可选添加备注
- *
- * 请求字段：
- * - ledger_id: 账本外部 ID
- * - note: 备注（可选）
+ * GET /backup/export
+ * 导出用户所有数据
  */
-backupRouter.post('/snapshots', zValidator('json', BackupCreateSchema), async (c) => {
+backupRouter.get('/export', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
-  const req = c.req.valid('json');
-  const serverNow = nowUtc();
-
-  // 查找账本
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
-    .bind(userId, req.ledger_id)
-    .first<{ id: string; external_id: string }>();
-
-  if (!ledger) {
-    return c.json({ error: 'Ledger not found' }, 404);
-  }
-
-  // 构建快照数据
-  const [transactions, accounts, categories, tags, budgets] = await Promise.all([
-    db.prepare('SELECT * FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id).all(),
-    db.prepare('SELECT * FROM read_account_projection WHERE ledger_id = ?').bind(ledger.id).all(),
-    db.prepare('SELECT * FROM read_category_projection WHERE ledger_id = ?').bind(ledger.id).all(),
-    db.prepare('SELECT * FROM read_tag_projection WHERE ledger_id = ?').bind(ledger.id).all(),
-    db.prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?').bind(ledger.id).all(),
-  ]);
-
-  const snapshot = {
-    ledger: {
-      id: ledger.external_id,
-    },
-    transactions: transactions.results,
-    accounts: accounts.results,
-    categories: categories.results,
-    tags: tags.results,
-    budgets: budgets.results,
-    exported_at: serverNow,
-    version: '1.0',
-  };
-
-  const snapshotId = randomUUID();
-
-  await db
-    .prepare(
-      `INSERT INTO backup_snapshots (id, user_id, ledger_id, snapshot_json, note, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    )
-    .bind(snapshotId, userId, ledger.id, safeJsonStringify(snapshot), req.note ?? null, serverNow)
-    .run();
-
-  const response: BackupSnapshotOut = {
-    id: snapshotId,
-    ledger_id: req.ledger_id,
-    note: req.note ?? null,
-    created_at: serverNow,
-  };
-
-  return c.json(response);
-});
-
-// ---------------------------------------------------------------------------
-// GET /backup/snapshots - 列出备份快照
-// ---------------------------------------------------------------------------
-
-/**
- * 获取当前用户的所有备份快照
- *
- * 功能说明：
- * - 返回用户的所有备份快照列表
- * - 按创建时间倒序
- */
-backupRouter.get('/snapshots', async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-
-  const rows = await db
-    .prepare(
-      `SELECT bs.id, bs.ledger_id, bs.note, bs.created_at,
-              l.external_id as ledger_external_id
-       FROM backup_snapshots bs
-       JOIN ledgers l ON bs.ledger_id = l.id
-       WHERE bs.user_id = ?
-       ORDER BY bs.created_at DESC`
-    )
-    .bind(userId)
-    .all<{
-      id: string;
-      ledger_id: string;
-      ledger_external_id: string;
-      note: string | null;
-      created_at: string;
-    }>();
-
-  const result: BackupSnapshotOut[] = rows.results.map((row) => ({
-    id: row.id,
-    ledger_id: row.ledger_external_id,
-    note: row.note,
-    created_at: row.created_at,
-  }));
-
-  return c.json(result);
-});
-
-// ---------------------------------------------------------------------------
-// POST /backup/snapshots/:id/restore - 恢复备份快照
-// ---------------------------------------------------------------------------
-
-/**
- * 从备份快照恢复账本数据
- *
- * 功能说明：
- * - 读取快照 JSON
- * - 清除现有 projection 数据
- * - 重新写入快照数据
- * - 生成新的 SyncChange 记录
- */
-backupRouter.post('/snapshots/:id/restore', zValidator('json', BackupRestoreSchema), async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-  const snapshotId = c.req.param('id');
-  const req = c.req.valid('json');
-  const serverNow = nowUtc();
-
-  // 获取快照
-  const snapshotRow = await db
-    .prepare(
-      `SELECT bs.*, l.external_id as ledger_external_id
-       FROM backup_snapshots bs
-       JOIN ledgers l ON bs.ledger_id = l.id
-       WHERE bs.id = ? AND bs.user_id = ?`
-    )
-    .bind(snapshotId, userId)
-    .first<{
-      id: string;
-      ledger_id: string;
-      ledger_external_id: string;
-      snapshot_json: string;
-    }>();
-
-  if (!snapshotRow) {
-    return c.json({ error: 'Snapshot not found' }, 404);
-  }
-
-  let snapshot: {
-    transactions?: Array<Record<string, unknown>>;
-    accounts?: Array<Record<string, unknown>>;
-    categories?: Array<Record<string, unknown>>;
-    tags?: Array<Record<string, unknown>>;
-    budgets?: Array<Record<string, unknown>>;
-  };
 
   try {
-    snapshot = JSON.parse(snapshotRow.snapshot_json);
-  } catch {
-    return c.json({ error: 'Invalid snapshot data' }, 400);
+    const ledgers = await db
+      .prepare('SELECT * FROM ledgers WHERE user_id = ?')
+      .bind(userId)
+      .all();
+
+    const transactions = await db
+      .prepare('SELECT * FROM read_tx_projection WHERE user_id = ?')
+      .bind(userId)
+      .all();
+
+    const accounts = await db
+      .prepare('SELECT * FROM read_account_projection WHERE user_id = ?')
+      .bind(userId)
+      .all();
+
+    const categories = await db
+      .prepare('SELECT * FROM read_category_projection WHERE user_id = ?')
+      .bind(userId)
+      .all();
+
+    const tags = await db
+      .prepare('SELECT * FROM read_tag_projection WHERE user_id = ?')
+      .bind(userId)
+      .all();
+
+    const budgets = await db
+      .prepare('SELECT * FROM read_budget_projection WHERE user_id = ?')
+      .bind(userId)
+      .all();
+
+    const syncChanges = await db
+      .prepare('SELECT * FROM sync_changes WHERE user_id = ? ORDER BY change_id ASC')
+      .bind(userId)
+      .all();
+
+    return c.json({
+      export_time: nowUtc(),
+      user_id: userId,
+      data: {
+        ledgers: ledgers.results,
+        transactions: transactions.results,
+        accounts: accounts.results,
+        categories: categories.results,
+        tags: tags.results,
+        budgets: budgets.results,
+        sync_changes: syncChanges.results,
+      },
+    });
+  } catch (error) {
+    console.error('[BACKUP] Export error:', error);
+    return c.json({ error: 'Export failed' }, 500);
   }
+});
 
-  const ledgerId = snapshotRow.ledger_id;
+/**
+ * DELETE /backup/clear-data
+ * 清空用户所有数据（保留账户）
+ */
+backupRouter.delete('/clear-data', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const serverNow = nowUtc();
 
-  // 清除现有 projection 数据
-  await db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledgerId).run();
-  await db.prepare('DELETE FROM read_account_projection WHERE ledger_id = ?').bind(ledgerId).run();
-  await db.prepare('DELETE FROM read_category_projection WHERE ledger_id = ?').bind(ledgerId).run();
-  await db.prepare('DELETE FROM read_tag_projection WHERE ledger_id = ?').bind(ledgerId).run();
-  await db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').bind(ledgerId).run();
+  try {
+    console.log('[BACKUP] Starting data clear for user:', userId);
 
-  // 获取最新 change_id
-  const latestChangeId = await db
-    .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id = ?')
-    .bind(ledgerId)
-    .first<{ max_id: number | null }>();
+    // 1. 先提取账户数据（保留）
+    const accounts = await db
+      .prepare('SELECT * FROM read_account_projection WHERE user_id = ?')
+      .bind(userId)
+      .all();
 
-  let nextChangeId = (latestChangeId?.max_id ?? 0) + 1;
+    console.log('[BACKUP] Found', accounts.results.length, 'accounts to preserve');
 
-  // 恢复 transactions
-  if (snapshot.transactions) {
-    for (const tx of snapshot.transactions) {
+    // 2. 删除所有账本（会通过外键级联删除大部分数据）
+    const ledgers = await db
+      .prepare('SELECT id FROM ledgers WHERE user_id = ?')
+      .bind(userId)
+      .all();
+
+    console.log('[BACKUP] Deleting', ledgers.results.length, 'ledgers');
+
+    for (const ledger of ledgers.results) {
       await db
-        .prepare(
-          `INSERT INTO read_tx_projection
-           (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
-            category_sync_id, category_name, category_kind,
-            account_sync_id, account_name,
-            from_account_sync_id, from_account_name,
-            to_account_sync_id, to_account_name,
-            tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          ledgerId,
-          tx.sync_id,
-          userId,
-          tx.tx_type,
-          tx.amount,
-          tx.happened_at,
-          tx.note ?? null,
-          tx.category_sync_id ?? null,
-          tx.category_name ?? null,
-          tx.category_kind ?? null,
-          tx.account_sync_id ?? null,
-          tx.account_name ?? null,
-          tx.from_account_sync_id ?? null,
-          tx.from_account_name ?? null,
-          tx.to_account_sync_id ?? null,
-          tx.to_account_name ?? null,
-          tx.tags_csv ?? null,
-          tx.tag_sync_ids_json ?? null,
-          tx.attachments_json ?? null,
-          tx.tx_index ?? 0,
-          nextChangeId++,
-        )
+        .prepare('DELETE FROM ledgers WHERE id = ?')
+        .bind(ledger.id)
         .run();
     }
-  }
 
-  // 恢复 accounts
-  if (snapshot.accounts) {
-    for (const acc of snapshot.accounts) {
+    // 3. 清理 sync_changes（按 user_id 删除）
+    const syncDeleteResult = await db
+      .prepare('DELETE FROM sync_changes WHERE user_id = ?')
+      .bind(userId)
+      .run();
+
+    console.log('[BACKUP] Deleted sync_changes');
+
+    // 4. 直接清理投影表（确保彻底删除）
+    await db.prepare('DELETE FROM read_tx_projection WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM read_category_projection WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM read_tag_projection WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM read_budget_projection WHERE user_id = ?').bind(userId).run();
+
+    // 5. 清理附件文件（按 user_id 或 ledger_id）
+    await db
+      .prepare('DELETE FROM attachment_files WHERE user_id = ?')
+      .bind(userId)
+      .run();
+
+    console.log('[BACKUP] Cleared projections and attachments');
+
+    // 6. 恢复账户（如果之前有账户的话）
+    for (const account of accounts.results) {
+      // 检查账本是否还存在，如果不存在则不恢复
+      const ledgerExists = await db
+        .prepare('SELECT id FROM ledgers WHERE id = ?')
+        .bind(account.ledger_id)
+        .first();
+
+      if (!ledgerExists) {
+        console.log('[BACKUP] Skipping account', account.sync_id, 'because ledger was deleted');
+        continue;
+      }
+
+      // 恢复账户
       await db
         .prepare(
-          `INSERT INTO read_account_projection
-           (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+          `INSERT OR IGNORE INTO read_account_projection 
+           (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance, 
             note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(
-          ledgerId,
-          acc.sync_id,
+          account.ledger_id,
+          account.sync_id,
           userId,
-          acc.name,
-          acc.account_type ?? null,
-          acc.currency ?? null,
-          acc.initial_balance ?? 0,
-          acc.note ?? null,
-          acc.credit_limit ?? null,
-          acc.billing_day ?? null,
-          acc.payment_due_day ?? null,
-          acc.bank_name ?? null,
-          acc.card_last_four ?? null,
-          nextChangeId++,
+          account.name,
+          account.account_type,
+          account.currency,
+          account.initial_balance,
+          account.note,
+          account.credit_limit,
+          account.billing_day,
+          account.payment_due_day,
+          account.bank_name,
+          account.card_last_four,
+          0,
         )
         .run();
     }
-  }
 
-  // 恢复 categories
-  if (snapshot.categories) {
-    for (const cat of snapshot.categories) {
-      await db
-        .prepare(
-          `INSERT INTO read_category_projection
-           (ledger_id, sync_id, user_id, name, kind, level, sort_order,
-            icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
-            parent_name, source_change_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          ledgerId,
-          cat.sync_id,
-          userId,
-          cat.name,
-          cat.kind ?? null,
-          cat.level ?? null,
-          cat.sort_order ?? null,
-          cat.icon ?? null,
-          cat.icon_type ?? null,
-          cat.custom_icon_path ?? null,
-          cat.icon_cloud_file_id ?? null,
-          cat.icon_cloud_sha256 ?? null,
-          cat.parent_name ?? null,
-          nextChangeId++,
-        )
-        .run();
-    }
-  }
+    console.log('[BACKUP] Data clear completed, restored', accounts.results.length, 'accounts');
 
-  // 恢复 tags
-  if (snapshot.tags) {
-    for (const tag of snapshot.tags) {
-      await db
-        .prepare(
-          `INSERT INTO read_tag_projection
-           (ledger_id, sync_id, user_id, name, color, source_change_id)
-           VALUES (?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          ledgerId,
-          tag.sync_id,
-          userId,
-          tag.name,
-          tag.color ?? null,
-          nextChangeId++,
-        )
-        .run();
-    }
+    return c.json({
+      success: true,
+      message: 'All data cleared except accounts',
+      preserved_accounts: accounts.results.length,
+      cleared_at: serverNow,
+    });
+  } catch (error) {
+    console.error('[BACKUP] Clear data error:', error);
+    return c.json({ 
+      error: 'Clear data failed',
+      message: error instanceof Error ? error.message : String(error)
+    }, 500);
   }
-
-  // 恢复 budgets
-  if (snapshot.budgets) {
-    for (const budget of snapshot.budgets) {
-      await db
-        .prepare(
-          `INSERT INTO read_budget_projection
-           (ledger_id, sync_id, user_id, budget_type, category_sync_id, amount,
-            period, start_day, enabled, source_change_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          ledgerId,
-          budget.sync_id,
-          userId,
-          budget.budget_type ?? 'total',
-          budget.category_sync_id ?? null,
-          budget.amount ?? 0,
-          budget.period ?? 'monthly',
-          budget.start_day ?? 1,
-          budget.enabled ? 1 : 0,
-          nextChangeId++,
-        )
-        .run();
-    }
-  }
-
-  return c.json({
-    restored: true,
-    ledger_id: snapshotRow.ledger_external_id,
-    change_id: nextChangeId - 1,
-  });
 });
 
 export default backupRouter;

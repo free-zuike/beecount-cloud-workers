@@ -417,6 +417,31 @@ const handleUpload = async (c: any) => {
             .bind(fileId, ledger.id, userId, sha256Hash, size, mimeType, actualFileName, storageKey, now)
             .run();
 
+        // 写入 sync_changes 以便 APP 能同步附件信息
+        await db
+            .prepare(
+                `INSERT INTO sync_changes
+                 (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .bind(
+                userId,
+                ledger.id,
+                'attachment',
+                fileId,
+                'upsert',
+                JSON.stringify({
+                    file_id: fileId,
+                    sha256: sha256Hash,
+                    size: size,
+                    mime_type: mimeType,
+                    file_name: actualFileName,
+                }),
+                now,
+                userId
+            )
+            .run();
+
         const response = {
             file_id: fileId,
             ledger_id: ledger.external_id,
@@ -569,12 +594,12 @@ attachmentsRouter.delete('/:id', async (c) => {
 
     const row = await db
         .prepare(
-            `SELECT a.id, a.storage_path FROM attachment_files a
+            `SELECT a.id, a.storage_path, a.ledger_id FROM attachment_files a
              JOIN ledgers l ON a.ledger_id = l.id
              WHERE a.id = ? AND l.user_id = ?`
         )
         .bind(fileId, userId)
-        .first<{ id: string; storage_path: string }>();
+        .first<{ id: string; storage_path: string; ledger_id: string }>();
 
     if (!row) {
         return c.json({ error: 'Attachment not found' }, 404);
@@ -585,6 +610,26 @@ attachmentsRouter.delete('/:id', async (c) => {
     }
 
     await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
+
+    // 写入 sync_changes 以便 APP 能同步附件删除
+    const now = new Date().toISOString();
+    await db
+        .prepare(
+            `INSERT INTO sync_changes
+             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+            userId,
+            row.ledger_id,
+            'attachment',
+            fileId,
+            'delete',
+            JSON.stringify({ file_id: fileId }),
+            now,
+            userId
+        )
+        .run();
 
     return c.json({ success: true });
 });

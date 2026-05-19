@@ -2379,15 +2379,11 @@ const FRONTEND_HTML = `<!DOCTYPE html>
 
     async function confirmClearData() {
       try {
-        const ledgers = await api('/api/v1/read/ledgers') || [];
-        for (const ledger of ledgers) {
-          await api('/api/v1/write/ledgers/' + ledger.ledger_id, {
-            method: 'DELETE',
-            body: JSON.stringify({ base_change_id: 0 })
-          });
-        }
+        await api('/api/v1/backup/clear-data', {
+          method: 'DELETE'
+        });
         closeModal('confirmClearDataModal');
-        showToast('所有数据已清空');
+        showToast('所有数据已清空（账户已保留）');
         loadPageData();
       } catch (err) {
         showToast('清空失败: ' + err.message, 'error');
