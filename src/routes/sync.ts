@@ -21,6 +21,8 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 
+const CODE_VERSION = 'v1.2-batch-fix';
+
 // ===========================
 // 辅助函数
 // ===========================
@@ -114,6 +116,7 @@ const syncRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 // ---------------------------------------------------------------------------
 
 syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) => {
+  console.log(`[SYNC] ===== ${CODE_VERSION} START =====`);
   try {
     console.log('[SYNC] /sync/push started');
     const userId = c.get('userId');
@@ -217,7 +220,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     }
     console.log('[SYNC] ledgerMap keys:', Object.keys(ledgerMap));
 
-    // ====================== 优化2：批量获取现有变更（分批次避免变量过多） ======================
+    // ====================== 优化2：批量获取现有变更（分更小的批次） ======================
     const existingChangeMap = new Map<string, { change_id: number; updated_at: string; updated_by_device_id: string | null }>();
     
     if (changes.length > 0) {
@@ -234,8 +237,8 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           entity_sync_id: string;
         }>;
 
-      // 分成更小的批次（每批 50 个，每批 150 个变量，避免超过 SQLite 限制）
-      const batches = chunkArray(validChangeEntries, 50);
+      // 分成更小的批次（每批 30 个，每批 90 个变量，远低于 SQLite 限制）
+      const batches = chunkArray(validChangeEntries, 30);
       console.log('[SYNC] Split valid entries into', batches.length, 'batches');
 
       for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
@@ -268,9 +271,9 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     }
     console.log('[SYNC] existingChangeMap size:', existingChangeMap.size);
 
-    // ====================== 优化3：批量写入变更（分批次避免 CPU 超时） ======================
+    // ====================== 优化3：批量写入变更（分小批次避免 CPU 超时） ======================
     const conflictList: typeof conflictSamples = [];
-    const BATCH_INSERT_SIZE = 20; // 每批处理 20 个插入
+    const BATCH_INSERT_SIZE = 15; // 每批处理 15 个插入
 
     for (let startIdx = 0; startIdx < changes.length; startIdx += BATCH_INSERT_SIZE) {
       const batchChanges = changes.slice(startIdx, startIdx + BATCH_INSERT_SIZE);
@@ -381,6 +384,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     };
 
     console.log('[SYNC] /sync/push returning with accepted:', accepted);
+    console.log(`[SYNC] ===== ${CODE_VERSION} SUCCESS =====`);
     return c.json(response);
   } catch (error) {
     console.error('[SYNC] /sync/push error - BEGIN ====================================');
@@ -396,6 +400,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       console.error('[SYNC] Error stack:', error.stack);
     }
     console.error('[SYNC] /sync/push error - END ======================================');
+    console.log(`[SYNC] ===== ${CODE_VERSION} ERROR =====`);
     
     return c.json({ 
       error: 'Internal server error',
