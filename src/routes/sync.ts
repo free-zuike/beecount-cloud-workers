@@ -21,7 +21,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 
-const CODE_VERSION = 'v1.2-batch-fix';
+const CODE_VERSION = 'v1.3-projection-fix';
 
 // ===========================
 // 辅助函数
@@ -274,12 +274,21 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     // ====================== 优化3：批量写入变更（分小批次避免 CPU 超时） ======================
     const conflictList: typeof conflictSamples = [];
     const BATCH_INSERT_SIZE = 15; // 每批处理 15 个插入
+    const processedChanges: Array<{
+      change: typeof changes[0];
+      ledgerRow: typeof ledgerMap[string];
+      newChangeId: number;
+    }> = [];
 
     for (let startIdx = 0; startIdx < changes.length; startIdx += BATCH_INSERT_SIZE) {
       const batchChanges = changes.slice(startIdx, startIdx + BATCH_INSERT_SIZE);
       console.log('[SYNC] Processing insertion batch', Math.floor(startIdx / BATCH_INSERT_SIZE) + 1, 'with', batchChanges.length, 'changes');
       
-      const insertPromises: Promise<{ meta: { last_row_id: number } }>[] = [];
+      const insertPromises: Array<{
+        result: Promise<{ meta: { last_row_id: number } }>;
+        change: typeof changes[0];
+        ledgerRow: typeof ledgerMap[string];
+      }> = [];
 
       for (const change of batchChanges) {
         const ledgerRow = ledgerMap[change.ledger_id];
@@ -326,13 +335,12 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         }
 
         // 添加到批量插入
-        insertPromises.push(
-          db.prepare(
+        insertPromises.push({
+          result: db.prepare(
             `INSERT INTO sync_changes
              (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
+          ).bind(
             userId,
             ledgerRow.id,
             change.entity_type,
@@ -342,23 +350,43 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
             clampedUpdatedAt.toISOString(),
             deviceId,
             userId,
-          )
-          .run()
-        );
+          ).run(),
+          change,
+          ledgerRow,
+        });
 
         touchedLedgers[ledgerRow.external_id] = ledgerRow.id;
       }
 
       // 执行这一批次的插入
       if (insertPromises.length > 0) {
-        const results = await Promise.all(insertPromises);
+        const results = await Promise.all(insertPromises.map(p => p.result));
         accepted += results.length;
         
-        // 获取最大 cursor
-        for (const result of results) {
-          const changeId = result.meta.last_row_id as number;
+        // 记录处理的变更以便后续应用投影
+        for (let i = 0; i < insertPromises.length; i++) {
+          const { change, ledgerRow } = insertPromises[i];
+          const changeId = results[i].meta.last_row_id as number;
           maxCursor = Math.max(maxCursor, changeId);
+          processedChanges.push({ change, ledgerRow, newChangeId: changeId });
         }
+
+        // 立即应用这一批次的投影更新（避免一次性处理太多）
+        for (const { change, ledgerRow, newChangeId } of processedChanges) {
+          try {
+            await applyChangeToProjection(db, ledgerRow.id, userId, {
+              change_id: newChangeId,
+              entity_type: change.entity_type,
+              entity_sync_id: change.entity_sync_id,
+              action: change.action,
+              payload: change.payload,
+              ledger_id: ledgerRow.id,
+            });
+          } catch (err) {
+            console.error('[SYNC] Error applying change to projection:', err);
+          }
+        }
+        processedChanges.length = 0; // 清空已处理的列表
       }
     }
 
@@ -417,8 +445,8 @@ syncRouter.get('/pull', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   
-  const cursor = parseInt(c.req.query('cursor') || '0');
-  const limit = parseInt(c.req.query('limit') || '100');
+  const cursor = parseInt(c.req.query('cursor') ?? '0');
+  const limit = parseInt(c.req.query('limit') ?? '100');
   const ledgerId = c.req.query('ledger_id');
 
   try {
@@ -558,5 +586,422 @@ syncRouter.get('/full', async (c) => {
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
+
+// ---------------------------------------------------------------------------
+// applyChangeToProjection - 应用单个变更到投影表
+// ---------------------------------------------------------------------------
+
+async function applyChangeToProjection(
+  db: D1Database,
+  ledgerId: string,
+  userId: string,
+  change: {
+    change_id: number;
+    entity_type: string;
+    entity_sync_id: string;
+    action: string;
+    payload: Record<string, unknown>;
+    ledger_id: string;
+  }
+): Promise<void> {
+  // 处理 ledger_snapshot delete - 删除整个账本
+  if (change.entity_type === 'ledger_snapshot' && change.action === 'delete') {
+    await db.batch([
+      db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM read_account_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM read_category_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM read_tag_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM ledgers WHERE id = ?').bind(ledgerId),
+    ]);
+    return;
+  }
+
+  // 处理 ledger_snapshot upsert - 创建或更新账本
+  if (change.entity_type === 'ledger_snapshot' && change.action === 'upsert') {
+    const payload = change.payload as Record<string, unknown>;
+    const name = (payload.ledgerName ?? payload.name ?? change.entity_sync_id) as string;
+    const currency = (payload.currency ?? 'CNY') as string;
+    
+    // 检查账本是否存在
+    const existing = await db
+      .prepare('SELECT id FROM ledgers WHERE id = ?')
+      .bind(ledgerId)
+      .first();
+    
+    if (existing) {
+      // 更新账本
+      await db
+        .prepare('UPDATE ledgers SET name = ?, currency = ? WHERE id = ?')
+        .bind(name, currency, ledgerId)
+        .run();
+    } else {
+      // 查找账本的 external_id
+      const ledgerInfo = await db
+        .prepare('SELECT external_id FROM ledgers WHERE id = ?')
+        .bind(ledgerId)
+        .first<{ external_id: string }>();
+      
+      const externalId = ledgerInfo?.external_id ?? change.entity_sync_id;
+      
+      // 创建账本（如果不存在）
+      await db
+        .prepare(
+          `INSERT OR IGNORE INTO ledgers (id, user_id, external_id, name, currency, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .bind(ledgerId, userId, externalId, name, currency, nowUtc())
+        .run();
+    }
+    return;
+  }
+
+  const INDIVIDUAL_ENTITY_TYPES = [
+    'transaction',
+    'account',
+    'category',
+    'tag',
+    'budget',
+    'recurring_transaction',
+  ];
+
+  if (!INDIVIDUAL_ENTITY_TYPES.includes(change.entity_type)) {
+    return;
+  }
+
+  const payload = change.payload as Record<string, unknown>;
+
+  switch (change.entity_type) {
+    case 'transaction': {
+      if (change.action === 'delete') {
+        await db
+          .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+          .bind(ledgerId, change.entity_sync_id)
+          .run();
+      } else {
+        const existing = await db
+          .prepare('SELECT sync_id FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+          .bind(ledgerId, change.entity_sync_id)
+          .first();
+
+        if (existing) {
+          await db
+            .prepare(
+              `UPDATE read_tx_projection SET
+               tx_type = ?, amount = ?, happened_at = ?, note = ?,
+               category_sync_id = ?, category_name = ?, category_kind = ?,
+               account_sync_id = ?, account_name = ?,
+               from_account_sync_id = ?, from_account_name = ?,
+               to_account_sync_id = ?, to_account_name = ?,
+               tags_csv = ?, tag_sync_ids_json = ?, attachments_json = ?,
+               tx_index = ?, source_change_id = ?
+               WHERE ledger_id = ? AND sync_id = ?`
+            )
+            .bind(
+              payload.tx_type ?? 'expense',
+              payload.amount ?? 0,
+              payload.happened_at ?? nowUtc(),
+              payload.note ?? null,
+              payload.categoryId ?? null,
+              payload.categoryName ?? null,
+              payload.categoryKind ?? null,
+              payload.accountId ?? null,
+              payload.accountName ?? null,
+              payload.fromAccountId ?? null,
+              payload.fromAccountName ?? null,
+              payload.toAccountId ?? null,
+              payload.toAccountName ?? null,
+              payload.tags ?? null,
+              payload.tagIds ? safeJsonStringify(payload.tagIds) : null,
+              payload.attachments ? safeJsonStringify(payload.attachments) : null,
+              payload.tx_index ?? 0,
+              change.change_id,
+              ledgerId,
+              change.entity_sync_id,
+            )
+            .run();
+        } else {
+          await db
+            .prepare(
+              `INSERT INTO read_tx_projection
+               (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
+                category_sync_id, category_name, category_kind,
+                account_sync_id, account_name,
+                from_account_sync_id, from_account_name,
+                to_account_sync_id, to_account_name,
+                tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .bind(
+              ledgerId,
+              change.entity_sync_id,
+              userId,
+              payload.tx_type ?? 'expense',
+              payload.amount ?? 0,
+              payload.happened_at ?? nowUtc(),
+              payload.note ?? null,
+              payload.categoryId ?? null,
+              payload.categoryName ?? null,
+              payload.categoryKind ?? null,
+              payload.accountId ?? null,
+              payload.accountName ?? null,
+              payload.fromAccountId ?? null,
+              payload.fromAccountName ?? null,
+              payload.toAccountId ?? null,
+              payload.toAccountName ?? null,
+              payload.tags ?? null,
+              payload.tagIds ? safeJsonStringify(payload.tagIds) : null,
+              payload.attachments ? safeJsonStringify(payload.attachments) : null,
+              payload.tx_index ?? 0,
+              change.change_id,
+            )
+            .run();
+        }
+      }
+      break;
+    }
+
+    case 'account': {
+      if (change.action === 'delete') {
+        await db
+          .prepare('DELETE FROM read_account_projection WHERE ledger_id = ? AND sync_id = ?')
+          .bind(ledgerId, change.entity_sync_id)
+          .run();
+      } else {
+        const existing = await db
+          .prepare('SELECT sync_id FROM read_account_projection WHERE ledger_id = ? AND sync_id = ?')
+          .bind(ledgerId, change.entity_sync_id)
+          .first();
+
+        if (existing) {
+          await db
+            .prepare(
+              `UPDATE read_account_projection SET
+               name = ?, account_type = ?, currency = ?, initial_balance = ?,
+               note = ?, credit_limit = ?, billing_day = ?, payment_due_day = ?,
+               bank_name = ?, card_last_four = ?, source_change_id = ?
+               WHERE ledger_id = ? AND sync_id = ?`
+            )
+            .bind(
+              payload.name ?? null,
+              payload.account_type ?? null,
+              payload.currency ?? null,
+              payload.initial_balance ?? 0,
+              payload.note ?? null,
+              payload.credit_limit ?? null,
+              payload.billing_day ?? null,
+              payload.payment_due_day ?? null,
+              payload.bank_name ?? null,
+              payload.card_last_four ?? null,
+              change.change_id,
+              ledgerId,
+              change.entity_sync_id,
+            )
+            .run();
+        } else {
+          await db
+            .prepare(
+              `INSERT INTO read_account_projection
+               (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+                note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .bind(
+              ledgerId,
+              change.entity_sync_id,
+              userId,
+              payload.name ?? null,
+              payload.account_type ?? null,
+              payload.currency ?? null,
+              payload.initial_balance ?? 0,
+              payload.note ?? null,
+              payload.credit_limit ?? null,
+              payload.billing_day ?? null,
+              payload.payment_due_day ?? null,
+              payload.bank_name ?? null,
+              payload.card_last_four ?? null,
+              change.change_id,
+            )
+            .run();
+        }
+      }
+      break;
+    }
+
+    case 'category': {
+      if (change.action === 'delete') {
+        await db
+          .prepare('DELETE FROM read_category_projection WHERE ledger_id = ? AND sync_id = ?')
+          .bind(ledgerId, change.entity_sync_id)
+          .run();
+      } else {
+        const existing = await db
+          .prepare('SELECT sync_id FROM read_category_projection WHERE ledger_id = ? AND sync_id = ?')
+          .bind(ledgerId, change.entity_sync_id)
+          .first();
+
+        if (existing) {
+          await db
+            .prepare(
+              `UPDATE read_category_projection SET
+               name = ?, kind = ?, level = ?, sort_order = ?,
+               icon = ?, icon_type = ?, custom_icon_path = ?,
+               icon_cloud_file_id = ?, icon_cloud_sha256 = ?,
+               parent_name = ?, source_change_id = ?
+               WHERE ledger_id = ? AND sync_id = ?`
+            )
+            .bind(
+              payload.name ?? null,
+              payload.kind ?? null,
+              payload.level ?? null,
+              payload.sort_order ?? null,
+              payload.icon ?? null,
+              payload.icon_type ?? null,
+              payload.custom_icon_path ?? null,
+              payload.icon_cloud_file_id ?? null,
+              payload.icon_cloud_sha256 ?? null,
+              payload.parent_name ?? null,
+              change.change_id,
+              ledgerId,
+              change.entity_sync_id,
+            )
+            .run();
+        } else {
+          await db
+            .prepare(
+              `INSERT INTO read_category_projection
+               (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+                icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+                parent_name, source_change_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .bind(
+              ledgerId,
+              change.entity_sync_id,
+              userId,
+              payload.name ?? null,
+              payload.kind ?? null,
+              payload.level ?? null,
+              payload.sort_order ?? null,
+              payload.icon ?? null,
+              payload.icon_type ?? null,
+              payload.custom_icon_path ?? null,
+              payload.icon_cloud_file_id ?? null,
+              payload.icon_cloud_sha256 ?? null,
+              payload.parent_name ?? null,
+              change.change_id,
+            )
+            .run();
+        }
+      }
+      break;
+    }
+
+    case 'tag': {
+      if (change.action === 'delete') {
+        await db
+          .prepare('DELETE FROM read_tag_projection WHERE ledger_id = ? AND sync_id = ?')
+          .bind(ledgerId, change.entity_sync_id);
+      } else {
+        const existing = await db
+          .prepare('SELECT sync_id FROM read_tag_projection WHERE ledger_id = ? AND sync_id = ?')
+          .bind(ledgerId, change.entity_sync_id)
+          .first();
+
+        if (existing) {
+          await db
+            .prepare(
+              `UPDATE read_tag_projection SET
+               name = ?, color = ?, source_change_id = ?
+               WHERE ledger_id = ? AND sync_id = ?`
+            )
+            .bind(
+              payload.name ?? null,
+              payload.color ?? null,
+              change.change_id,
+              ledgerId,
+              change.entity_sync_id,
+            )
+            .run();
+        } else {
+          await db
+            .prepare(
+              `INSERT INTO read_tag_projection
+               (ledger_id, sync_id, user_id, name, color, source_change_id)
+               VALUES (?, ?, ?, ?, ?, ?)`
+            )
+            .bind(
+              ledgerId,
+              change.entity_sync_id,
+              userId,
+              payload.name ?? null,
+              payload.color ?? null,
+              change.change_id,
+            )
+            .run();
+        }
+      }
+      break;
+    }
+
+    case 'budget': {
+      if (change.action === 'delete') {
+        await db
+          .prepare('DELETE FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
+          .bind(ledgerId, change.entity_sync_id)
+          .run();
+      } else {
+        const existing = await db
+          .prepare('SELECT sync_id FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
+          .bind(ledgerId, change.entity_sync_id)
+          .first();
+
+        if (existing) {
+          await db
+            .prepare(
+              `UPDATE read_budget_projection SET
+               budget_type = ?, category_sync_id = ?, amount = ?,
+               period = ?, start_day = ?, enabled = ?, source_change_id = ?
+               WHERE ledger_id = ? AND sync_id = ?`
+            )
+            .bind(
+              payload.budget_type ?? 'total',
+              payload.category_sync_id ?? null,
+              payload.amount ?? 0,
+              payload.period ?? 'monthly',
+              payload.start_day ?? 1,
+              payload.enabled ?? true,
+              change.change_id,
+              ledgerId,
+              change.entity_sync_id,
+            )
+            .run();
+        } else {
+          await db
+            .prepare(
+              `INSERT INTO read_budget_projection
+               (ledger_id, sync_id, user_id, budget_type, category_sync_id, amount,
+                period, start_day, enabled, source_change_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .bind(
+              ledgerId,
+              change.entity_sync_id,
+              userId,
+              payload.budget_type ?? 'total',
+              payload.category_sync_id ?? null,
+              payload.amount ?? 0,
+              payload.period ?? 'monthly',
+              payload.start_day ?? 1,
+              payload.enabled ?? true,
+              change.change_id,
+            )
+            .run();
+        }
+      }
+      break;
+    }
+  }
+}
 
 export default syncRouter;
