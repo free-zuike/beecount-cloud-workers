@@ -101,6 +101,12 @@ function App() {
     path_style: false,
     cdn_domain: ''
   })
+  
+  // Modal states
+  const [showModal, setShowModal] = useState(false)
+  const [modalType, setModalType] = useState<'2fa-setup' | '2fa-confirm' | '2fa-disable' | '2fa-success' | 'confirm-delete'>('2fa-setup')
+  const [modalData, setModalData] = useState<{ qrCode?: string; recoveryCodes?: string[]; error?: string }>({})
+  const [totpCode, setTotpCode] = useState('')
 
   useEffect(() => {
     const savedToken = localStorage.getItem('token')
@@ -472,28 +478,9 @@ function App() {
       
       const data = await res.json()
       if (res.ok && data.qr_code_uri) {
-        if (confirm(`请使用 Authenticator 应用扫描二维码，然后点击确定继续验证。\n\n二维码链接：${data.qr_code_uri}`)) {
-          const code = prompt('请输入 Authenticator 应用中的验证码：')
-          if (code) {
-            const confirmRes = await fetch('/api/v1/2fa/confirm', {
-              method: 'POST',
-              headers: { 
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${token}`
-              },
-              body: JSON.stringify({ code })
-            })
-            
-            if (confirmRes.ok) {
-              const confirmData = await confirmRes.json()
-              alert('2FA 已成功启用！\n\n恢复码（请保存）：\n' + confirmData.recovery_codes?.join('\n'))
-              fetchTwoFAStatus(token)
-            } else {
-              const confirmData = await confirmRes.json()
-              alert(confirmData.error || '验证失败')
-            }
-          }
-        }
+        setModalData({ qrCode: data.qr_code_uri })
+        setModalType('2fa-setup')
+        setShowModal(true)
       } else {
         alert(data.error || '设置失败')
       }
@@ -502,12 +489,42 @@ function App() {
     }
   }
 
+  const handleConfirm2FA = async () => {
+    if (!token || !totpCode) return
+    
+    try {
+      const confirmRes = await fetch('/api/v1/2fa/confirm', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ code: totpCode })
+      })
+      
+      if (confirmRes.ok) {
+        const confirmData = await confirmRes.json()
+        setModalData({ recoveryCodes: confirmData.recovery_codes })
+        setModalType('2fa-success')
+        setTotpCode('')
+        fetchTwoFAStatus(token)
+      } else {
+        const confirmData = await confirmRes.json()
+        setModalData({ qrCode: modalData.qrCode, error: confirmData.error || '验证失败' })
+      }
+    } catch (err) {
+      setModalData({ qrCode: modalData.qrCode, error: '网络错误' })
+    }
+  }
+
   const handleDisable2FA = async () => {
     if (!token) return
-    if (!confirm('确定要关闭 2FA 吗？')) return
-    
-    const code = prompt('请输入 Authenticator 应用中的验证码：')
-    if (!code) return
+    setModalType('2fa-disable')
+    setShowModal(true)
+  }
+
+  const handleConfirmDisable2FA = async () => {
+    if (!token || !totpCode) return
     
     try {
       const res = await fetch('/api/v1/2fa/disable', {
@@ -516,25 +533,25 @@ function App() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({ code })
+        body: JSON.stringify({ code: totpCode, password: '' })
       })
       
       if (res.ok) {
+        setShowModal(false)
+        setTotpCode('')
         alert('2FA 已关闭！')
         fetchTwoFAStatus(token)
       } else {
         const data = await res.json()
-        alert(data.error || '关闭失败')
+        setModalData({ error: data.error || '关闭失败' })
       }
     } catch (err) {
-      alert('网络错误')
+      setModalData({ error: '网络错误' })
     }
   }
 
   const handleRegenerateRecoveryCodes = async () => {
     if (!token) return
-    if (!confirm('确定要重新生成恢复码吗？旧的恢复码将失效！')) return
-    
     const code = prompt('请输入 Authenticator 应用中的验证码：')
     if (!code) return
     
@@ -1272,6 +1289,89 @@ function App() {
               
               <button type="submit" className="btn btn-primary btn-block">创建</button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {showModal && (
+        <div className="modal-overlay" onClick={() => setShowModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            {modalType === '2fa-setup' && (
+              <>
+                <div className="modal-header">
+                  <h3>🔐 设置双重认证</h3>
+                  <button className="modal-close" onClick={() => setShowModal(false)}>×</button>
+                </div>
+                <div className="modal-body">
+                  <p>请使用 Authenticator 应用（如 Google Authenticator、Microsoft Authenticator）扫描下方的二维码。</p>
+                  <div className="qr-code-box">
+                    {modalData.qrCode}
+                  </div>
+                  {modalData.error && <p className="error">{modalData.error}</p>}
+                  <div className="form-group">
+                    <label>验证码</label>
+                    <input
+                      type="text"
+                      value={totpCode}
+                      onChange={(e) => setTotpCode(e.target.value)}
+                      placeholder="请输入 6 位验证码"
+                      maxLength={6}
+                    />
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button className="btn btn-secondary" onClick={() => setShowModal(false)}>取消</button>
+                  <button className="btn btn-primary" onClick={handleConfirm2FA}>确认启用</button>
+                </div>
+              </>
+            )}
+            
+            {modalType === '2fa-success' && (
+              <>
+                <div className="modal-header">
+                  <h3>✅ 2FA 启用成功</h3>
+                  <button className="modal-close" onClick={() => setShowModal(false)}>×</button>
+                </div>
+                <div className="modal-body">
+                  <p>双重认证已成功启用！请保存以下恢复码，以便在无法访问设备时恢复账户。</p>
+                  <div className="recovery-codes">
+                    <h4>🔑 恢复码（请保存）</h4>
+                    <div className="codes">{modalData.recoveryCodes?.join('\n')}</div>
+                  </div>
+                  <p style={{ color: '#dc3545', fontWeight: 'bold' }}>⚠️ 请务必妥善保存这些恢复码，丢失后无法找回！</p>
+                </div>
+                <div className="modal-footer">
+                  <button className="btn btn-primary" onClick={() => setShowModal(false)}>我已保存</button>
+                </div>
+              </>
+            )}
+            
+            {modalType === '2fa-disable' && (
+              <>
+                <div className="modal-header">
+                  <h3>⚠️ 关闭双重认证</h3>
+                  <button className="modal-close" onClick={() => setShowModal(false)}>×</button>
+                </div>
+                <div className="modal-body">
+                  <p>确定要关闭双重认证吗？这将降低您账户的安全性。</p>
+                  {modalData.error && <p className="error">{modalData.error}</p>}
+                  <div className="form-group">
+                    <label>验证码</label>
+                    <input
+                      type="text"
+                      value={totpCode}
+                      onChange={(e) => setTotpCode(e.target.value)}
+                      placeholder="请输入 6 位验证码"
+                      maxLength={6}
+                    />
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button className="btn btn-secondary" onClick={() => setShowModal(false)}>取消</button>
+                  <button className="btn btn-danger" onClick={handleConfirmDisable2FA}>确认关闭</button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
