@@ -1486,16 +1486,80 @@ const FRONTEND_HTML = `<!DOCTYPE html>
         state.categories = [];
       }
       
-      const expenseCats = state.categories.filter(c => c.kind === 'expense');
-      const incomeCats = state.categories.filter(c => c.kind === 'income');
+      const hasParentCategories = state.categories.some(c => c.level === 2 && c.parent_name);
       
-      const catItemHtml = function(c) {
+      const catItemHtml = function(c, showDelete = true) {
         const name = (c.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const syncId = (c.id || c.sync_id || '').replace(/"/g, '&quot;');
-        return '<div class="category-item" data-id="' + syncId + '"><span class="category-icon">' + (c.icon || '📁') + '</span><span>' + name + '</span><div class="tag-actions" style="margin-left: auto; display: flex; gap: 4px;"><button class="tx-action-btn" onclick="showEditCategoryModal(this.closest(&apos;[data-id]&apos;).dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="showDeleteCategoryModal(this.closest(&apos;[data-id]&apos;).dataset.id)">删除</button></div></div>';
+        const indentStyle = c.level === 2 ? 'padding-left: 24px; border-left: 2px solid var(--border); margin-left: 8px;' : '';
+        const deleteBtn = showDelete ? '<button class="tx-action-btn" onclick="showEditCategoryModal(this.closest(&apos;[data-id]&apos;).dataset.id)">编辑</button><button class="tx-action-btn delete" onclick="showDeleteCategoryModal(this.closest(&apos;[data-id]&apos;).dataset.id)">删除</button>' : '';
+        return '<div class="category-item" data-id="' + syncId + '" style="' + indentStyle + '"><span class="category-icon">' + (c.icon || '📁') + '</span><span>' + name + '</span><div class="tag-actions" style="margin-left: auto; display: flex; gap: 4px;">' + deleteBtn + '</div></div>';
       };
       
-      container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="showModal(&apos;createCategoryModal&apos;)">+ 新建分类</button></div><div class="card"><h4 class="section-title">支出分类</h4><div class="category-list">' + (expenseCats.length > 0 ? expenseCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无支出分类</p>') + '</div></div><div class="card" style="margin-top: 16px;"><h4 class="section-title">收入分类</h4><div class="category-list">' + (incomeCats.length > 0 ? incomeCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无收入分类</p>') + '</div></div></div>';
+      if (hasParentCategories) {
+        const renderCategoryGroup = function(cats, title) {
+          const grouped = {};
+          cats.forEach(function(c) {
+            if (c.level === 2 && c.parent_name) {
+              if (!grouped[c.parent_name]) {
+                grouped[c.parent_name] = { parent: null, children: [] };
+              }
+              grouped[c.parent_name].children.push(c);
+            } else if (c.level === 1) {
+              if (!grouped[c.name]) {
+                grouped[c.name] = { parent: c, children: [] };
+              } else {
+                grouped[c.name].parent = c;
+              }
+            }
+          });
+          
+          let html = '<div class="card"><h4 class="section-title">' + title + '</h4>';
+          const entries = Object.entries(grouped).sort(function(a, b) {
+            return (a[1].parent?.sort_order || 999) - (b[1].parent?.sort_order || 999);
+          });
+          
+          entries.forEach(function(entry) {
+            const parentName = entry[0];
+            const data = entry[1];
+            if (data.parent) {
+              html += '<div style="margin-bottom: 12px;"><div style="font-weight: 600; color: var(--primary); margin-bottom: 6px;">' + catItemHtml(data.parent, false) + '</div>';
+              if (data.children.length > 0) {
+                data.children.forEach(function(child) {
+                  html += catItemHtml(child);
+                });
+              }
+              html += '</div>';
+            }
+          });
+          
+          html += '</div>';
+          return html;
+        };
+        
+        const expenseCats = state.categories.filter(c => c.kind === 'expense');
+        const incomeCats = state.categories.filter(c => c.kind === 'income');
+        
+        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="initDefaultCategories()">+ 初始化默认分类</button></div>' + renderCategoryGroup(expenseCats, '支出分类') + '<div style="margin-top: 16px;">' + renderCategoryGroup(incomeCats, '收入分类') + '</div></div>';
+      } else {
+        const expenseCats = state.categories.filter(c => c.kind === 'expense');
+        const incomeCats = state.categories.filter(c => c.kind === 'income');
+        
+        container.innerHTML = '<div class="page active"><div class="page-header"><h2>分类管理</h2><button class="btn btn-primary" onclick="initDefaultCategories()">+ 初始化默认分类</button></div><div class="card"><h4 class="section-title">支出分类</h4><div class="category-list">' + (expenseCats.length > 0 ? expenseCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无支出分类，点击上方按钮初始化默认分类</p>') + '</div></div><div class="card" style="margin-top: 16px;"><h4 class="section-title">收入分类</h4><div class="category-list">' + (incomeCats.length > 0 ? incomeCats.map(catItemHtml).join('') : '<p style="color: var(--text-muted);">暂无收入分类</p>') + '</div></div></div>';
+      }
+    }
+    
+    async function initDefaultCategories() {
+      try {
+        showToast('正在初始化默认分类...');
+        const result = await api('/api/v1/write/categories/init-defaults', {
+          method: 'POST'
+        });
+        showToast('已添加 ' + (result.created_count || 0) + ' 个分类');
+        loadPageData();
+      } catch (err) {
+        showToast('初始化失败: ' + err.message, 'error');
+      }
     }
     
     async function renderAccountsPage(container) {

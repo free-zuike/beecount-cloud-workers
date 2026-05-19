@@ -1433,4 +1433,227 @@ writeRouter.delete('/budgets/:id', zValidator('json', WriteBaseSchema), async (c
   } as WriteCommitMeta);
 });
 
+// ---------------------------------------------------------------------------
+// POST /write/categories/init-defaults - 创建默认分类
+// ---------------------------------------------------------------------------
+
+interface DefaultCategory {
+  name: string;
+  kind: 'expense' | 'income';
+  level: number;
+  sort_order: number;
+  icon: string;
+  children?: Array<{
+    name: string;
+    icon: string;
+  }>;
+}
+
+const DEFAULT_CATEGORIES: DefaultCategory[] = [
+  // 支出分类
+  { name: '餐饮', kind: 'expense', level: 1, sort_order: 1, icon: '🍜', children: [
+    { name: '一日三餐', icon: '🍚' },
+    { name: '零食', icon: '🍪' },
+    { name: '外卖', icon: '🛵' },
+    { name: '聚餐', icon: '🍻' },
+  ]},
+  { name: '购物', kind: 'expense', level: 1, sort_order: 2, icon: '🛒', children: [
+    { name: '日用品', icon: '🧴' },
+    { name: '服装', icon: '👕' },
+    { name: '数码', icon: '📱' },
+    { name: '美妆', icon: '💄' },
+  ]},
+  { name: '交通', kind: 'expense', level: 1, sort_order: 3, icon: '🚗', children: [
+    { name: '公交', icon: '🚌' },
+    { name: '地铁', icon: '🚇' },
+    { name: '打车', icon: '🚕' },
+    { name: '加油', icon: '⛽' },
+    { name: '停车', icon: '🅿️' },
+  ]},
+  { name: '居住', kind: 'expense', level: 1, sort_order: 4, icon: '🏠', children: [
+    { name: '房租', icon: '🏦' },
+    { name: '水电', icon: '💡' },
+    { name: '物业', icon: '🏢' },
+  ]},
+  { name: '通讯', kind: 'expense', level: 1, sort_order: 5, icon: '📱', children: [
+    { name: '话费', icon: '📞' },
+    { name: '流量', icon: '📶' },
+  ]},
+  { name: '娱乐', kind: 'expense', level: 1, sort_order: 6, icon: '🎮', children: [
+    { name: '电影', icon: '🎬' },
+    { name: '音乐', icon: '🎵' },
+    { name: '游戏', icon: '🎮' },
+    { name: '旅游', icon: '✈️' },
+  ]},
+  { name: '医疗', kind: 'expense', level: 1, sort_order: 7, icon: '🏥', children: [
+    { name: '门诊', icon: '🩺' },
+    { name: '买药', icon: '💊' },
+  ]},
+  { name: '教育', kind: 'expense', level: 1, sort_order: 8, icon: '📚', children: [
+    { name: '培训', icon: '🎓' },
+    { name: '书籍', icon: '📖' },
+  ]},
+  { name: '金融', kind: 'expense', level: 1, sort_order: 9, icon: '💰', children: [
+    { name: '手续费', icon: '💳' },
+    { name: '利息', icon: '📊' },
+  ]},
+  { name: '保险', kind: 'expense', level: 1, sort_order: 10, icon: '🏛️', children: [
+    { name: '医保', icon: '🏥' },
+    { name: '车险', icon: '🚗' },
+  ]},
+  { name: '其他支出', kind: 'expense', level: 1, sort_order: 11, icon: '📦', children: [
+    { name: '其他', icon: '❓' },
+  ]},
+  // 收入分类
+  { name: '工资', kind: 'income', level: 1, sort_order: 21, icon: '💵', children: [
+    { name: '基本工资', icon: '💰' },
+    { name: '加班费', icon: '⏰' },
+    { name: '补贴', icon: '🎁' },
+  ]},
+  { name: '奖金', kind: 'income', level: 1, sort_order: 22, icon: '🏆', children: [
+    { name: '年终奖', icon: '🎊' },
+    { name: '绩效', icon: '📈' },
+  ]},
+  { name: '投资', kind: 'income', level: 1, sort_order: 23, icon: '📈', children: [
+    { name: '股票', icon: '📉' },
+    { name: '基金', icon: '📊' },
+    { name: '利息', icon: '💵' },
+  ]},
+  { name: '理财', kind: 'income', level: 1, sort_order: 24, icon: '💎', children: [
+    { name: '理财收益', icon: '💰' },
+  ]},
+  { name: '兼职', kind: 'income', level: 1, sort_order: 25, icon: '💼', children: [
+    { name: '外快', icon: '💵' },
+  ]},
+  { name: '礼金', kind: 'income', level: 1, sort_order: 26, icon: '🎁', children: [
+    { name: '红包', icon: '🧧' },
+    { name: '礼物', icon: '🎀' },
+  ]},
+  { name: '其他收入', kind: 'income', level: 1, sort_order: 27, icon: '💴', children: [
+    { name: '其他', icon: '❓' },
+  ]},
+];
+
+writeRouter.post('/categories/init-defaults', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const serverNow = nowUtc();
+
+  const ledger = await db
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .first<{ id: string; external_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  const existingCategories = await db
+    .prepare('SELECT name, kind FROM read_category_projection WHERE ledger_id = ? AND level = 1')
+    .bind(ledger.id)
+    .all<{ name: string; kind: string }>();
+
+  const existingNames = new Set(existingCategories.results.map(c => `${c.kind}:${c.name}`));
+  let createdCount = 0;
+  const parentSyncIds: Record<string, string> = {};
+
+  for (const cat of DEFAULT_CATEGORIES) {
+    const key = `${cat.kind}:${cat.name}`;
+    if (existingNames.has(key)) {
+      continue;
+    }
+
+    const parentSyncId = randomUUID();
+    parentSyncIds[cat.name] = parentSyncId;
+
+    const payload: Record<string, unknown> = {
+      name: cat.name,
+      kind: cat.kind,
+      level: 1,
+      sort_order: cat.sort_order,
+      icon: cat.icon,
+      icon_type: 'emoji',
+      parent_name: null,
+    };
+
+    await db
+      .prepare(
+        `INSERT INTO sync_changes
+         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(userId, ledger.id, 'category', parentSyncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
+      .run();
+
+    await db
+      .prepare(
+        `INSERT INTO read_category_projection
+         (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+          icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+          parent_name, source_change_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        ledger.id, parentSyncId, userId, cat.name, cat.kind, 1,
+        cat.sort_order, cat.icon, 'emoji', null, null, null, null, 0,
+      )
+      .run();
+
+    createdCount++;
+
+    if (cat.children) {
+      for (const child of cat.children) {
+        const childSyncId = randomUUID();
+        const childPayload: Record<string, unknown> = {
+          name: child.name,
+          kind: cat.kind,
+          level: 2,
+          sort_order: cat.sort_order * 100 + (cat.children.indexOf(child) + 1),
+          icon: child.icon,
+          icon_type: 'emoji',
+          parent_name: cat.name,
+        };
+
+        await db
+          .prepare(
+            `INSERT INTO sync_changes
+             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(userId, ledger.id, 'category', childSyncId, 'upsert', safeJsonStringify(childPayload), serverNow, userId)
+          .run();
+
+        await db
+          .prepare(
+            `INSERT INTO read_category_projection
+             (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+              icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+              parent_name, source_change_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            ledger.id, childSyncId, userId, child.name, cat.kind, 2,
+            cat.sort_order * 100 + (cat.children.indexOf(child) + 1),
+            child.icon, 'emoji', null, null, null, cat.name, 0,
+          )
+          .run();
+
+        createdCount++;
+      }
+    }
+  }
+
+  return c.json({
+    success: true,
+    message: `Created ${createdCount} default categories`,
+    created_count: createdCount,
+  });
+});
+
+writeRouter.get('/categories/defaults', async (c) => {
+  return c.json({
+    categories: DEFAULT_CATEGORIES,
+  });
+});
+
 export default writeRouter;
