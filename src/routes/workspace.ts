@@ -1,8 +1,27 @@
 /**
  * Workspace 路由模块 - 实现跨账本聚合查询接口
+ *
+ * 参考原版 BeeCount-Cloud (Python/FastAPI) 的 /read/workspace 端点：
+ * - GET /read/workspace/transactions       - 跨账本交易列表（支持复杂过滤）
+ * - GET /read/workspace/transactions.csv  - CSV 导出
+ * - GET /read/workspace/accounts          - 跨账本账户聚合
+ * - GET /read/workspace/categories         - 跨账本分类聚合
+ * - GET /read/workspace/tags             - 跨账本标签聚合
+ * - GET /read/workspace/ledger-counts    - 账本总览统计
+ * - GET /read/workspace/analytics         - 收支分析（series + category ranks）
+ *
+ * 跟 ledgers.py 的区别：
+ * - 这里的查询不锁定到单个账本，会扫用户所有可见账本做聚合
+ * - 去重/跨账本 dedup / owner 信息回填逻辑在这里
+ *
+ * @module routes/workspace
  */
 
 import { Hono } from 'hono';
+
+// ===========================
+// 辅助函数
+// ===========================
 
 function nowUtc(): string {
   return new Date().toISOString();
@@ -33,25 +52,9 @@ type Variables = {
 
 const workspaceRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
-workspaceRouter.use('*', async (c, next) => {
-  try {
-    await next();
-  } catch (error) {
-    console.error('[WORKSPACE] Error:', error);
-    console.error('[WORKSPACE] Error type:', typeof error);
-    
-    const errorStr = String(error);
-    if (errorStr.includes('no such table')) {
-      const path = c.req.path;
-      if (path.includes('/transactions')) {
-        return c.json({ items: [], total: 0, limit: 0, offset: 0 });
-      }
-      return c.json([]);
-    }
-    
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
+// ---------------------------------------------------------------------------
+// GET /read/workspace/transactions - 跨账本交易列表
+// ---------------------------------------------------------------------------
 
 workspaceRouter.get('/transactions', async (c) => {
   const userId = c.get('userId');
@@ -64,6 +67,7 @@ workspaceRouter.get('/transactions', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') ?? '20', 10), 2000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
 
+  // 构建账本查询条件
   let ledgerQuery = 'SELECT id, external_id, name FROM ledgers WHERE user_id = ?';
   const ledgerParams: string[] = [userId];
 
@@ -84,6 +88,7 @@ workspaceRouter.get('/transactions', async (c) => {
     ledgerMeta[l.id] = { external_id: l.external_id, name: l.name };
   });
 
+  // 构建交易查询
   let txQuery = `SELECT * FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`;
   const txParams: (string | number)[] = [...ledgerInternalIds];
 
@@ -104,6 +109,7 @@ workspaceRouter.get('/transactions', async (c) => {
     txParams.push(pattern, pattern, pattern, pattern);
   }
 
+  // 排序和分页
   txQuery += ' ORDER BY happened_at DESC, tx_index DESC LIMIT ? OFFSET ?';
   txParams.push(limit + 1, offset);
 
@@ -156,6 +162,10 @@ workspaceRouter.get('/transactions', async (c) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// GET /read/workspace/accounts - 跨账本账户聚合
+// ---------------------------------------------------------------------------
+
 workspaceRouter.get('/accounts', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
@@ -197,6 +207,7 @@ workspaceRouter.get('/accounts', async (c) => {
 
   const acctRows = await db.prepare(acctQuery).bind(...acctParams).all<Record<string, unknown>>();
 
+  // 计算统计
   const accountIds = [...new Set(acctRows.results.map((r) => r.sync_id as string))];
 
   const items = acctRows.results.map((row) => {
@@ -228,6 +239,10 @@ workspaceRouter.get('/accounts', async (c) => {
 
   return c.json(items);
 });
+
+// ---------------------------------------------------------------------------
+// GET /read/workspace/categories - 跨账本分类聚合
+// ---------------------------------------------------------------------------
 
 workspaceRouter.get('/categories', async (c) => {
   const userId = c.get('userId');
@@ -297,6 +312,10 @@ workspaceRouter.get('/categories', async (c) => {
   return c.json(items);
 });
 
+// ---------------------------------------------------------------------------
+// GET /read/workspace/tags - 跨账本标签聚合
+// ---------------------------------------------------------------------------
+
 workspaceRouter.get('/tags', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
@@ -359,6 +378,10 @@ workspaceRouter.get('/tags', async (c) => {
   return c.json(items);
 });
 
+// ---------------------------------------------------------------------------
+// GET /read/workspace/budgets - 跨账本预算聚合
+// ---------------------------------------------------------------------------
+
 workspaceRouter.get('/budgets', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
@@ -419,6 +442,10 @@ workspaceRouter.get('/budgets', async (c) => {
   return c.json(items);
 });
 
+// ---------------------------------------------------------------------------
+// GET /read/workspace/ledger-counts - 账本总览统计
+// ---------------------------------------------------------------------------
+
 workspaceRouter.get('/ledger-counts', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
@@ -463,6 +490,10 @@ workspaceRouter.get('/ledger-counts', async (c) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// GET /read/workspace/analytics - 收支分析
+// ---------------------------------------------------------------------------
+
 workspaceRouter.get('/analytics', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
@@ -491,6 +522,7 @@ workspaceRouter.get('/analytics', async (c) => {
 
   const ledgerInternalIds = ledgers.results.map((l) => l.id);
 
+  // 查询所有交易
   const txRows = await db
     .prepare(`SELECT tx_type, amount, happened_at, category_name FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`)
     .bind(...ledgerInternalIds)

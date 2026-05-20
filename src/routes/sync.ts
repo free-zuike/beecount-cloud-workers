@@ -111,28 +111,6 @@ type Variables = {
 
 const syncRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
-syncRouter.use('*', async (c, next) => {
-  try {
-    await next();
-  } catch (error) {
-    console.error('[SYNC] Error:', error);
-    
-    const errorStr = String(error);
-    if (errorStr.includes('no such table')) {
-      const path = c.req.path;
-      if (path.includes('/pull')) {
-        return c.json({ changes: [], server_cursor: 0, server_timestamp: nowUtc() });
-      }
-      if (path.includes('/ledgers')) {
-        return c.json({ ledgers: [] });
-      }
-      return c.json({});
-    }
-    
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
-
 // ---------------------------------------------------------------------------
 // POST /sync/push - 增量推送：客户端推送变更到服务端
 // ---------------------------------------------------------------------------
@@ -148,9 +126,11 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     console.log('[SYNC] changes count:', req.changes?.length);
     const serverNow = nowUtc();
 
+    // 处理 device_id - 如果未提供，尝试从 header 获取或使用默认值
     const deviceId = req.device_id || c.req.header('X-Device-ID') || 'unknown';
     console.log('[SYNC] deviceId:', deviceId);
 
+    // 验证设备有效性（设备必须属于当前用户且未被撤销）
     const device = await db
       .prepare(
         `SELECT id FROM devices
@@ -165,6 +145,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       return c.json({ error: 'Invalid device' }, 401);
     }
 
+    // 更新设备最后活跃时间
     await db
       .prepare(
         `UPDATE devices SET last_seen_at = ?, last_ip = ?
@@ -182,6 +163,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
     const changes = req.changes;
     
+    // 空变更快速返回
     if (changes.length === 0) {
       const maxRow = await db
         .prepare(`SELECT MAX(change_id) as max_id FROM sync_changes WHERE user_id = ?`)
@@ -199,6 +181,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       });
     }
 
+    // ====================== 优化1：批量预加载账本 ======================
     const ledgerExternalIds = [...new Set(changes.map(c => c.ledger_id))];
     console.log('[SYNC] ledgerExternalIds:', ledgerExternalIds);
     const ledgerMap: Record<string, { id: string; user_id: string; external_id: string }> = {};
@@ -219,6 +202,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         ledgerMap[ledger.external_id] = ledger;
       }
       
+      // 创建不存在的账本（批量）
       for (const externalId of ledgerExternalIds) {
         if (!ledgerMap[externalId]) {
           console.log('[SYNC] Creating new ledger:', externalId);
@@ -236,9 +220,11 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     }
     console.log('[SYNC] ledgerMap keys:', Object.keys(ledgerMap));
 
+    // ====================== 优化2：批量获取现有变更（分更小的批次） ======================
     const existingChangeMap = new Map<string, { change_id: number; updated_at: string; updated_by_device_id: string | null }>();
     
     if (changes.length > 0) {
+      // 准备有效的变更查询参数
       const validChangeEntries = changes
         .map(c => ({
           ledgerId: ledgerMap[c.ledger_id]?.id,
@@ -251,6 +237,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           entity_sync_id: string;
         }>;
 
+      // 分成更小的批次（每批 30 个，每批 90 个变量，远低于 SQLite 限制）
       const batches = chunkArray(validChangeEntries, 30);
       console.log('[SYNC] Split valid entries into', batches.length, 'batches');
 
@@ -284,8 +271,9 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     }
     console.log('[SYNC] existingChangeMap size:', existingChangeMap.size);
 
+    // ====================== 优化3：批量写入变更（分小批次避免 CPU 超时） ======================
     const conflictList: typeof conflictSamples = [];
-    const BATCH_INSERT_SIZE = 15;
+    const BATCH_INSERT_SIZE = 15; // 每批处理 15 个插入
     const processedChanges: Array<{
       change: typeof changes[0];
       ledgerRow: typeof ledgerMap[string];
@@ -324,6 +312,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           };
         }
 
+        // 已有变更且更新更新 → 冲突拒绝
         if (existingTuple && existingTuple.ts > incomingTuple.ts) {
           rejected++;
           conflictCount++;
@@ -339,11 +328,13 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           continue;
         }
 
+        // 完全相同的 (ts, device_id) → 幂等重放
         if (existingTuple && existingTuple.ts === incomingTuple.ts && existingTuple.deviceId === incomingTuple.deviceId) {
           accepted++;
           continue;
         }
 
+        // 添加到批量插入
         insertPromises.push({
           result: db.prepare(
             `INSERT INTO sync_changes
@@ -367,10 +358,12 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         touchedLedgers[ledgerRow.external_id] = ledgerRow.id;
       }
 
+      // 执行这一批次的插入
       if (insertPromises.length > 0) {
         const results = await Promise.all(insertPromises.map(p => p.result));
         accepted += results.length;
         
+        // 记录处理的变更以便后续应用投影
         for (let i = 0; i < insertPromises.length; i++) {
           const { change, ledgerRow } = insertPromises[i];
           const changeId = results[i].meta.last_row_id as number;
@@ -378,6 +371,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           processedChanges.push({ change, ledgerRow, newChangeId: changeId });
         }
 
+        // 立即应用这一批次的投影更新（避免一次性处理太多）
         for (const { change, ledgerRow, newChangeId } of processedChanges) {
           try {
             await applyChangeToProjection(db, ledgerRow.id, userId, {
@@ -392,12 +386,14 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
             console.error('[SYNC] Error applying change to projection:', err);
           }
         }
-        processedChanges.length = 0;
+        processedChanges.length = 0; // 清空已处理的列表
       }
     }
 
+    // 合并冲突样本
     conflictSamples.push(...conflictList);
 
+    // 如果没有任何变更被接受，计算最大游标
     if (maxCursor === 0) {
       const maxRow = await db
         .prepare(`SELECT MAX(change_id) as max_id FROM sync_changes WHERE user_id = ?`)
@@ -449,7 +445,7 @@ syncRouter.get('/pull', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   
-  const cursor = parseInt(c.req.query('cursor') ?? c.req.query('since') ?? '0');
+  const cursor = parseInt(c.req.query('cursor') ?? '0');
   const limit = parseInt(c.req.query('limit') ?? '100');
   const ledgerId = c.req.query('ledger_id');
 
@@ -503,15 +499,6 @@ syncRouter.get('/pull', async (c) => {
     });
   } catch (error) {
     console.error('[SYNC] /sync/pull error:', error);
-    
-    if (error instanceof Error && error.message.includes('no such table')) {
-      return c.json({
-        changes: [],
-        server_cursor: 0,
-        server_timestamp: nowUtc(),
-      });
-    }
-    
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
@@ -540,11 +527,6 @@ syncRouter.get('/ledgers', async (c) => {
     });
   } catch (error) {
     console.error('[SYNC] /sync/ledgers error:', error);
-    
-    if (error instanceof Error && error.message.includes('no such table')) {
-      return c.json({ ledgers: [] });
-    }
-    
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
@@ -560,6 +542,7 @@ syncRouter.get('/full', async (c) => {
   const ledgerId = c.req.query('ledger_id');
 
   try {
+    // 查找账本
     let query = `SELECT id, external_id FROM ledgers WHERE user_id = ?`;
     const params: (string | number)[] = [userId];
     
@@ -578,6 +561,7 @@ syncRouter.get('/full', async (c) => {
     };
 
     for (const ledger of ledgers.results) {
+      // 获取账本下的所有变更
       const changes = await db
         .prepare(`
           SELECT entity_type, entity_sync_id, action, payload_json
@@ -599,11 +583,6 @@ syncRouter.get('/full', async (c) => {
     return c.json(result);
   } catch (error) {
     console.error('[SYNC] /sync/full error:', error);
-    
-    if (error instanceof Error && error.message.includes('no such table')) {
-      return c.json({ server_timestamp: nowUtc() });
-    }
-    
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
@@ -625,6 +604,7 @@ async function applyChangeToProjection(
     ledger_id: string;
   }
 ): Promise<void> {
+  // 处理 ledger_snapshot delete - 删除整个账本
   if (change.entity_type === 'ledger_snapshot' && change.action === 'delete') {
     await db.batch([
       db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledgerId),
@@ -637,22 +617,26 @@ async function applyChangeToProjection(
     return;
   }
 
+  // 处理 ledger_snapshot upsert - 创建或更新账本
   if (change.entity_type === 'ledger_snapshot' && change.action === 'upsert') {
     const payload = change.payload as Record<string, unknown>;
     const name = (payload.ledgerName ?? payload.ledger_name ?? payload.name ?? '账本') as string;
     const currency = (payload.currency ?? 'CNY') as string;
     
+    // 检查账本是否存在
     const existing = await db
       .prepare('SELECT id FROM ledgers WHERE id = ?')
       .bind(ledgerId)
       .first();
     
     if (existing) {
+      // 更新账本
       await db
         .prepare('UPDATE ledgers SET name = ?, currency = ? WHERE id = ?')
         .bind(name, currency, ledgerId)
         .run();
     } else {
+      // 查找账本的 external_id
       const ledgerInfo = await db
         .prepare('SELECT external_id FROM ledgers WHERE id = ?')
         .bind(ledgerId)
@@ -660,6 +644,7 @@ async function applyChangeToProjection(
       
       const externalId = ledgerInfo?.external_id ?? change.entity_sync_id;
       
+      // 创建账本（如果不存在）
       await db
         .prepare(
           `INSERT OR IGNORE INTO ledgers (id, user_id, external_id, name, currency, created_at)

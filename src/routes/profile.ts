@@ -1,18 +1,35 @@
 /**
  * 个人资料路由模块 - 实现 BeeCount Cloud 用户资料接口
  *
+ * 参考原版 BeeCount-Cloud (Python/FastAPI) 的 /profile 端点：
+ * - GET  /profile/me            - 获取当前用户资料
+ * - PATCH /profile/me           - 更新当前用户资料
+ * - POST /profile/me/avatar     - 上传头像
+ *
+ * 功能说明：
+ * - 用户资料包括显示名、主题设置、AI 配置等
+ * - AI 配置存储为 JSON（providers / binding / custom_prompt 等）
+ * - 外观设置存储为 JSON（header_decoration_style / compact_amount / show_transaction_time）
+ *
  * @module routes/profile
  */
 
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
+import { randomUUID } from 'crypto';
 import { hashPassword, verifyPassword } from '../auth';
 
+// ===========================
+// 辅助函数
+// ===========================
+
+/** 获取当前 UTC 时间 */
 function nowUtc(): string {
   return new Date().toISOString();
 }
 
+/** 安全解析 JSON */
 function safeJsonParse<T = Record<string, unknown>>(jsonStr: string | null): T | null {
   if (!jsonStr) return null;
   try {
@@ -22,6 +39,7 @@ function safeJsonParse<T = Record<string, unknown>>(jsonStr: string | null): T |
   }
 }
 
+/** 安全序列化 JSON */
 function safeJsonStringify(obj: unknown): string | null {
   if (obj === null || obj === undefined) return null;
   try {
@@ -31,6 +49,11 @@ function safeJsonStringify(obj: unknown): string | null {
   }
 }
 
+// ===========================
+// Schema 定义
+// ===========================
+
+/** 更新资料请求 */
 const ProfilePatchSchema = z.object({
   display_name: z.string().min(1).max(32).optional(),
   income_is_red: z.boolean().nullable().optional(),
@@ -39,6 +62,11 @@ const ProfilePatchSchema = z.object({
   ai_config: z.record(z.unknown()).nullable().optional(),
 });
 
+// ===========================
+// 类型定义
+// ===========================
+
+/** 用户资料输出 */
 interface UserProfileOut {
   user_id: string;
   email: string;
@@ -51,6 +79,10 @@ interface UserProfileOut {
   ai_config: Record<string, unknown> | null;
 }
 
+// ===========================
+// 路由定义
+// ===========================
+
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
@@ -62,20 +94,28 @@ type Variables = {
 
 const profileRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
-profileRouter.use('*', async (c, next) => {
-  try {
-    await next();
-  } catch (error) {
-    console.error('[PROFILE] Error:', error);
-    
-    if (error instanceof Error && error.message.includes('no such table')) {
-      return c.json({ error: 'Database not initialized' }, 503);
-    }
-    
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
+// ---------------------------------------------------------------------------
+// GET /profile/me - 获取当前用户资料
+// ---------------------------------------------------------------------------
 
+/**
+ * 获取当前登录用户的资料
+ *
+ * 功能说明：
+ * - 联表查询 users 和 user_profiles
+ * - 返回用户的显示名、头像、主题、AI 配置等信息
+ *
+ * 响应字段：
+ * - user_id: 用户 ID
+ * - email: 邮箱
+ * - display_name: 显示名称
+ * - avatar_url: 头像 URL（这里返回 avatar_file_id，实际 URL 由客户端拼接）
+ * - avatar_version: 头像版本号
+ * - income_is_red: 收入是否红色显示（true = 红收绿支，false = 红支绿收）
+ * - theme_primary_color: 主题色（#RRGGBB）
+ * - appearance: 外观设置 JSON
+ * - ai_config: AI 配置 JSON
+ */
 profileRouter.get('/me', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
@@ -122,18 +162,40 @@ profileRouter.get('/me', async (c) => {
   return c.json(response);
 });
 
+// ---------------------------------------------------------------------------
+// PATCH /profile/me - 更新当前用户资料
+// ---------------------------------------------------------------------------
+
+/**
+ * 更新当前登录用户的资料
+ *
+ * 功能说明：
+ * - 所有字段可选，只更新非 undefined 的字段
+ * - display_name 最大 32 字符
+ * - theme_primary_color 必须符合 #RRGGBB 格式
+ * - appearance 和 ai_config 整体覆盖（如果有）
+ *
+ * 请求字段（全部可选）：
+ * - display_name: 显示名称
+ * - income_is_red: 收入红色显示偏好
+ * - theme_primary_color: 主题色
+ * - appearance: 外观设置对象
+ * - ai_config: AI 配置对象
+ */
 profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
+  // 检查是否已有 profile
   const existing = await db
     .prepare('SELECT id FROM user_profiles WHERE user_id = ?')
     .bind(userId)
     .first<{ id: number }>();
 
   if (!existing) {
+    // 创建新 profile
     await db
       .prepare(
         `INSERT INTO user_profiles (user_id, display_name, avatar_version, income_is_red,
@@ -151,6 +213,7 @@ profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => 
       )
       .run();
   } else {
+    // 构建动态更新语句
     const updates: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [serverNow];
 
@@ -183,6 +246,7 @@ profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => 
       .run();
   }
 
+  // 返回更新后的资料
   const row = await db
     .prepare(
       `SELECT u.id, u.email,
@@ -225,6 +289,10 @@ profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => 
   return c.json(response);
 });
 
+// ---------------------------------------------------------------------------
+// POST /profile/me/change-password - 修改密码
+// ---------------------------------------------------------------------------
+
 profileRouter.post('/me/change-password', zValidator('json', z.object({
   current_password: z.string(),
   new_password: z.string().min(8)
@@ -233,6 +301,7 @@ profileRouter.post('/me/change-password', zValidator('json', z.object({
   const db = c.env.DB;
   const { current_password, new_password } = c.req.valid('json');
 
+  // 获取当前密码哈希
   const user = await db
     .prepare('SELECT password_hash FROM users WHERE id = ?')
     .bind(userId)
@@ -242,11 +311,13 @@ profileRouter.post('/me/change-password', zValidator('json', z.object({
     return c.json({ error: 'User not found' }, 404);
   }
 
+  // 验证当前密码
   const passwordValid = await verifyPassword(user.password_hash, current_password);
   if (!passwordValid) {
     return c.json({ error: 'Current password is incorrect' }, 400);
   }
 
+  // 哈希新密码并更新
   const newPasswordHash = await hashPassword(new_password);
   await db
     .prepare('UPDATE users SET password_hash = ? WHERE id = ?')
@@ -256,13 +327,84 @@ profileRouter.post('/me/change-password', zValidator('json', z.object({
   return c.json({ success: true, message: 'Password changed successfully' });
 });
 
+// ---------------------------------------------------------------------------
+// POST /profile/me/avatar - 上传头像
+// ---------------------------------------------------------------------------
+
+/**
+ * 上传用户头像
+ *
+ * 功能说明：
+ * - 接收 FormData 中的 file 字段
+ * - 计算文件 SHA256 哈希
+ * - 存储到 attachment_files 表
+ * - 更新 user_profiles 的 avatar_file_id 和 avatar_version
+ *
+ * 请求：
+ * - FormData with file field
+ *
+ * 响应：
+ * - avatar_url: 头像文件 ID
+ * - avatar_version: 新版本号
+ */
 profileRouter.post('/me/avatar', async (c) => {
+  // 暂时不实现头像上传
   return c.json({ error: 'Avatar upload not implemented yet' }, 501);
 });
 
+// ---------------------------------------------------------------------------
+// GET /profile/avatar/:user_id - 下载用户头像
+// ---------------------------------------------------------------------------
+
+/**
+ * 下载指定用户头像
+ *
+ * 功能说明：
+ * - 公开端点，无需认证即可访问
+ * - 返回一个 SVG 占位符头像
+ *
+ * 路径参数：
+ * - user_id: 用户 ID
+ *
+ * 查询参数：
+ * - v: 头像版本号（用于缓存 busting）
+ *
+ * 响应：
+ * - 200: SVG 图片
+ * - 500: 服务器错误
+ */
 profileRouter.get('/avatar/:user_id', async (c) => {
+  const userId = c.req.param('user_id');
+  const db = c.env.DB;
   const version = c.req.query('v');
 
+  // 先尝试查询用户头像
+  try {
+    const profile = await db
+      .prepare(
+        `SELECT p.avatar_file_id, p.avatar_version
+         FROM user_profiles p
+         WHERE p.user_id = ?`
+      )
+      .bind(userId)
+      .first<{
+        avatar_file_id: string | null;
+        avatar_version: number | null;
+      }>();
+
+    if (profile && profile.avatar_file_id) {
+      // 如果有头像，返回 JSON 响应
+      return c.json({
+        error: 'Avatar not yet implemented',
+        file_id: profile.avatar_file_id,
+        version: profile.avatar_version,
+      });
+    }
+  } catch (err) {
+    console.error('[Avatar] Database query failed:', err);
+  }
+
+  // 返回默认 SVG 占位符头像
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
     <circle cx="50" cy="50" r="50" fill="#FF9800"/>
     <circle cx="50" cy="40" r="20" fill="#FFE0B2"/>
