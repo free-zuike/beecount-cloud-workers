@@ -365,36 +365,33 @@ backupRouter.get('/schedules', async (c) => {
 
   const rows = await db
     .prepare(
-      `SELECT s.id, s.name, s.ledger_id, s.remote_id, s.cron_expression,
+      `SELECT s.id, s.name, s.user_id, s.cron_expr,
               s.retention_days, s.enabled, s.created_at, s.updated_at,
-              l.external_id as ledger_external_id,
-              r.name as remote_name
+              s.next_run_at, s.last_run_at, s.last_run_status
        FROM backup_schedules s
-       LEFT JOIN ledgers l ON s.ledger_id = l.id
-       LEFT JOIN backup_remotes r ON s.remote_id = r.id
        ORDER BY s.created_at DESC`
     )
     .all<{
-      id: string;
+      id: number;
       name: string;
-      ledger_id: string;
-      remote_id: string | null;
-      cron_expression: string;
+      user_id: string;
+      cron_expr: string;
       retention_days: number | null;
       enabled: number;
       created_at: string;
       updated_at: string;
-      ledger_external_id: string;
-      remote_name: string | null;
+      next_run_at: string | null;
+      last_run_at: string | null;
+      last_run_status: string | null;
     }>();
 
   const schedules = rows.results.map((row) => ({
-    id: row.id,
+    id: String(row.id),
     name: row.name,
-    ledger_id: row.ledger_external_id,
-    remote_id: row.remote_id,
-    remote_name: row.remote_name,
-    cron_expression: row.cron_expression,
+    ledger_id: '',
+    remote_id: null,
+    remote_name: null,
+    cron_expression: row.cron_expr,
     retention_days: row.retention_days ?? 30,
     enabled: Boolean(row.enabled),
     created_at: row.created_at,
@@ -546,44 +543,38 @@ backupRouter.get('/runs', async (c) => {
 
   const rows = await db
     .prepare(
-      `SELECT r.id, r.schedule_id, r.ledger_id, r.remote_id, r.status,
-              r.started_at, r.completed_at, r.error_message, r.backup_size,
-              l.external_id as ledger_external_id,
-              rm.name as remote_name
+      `SELECT r.id, r.schedule_id, r.status,
+              r.started_at, r.finished_at, r.error_message, r.bytes_total,
+              r.backup_filename
        FROM backup_runs r
-       LEFT JOIN ledgers l ON r.ledger_id = l.id
-       LEFT JOIN backup_remotes rm ON r.remote_id = rm.id
        ORDER BY r.started_at DESC
        LIMIT ? OFFSET ?`
     )
     .bind(limit, offset)
     .all<{
-      id: string;
-      schedule_id: string | null;
-      ledger_id: string;
-      remote_id: string | null;
+      id: number;
+      schedule_id: number | null;
       status: string;
       started_at: string;
-      completed_at: string | null;
+      finished_at: string | null;
       error_message: string | null;
-      backup_size: number | null;
-      ledger_external_id: string;
-      remote_name: string | null;
+      bytes_total: number | null;
+      backup_filename: string | null;
     }>();
 
   const totalRow = await db.prepare('SELECT COUNT(*) as cnt FROM backup_runs').first<{ cnt: number }>();
 
   const runs = rows.results.map((row) => ({
-    id: row.id,
-    schedule_id: row.schedule_id,
-    ledger_id: row.ledger_external_id,
-    remote_id: row.remote_id,
-    remote_name: row.remote_name,
+    id: String(row.id),
+    schedule_id: row.schedule_id ? String(row.schedule_id) : null,
+    ledger_id: '',
+    remote_id: null,
+    remote_name: null,
     status: row.status,
     started_at: row.started_at,
-    completed_at: row.completed_at,
+    completed_at: row.finished_at,
     error_message: row.error_message,
-    backup_size: row.backup_size,
+    backup_size: row.bytes_total,
   }));
 
   return c.json({
