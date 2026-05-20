@@ -593,8 +593,6 @@ profileRouter.post('/me/avatar', async (c) => {
   const db = c.env.DB;
   const serverNow = nowUtc();
 
-  // 获取上传的文件（简化版，实际需要处理 FormData）
-  // Cloudflare Workers 支持 Request.formData()
   let fileId: string;
   let newVersion: number;
 
@@ -611,16 +609,21 @@ profileRouter.post('/me/avatar', async (c) => {
     const mimeType = file.type || 'image/png';
     const size = file.size;
 
-    // 计算 SHA256（简化，完整实现需要读取文件内容）
     const fileBuffer = await file.arrayBuffer();
     const hashBuffer = await crypto.subtle.digest('SHA-256', fileBuffer);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const sha256 = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 
-    // 存储路径
     const storagePath = `avatars/${userId}/${fileId}/${fileName}`;
 
-    // 插入 attachment_files 记录
+    const s3 = new S3Service(db, c.env);
+    if (await s3.isConfigured()) {
+      const uploadSuccess = await s3.upload(storagePath, fileBuffer, mimeType);
+      if (!uploadSuccess) {
+        return c.json({ error: 'Failed to upload avatar to S3' }, 500);
+      }
+    }
+
     await db
       .prepare(
         `INSERT INTO attachment_files
@@ -630,7 +633,6 @@ profileRouter.post('/me/avatar', async (c) => {
       .bind(fileId, userId, sha256, size, mimeType, fileName, storagePath, serverNow)
       .run();
 
-    // 更新 avatar_version
     const profile = await db
       .prepare('SELECT avatar_version FROM user_profiles WHERE user_id = ?')
       .bind(userId)
@@ -650,8 +652,10 @@ profileRouter.post('/me/avatar', async (c) => {
     return c.json({ error: 'Failed to upload avatar' }, 500);
   }
 
+  const avatarUrl = `/api/v1/profile/avatar/${userId}?v=${newVersion}`;
+
   return c.json({
-    avatar_url: fileId,
+    avatar_url: avatarUrl,
     avatar_version: newVersion,
   });
 });
