@@ -185,6 +185,8 @@ const zhCN = {
   'ops.device.header.lastSeen': '最近活跃',
   'ops.device.header.firstSeen': '首次登录',
   'ops.device.header.sessions': '会话数',
+  'ops.device.header.deviceModel': '设备型号',
+  'ops.device.header.osVersion': '系统版本',
   'ops.device.unknownName': '未知设备',
 
   'attachment.default': '附件',
