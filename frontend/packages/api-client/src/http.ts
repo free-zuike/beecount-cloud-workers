@@ -60,16 +60,47 @@ export function configureHttp(opts: { refreshToken?: RefreshFn | null; onLogout?
   logoutFn = opts.onLogout ?? null
 }
 
-async function parseResponse<T>(res: Response): Promise<T> {
+async function checkAuthErrorAndLogout(res: Response): Promise<{ isAuthError: boolean; text: string }> {
+  let text = ''
+  try {
+    text = await res.text()
+  } catch (_) {
+    // ignore
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    logoutFn?.()
+    return { isAuthError: true, text }
+  }
+
+  if (res.status === 500) {
+    try {
+      const json = JSON.parse(text) as any
+      const code = json?.error_code || json?.error?.code
+      if (code && code.startsWith('AUTH_')) {
+        logoutFn?.()
+        return { isAuthError: true, text }
+      }
+    } catch (_) {
+      // ignore parse errors
+    }
+  }
+
+  return { isAuthError: false, text }
+}
+
+async function parseResponse<T>(res: Response, text?: string): Promise<T> {
   if (!res.ok) {
+    if (text) {
+      throw await extractApiError(new Response(text, { status: res.status, headers: res.headers }))
+    }
     throw await extractApiError(res)
   }
-  // 204 No Content 或 Content-Length: 0 的响应 (DELETE 撤销/删除 PAT 这种)
-  // 没有 body,直接 `res.json()` 会抛 `Unexpected end of JSON input`。返
-  // `undefined as T` —— 调用方签名是 `Promise<void>` 时 OK,期望 JSON
-  // 的调用方本来就不会发出 204 请求。
   if (res.status === 204 || res.headers.get('content-length') === '0') {
     return undefined as T
+  }
+  if (text) {
+    return JSON.parse(text) as T
   }
   return res.json()
 }
@@ -135,68 +166,33 @@ type FetchMaker = (token: string) => Promise<Response>
  * Callers provide a factory that builds the request given the current token
  * string so we can replay the call with a refreshed token.
  */
-async function isAuthError(res: Response): Promise<boolean> {
-  if (res.status === 401 || res.status === 403) return true
-  if (res.status !== 500) return false
-  try {
-    const text = await res.text()
-    const json = JSON.parse(text) as any
-    const code = json?.error_code || json?.error?.code
-    if (code && code.startsWith('AUTH_')) return true
-  } catch (_) {
-    // ignore parse errors
-  }
-  return false
-}
+async function authedFetchAndParse<T>(makeRequest: FetchMaker, token: string): Promise<T> {
+  let res = await makeRequest(token)
+  const { isAuthError, text } = await checkAuthErrorAndLogout(res)
 
-async function authedFetch(makeRequest: FetchMaker, token: string): Promise<Response> {
-  const res = await makeRequest(token)
-  if (res.status === 401) {
-    try {
-      await res.text()
-    } catch (_) {
-      // ignore
-    }
-    if (!refreshFn) {
-      logoutFn?.()
-      return res
-    }
+  if (res.status === 401 && refreshFn) {
     try {
       const fresh = await doRefresh()
-      return await makeRequest(fresh)
+      res = await makeRequest(fresh)
+      const { isAuthError: retryIsAuthError, text: retryText } = await checkAuthErrorAndLogout(res)
+      return await parseResponse<T>(res, retryText)
     } catch (_) {
-      logoutFn?.()
-      return res
+      // Refresh failed, error already handled by checkAuthErrorAndLogout
     }
   }
-  if (res.status === 500) {
-    const text = await res.text()
-    try {
-      const json = JSON.parse(text) as any
-      const code = json?.error_code || json?.error?.code
-      if (code && code.startsWith('AUTH_')) {
-        logoutFn?.()
-      }
-    } catch (_) {
-      // ignore parse errors
-    }
-    throw await extractApiError(new Response(text, { status: res.status, headers: res.headers }))
-  }
-  return res
+
+  return await parseResponse<T>(res, text)
 }
 
 export async function authedGet<T>(path: string, token: string): Promise<T> {
-  const res = await authedFetch(
+  return authedFetchAndParse<T>(
     (tok) =>
       fetch(`${API_BASE}${path}`, {
         headers: authHeaders(tok),
-        // 数据是事件日志 + 最新快照驱动的，任何缓存命中都会让 refresh-after-write
-        // 看到上一份数据。显式拒绝，避免浏览器/中间 CDN 给同路径返回旧响应。
         cache: 'no-store'
       }),
     token
   )
-  return parseResponse<T>(res)
 }
 
 export async function authedPost<T>(
@@ -205,7 +201,7 @@ export async function authedPost<T>(
   body: unknown,
   idempotencyKey?: string
 ): Promise<T> {
-  const res = await authedFetch(
+  return authedFetchAndParse<T>(
     (tok) =>
       fetch(`${API_BASE}${path}`, {
         method: 'POST',
@@ -217,11 +213,10 @@ export async function authedPost<T>(
       }),
     token
   )
-  return parseResponse<T>(res)
 }
 
 export async function authedPatch<T>(path: string, token: string, body: unknown): Promise<T> {
-  const res = await authedFetch(
+  return authedFetchAndParse<T>(
     (tok) =>
       fetch(`${API_BASE}${path}`, {
         method: 'PATCH',
@@ -233,12 +228,11 @@ export async function authedPatch<T>(path: string, token: string, body: unknown)
       }),
     token
   )
-  return parseResponse<T>(res)
 }
 
 export async function authedDelete<T>(path: string, token: string, body?: unknown): Promise<T> {
   const hasBody = typeof body !== 'undefined'
-  const res = await authedFetch(
+  return authedFetchAndParse<T>(
     (tok) =>
       fetch(`${API_BASE}${path}`, {
         method: 'DELETE',
@@ -252,5 +246,4 @@ export async function authedDelete<T>(path: string, token: string, body?: unknow
       }),
     token
   )
-  return parseResponse<T>(res)
 }
