@@ -151,6 +151,43 @@ class S3Service {
             console.error('[S3] Error getting config from database:', error);
         }
 
+        // 尝试从备份配置中读取
+        try {
+            const backupRemote = await this.db
+                .prepare(
+                    'SELECT config_summary FROM backup_remotes WHERE backend_type = ? AND encrypted = 0 ORDER BY id DESC LIMIT 1'
+                )
+                .bind('s3')
+                .first<{ config_summary: string }>();
+
+            if (backupRemote && backupRemote.config_summary) {
+                const config = JSON.parse(backupRemote.config_summary);
+                if (config.access_key_id && config.secret_access_key && config.bucket) {
+                    const backupConfig = {
+                        id: 'backup_remote',
+                        name: 'Backup S3',
+                        type: 's3',
+                        savePath: 'backup_remote',
+                        accessKeyId: config.access_key_id,
+                        secretAccessKey: config.secret_access_key,
+                        region: config.region || 'auto',
+                        bucketName: config.bucket,
+                        endpoint: config.endpoint || 'https://s3.amazonaws.com',
+                        pathStyle: config.path_style !== undefined ? Boolean(config.path_style) : true,
+                        cdnDomain: config.cdn_domain || '',
+                        enabled: true,
+                        fixed: true
+                    };
+                    this.s3ConfigCache = backupConfig;
+                    this.s3ConfigCacheTime = now;
+                    console.log('[S3] Using config from backup_remotes');
+                    return backupConfig;
+                }
+            }
+        } catch (err) {
+            console.error('[S3] Failed to load config from backup_remotes:', err);
+        }
+
         // 回退到环境变量配置
         if (this.env.S3_ACCESS_KEY_ID) {
             const envConfig = {
@@ -174,6 +211,7 @@ class S3Service {
             return envConfig;
         }
 
+        console.log('[S3] No S3 config found');
         return null;
     }
 
