@@ -147,12 +147,17 @@ profileRouter.get('/me', async (c) => {
     return c.json({ error: 'User not found' }, 404);
   }
 
+  const avatarVersion = row.avatar_version ?? 0;
+  const avatarUrl = row.avatar_file_id 
+    ? `/api/v1/profile/avatar/${row.id}?v=${avatarVersion}`
+    : null;
+
   const response: UserProfileOut = {
     user_id: row.id,
     email: row.email,
     display_name: row.display_name,
-    avatar_url: row.avatar_file_id,
-    avatar_version: row.avatar_version ?? 0,
+    avatar_url: avatarUrl,
+    avatar_version: avatarVersion,
     income_is_red: row.income_is_red !== null ? Boolean(row.income_is_red) : null,
     theme_primary_color: row.theme_primary_color,
     appearance: safeJsonParse(row.appearance_json),
@@ -274,12 +279,17 @@ profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => 
     return c.json({ error: 'User not found' }, 404);
   }
 
+  const avatarVersion = row.avatar_version ?? 0;
+  const avatarUrl = row.avatar_file_id 
+    ? `/api/v1/profile/avatar/${row.id}?v=${avatarVersion}`
+    : null;
+
   const response: UserProfileOut = {
     user_id: row.id,
     email: row.email,
     display_name: row.display_name,
-    avatar_url: row.avatar_file_id,
-    avatar_version: row.avatar_version ?? 0,
+    avatar_url: avatarUrl,
+    avatar_version: avatarVersion,
     income_is_red: row.income_is_red !== null ? Boolean(row.income_is_red) : null,
     theme_primary_color: row.theme_primary_color,
     appearance: safeJsonParse(row.appearance_json),
@@ -457,6 +467,14 @@ profileRouter.post('/avatar', async (c) => {
 
     const storagePath = `avatars/${userId}/${fileId}/${fileName}`;
 
+    const s3 = new S3Service(db, c.env);
+    if (await s3.isConfigured()) {
+      const uploadSuccess = await s3.upload(storagePath, fileBuffer, mimeType);
+      if (!uploadSuccess) {
+        return c.json({ error: 'Failed to upload avatar to S3' }, 500);
+      }
+    }
+
     await db
       .prepare(
         `INSERT INTO attachment_files
@@ -485,8 +503,10 @@ profileRouter.post('/avatar', async (c) => {
     return c.json({ error: 'Failed to upload avatar' }, 500);
   }
 
+  const avatarUrl = `/api/v1/profile/avatar/${userId}?v=${newVersion}`;
+
   return c.json({
-    avatar_url: fileId,
+    avatar_url: avatarUrl,
     avatar_version: newVersion,
   });
 });
@@ -501,7 +521,7 @@ profileRouter.post('/avatar', async (c) => {
  * 功能说明：
  * - 公开端点，无需认证即可访问
  * - 按 user_id 查询用户头像
- * - 如果有头像文件，从 R2 返回
+ * - 如果有头像文件，直接返回图片内容
  * - 如果没有，返回默认的 SVG 头像
  */
 profileRouter.get('/avatar/:user_id', async (c) => {
@@ -538,7 +558,7 @@ profileRouter.get('/avatar/:user_id', async (c) => {
   if (profile.avatar_file_id) {
     const attachment = await db
       .prepare(
-        `SELECT mime_type, file_name, size_bytes
+        `SELECT mime_type, file_name, size_bytes, storage_path
          FROM attachment_files
          WHERE id = ?`
       )
@@ -547,17 +567,23 @@ profileRouter.get('/avatar/:user_id', async (c) => {
         mime_type: string | null;
         file_name: string | null;
         size_bytes: number;
+        storage_path: string;
       }>();
 
     if (attachment) {
-      return c.json({
-        file_id: attachment.file_name,
-        mime_type: attachment.mime_type,
-        size: attachment.size_bytes,
-        version: profile.avatar_version,
-        cache_control: cacheControl,
-        avatar_url: `/api/v1/attachments/${profile.avatar_file_id}`,
-      });
+      const s3 = new S3Service(db, c.env);
+      if (await s3.isConfigured()) {
+        const s3Response = await s3.download(attachment.storage_path);
+        if (s3Response) {
+          return new Response(s3Response.body, {
+            headers: {
+              'Content-Type': attachment.mime_type || 'image/png',
+              'Content-Length': String(attachment.size_bytes),
+              'Cache-Control': cacheControl,
+            },
+          });
+        }
+      }
     }
   }
 
@@ -566,15 +592,222 @@ profileRouter.get('/avatar/:user_id', async (c) => {
     <text x="64" y="72" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="white" text-anchor="middle">${initial}</text>
   </svg>`;
 
-  return c.json({
-    file_id: null,
-    mime_type: 'image/svg+xml',
-    size: new TextEncoder().encode(defaultAvatar).length,
-    version: 0,
-    cache_control: 'public, max-age=31536000',
-    avatar_url: `data:image/svg+xml;base64,${btoa(defaultAvatar)}`,
-    initial: initial,
+  const avatarBuffer = new TextEncoder().encode(defaultAvatar);
+  
+  return new Response(avatarBuffer, {
+    headers: {
+      'Content-Type': 'image/svg+xml',
+      'Content-Length': String(avatarBuffer.length),
+      'Cache-Control': 'public, max-age=31536000',
+    },
   });
 });
+
+/**
+ * S3 服务类（从 attachments.ts 提取，用于头像下载）
+ */
+class S3Service {
+  private db: D1Database;
+  private env: Bindings;
+  private s3ConfigCache: any = null;
+  private s3ConfigCacheTime: number = 0;
+  private CACHE_TTL_MS = 60000;
+
+  constructor(db: D1Database, env: Bindings) {
+    this.db = db;
+    this.env = env;
+  }
+
+  private async getS3Config(): Promise<any> {
+    const now = Date.now();
+    if (this.s3ConfigCache && (now - this.s3ConfigCacheTime) < this.CACHE_TTL_MS) {
+      return this.s3ConfigCache;
+    }
+
+    try {
+      const { getFirstEnabledS3Config } = await import('./sys_config');
+      const dbConfig = await getFirstEnabledS3Config(this.db, this.env);
+      if (dbConfig) {
+        this.s3ConfigCache = dbConfig;
+        this.s3ConfigCacheTime = now;
+        return dbConfig;
+      }
+    } catch {
+      // ignore
+    }
+
+    if (this.env.S3_ACCESS_KEY_ID) {
+      const envConfig = {
+        id: 1,
+        name: 'S3_env',
+        type: 's3',
+        savePath: 'environment variable',
+        accessKeyId: this.env.S3_ACCESS_KEY_ID,
+        secretAccessKey: this.env.S3_SECRET_ACCESS_KEY,
+        region: this.env.S3_REGION || 'us-east-1',
+        bucketName: this.env.S3_BUCKET_NAME,
+        endpoint: this.env.S3_ENDPOINT,
+        pathStyle: true,
+        cdnDomain: '',
+        enabled: true,
+        fixed: true
+      };
+      this.s3ConfigCache = envConfig;
+      this.s3ConfigCacheTime = now;
+      return envConfig;
+    }
+
+    return null;
+  }
+
+  async isConfigured(): Promise<boolean> {
+    const config = await this.getS3Config();
+    return config !== null;
+  }
+
+  async upload(key: string, body: ArrayBuffer, contentType: string): Promise<boolean> {
+    const config = await this.getS3Config();
+    if (!config) {
+      return false;
+    }
+
+    try {
+      const { url, headers } = await signRequest(
+        config.accessKeyId,
+        config.secretAccessKey,
+        config.region || 'us-east-1',
+        config.endpoint,
+        config.bucketName,
+        key,
+        'PUT',
+        contentType,
+        body.byteLength
+      );
+
+      const response = await fetch(url, {
+        method: 'PUT',
+        headers,
+        body
+      });
+
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async download(key: string): Promise<Response | null> {
+    const config = await this.getS3Config();
+    if (!config) {
+      return null;
+    }
+
+    try {
+      const { url, headers } = await signRequest(
+        config.accessKeyId,
+        config.secretAccessKey,
+        config.region || 'us-east-1',
+        config.endpoint,
+        config.bucketName,
+        key,
+        'GET',
+        'application/octet-stream',
+        0
+      );
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+
+      return response;
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function signRequest(
+    accessKey: string,
+    secretKey: string,
+    region: string,
+    endpoint: string,
+    bucket: string,
+    key: string,
+    method: string,
+    contentType: string,
+    bodyLength: number
+): Promise<{ url: string; headers: Record<string, string> }> {
+    const now = new Date();
+    const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
+    const dateStamp = amzDate.slice(0, 8);
+    const service = 's3';
+    
+    const url = `${endpoint}/${bucket}/${key}`;
+    const host = new URL(endpoint).host;
+    
+    const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:${amzDate}\n`;
+    const signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date';
+    const payloadHash = 'UNSIGNED-PAYLOAD';
+    
+    const canonicalRequest = `${method}\n/${bucket}/${key}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+    
+    const algorithm = 'AWS4-HMAC-SHA256';
+    const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+    const hashedCanonicalRequest = await sha256Hex(canonicalRequest);
+    const stringToSign = `${algorithm}\n${amzDate}\n${credentialScope}\n${hashedCanonicalRequest}`;
+    
+    const signingKey = await getSignatureKey(secretKey, dateStamp, region, service);
+    const signature = await hmacHex(signingKey, stringToSign);
+    
+    const authorizationHeader = `${algorithm} Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+    
+    return {
+        url,
+        headers: {
+            'Content-Type': contentType,
+            'X-Amz-Date': amzDate,
+            'X-Amz-Content-SHA256': payloadHash,
+            'Authorization': authorizationHeader
+        }
+    };
+}
+
+async function getSignatureKey(key: string, dateStamp: string, regionName: string, serviceName: string): Promise<Uint8Array> {
+    const kDate = await hmac(new TextEncoder().encode(`AWS4${key}`), dateStamp);
+    const kRegion = await hmac(kDate, regionName);
+    const kService = await hmac(kRegion, serviceName);
+    const kSigning = await hmac(kService, 'aws4_request');
+    return kSigning;
+}
+
+async function hmac(key: Uint8Array | ArrayBuffer, data: string): Promise<Uint8Array> {
+  const encoder = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    (key as ArrayBuffer),
+    { name: 'HMAC', hash: { name: 'SHA-256' } },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(data));
+  return new Uint8Array(signature);
+}
+
+async function sha256Hex(data: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(data));
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function hmacHex(key: Uint8Array, data: string): Promise<string> {
+    const signature = await hmac(key, data);
+    return Array.from(signature).map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 export default profileRouter;
