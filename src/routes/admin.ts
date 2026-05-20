@@ -131,12 +131,33 @@ adminRouter.use('/*', async (c, next) => {
   await next();
 });
 
+// Health check endpoint
+adminRouter.get('/health', async (c) => {
+  const db = c.env.DB;
+  
+  try {
+    await db.prepare('SELECT 1').first();
+    return c.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      database: 'connected',
+    });
+  } catch (error) {
+    return c.json({
+      status: 'unhealthy',
+      timestamp: new Date().toISOString(),
+      database: 'disconnected',
+      error: String(error),
+    }, 503);
+  }
+});
+
 // ---------------------------------------------------------------------------
-// GET /admin/overview - 获取系统概览
+// GET /admin/overview - 管理员概览
 // ---------------------------------------------------------------------------
 
 /**
- * 获取系统统计概览
+ * 管理员概览统计
  *
  * 功能说明：
  * - 返回各表的数量统计
