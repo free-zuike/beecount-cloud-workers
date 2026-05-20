@@ -309,6 +309,94 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
   const newChangeId = changeResult.meta.last_row_id as number;
   console.log('[WRITE] Ledger created successfully, changeId:', newChangeId);
 
+  // 自动创建默认分类
+  console.log('[WRITE] Creating default categories for new ledger...');
+  let createdCount = 0;
+  const parentSyncIds: Record<string, string> = {};
+
+  for (const cat of DEFAULT_CATEGORIES) {
+    const parentSyncId = randomUUID();
+    parentSyncIds[cat.name] = parentSyncId;
+
+    const payload: Record<string, unknown> = {
+      name: cat.name,
+      kind: cat.kind,
+      level: 1,
+      sort_order: cat.sort_order,
+      icon: cat.icon,
+      icon_type: 'emoji',
+      parent_name: null,
+    };
+
+    await db
+      .prepare(
+        `INSERT INTO sync_changes
+         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(userId, ledgerId, 'category', parentSyncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
+      .run();
+
+    await db
+      .prepare(
+        `INSERT INTO read_category_projection
+         (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+          icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+          parent_name, source_change_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        ledgerId, parentSyncId, userId, cat.name, cat.kind, 1,
+        cat.sort_order, cat.icon, 'emoji', null, null, null, null, 0,
+      )
+      .run();
+
+    createdCount++;
+
+    if (cat.children) {
+      for (const child of cat.children) {
+        const childSyncId = randomUUID();
+        const childPayload: Record<string, unknown> = {
+          name: child.name,
+          kind: cat.kind,
+          level: 2,
+          sort_order: cat.sort_order * 100 + (cat.children.indexOf(child) + 1),
+          icon: child.icon,
+          icon_type: 'emoji',
+          parent_name: cat.name,
+        };
+
+        await db
+          .prepare(
+            `INSERT INTO sync_changes
+             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(userId, ledgerId, 'category', childSyncId, 'upsert', safeJsonStringify(childPayload), serverNow, userId)
+          .run();
+
+        await db
+          .prepare(
+            `INSERT INTO read_category_projection
+             (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+              icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+              parent_name, source_change_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            ledgerId, childSyncId, userId, child.name, cat.kind, 2,
+            cat.sort_order * 100 + (cat.children.indexOf(child) + 1),
+            child.icon, 'emoji', null, null, null, cat.name, 0,
+          )
+          .run();
+
+        createdCount++;
+      }
+    }
+  }
+
+  console.log('[WRITE] Created', createdCount, 'default categories');
+
   return c.json({
     ledger_id: ledgerExternalId,
     base_change_id: 0,
