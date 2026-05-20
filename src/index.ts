@@ -344,7 +344,7 @@ const authMiddleware = async (c: any, next: () => Promise<void>, skipPaths: stri
 
 // /api/v1 前缀的路由认证
 app.use('/api/v1/*', async (c, next) => {
-  await authMiddleware(c, next, ['/api/v1/auth']);
+  await authMiddleware(c, next, ['/api/v1/auth', '/api/v1/profile/avatar']);
 });
 
 // /2fa 前缀的路由认证（蜜蜂记账 APP 使用 /2fa 路径）
