@@ -50,6 +50,224 @@ function safeJsonStringify(obj: unknown): string | null {
 }
 
 // ===========================
+// S3 服务类（用于头像上传下载）
+// ===========================
+
+type S3Bindings = {
+  DB: D1Database;
+  JWT_SECRET: string;
+  S3_ACCESS_KEY_ID?: string;
+  S3_SECRET_ACCESS_KEY?: string;
+  S3_REGION?: string;
+  S3_BUCKET_NAME?: string;
+  S3_ENDPOINT?: string;
+};
+
+class S3Service {
+  private db: D1Database;
+  private env: S3Bindings;
+  private s3ConfigCache: any = null;
+  private s3ConfigCacheTime: number = 0;
+  private CACHE_TTL_MS = 60000;
+
+  constructor(db: D1Database, env: S3Bindings) {
+    this.db = db;
+    this.env = env;
+  }
+
+  private async getS3Config(): Promise<any> {
+    const now = Date.now();
+    if (this.s3ConfigCache && (now - this.s3ConfigCacheTime) < this.CACHE_TTL_MS) {
+      return this.s3ConfigCache;
+    }
+
+    try {
+      const { getFirstEnabledS3Config } = await import('./sys_config');
+      const dbConfig = await getFirstEnabledS3Config(this.db, this.env as Bindings);
+      if (dbConfig) {
+        this.s3ConfigCache = dbConfig;
+        this.s3ConfigCacheTime = now;
+        return dbConfig;
+      }
+    } catch {
+      // ignore
+    }
+
+    if (this.env.S3_ACCESS_KEY_ID) {
+      const envConfig = {
+        id: 1,
+        name: 'S3_env',
+        type: 's3',
+        savePath: 'environment variable',
+        accessKeyId: this.env.S3_ACCESS_KEY_ID,
+        secretAccessKey: this.env.S3_SECRET_ACCESS_KEY,
+        region: this.env.S3_REGION || 'us-east-1',
+        bucketName: this.env.S3_BUCKET_NAME,
+        endpoint: this.env.S3_ENDPOINT,
+        pathStyle: true,
+        cdnDomain: '',
+        enabled: true,
+        fixed: true
+      };
+      this.s3ConfigCache = envConfig;
+      this.s3ConfigCacheTime = now;
+      return envConfig;
+    }
+
+    return null;
+  }
+
+  async isConfigured(): Promise<boolean> {
+    const config = await this.getS3Config();
+    return config !== null;
+  }
+
+  async upload(key: string, body: ArrayBuffer, contentType: string): Promise<boolean> {
+    const config = await this.getS3Config();
+    if (!config) {
+      return false;
+    }
+
+    try {
+      const { url, headers } = await signRequest(
+        config.accessKeyId,
+        config.secretAccessKey,
+        config.region || 'us-east-1',
+        config.endpoint,
+        config.bucketName,
+        key,
+        'PUT',
+        contentType,
+        body.byteLength
+      );
+
+      const response = await fetch(url, {
+        method: 'PUT',
+        headers,
+        body
+      });
+
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async download(key: string): Promise<Response | null> {
+    const config = await this.getS3Config();
+    if (!config) {
+      return null;
+    }
+
+    try {
+      const { url, headers } = await signRequest(
+        config.accessKeyId,
+        config.secretAccessKey,
+        config.region || 'us-east-1',
+        config.endpoint,
+        config.bucketName,
+        key,
+        'GET',
+        'application/octet-stream',
+        0
+      );
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+
+      return response;
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function signRequest(
+    accessKey: string,
+    secretKey: string,
+    region: string,
+    endpoint: string,
+    bucket: string,
+    key: string,
+    method: string,
+    contentType: string,
+    bodyLength: number
+): Promise<{ url: string; headers: Record<string, string> }> {
+    const now = new Date();
+    const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
+    const dateStamp = amzDate.slice(0, 8);
+    const service = 's3';
+    
+    const url = `${endpoint}/${bucket}/${key}`;
+    const host = new URL(endpoint).host;
+    
+    const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:${amzDate}\n`;
+    const signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date';
+    const payloadHash = 'UNSIGNED-PAYLOAD';
+    
+    const canonicalRequest = `${method}\n/${bucket}/${key}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+    
+    const algorithm = 'AWS4-HMAC-SHA256';
+    const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+    const hashedCanonicalRequest = await sha256Hex(canonicalRequest);
+    const stringToSign = `${algorithm}\n${amzDate}\n${credentialScope}\n${hashedCanonicalRequest}`;
+    
+    const signingKey = await getSignatureKey(secretKey, dateStamp, region, service);
+    const signature = await hmacHex(signingKey, stringToSign);
+    
+    const authorizationHeader = `${algorithm} Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+    
+    return {
+        url,
+        headers: {
+            'Content-Type': contentType,
+            'X-Amz-Date': amzDate,
+            'X-Amz-Content-SHA256': payloadHash,
+            'Authorization': authorizationHeader
+        }
+    };
+}
+
+async function getSignatureKey(key: string, dateStamp: string, regionName: string, serviceName: string): Promise<Uint8Array> {
+    const kDate = await hmac(new TextEncoder().encode(`AWS4${key}`), dateStamp);
+    const kRegion = await hmac(kDate, regionName);
+    const kService = await hmac(kRegion, serviceName);
+    const kSigning = await hmac(kService, 'aws4_request');
+    return kSigning;
+}
+
+async function hmac(key: Uint8Array | ArrayBuffer, data: string): Promise<Uint8Array> {
+  const encoder = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    (key as ArrayBuffer),
+    { name: 'HMAC', hash: { name: 'SHA-256' } },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(data));
+  return new Uint8Array(signature);
+}
+
+async function sha256Hex(data: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(data));
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function hmacHex(key: Uint8Array, data: string): Promise<string> {
+    const signature = await hmac(key, data);
+    return Array.from(signature).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ===========================
 // Schema 定义
 // ===========================
 
@@ -602,212 +820,5 @@ profileRouter.get('/avatar/:user_id', async (c) => {
     },
   });
 });
-
-/**
- * S3 服务类（从 attachments.ts 提取，用于头像下载）
- */
-class S3Service {
-  private db: D1Database;
-  private env: Bindings;
-  private s3ConfigCache: any = null;
-  private s3ConfigCacheTime: number = 0;
-  private CACHE_TTL_MS = 60000;
-
-  constructor(db: D1Database, env: Bindings) {
-    this.db = db;
-    this.env = env;
-  }
-
-  private async getS3Config(): Promise<any> {
-    const now = Date.now();
-    if (this.s3ConfigCache && (now - this.s3ConfigCacheTime) < this.CACHE_TTL_MS) {
-      return this.s3ConfigCache;
-    }
-
-    try {
-      const { getFirstEnabledS3Config } = await import('./sys_config');
-      const dbConfig = await getFirstEnabledS3Config(this.db, this.env);
-      if (dbConfig) {
-        this.s3ConfigCache = dbConfig;
-        this.s3ConfigCacheTime = now;
-        return dbConfig;
-      }
-    } catch {
-      // ignore
-    }
-
-    if (this.env.S3_ACCESS_KEY_ID) {
-      const envConfig = {
-        id: 1,
-        name: 'S3_env',
-        type: 's3',
-        savePath: 'environment variable',
-        accessKeyId: this.env.S3_ACCESS_KEY_ID,
-        secretAccessKey: this.env.S3_SECRET_ACCESS_KEY,
-        region: this.env.S3_REGION || 'us-east-1',
-        bucketName: this.env.S3_BUCKET_NAME,
-        endpoint: this.env.S3_ENDPOINT,
-        pathStyle: true,
-        cdnDomain: '',
-        enabled: true,
-        fixed: true
-      };
-      this.s3ConfigCache = envConfig;
-      this.s3ConfigCacheTime = now;
-      return envConfig;
-    }
-
-    return null;
-  }
-
-  async isConfigured(): Promise<boolean> {
-    const config = await this.getS3Config();
-    return config !== null;
-  }
-
-  async upload(key: string, body: ArrayBuffer, contentType: string): Promise<boolean> {
-    const config = await this.getS3Config();
-    if (!config) {
-      return false;
-    }
-
-    try {
-      const { url, headers } = await signRequest(
-        config.accessKeyId,
-        config.secretAccessKey,
-        config.region || 'us-east-1',
-        config.endpoint,
-        config.bucketName,
-        key,
-        'PUT',
-        contentType,
-        body.byteLength
-      );
-
-      const response = await fetch(url, {
-        method: 'PUT',
-        headers,
-        body
-      });
-
-      return response.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  async download(key: string): Promise<Response | null> {
-    const config = await this.getS3Config();
-    if (!config) {
-      return null;
-    }
-
-    try {
-      const { url, headers } = await signRequest(
-        config.accessKeyId,
-        config.secretAccessKey,
-        config.region || 'us-east-1',
-        config.endpoint,
-        config.bucketName,
-        key,
-        'GET',
-        'application/octet-stream',
-        0
-      );
-
-      const response = await fetch(url, {
-        method: 'GET',
-        headers
-      });
-
-      if (!response.ok) {
-        return null;
-      }
-
-      return response;
-    } catch {
-      return null;
-    }
-  }
-}
-
-async function signRequest(
-    accessKey: string,
-    secretKey: string,
-    region: string,
-    endpoint: string,
-    bucket: string,
-    key: string,
-    method: string,
-    contentType: string,
-    bodyLength: number
-): Promise<{ url: string; headers: Record<string, string> }> {
-    const now = new Date();
-    const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
-    const dateStamp = amzDate.slice(0, 8);
-    const service = 's3';
-    
-    const url = `${endpoint}/${bucket}/${key}`;
-    const host = new URL(endpoint).host;
-    
-    const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:${amzDate}\n`;
-    const signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date';
-    const payloadHash = 'UNSIGNED-PAYLOAD';
-    
-    const canonicalRequest = `${method}\n/${bucket}/${key}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
-    
-    const algorithm = 'AWS4-HMAC-SHA256';
-    const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
-    const hashedCanonicalRequest = await sha256Hex(canonicalRequest);
-    const stringToSign = `${algorithm}\n${amzDate}\n${credentialScope}\n${hashedCanonicalRequest}`;
-    
-    const signingKey = await getSignatureKey(secretKey, dateStamp, region, service);
-    const signature = await hmacHex(signingKey, stringToSign);
-    
-    const authorizationHeader = `${algorithm} Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-    
-    return {
-        url,
-        headers: {
-            'Content-Type': contentType,
-            'X-Amz-Date': amzDate,
-            'X-Amz-Content-SHA256': payloadHash,
-            'Authorization': authorizationHeader
-        }
-    };
-}
-
-async function getSignatureKey(key: string, dateStamp: string, regionName: string, serviceName: string): Promise<Uint8Array> {
-    const kDate = await hmac(new TextEncoder().encode(`AWS4${key}`), dateStamp);
-    const kRegion = await hmac(kDate, regionName);
-    const kService = await hmac(kRegion, serviceName);
-    const kSigning = await hmac(kService, 'aws4_request');
-    return kSigning;
-}
-
-async function hmac(key: Uint8Array | ArrayBuffer, data: string): Promise<Uint8Array> {
-  const encoder = new TextEncoder();
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    (key as ArrayBuffer),
-    { name: 'HMAC', hash: { name: 'SHA-256' } },
-    false,
-    ['sign']
-  );
-  const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(data));
-  return new Uint8Array(signature);
-}
-
-async function sha256Hex(data: string): Promise<string> {
-    const encoder = new TextEncoder();
-    const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(data));
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-async function hmacHex(key: Uint8Array, data: string): Promise<string> {
-    const signature = await hmac(key, data);
-    return Array.from(signature).map(b => b.toString(16).padStart(2, '0')).join('');
-}
 
 export default profileRouter;
