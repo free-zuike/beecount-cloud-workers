@@ -272,6 +272,66 @@ app.use('*', async (c, next) => {
 app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
 /**
+ * 测试端点 - 在所有中间件和其他路由之前！
+ */
+app.get('/api/v1/test-route', (c) => c.json({ 
+  message: 'Test route is working!', 
+  time: new Date().toISOString() 
+}));
+
+// 我们要的关键路由 - 在所有认证之前！
+app.post('/api/v1/admin/backup/test-public', (c) => 
+  c.json({ message: 'Public test endpoint works!', time: new Date().toISOString() })
+);
+
+app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
+  try {
+    const db = c.env.DB;
+    const scheduleId = c.req.param('id');
+    const serverNow = new Date().toISOString();
+
+    const schedule = await db
+      .prepare('SELECT id, name, user_id FROM backup_schedules WHERE id = ?')
+      .bind(scheduleId)
+      .first<{ id: number; name: string; user_id: string }>();
+
+    if (!schedule) {
+      return c.json({ error: 'Schedule not found' }, 404);
+    }
+
+    const ledger = await db
+      .prepare('SELECT id FROM ledgers WHERE user_id = ? LIMIT 1')
+      .bind(schedule.user_id)
+      .first<{ id: string }>();
+
+    if (!ledger) {
+      return c.json({ error: 'Ledger not found' }, 404);
+    }
+
+    const runId = crypto.randomUUID();
+    await db
+      .prepare(
+        `INSERT INTO backup_runs (id, schedule_id, ledger_id, remote_id, status, started_at)
+         VALUES (?, ?, ?, NULL, 'pending', ?)`
+      )
+      .bind(runId, scheduleId, ledger.id, serverNow)
+      .run();
+
+    return c.json({
+      id: runId,
+      schedule_id: Number(scheduleId),
+      schedule_name: schedule.name,
+      status: 'pending',
+      started_at: serverNow,
+      message: 'Backup scheduled. Use /admin/backup/runs to check status.',
+    }, 202);
+  } catch (e) {
+    console.error('Error in run-now handler:', e);
+    return c.json({ error: 'Internal server error', detail: String(e) }, 500);
+  }
+});
+
+/**
  * API 版本信息
  */
 app.get('/api/v1/version', (c) =>
@@ -349,7 +409,12 @@ const authMiddleware = async (c: any, next: () => Promise<void>, skipPaths: stri
 
 // /api/v1 前缀的路由认证
 app.use('/api/v1/*', async (c, next) => {
-  await authMiddleware(c, next, ['/api/v1/auth', '/api/v1/profile/avatar']);
+  await authMiddleware(c, next, [
+    '/api/v1/auth', 
+    '/api/v1/profile/avatar',
+    '/api/v1/test-route',
+    '/api/v1/admin/backup/test-public'
+  ]);
 });
 
 // /2fa 前缀的路由认证（蜜蜂记账 APP 使用 /2fa 路径）
@@ -372,59 +437,6 @@ app.use('/notifications/*', async (c, next) => authMiddleware(c, next));
 // ===========================
 // 路由注册
 // ===========================
-
-// 直接硬编码测试端点 - 放在所有路由之前！
-app.post('/api/v1/admin/backup/test-route', (c) => {
-  return c.json({ message: 'Direct test route works!', time: new Date().toISOString() });
-});
-
-// 临时直接定义 schedules/:id/run-now 路由
-app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
-  try {
-    const db = c.env.DB;
-    const scheduleId = c.req.param('id');
-    const serverNow = new Date().toISOString();
-
-    const schedule = await db
-      .prepare('SELECT id, name, user_id FROM backup_schedules WHERE id = ?')
-      .bind(scheduleId)
-      .first<{ id: number; name: string; user_id: string }>();
-
-    if (!schedule) {
-      return c.json({ error: 'Schedule not found' }, 404);
-    }
-
-    const ledger = await db
-      .prepare('SELECT id FROM ledgers WHERE user_id = ? LIMIT 1')
-      .bind(schedule.user_id)
-      .first<{ id: string }>();
-
-    if (!ledger) {
-      return c.json({ error: 'Ledger not found' }, 404);
-    }
-
-    const runId = crypto.randomUUID();
-    await db
-      .prepare(
-        `INSERT INTO backup_runs (id, schedule_id, ledger_id, remote_id, status, started_at)
-         VALUES (?, ?, ?, NULL, 'pending', ?)`
-      )
-      .bind(runId, scheduleId, ledger.id, serverNow)
-      .run();
-
-    return c.json({
-      id: runId,
-      schedule_id: Number(scheduleId),
-      schedule_name: schedule.name,
-      status: 'pending',
-      started_at: serverNow,
-      message: 'Backup scheduled. Use /admin/backup/runs to check status.',
-    }, 202);
-  } catch (e) {
-    console.error('Error in run-now handler:', e);
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
 
 app.route('/api/v1/auth', authRouter);
 app.route('/api/v1/2fa', twoFactorRouter);
