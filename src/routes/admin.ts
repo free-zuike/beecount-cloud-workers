@@ -109,55 +109,13 @@ type Variables = {
 const adminRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // ---------------------------------------------------------------------------
-// POST /admin/grant-me-admin - 给自己授予管理员权限（临时，不需要 admin 权限）
-// ---------------------------------------------------------------------------
-
-/**
- * 给自己授予管理员权限（临时功能）
- *
- * 功能说明：
- * - 允许任何已登录用户给自己授予管理员权限
- * - 仅用于首次设置
- */
-adminRouter.post('/grant-me-admin', async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-
-  // 更新用户为管理员
-  await db
-    .prepare('UPDATE users SET is_admin = 1 WHERE id = ?')
-    .bind(userId)
-    .run();
-
-  const user = await db
-    .prepare('SELECT id, email, is_admin FROM users WHERE id = ?')
-    .bind(userId)
-    .first<{ id: string; email: string; is_admin: number }>();
-
-  return c.json({
-    success: true,
-    user: {
-      id: user?.id,
-      email: user?.email,
-      is_admin: Boolean(user?.is_admin),
-    },
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 管理员权限检查中间件（除了上面的 grant-me-admin 端点）
+// 管理员权限检查中间件
 // ---------------------------------------------------------------------------
 
 /**
  * 检查当前用户是否为管理员
  */
 adminRouter.use('/*', async (c, next) => {
-  // 跳过 /grant-me-admin 的权限检查
-  if (c.req.path === '/grant-me-admin') {
-    await next();
-    return;
-  }
-
   const userId = c.get('userId');
   const db = c.env.DB;
 
@@ -509,8 +467,6 @@ adminRouter.get('/devices', async (c) => {
 
   return c.json({ total: items.length, items });
 });
-
-
 
 // ---------------------------------------------------------------------------
 // GET /admin/logs - 获取最近日志（简化版）
