@@ -419,6 +419,79 @@ profileRouter.post('/me/avatar', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /profile/avatar - 上传当前用户头像
+// ---------------------------------------------------------------------------
+
+/**
+ * 上传当前用户头像（不带 /me 前缀）
+ */
+profileRouter.post('/avatar', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const serverNow = nowUtc();
+
+  if (!userId) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  let fileId: string;
+  let newVersion: number;
+
+  try {
+    const formData = await c.req.formData();
+    const file = formData.get('file') as File | null;
+
+    if (!file) {
+      return c.json({ error: 'No file provided' }, 400);
+    }
+
+    fileId = randomUUID();
+    const fileName = file.name || 'avatar';
+    const mimeType = file.type || 'image/png';
+    const size = file.size;
+
+    const fileBuffer = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', fileBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const sha256 = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+
+    const storagePath = `avatars/${userId}/${fileId}/${fileName}`;
+
+    await db
+      .prepare(
+        `INSERT INTO attachment_files
+         (id, ledger_id, user_id, sha256, size_bytes, mime_type, file_name, storage_path, attachment_kind, created_at)
+         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'category_icon', ?)`
+      )
+      .bind(fileId, userId, sha256, size, mimeType, fileName, storagePath, serverNow)
+      .run();
+
+    const profile = await db
+      .prepare('SELECT avatar_version FROM user_profiles WHERE user_id = ?')
+      .bind(userId)
+      .first<{ avatar_version: number }>();
+
+    newVersion = (profile?.avatar_version ?? 0) + 1;
+
+    await db
+      .prepare(
+        `UPDATE user_profiles
+         SET avatar_file_id = ?, avatar_version = ?, updated_at = ?
+         WHERE user_id = ?`
+      )
+      .bind(fileId, newVersion, serverNow, userId)
+      .run();
+  } catch (err) {
+    return c.json({ error: 'Failed to upload avatar' }, 500);
+  }
+
+  return c.json({
+    avatar_url: fileId,
+    avatar_version: newVersion,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /profile/avatar/:user_id - 下载用户头像
 // ---------------------------------------------------------------------------
 
