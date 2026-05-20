@@ -60,26 +60,16 @@ export function configureHttp(opts: { refreshToken?: RefreshFn | null; onLogout?
   logoutFn = opts.onLogout ?? null
 }
 
-async function drainResponse(res: Response): Promise<void> {
-  try {
-    await res.text()
-  } catch {
-    // ignore
-  }
-}
-
-async function parseResponse<T>(res: Response, text?: string): Promise<T> {
+async function parseResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    if (text) {
-      throw await extractApiError(new Response(text, { status: res.status, headers: res.headers }))
-    }
     throw await extractApiError(res)
   }
+  // 204 No Content 或 Content-Length: 0 的响应 (DELETE 撤销/删除 PAT 这种)
+  // 没有 body,直接 `res.json()` 会抛 `Unexpected end of JSON input`。返
+  // `undefined as T` —— 调用方签名是 `Promise<void>` 时 OK,期望 JSON
+  // 的调用方本来就不会发出 204 请求。
   if (res.status === 204 || res.headers.get('content-length') === '0') {
     return undefined as T
-  }
-  if (text) {
-    return JSON.parse(text) as T
   }
   return res.json()
 }
@@ -148,14 +138,17 @@ type FetchMaker = (token: string) => Promise<Response>
 async function authedFetch(makeRequest: FetchMaker, token: string): Promise<Response> {
   const res = await makeRequest(token)
   if (res.status !== 401) return res
-
-  await drainResponse(res)
-
+  // Drain the body so we don't leak the connection on node/fetch implementations.
+  try {
+    await res.text()
+  } catch (_) {
+    // ignore
+  }
   if (!refreshFn) {
+    // No refresh path configured — surface 401 so caller logs out explicitly.
     logoutFn?.()
     return res
   }
-
   try {
     const fresh = await doRefresh()
     return await makeRequest(fresh)
@@ -170,6 +163,8 @@ export async function authedGet<T>(path: string, token: string): Promise<T> {
     (tok) =>
       fetch(`${API_BASE}${path}`, {
         headers: authHeaders(tok),
+        // 数据是事件日志 + 最新快照驱动的，任何缓存命中都会让 refresh-after-write
+        // 看到上一份数据。显式拒绝，避免浏览器/中间 CDN 给同路径返回旧响应。
         cache: 'no-store'
       }),
     token
