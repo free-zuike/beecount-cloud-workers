@@ -771,6 +771,43 @@ backupRouter.delete('/schedules/:id', async (c) => {
   return c.json({ success: true });
 });
 
+/**
+ * 手动触发备份调度运行
+ */
+backupRouter.post('/schedules/:id/run-now', async (c) => {
+  const db = c.env.DB;
+  const scheduleId = c.req.param('id');
+  const serverNow = nowUtc();
+
+  const schedule = await db
+    .prepare('SELECT id, name, user_id FROM backup_schedules WHERE id = ?')
+    .bind(scheduleId)
+    .first<{ id: number; name: string; user_id: string }>();
+
+  if (!schedule) {
+    return c.json({ error: 'Schedule not found' }, 404);
+  }
+
+  const runId = randomUUID();
+
+  await db
+    .prepare(
+      `INSERT INTO backup_runs (id, schedule_id, ledger_id, remote_id, status, started_at)
+       VALUES (?, ?, NULL, NULL, 'pending', ?)`
+    )
+    .bind(runId, scheduleId, serverNow)
+    .run();
+
+  return c.json({
+    id: runId,
+    schedule_id: Number(scheduleId),
+    schedule_name: schedule.name,
+    status: 'pending',
+    started_at: serverNow,
+    message: 'Backup scheduled. Use /admin/backup/runs to check status.',
+  }, 202);
+});
+
 // ---------------------------------------------------------------------------
 // 备份运行管理
 // ---------------------------------------------------------------------------
