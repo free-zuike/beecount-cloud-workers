@@ -125,7 +125,7 @@ backupRouter.get('/remotes', async (c) => {
 
   const rows = await db
     .prepare(
-      `SELECT id, name, backend_type, config_json, is_default, created_at, updated_at
+      `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
        FROM backup_remotes
        ORDER BY created_at DESC`
     )
@@ -133,14 +133,14 @@ backupRouter.get('/remotes', async (c) => {
       id: string;
       name: string;
       backend_type: string;
-      config_json: string;
-      is_default: number;
+      config_summary: string;
+      encrypted: number;
       created_at: string;
       updated_at: string;
     }>();
 
   const remotes = rows.results.map((row) => {
-    const config = JSON.parse(row.config_json || '{}');
+    const config = JSON.parse(row.config_summary || '{}');
     const maskedConfig: Record<string, string> = {};
     for (const [key, value] of Object.entries(config)) {
       if (String(key).toLowerCase().includes('pass') || String(key).toLowerCase().includes('secret')) {
@@ -155,7 +155,7 @@ backupRouter.get('/remotes', async (c) => {
       name: row.name,
       backend_type: row.backend_type,
       config: maskedConfig,
-      is_default: Boolean(row.is_default),
+      encrypted: Boolean(row.encrypted),
       created_at: row.created_at,
       updated_at: row.updated_at,
     };
@@ -177,7 +177,7 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
 
   await db
     .prepare(
-      `INSERT INTO backup_remotes (id, name, backend_type, config_json, is_default, created_at, updated_at)
+      `INSERT INTO backup_remotes (id, name, backend_type, config_summary, encrypted, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
@@ -193,7 +193,7 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
 
   if (req.is_default) {
     await db
-      .prepare('UPDATE backup_remotes SET is_default = 0 WHERE id != ?')
+      .prepare('UPDATE backup_remotes SET encrypted = 0 WHERE id != ?')
       .bind(remoteId)
       .run();
   }
@@ -236,12 +236,11 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
   }
 
   if (req.config !== undefined) {
-    updates.push('config_json = ?');
+    updates.push('config_summary = ?');
     params.push(JSON.stringify(req.config));
   }
-
   if (req.is_default !== undefined) {
-    updates.push('is_default = ?');
+    updates.push('encrypted = ?');
     params.push(req.is_default ? 1 : 0);
   }
 
@@ -254,14 +253,14 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
 
   if (req.is_default) {
     await db
-      .prepare('UPDATE backup_remotes SET is_default = 0 WHERE id != ?')
-      .bind(remoteId)
+      .prepare('UPDATE backup_remotes SET encrypted = 0 WHERE id != ?')
+      .bind(id)
       .run();
   }
 
   const updated = await db
     .prepare(
-      `SELECT id, name, backend_type, config_json, is_default, created_at, updated_at
+      `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
        FROM backup_remotes WHERE id = ?`
     )
     .bind(remoteId)
@@ -269,8 +268,8 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
       id: string;
       name: string;
       backend_type: string;
-      config_json: string;
-      is_default: number;
+      config_summary: string;
+      encrypted: number;
       created_at: string;
       updated_at: string;
     }>();
@@ -279,8 +278,8 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
     id: updated?.id,
     name: updated?.name,
     backend_type: updated?.backend_type,
-    config: updated?.config_json ? JSON.parse(updated.config_json) : {},
-    is_default: Boolean(updated?.is_default),
+    config: updated?.config_summary ? JSON.parse(updated.config_summary) : {},
+    encrypted: Boolean(updated?.encrypted),
     created_at: updated?.created_at,
     updated_at: updated?.updated_at,
   });
