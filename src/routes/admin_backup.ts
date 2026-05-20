@@ -218,6 +218,11 @@ type Variables = {
 
 const backupRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
+// 测试端点 - 首先添加一个简单的测试路由
+backupRouter.get('/test', (c) => {
+  return c.json({ message: 'adminBackupRouter is working!', time: new Date().toISOString() });
+});
+
 // ---------------------------------------------------------------------------
 // 管理员权限检查
 // ---------------------------------------------------------------------------
