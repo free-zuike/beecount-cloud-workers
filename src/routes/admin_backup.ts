@@ -181,19 +181,20 @@ const RemoteTestSchema = z.object({
 
 const ScheduleCreateSchema = z.object({
   name: z.string().min(1).max(64),
-  ledger_id: z.string(),
-  remote_id: z.string().optional().nullable(),
-  cron_expression: z.string().min(1).max(64),
+  cron_expr: z.string().min(1).max(64),
   retention_days: z.number().int().min(1).max(365).optional(),
   enabled: z.boolean().optional(),
+  remote_ids: z.array(z.number()).optional().default([]),
+  include_attachments: z.boolean().optional().default(true),
 });
 
 const ScheduleUpdateSchema = z.object({
   name: z.string().min(1).max(64).optional(),
-  remote_id: z.string().nullable().optional(),
-  cron_expression: z.string().min(1).max(64).optional(),
+  cron_expr: z.string().min(1).max(64).optional(),
   retention_days: z.number().int().min(1).max(365).optional(),
   enabled: z.boolean().optional(),
+  remote_ids: z.array(z.number()).optional(),
+  include_attachments: z.boolean().optional(),
 });
 
 const RunNowSchema = z.object({
@@ -313,7 +314,7 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
     )
     .run();
 
-  const remoteId = result.lastRowId;
+  const remoteId = (result as any).lastRowId;
 
   if (req.is_default) {
     await db
@@ -605,8 +606,8 @@ backupRouter.get('/schedules', async (c) => {
 
   const rows = await db
     .prepare(
-      `SELECT s.id, s.name, s.user_id, s.cron_expr,
-              s.retention_days, s.enabled, s.created_at, s.updated_at,
+      `SELECT s.id, s.name, s.cron_expr,
+              s.retention_days, s.include_attachments, s.enabled, s.created_at,
               s.next_run_at, s.last_run_at, s.last_run_status
        FROM backup_schedules s
        ORDER BY s.created_at DESC`
@@ -617,6 +618,7 @@ backupRouter.get('/schedules', async (c) => {
       user_id: string;
       cron_expr: string;
       retention_days: number | null;
+      include_attachments: number;
       enabled: number;
       created_at: string;
       updated_at: string;
@@ -626,16 +628,17 @@ backupRouter.get('/schedules', async (c) => {
     }>();
 
   const schedules = rows.results.map((row) => ({
-    id: String(row.id),
+    id: Number(row.id),
     name: row.name,
-    ledger_id: '',
-    remote_id: null,
-    remote_name: null,
-    cron_expression: row.cron_expr,
+    cron_expr: row.cron_expr,
     retention_days: row.retention_days ?? 30,
+    include_attachments: Boolean(row.include_attachments),
     enabled: Boolean(row.enabled),
+    next_run_at: row.next_run_at,
+    last_run_at: row.last_run_at,
+    last_run_status: row.last_run_status,
+    remote_ids: [],
     created_at: row.created_at,
-    updated_at: row.updated_at,
   }));
 
   return c.json(schedules);
@@ -648,47 +651,40 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
   const db = c.env.DB;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
+  const userId = c.get('userId');
 
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE external_id = ?')
-    .bind(req.ledger_id)
-    .first<{ id: string; external_id: string }>();
-
-  if (!ledger) {
-    return c.json({ error: 'Ledger not found' }, 404);
-  }
-
-  const scheduleId = randomUUID();
-
-  await db
+  const insertResult = await db
     .prepare(
       `INSERT INTO backup_schedules
-       (id, name, ledger_id, remote_id, cron_expression, retention_days, enabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (name, user_id, cron_expr, retention_days, include_attachments, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
-      scheduleId,
       req.name,
-      ledger.id,
-      req.remote_id ?? null,
-      req.cron_expression,
+      userId,
+      req.cron_expr,
       req.retention_days ?? 30,
+      req.include_attachments !== false ? 1 : 0,
       req.enabled !== false ? 1 : 0,
       serverNow,
       serverNow
     )
     .run();
 
+  const scheduleId = Number((insertResult as any).lastRowId);
+
   return c.json({
     id: scheduleId,
     name: req.name,
-    ledger_id: req.ledger_id,
-    remote_id: req.remote_id,
-    cron_expression: req.cron_expression,
+    cron_expr: req.cron_expr,
     retention_days: req.retention_days ?? 30,
+    include_attachments: req.include_attachments ?? true,
     enabled: req.enabled ?? true,
+    next_run_at: null,
+    last_run_at: null,
+    last_run_status: null,
+    remote_ids: req.remote_ids,
     created_at: serverNow,
-    updated_at: serverNow,
   }, 201);
 });
 
@@ -718,19 +714,25 @@ backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), a
     params.push(req.name);
   }
 
-  if (req.remote_id !== undefined) {
+  if (req.remote_ids !== undefined) {
+    const remoteId = req.remote_ids.length > 0 ? String(req.remote_ids[0]) : null;
     updates.push('remote_id = ?');
-    params.push(req.remote_id);
+    params.push(remoteId);
   }
 
-  if (req.cron_expression !== undefined) {
+  if (req.cron_expr !== undefined) {
     updates.push('cron_expr = ?');
-    params.push(req.cron_expression);
+    params.push(req.cron_expr);
   }
 
   if (req.retention_days !== undefined) {
     updates.push('retention_days = ?');
     params.push(req.retention_days);
+  }
+
+  if (req.include_attachments !== undefined) {
+    updates.push('include_attachments = ?');
+    params.push(req.include_attachments ? 1 : 0);
   }
 
   if (req.enabled !== undefined) {
