@@ -168,16 +168,21 @@ type FetchMaker = (token: string) => Promise<Response>
  */
 async function authedFetchAndParse<T>(makeRequest: FetchMaker, token: string): Promise<T> {
   let res = await makeRequest(token)
-  const { isAuthError, text } = await checkAuthErrorAndLogout(res)
+  let text: string | undefined
 
-  if (res.status === 401 && refreshFn) {
-    try {
-      const fresh = await doRefresh()
-      res = await makeRequest(fresh)
-      const { isAuthError: retryIsAuthError, text: retryText } = await checkAuthErrorAndLogout(res)
-      return await parseResponse<T>(res, retryText)
-    } catch (_) {
-      // Refresh failed, error already handled by checkAuthErrorAndLogout
+  if (res.status === 401 || res.status === 403 || res.status === 500) {
+    const result = await checkAuthErrorAndLogout(res)
+    text = result.text
+
+    if (res.status === 401 && refreshFn) {
+      try {
+        const fresh = await doRefresh()
+        res = await makeRequest(fresh)
+        const retryResult = await checkAuthErrorAndLogout(res)
+        return await parseResponse<T>(res, retryResult.text)
+      } catch (_) {
+        // Refresh failed, error already handled by checkAuthErrorAndLogout
+      }
     }
   }
 
