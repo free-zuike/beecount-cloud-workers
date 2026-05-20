@@ -19,8 +19,8 @@ CREATE INDEX IF NOT EXISTS idx_backup_remotes_backend_type ON backup_remotes(bac
 CREATE TABLE IF NOT EXISTS backup_schedules (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
-    remote_id TEXT REFERENCES backup_remotes(id) ON DELETE SET NULL,
+    ledger_id TEXT NOT NULL,
+    remote_id TEXT,
     cron_expression TEXT NOT NULL,
     retention_days INTEGER DEFAULT 30,
     enabled BOOLEAN DEFAULT 1 NOT NULL,
@@ -35,9 +35,9 @@ CREATE INDEX IF NOT EXISTS idx_backup_schedules_enabled ON backup_schedules(enab
 -- 3. 创建 backup_runs 表
 CREATE TABLE IF NOT EXISTS backup_runs (
     id TEXT PRIMARY KEY,
-    schedule_id TEXT REFERENCES backup_schedules(id) ON DELETE SET NULL,
-    ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
-    remote_id TEXT REFERENCES backup_remotes(id) ON DELETE SET NULL,
+    schedule_id TEXT,
+    ledger_id TEXT NOT NULL,
+    remote_id TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     error_message TEXT,
     backup_size INTEGER,
