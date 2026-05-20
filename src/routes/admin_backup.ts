@@ -36,6 +36,128 @@ function nowUtc(): string {
 }
 
 // ===========================
+// S3 签名辅助函数
+// ===========================
+
+async function signS3Request(
+    accessKey: string,
+    secretKey: string,
+    region: string,
+    endpoint: string,
+    bucket: string,
+    key: string,
+    method: string
+): Promise<{ url: string; headers: Record<string, string> }> {
+    const now = new Date();
+    const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
+    const dateStamp = amzDate.slice(0, 8);
+    const service = 's3';
+    
+    const url = `${endpoint}/${bucket}/${key}`;
+    const host = new URL(endpoint).host;
+    
+    const canonicalHeaders = `host:${host}\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:${amzDate}\n`;
+    const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+    const payloadHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+    
+    const canonicalRequest = `${method}\n/${bucket}/${key}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+    
+    const algorithm = 'AWS4-HMAC-SHA256';
+    const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+    
+    const hashedCanonicalRequest = await sha256Hex(canonicalRequest);
+    const stringToSign = `${algorithm}\n${amzDate}\n${credentialScope}\n${hashedCanonicalRequest}`;
+    
+    const signingKey = await getSignatureKey(secretKey, dateStamp, region, service);
+    const signature = await hmacHex(signingKey, stringToSign);
+    
+    const authorizationHeader = `${algorithm} Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+    
+    return {
+        url,
+        headers: {
+            'Host': host,
+            'x-amz-date': amzDate,
+            'x-amz-content-sha256': payloadHash,
+            'Authorization': authorizationHeader
+        }
+    };
+}
+
+async function getSignatureKey(key: string, dateStamp: string, regionName: string, serviceName: string): Promise<Uint8Array> {
+    const kDate = await hmac(new TextEncoder().encode(`AWS4${key}`), dateStamp);
+    const kRegion = await hmac(kDate, regionName);
+    const kService = await hmac(kRegion, serviceName);
+    const kSigning = await hmac(kService, 'aws4_request');
+    return kSigning;
+}
+
+async function hmac(key: Uint8Array | ArrayBuffer, data: string): Promise<Uint8Array> {
+    const encoder = new TextEncoder();
+    const cryptoKey = await crypto.subtle.importKey(
+        'raw',
+        (key as ArrayBuffer),
+        { name: 'HMAC', hash: { name: 'SHA-256' } },
+        false,
+        ['sign']
+    );
+    const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(data));
+    return new Uint8Array(signature);
+}
+
+async function sha256Hex(data: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(data));
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function hmacHex(key: Uint8Array, data: string): Promise<string> {
+    const signature = await hmac(key, data);
+    return Array.from(signature).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function testS3Connection(
+    endpoint: string,
+    bucket: string,
+    accessKey: string,
+    secretKey: string,
+    region: string
+): Promise<{ ok: boolean; message: string }> {
+    try {
+        const { url, headers } = await signS3Request(
+            accessKey,
+            secretKey,
+            region,
+            endpoint,
+            bucket.replace(/^\/+/, ''),
+            '',
+            'HEAD'
+        );
+        
+        console.log('[Backup S3 Test] Testing connection to:', url);
+        
+        const response = await fetch(url, {
+            method: 'HEAD',
+            headers
+        });
+        
+        console.log('[Backup S3 Test] Response status:', response.status);
+        
+        if (response.ok) {
+            return { ok: true, message: `S3 connection successful: ${bucket} at ${endpoint}` };
+        } else {
+            const errorText = await response.text().catch(() => '');
+            return { ok: false, message: `S3 connection failed: HTTP ${response.status} ${response.statusText} ${errorText}`.slice(0, 200) };
+        }
+    } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        console.error('[Backup S3 Test] Error:', errorMsg);
+        return { ok: false, message: `S3 connection error: ${errorMsg}` };
+    }
+}
+
+// ===========================
 // Schema 定义
 // ===========================
 
@@ -383,11 +505,18 @@ backupRouter.post('/remotes/:id/test', async (c) => {
       case 's3':
         const s3Endpoint = config.endpoint || 'https://s3.amazonaws.com';
         const s3Bucket = config.bucket;
+        const s3AccessKey = config.access_key_id;
+        const s3SecretKey = config.secret_access_key;
+        const s3Region = config.region || 'auto';
+        
         if (!s3Bucket) {
           testResult.message = 'Bucket name is required';
+        } else if (!s3AccessKey || !s3SecretKey) {
+          testResult.message = 'Access key or secret key is missing';
         } else {
-          testResult.ok = true;
-          testResult.message = `S3 remote configured: ${s3Bucket} at ${s3Endpoint}`;
+          const result = await testS3Connection(s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, s3Region);
+          testResult.ok = result.ok;
+          testResult.message = result.message;
         }
         break;
 
@@ -429,11 +558,18 @@ backupRouter.post('/remotes/test', zValidator('json', RemoteTestSchema), async (
       case 's3':
         const s3Endpoint = config.endpoint || 'https://s3.amazonaws.com';
         const s3Bucket = config.bucket;
+        const s3AccessKey = config.access_key_id;
+        const s3SecretKey = config.secret_access_key;
+        const s3Region = config.region || 'auto';
+        
         if (!s3Bucket) {
           testResult.message = 'Bucket name is required';
+        } else if (!s3AccessKey || !s3SecretKey) {
+          testResult.message = 'Access key or secret key is missing';
         } else {
-          testResult.ok = true;
-          testResult.message = `S3 remote configured: ${s3Bucket} at ${s3Endpoint}`;
+          const result = await testS3Connection(s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, s3Region);
+          testResult.ok = result.ok;
+          testResult.message = result.message;
         }
         break;
 
