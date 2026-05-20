@@ -258,9 +258,26 @@ app.get('/ws', async (c) => {
 // ===========================
 // 前端静态文件服务 (SPA 支持)
 // ===========================
-app.get('*', async (c) => {
+app.get('*', async (c, next) => {
   const url = new URL(c.req.url);
   const pathname = url.pathname;
+  
+  // 如果是 API 路径或蜜蜂记账 APP 兼容路径，不处理，继续匹配后续路由
+  if (pathname.startsWith('/api/') || 
+      pathname.startsWith('/sync/') || 
+      pathname.startsWith('/read/') || 
+      pathname.startsWith('/write/') || 
+      pathname.startsWith('/devices/') || 
+      pathname.startsWith('/profile/') || 
+      pathname.startsWith('/attachments/') || 
+      pathname.startsWith('/import/') || 
+      pathname.startsWith('/ai/') || 
+      pathname.startsWith('/backup/') || 
+      pathname.startsWith('/notifications/') ||
+      pathname.startsWith('/2fa/') ||
+      pathname === '/ws') {
+    return next();
+  }
   
   // 静态资源文件 (assets, branding, icons, manifest.webmanifest, sw.js)
   // 这些文件应该直接从 ASSETS 获取
