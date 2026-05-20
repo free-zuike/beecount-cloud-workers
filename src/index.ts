@@ -391,8 +391,8 @@ app.route('/api/v1/ai', aiRouter);
 app.route('/api/v1/backup', backupRouter);
 app.route('/api/v1/notifications', notificationsRouter);
 app.route('/api/v1/mcp-calls', mcpCallsRouter);
-app.route('/api/v1/admin', adminRouter);
 app.route('/api/v1/admin/backup', adminBackupRouter);
+app.route('/api/v1/admin', adminRouter);
 app.route('/api/v1/sys-config', sysConfigRouter);
 
 // 前端使用的路径：/api/v1/profile/mcp-calls
