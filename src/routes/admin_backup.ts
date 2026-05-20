@@ -184,7 +184,7 @@ const ScheduleCreateSchema = z.object({
   cron_expr: z.string().min(1).max(64),
   retention_days: z.number().int().min(1).max(365).optional(),
   enabled: z.boolean().optional(),
-  remote_ids: z.array(z.number()).optional().default([]),
+  remote_ids: z.array(z.union([z.string(), z.number()])).optional().default([]),
   include_attachments: z.boolean().optional().default(true),
 });
 
@@ -193,7 +193,7 @@ const ScheduleUpdateSchema = z.object({
   cron_expr: z.string().min(1).max(64).optional(),
   retention_days: z.number().int().min(1).max(365).optional(),
   enabled: z.boolean().optional(),
-  remote_ids: z.array(z.number()).optional(),
+  remote_ids: z.array(z.union([z.string(), z.number()])).optional(),
   include_attachments: z.boolean().optional(),
 });
 
