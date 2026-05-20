@@ -189,15 +189,27 @@ export function OpsDevicesPanel({ rows, onReload }: OpsDevicesPanelProps) {
                             <span className="font-mono text-[10px]">{row.last_ip}</span>
                           </div>
                         ) : null}
+                        {row.platform ? (
+                          <div className="flex items-center justify-between gap-2">
+                            <span>{t('ops.device.header.platform')}</span>
+                            <span className="text-[10px]">{row.platform}</span>
+                          </div>
+                        ) : null}
+                        {row.app_version ? (
+                          <div className="flex items-center justify-between gap-2">
+                            <span>{t('ops.device.header.version')}</span>
+                            <span className="text-[10px]">{row.app_version}</span>
+                          </div>
+                        ) : null}
                         {row.device_model ? (
                           <div className="flex items-center justify-between gap-2">
-                            <span>{t('ops.device.header.deviceModel')}</span>
+                            <span>{t('ops.device.header.device')}</span>
                             <span className="text-[10px]">{row.device_model}</span>
                           </div>
                         ) : null}
                         {row.os_version ? (
                           <div className="flex items-center justify-between gap-2">
-                            <span>{t('ops.device.header.osVersion')}</span>
+                            <span>{t('ops.device.header.os')}</span>
                             <span className="text-[10px]">{row.os_version}</span>
                           </div>
                         ) : null}

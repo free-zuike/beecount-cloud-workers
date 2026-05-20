@@ -640,8 +640,6 @@ const en = {
   'ops.device.header.lastSeen': 'Last active',
   'ops.device.header.firstSeen': 'First login',
   'ops.device.header.sessions': 'Sessions',
-  'ops.device.header.deviceModel': 'Device Model',
-  'ops.device.header.osVersion': 'OS Version',
   'ops.device.unknownName': 'Unknown device',
 
   'attachment.default': 'Attachment',
