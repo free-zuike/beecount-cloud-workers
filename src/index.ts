@@ -22,18 +22,120 @@ function generateRandomPassword(): string {
   return password;
 }
 
+// 初始化数据库表（备用方案）
+async function initializeDatabase(db: D1Database): Promise<void> {
+  try {
+    // 检查 users 表是否存在
+    const tableCheck = await db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+      .first();
+
+    if (tableCheck) {
+      console.log('[INIT] Database tables already exist');
+      return;
+    }
+
+    console.log('[INIT] Creating database tables...');
+
+    // 创建所有表
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        is_admin BOOLEAN DEFAULT 0 NOT NULL,
+        is_enabled BOOLEAN DEFAULT 1 NOT NULL,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        totp_secret_encrypted TEXT,
+        totp_enabled BOOLEAN DEFAULT 0 NOT NULL,
+        totp_enabled_at TEXT
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS user_profiles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        display_name TEXT,
+        avatar_file_id TEXT,
+        avatar_version INTEGER DEFAULT 0,
+        income_is_red BOOLEAN DEFAULT 1,
+        theme_primary_color TEXT,
+        appearance_json TEXT,
+        ai_config_json TEXT,
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS ledgers (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        external_id TEXT NOT NULL,
+        name TEXT,
+        currency TEXT DEFAULT 'CNY' NOT NULL,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        UNIQUE(user_id, external_id)
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS sync_changes (
+        change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        entity_type TEXT NOT NULL,
+        entity_sync_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        updated_by_device_id TEXT,
+        updated_by_user_id TEXT
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS read_category_projection (
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        sync_id TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT,
+        kind TEXT,
+        level INTEGER,
+        sort_order INTEGER,
+        icon TEXT,
+        icon_type TEXT,
+        custom_icon_path TEXT,
+        icon_cloud_file_id TEXT,
+        icon_cloud_sha256 TEXT,
+        parent_name TEXT,
+        source_change_id INTEGER DEFAULT 0,
+        PRIMARY KEY (ledger_id, sync_id)
+      )
+    `).run();
+
+    console.log('[INIT] Database tables created successfully');
+  } catch (error) {
+    console.error('[INIT] Failed to initialize database:', error);
+  }
+}
+
 // 初始化默认管理员账户
 async function initializeAdmin(db: D1Database): Promise<void> {
   try {
+    console.log('🔍 [INIT] Checking for existing admin user...');
+    
     // 检查是否已有管理员账户
     const adminCount = await db
       .prepare('SELECT COUNT(*) as count FROM users WHERE is_admin = 1')
       .first<{ count: number }>();
 
     if (adminCount && adminCount.count > 0) {
-      console.log('[INIT] Admin user already exists, skipping initialization');
+      console.log('✅ [INIT] Admin user already exists, skipping initialization');
       return;
     }
+
+    console.log('🆕 [INIT] Creating default admin user...');
 
     // 生成随机密码
     const adminPassword = generateRandomPassword();
@@ -59,16 +161,30 @@ async function initializeAdmin(db: D1Database): Promise<void> {
       .bind(userId, 'Admin')
       .run();
 
-    console.log('========================================');
-    console.log('🐝 BeeCount Cloud - Admin Account Created');
-    console.log('========================================');
-    console.log(`Email: ${adminEmail}`);
-    console.log(`Password: ${adminPassword}`);
-    console.log('========================================');
-    console.log('Please change this password after first login!');
-    console.log('========================================');
+    console.log('');
+    console.log('╔════════════════════════════════════════════════════════════╗');
+    console.log('║                                                            ║');
+    console.log('║    🐝 BEECOUNT CLOUD - ADMIN ACCOUNT CREATED! 🐝          ║');
+    console.log('║                                                            ║');
+    console.log('╠════════════════════════════════════════════════════════════╣');
+    console.log('║  Email:    admin@localhost                                 ║');
+    console.log('║  Password: ' + adminPassword.padEnd(42) + '║');
+    console.log('╠════════════════════════════════════════════════════════════╣');
+    console.log('║  PLEASE LOGIN AND CHANGE THIS PASSWORD IMMEDIATELY!        ║');
+    console.log('╚════════════════════════════════════════════════════════════╝');
+    console.log('');
+    
+    // 同时也输出多行，确保能看到
+    console.log('📧 ADMIN EMAIL: admin@localhost');
+    console.log('🔑 ADMIN PASSWORD: ' + adminPassword);
+    console.log('📝 REMINDER: Change password after first login!');
+    
   } catch (error) {
-    console.error('[INIT] Failed to initialize admin user:', error);
+    console.error('❌ [INIT] Failed to initialize admin user:', error);
+    if (error instanceof Error) {
+      console.error('Error details:', error.message);
+      console.error('Stack:', error.stack);
+    }
   }
 }
 
@@ -117,10 +233,11 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 // 全局中间件
 app.use('*', cors());
 
-// 初始化中间件 - 在第一次请求时创建默认管理员
+// 初始化中间件 - 在第一次请求时创建数据库表和管理员
 let initialized = false;
 app.use('*', async (c, next) => {
   if (!initialized) {
+    await initializeDatabase(c.env.DB);
     await initializeAdmin(c.env.DB);
     initialized = true;
   }
