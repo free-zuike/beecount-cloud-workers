@@ -126,6 +126,11 @@ app.use('/api/v1/*', async (c, next) => {
   await authMiddleware(c, next, ['/api/v1/auth']);
 });
 
+// /api/v1/auth/2fa 前缀的路由认证（Web UI 使用）
+app.use('/api/v1/auth/2fa/*', async (c, next) => {
+  await authMiddleware(c, next, ['/api/v1/auth/2fa/verify']); // verify 不需要认证
+});
+
 // /2fa 前缀的路由认证（蜜蜂记账 APP 使用 /2fa 路径）
 app.use('/2fa/*', async (c, next) => {
   await authMiddleware(c, next, ['/2fa/verify']);
@@ -148,7 +153,8 @@ app.use('/notifications/*', async (c, next) => authMiddleware(c, next));
 // ===========================
 
 app.route('/api/v1/auth', authRouter);
-app.route('/api/v1/2fa', twoFactorRouter);
+app.route('/api/v1/auth/2fa', twoFactorRouter); // Web UI 使用的路径 /auth/2fa/*
+app.route('/api/v1/2fa', twoFactorRouter); // 备用路径
 app.route('/2fa', twoFactorRouter); // 蜜蜂记账 APP 使用的路径
 app.route('/api/v1/sync', syncRouter);
 app.route('/api/v1/read', readRouter);

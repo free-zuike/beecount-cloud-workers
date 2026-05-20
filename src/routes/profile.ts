@@ -151,7 +151,8 @@ profileRouter.get('/me', async (c) => {
     user_id: row.id,
     email: row.email,
     display_name: row.display_name,
-    avatar_url: row.avatar_file_id,
+    // 返回头像 API 路径而不是 file id
+    avatar_url: row.avatar_file_id ? `/api/v1/profile/avatar/${row.id}` : null,
     avatar_version: row.avatar_version ?? 0,
     income_is_red: row.income_is_red !== null ? Boolean(row.income_is_red) : null,
     theme_primary_color: row.theme_primary_color,
@@ -278,7 +279,8 @@ profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => 
     user_id: row.id,
     email: row.email,
     display_name: row.display_name,
-    avatar_url: row.avatar_file_id,
+    // 返回头像 API 路径而不是 file id
+    avatar_url: row.avatar_file_id ? `/api/v1/profile/avatar/${row.id}` : null,
     avatar_version: row.avatar_version ?? 0,
     income_is_red: row.income_is_red !== null ? Boolean(row.income_is_red) : null,
     theme_primary_color: row.theme_primary_color,
@@ -351,71 +353,8 @@ profileRouter.post('/me/change-password', zValidator('json', z.object({
  * - avatar_version: 新版本号
  */
 profileRouter.post('/me/avatar', async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-  const serverNow = nowUtc();
-
-  // 获取上传的文件（简化版，实际需要处理 FormData）
-  // Cloudflare Workers 支持 Request.formData()
-  let fileId: string;
-  let newVersion: number;
-
-  try {
-    const formData = await c.req.formData();
-    const file = formData.get('file') as File | null;
-
-    if (!file) {
-      return c.json({ error: 'No file provided' }, 400);
-    }
-
-    fileId = randomUUID();
-    const fileName = file.name || 'avatar';
-    const mimeType = file.type || 'image/png';
-    const size = file.size;
-
-    // 计算 SHA256（简化，完整实现需要读取文件内容）
-    const fileBuffer = await file.arrayBuffer();
-    const hashBuffer = await crypto.subtle.digest('SHA-256', fileBuffer);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const sha256 = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-
-    // 存储路径
-    const storagePath = `avatars/${userId}/${fileId}/${fileName}`;
-
-    // 插入 attachment_files 记录
-    await db
-      .prepare(
-        `INSERT INTO attachment_files
-         (id, ledger_id, user_id, sha256, size_bytes, mime_type, file_name, storage_path, attachment_kind, created_at)
-         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'category_icon', ?)`
-      )
-      .bind(fileId, userId, sha256, size, mimeType, fileName, storagePath, serverNow)
-      .run();
-
-    // 更新 avatar_version
-    const profile = await db
-      .prepare('SELECT avatar_version FROM user_profiles WHERE user_id = ?')
-      .bind(userId)
-      .first<{ avatar_version: number }>();
-
-    newVersion = (profile?.avatar_version ?? 0) + 1;
-
-    await db
-      .prepare(
-        `UPDATE user_profiles
-         SET avatar_file_id = ?, avatar_version = ?, updated_at = ?
-         WHERE user_id = ?`
-      )
-      .bind(fileId, newVersion, serverNow, userId)
-      .run();
-  } catch (err) {
-    return c.json({ error: 'Failed to upload avatar' }, 500);
-  }
-
-  return c.json({
-    avatar_url: fileId,
-    avatar_version: newVersion,
-  });
+  // 暂时不实现头像上传
+  return c.json({ error: 'Avatar upload not implemented yet' }, 501);
 });
 
 // ---------------------------------------------------------------------------
@@ -441,58 +380,9 @@ profileRouter.post('/me/avatar', async (c) => {
  * - 404: 头像不存在
  */
 profileRouter.get('/avatar/:user_id', async (c) => {
-  const userId = c.req.param('user_id');
-  const db = c.env.DB;
-  const version = c.req.query('v');
-
-  const profile = await db
-    .prepare(
-      `SELECT p.avatar_file_id, p.avatar_version
-       FROM user_profiles p
-       WHERE p.user_id = ?`
-    )
-    .bind(userId)
-    .first<{
-      avatar_file_id: string | null;
-      avatar_version: number | null;
-    }>();
-
-  if (!profile || !profile.avatar_file_id) {
-    return c.json({ error: 'Avatar not found' }, 404);
-  }
-
-  const attachment = await db
-    .prepare(
-      `SELECT id, storage_path, mime_type, file_name, size_bytes
-       FROM attachment_files
-       WHERE id = ?`
-    )
-    .bind(profile.avatar_file_id)
-    .first<{
-      id: string;
-      storage_path: string;
-      mime_type: string | null;
-      file_name: string | null;
-      size_bytes: number;
-    }>();
-
-  if (!attachment) {
-    return c.json({ error: 'Avatar not found' }, 404);
-  }
-
-  const cacheControl =
-    version && version === String(profile.avatar_version)
-      ? 'public, max-age=31536000, immutable'
-      : 'no-cache';
-
-  return c.json({
-    file_id: attachment.id,
-    mime_type: attachment.mime_type,
-    file_name: attachment.file_name,
-    size: attachment.size_bytes,
-    version: profile.avatar_version,
-    cache_control: cacheControl,
-  });
+  // 暂时不实现实际的图片存储和返回，返回 204 No Content
+  // 这样前端可以使用默认头像，而不会崩溃
+  return c.text('', 204);
 });
 
 export default profileRouter;
