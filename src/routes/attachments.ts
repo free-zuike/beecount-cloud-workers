@@ -171,7 +171,7 @@ class S3Service {
                         accessKeyId: config.access_key_id,
                         secretAccessKey: config.secret_access_key,
                         region: config.region || 'auto',
-                        bucketName: config.bucket,
+                        bucketName: config.bucket.replace(/^\/+/, ''),
                         endpoint: config.endpoint || 'https://s3.amazonaws.com',
                         pathStyle: config.path_style !== undefined ? Boolean(config.path_style) : true,
                         cdnDomain: config.cdn_domain || '',

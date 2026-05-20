@@ -94,29 +94,29 @@ class S3Service {
         .first<{ config_summary: string }>();
 
       if (backupRemote && backupRemote.config_summary) {
-        const config = JSON.parse(backupRemote.config_summary);
-        if (config.access_key_id && config.secret_access_key && config.bucket) {
-          const backupConfig = {
-            id: 'backup_remote',
-            name: 'Backup S3',
-            type: 's3',
-            savePath: 'backup_remote',
-            accessKeyId: config.access_key_id,
-            secretAccessKey: config.secret_access_key,
-            region: config.region || 'auto',
-            bucketName: config.bucket,
-            endpoint: config.endpoint || 'https://s3.amazonaws.com',
-            pathStyle: config.path_style !== undefined ? Boolean(config.path_style) : true,
-            cdnDomain: config.cdn_domain || '',
-            enabled: true,
-            fixed: true
-          };
-          this.s3ConfigCache = backupConfig;
-          this.s3ConfigCacheTime = now;
-          console.log('[S3Service] Using config from backup_remotes');
-          return backupConfig;
+          const config = JSON.parse(backupRemote.config_summary);
+          if (config.access_key_id && config.secret_access_key && config.bucket) {
+            const backupConfig = {
+              id: 'backup_remote',
+              name: 'Backup S3',
+              type: 's3',
+              savePath: 'backup_remote',
+              accessKeyId: config.access_key_id,
+              secretAccessKey: config.secret_access_key,
+              region: config.region || 'auto',
+              bucketName: config.bucket.replace(/^\/+/, ''),
+              endpoint: config.endpoint || 'https://s3.amazonaws.com',
+              pathStyle: config.path_style !== undefined ? Boolean(config.path_style) : true,
+              cdnDomain: config.cdn_domain || '',
+              enabled: true,
+              fixed: true
+            };
+            this.s3ConfigCache = backupConfig;
+            this.s3ConfigCacheTime = now;
+            console.log('[S3Service] Using config from backup_remotes');
+            return backupConfig;
+          }
         }
-      }
     } catch (err) {
       console.error('[S3Service] Failed to load config from backup_remotes:', err);
     }
