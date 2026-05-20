@@ -119,16 +119,20 @@ class S3Service {
 
   async isConfigured(): Promise<boolean> {
     const config = await this.getS3Config();
-    return config !== null;
+    const configured = config !== null;
+    console.log('[S3Service] isConfigured:', configured, config ? `endpoint: ${config.endpoint}, bucket: ${config.bucketName}` : 'no config');
+    return configured;
   }
 
   async upload(key: string, body: ArrayBuffer, contentType: string): Promise<boolean> {
     const config = await this.getS3Config();
     if (!config) {
+      console.log('[S3Service] upload: no config available');
       return false;
     }
 
     try {
+      console.log('[S3Service] upload: starting upload to', key);
       const { url, headers } = await signRequest(
         config.accessKeyId,
         config.secretAccessKey,
@@ -141,14 +145,17 @@ class S3Service {
         body.byteLength
       );
 
+      console.log('[S3Service] upload: sending request to', url);
       const response = await fetch(url, {
         method: 'PUT',
         headers,
         body
       });
 
+      console.log('[S3Service] upload: response status', response.status);
       return response.ok;
-    } catch {
+    } catch (err) {
+      console.error('[S3Service] upload: error', err);
       return false;
     }
   }
@@ -156,10 +163,12 @@ class S3Service {
   async download(key: string): Promise<Response | null> {
     const config = await this.getS3Config();
     if (!config) {
+      console.log('[S3Service] download: no config available');
       return null;
     }
 
     try {
+      console.log('[S3Service] download: starting download from', key);
       const { url, headers } = await signRequest(
         config.accessKeyId,
         config.secretAccessKey,
@@ -172,17 +181,21 @@ class S3Service {
         0
       );
 
+      console.log('[S3Service] download: sending request to', url);
       const response = await fetch(url, {
         method: 'GET',
         headers
       });
 
       if (!response.ok) {
+        console.log('[S3Service] download: response not ok', response.status);
         return null;
       }
 
+      console.log('[S3Service] download: success');
       return response;
-    } catch {
+    } catch (err) {
+      console.error('[S3Service] download: error', err);
       return null;
     }
   }
@@ -747,78 +760,83 @@ profileRouter.get('/avatar/:user_id', async (c) => {
   const db = c.env.DB;
   const version = c.req.query('v');
 
-  const profile = await db
-    .prepare(
-      `SELECT u.email, p.avatar_file_id, p.avatar_version, p.display_name
-       FROM users u
-       LEFT JOIN user_profiles p ON p.user_id = u.id
-       WHERE u.id = ?`
-    )
-    .bind(userId)
-    .first<{
-      email: string;
-      avatar_file_id: string | null;
-      avatar_version: number | null;
-      display_name: string | null;
-    }>();
-
-  if (!profile) {
-    return c.json({ error: 'User not found' }, 404);
-  }
-
-  const displayName = profile.display_name || profile.email.split('@')[0];
-  const initial = displayName.charAt(0).toUpperCase();
-
-  const cacheControl = version && version === String(profile.avatar_version)
-    ? 'public, max-age=31536000, immutable'
-    : 'no-cache';
-
-  if (profile.avatar_file_id) {
-    const attachment = await db
+  try {
+    const profile = await db
       .prepare(
-        `SELECT mime_type, file_name, size_bytes, storage_path
-         FROM attachment_files
-         WHERE id = ?`
+        `SELECT u.email, p.avatar_file_id, p.avatar_version, p.display_name
+         FROM users u
+         LEFT JOIN user_profiles p ON p.user_id = u.id
+         WHERE u.id = ?`
       )
-      .bind(profile.avatar_file_id)
+      .bind(userId)
       .first<{
-        mime_type: string | null;
-        file_name: string | null;
-        size_bytes: number;
-        storage_path: string;
+        email: string;
+        avatar_file_id: string | null;
+        avatar_version: number | null;
+        display_name: string | null;
       }>();
 
-    if (attachment) {
-      const s3 = new S3Service(db, c.env);
-      if (await s3.isConfigured()) {
-        const s3Response = await s3.download(attachment.storage_path);
-        if (s3Response) {
-          return new Response(s3Response.body, {
-            headers: {
-              'Content-Type': attachment.mime_type || 'image/png',
-              'Content-Length': String(attachment.size_bytes),
-              'Cache-Control': cacheControl,
-            },
-          });
+    if (!profile) {
+      return c.json({ error: 'User not found' }, 404);
+    }
+
+    const displayName = profile.display_name || profile.email.split('@')[0];
+    const initial = displayName.charAt(0).toUpperCase();
+
+    const cacheControl = version && version === String(profile.avatar_version)
+      ? 'public, max-age=31536000, immutable'
+      : 'no-cache';
+
+    if (profile.avatar_file_id) {
+      const attachment = await db
+        .prepare(
+          `SELECT mime_type, file_name, size_bytes, storage_path
+           FROM attachment_files
+           WHERE id = ?`
+        )
+        .bind(profile.avatar_file_id)
+        .first<{
+          mime_type: string | null;
+          file_name: string | null;
+          size_bytes: number;
+          storage_path: string;
+        }>();
+
+      if (attachment && attachment.storage_path) {
+        const s3 = new S3Service(db, c.env);
+        if (await s3.isConfigured()) {
+          const s3Response = await s3.download(attachment.storage_path);
+          if (s3Response) {
+            return new Response(s3Response.body, {
+              headers: {
+                'Content-Type': attachment.mime_type || 'image/png',
+                'Content-Length': String(attachment.size_bytes),
+                'Cache-Control': cacheControl,
+              },
+            });
+          }
         }
       }
     }
+
+    const defaultAvatar = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+      <circle cx="64" cy="64" r="64" fill="#4F46E5"/>
+      <text x="64" y="72" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="white" text-anchor="middle">${initial}</text>
+    </svg>`;
+
+    const avatarBuffer = new TextEncoder().encode(defaultAvatar);
+    
+    return new Response(avatarBuffer, {
+      headers: {
+        'Content-Type': 'image/svg+xml',
+        'Content-Length': String(avatarBuffer.length),
+        'Cache-Control': 'public, max-age=31536000',
+      },
+    });
+  } catch (err) {
+    console.error('[Avatar] Error fetching avatar:', err);
+    return c.json({ error: 'Failed to fetch avatar' }, 500);
   }
-
-  const defaultAvatar = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-    <circle cx="64" cy="64" r="64" fill="#4F46E5"/>
-    <text x="64" y="72" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="white" text-anchor="middle">${initial}</text>
-  </svg>`;
-
-  const avatarBuffer = new TextEncoder().encode(defaultAvatar);
-  
-  return new Response(avatarBuffer, {
-    headers: {
-      'Content-Type': 'image/svg+xml',
-      'Content-Length': String(avatarBuffer.length),
-      'Cache-Control': 'public, max-age=31536000',
-    },
-  });
 });
 
 export default profileRouter;
