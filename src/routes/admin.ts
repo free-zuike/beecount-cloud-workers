@@ -627,4 +627,60 @@ adminRouter.get('/logs', async (c) => {
   });
 });
 
+// Integrity scan endpoint
+adminRouter.get('/integrity/scan', async (c) => {
+  const db = c.env.DB;
+  
+  try {
+    const orphanedDevices = await db
+      .prepare(
+        `SELECT COUNT(*) as cnt FROM devices d
+         WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = d.user_id)`
+      )
+      .first<{ cnt: number }>();
+    
+    const orphanedLedgers = await db
+      .prepare(
+        `SELECT COUNT(*) as cnt FROM ledgers l
+         WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = l.user_id)`
+      )
+      .first<{ cnt: number }>();
+    
+    const orphanedSyncChanges = await db
+      .prepare(
+        `SELECT COUNT(*) as cnt FROM sync_changes sc
+         WHERE NOT EXISTS (SELECT 1 FROM ledgers l WHERE l.id = sc.ledger_id)`
+      )
+      .first<{ cnt: number }>();
+    
+    const missingProfiles = await db
+      .prepare(
+        `SELECT COUNT(*) as cnt FROM users u
+         WHERE NOT EXISTS (SELECT 1 FROM user_profiles p WHERE p.user_id = u.id)`
+      )
+      .first<{ cnt: number }>();
+    
+    return c.json({
+      status: 'completed',
+      timestamp: new Date().toISOString(),
+      issues: {
+        orphaned_devices: orphanedDevices?.cnt ?? 0,
+        orphaned_ledgers: orphanedLedgers?.cnt ?? 0,
+        orphaned_sync_changes: orphanedSyncChanges?.cnt ?? 0,
+        missing_profiles: missingProfiles?.cnt ?? 0,
+      },
+      total_issues: (orphanedDevices?.cnt ?? 0) + 
+                    (orphanedLedgers?.cnt ?? 0) + 
+                    (orphanedSyncChanges?.cnt ?? 0) + 
+                    (missingProfiles?.cnt ?? 0),
+    });
+  } catch (error) {
+    return c.json({
+      status: 'error',
+      timestamp: new Date().toISOString(),
+      error: String(error),
+    }, 500);
+  }
+});
+
 export default adminRouter;
