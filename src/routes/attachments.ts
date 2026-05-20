@@ -41,31 +41,17 @@ async function signRequest(
     const dateStamp = amzDate.slice(0, 8);
     const service = 's3';
     
-    // 尝试虚拟主机风格（virtual-hosted style），兼容更多 S3 服务
-    let url: string;
-    let host: string;
-    let canonicalPath: string;
-    
-    try {
-        const endpointUrl = new URL(endpoint);
-        host = `${bucket}.${endpointUrl.host}`;
-        url = `${endpointUrl.protocol}//${host}/${key}`;
-        canonicalPath = `/${key}`;
-        console.log('[S3] Using virtual-hosted style');
-    } catch {
-        // 如果无法构建虚拟主机风格，回退到路径风格
-        url = `${endpoint}/${bucket}/${key}`;
-        host = new URL(endpoint).host;
-        canonicalPath = `/${bucket}/${key}`;
-        console.log('[S3] Using path style');
-    }
+    // 使用路径风格（path-style），兼容大多数 S3 兼容服务
+    const url = `${endpoint}/${bucket}/${key}`;
+    const host = new URL(endpoint).host;
+    console.log('[S3] Using path style - endpoint:', endpoint, 'bucket:', bucket, 'key:', key);
     
     // 创建规范请求
     const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:${amzDate}\n`;
     const signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date';
     const payloadHash = 'UNSIGNED-PAYLOAD';
     
-    const canonicalRequest = `${method}\n${canonicalPath}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+    const canonicalRequest = `${method}\n/${bucket}/${key}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
     
     console.log('[S3] Canonical Request:', JSON.stringify(canonicalRequest));
     
