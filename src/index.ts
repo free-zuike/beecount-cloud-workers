@@ -373,6 +373,59 @@ app.use('/notifications/*', async (c, next) => authMiddleware(c, next));
 // 路由注册
 // ===========================
 
+// 直接硬编码测试端点 - 放在所有路由之前！
+app.post('/api/v1/admin/backup/test-route', (c) => {
+  return c.json({ message: 'Direct test route works!', time: new Date().toISOString() });
+});
+
+// 临时直接定义 schedules/:id/run-now 路由
+app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
+  try {
+    const db = c.env.DB;
+    const scheduleId = c.req.param('id');
+    const serverNow = new Date().toISOString();
+
+    const schedule = await db
+      .prepare('SELECT id, name, user_id FROM backup_schedules WHERE id = ?')
+      .bind(scheduleId)
+      .first<{ id: number; name: string; user_id: string }>();
+
+    if (!schedule) {
+      return c.json({ error: 'Schedule not found' }, 404);
+    }
+
+    const ledger = await db
+      .prepare('SELECT id FROM ledgers WHERE user_id = ? LIMIT 1')
+      .bind(schedule.user_id)
+      .first<{ id: string }>();
+
+    if (!ledger) {
+      return c.json({ error: 'Ledger not found' }, 404);
+    }
+
+    const runId = crypto.randomUUID();
+    await db
+      .prepare(
+        `INSERT INTO backup_runs (id, schedule_id, ledger_id, remote_id, status, started_at)
+         VALUES (?, ?, ?, NULL, 'pending', ?)`
+      )
+      .bind(runId, scheduleId, ledger.id, serverNow)
+      .run();
+
+    return c.json({
+      id: runId,
+      schedule_id: Number(scheduleId),
+      schedule_name: schedule.name,
+      status: 'pending',
+      started_at: serverNow,
+      message: 'Backup scheduled. Use /admin/backup/runs to check status.',
+    }, 202);
+  } catch (e) {
+    console.error('Error in run-now handler:', e);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
 app.route('/api/v1/auth', authRouter);
 app.route('/api/v1/2fa', twoFactorRouter);
 app.route('/2fa', twoFactorRouter); // 蜜蜂记账 APP 使用的路径
@@ -392,6 +445,7 @@ app.route('/api/v1/backup', backupRouter);
 app.route('/api/v1/notifications', notificationsRouter);
 app.route('/api/v1/mcp-calls', mcpCallsRouter);
 app.route('/api/v1/admin/backup', adminBackupRouter);
+// 临时在 adminRouter 注册 - 放在最后！让 adminBackupRouter 之后！
 app.route('/api/v1/admin', adminRouter);
 app.route('/api/v1/sys-config', sysConfigRouter);
 
