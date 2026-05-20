@@ -378,6 +378,9 @@ app.route('/api/v1/admin', adminRouter);
 app.route('/api/v1/admin/backup', adminBackupRouter);
 app.route('/api/v1/sys-config', sysConfigRouter);
 
+// 前端使用的路径：/api/v1/profile/mcp-calls
+app.route('/api/v1/profile/mcp-calls', mcpCallsRouter);
+
 // 蜜蜂记账 APP 兼容：添加没有 /api/v1 前缀的路由
 app.route('/sync', syncRouter);
 app.route('/read', readRouter);
