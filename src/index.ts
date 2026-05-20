@@ -289,7 +289,12 @@ app.get('/api/v1/version', (c) =>
 const authMiddleware = async (c: any, next: () => Promise<void>, skipPaths: string[] = []) => {
   // 检查是否有需要跳过的路径
   for (const skipPath of skipPaths) {
-    if (c.req.path.startsWith(skipPath)) {
+    // 对于头像路径，只跳过 GET 请求，不跳过 POST 上传
+    if (skipPath.includes('/profile/avatar')) {
+      if (c.req.method === 'GET' && c.req.path.startsWith(skipPath)) {
+        return await next();
+      }
+    } else if (c.req.path.startsWith(skipPath)) {
       return await next();
     }
   }
