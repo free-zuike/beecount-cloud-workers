@@ -167,25 +167,6 @@ export function OpsDevicesPanel({ rows, onReload }: OpsDevicesPanelProps) {
                         </Badge>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2 text-[11px]">
-                        <div className="rounded-md bg-muted/30 px-2 py-1">
-                          <div className="text-muted-foreground">{t('ops.device.header.platform')}</div>
-                          <div className="font-medium">{row.platform || '-'}</div>
-                        </div>
-                        <div className="rounded-md bg-muted/30 px-2 py-1">
-                          <div className="text-muted-foreground">{t('ops.device.header.version')}</div>
-                          <div className="font-medium">{row.app_version || '-'}</div>
-                        </div>
-                        <div className="rounded-md bg-muted/30 px-2 py-1">
-                          <div className="text-muted-foreground">{t('ops.device.header.device')}</div>
-                          <div className="truncate font-medium">{row.device_model || '-'}</div>
-                        </div>
-                        <div className="rounded-md bg-muted/30 px-2 py-1">
-                          <div className="text-muted-foreground">{t('ops.device.header.os')}</div>
-                          <div className="truncate font-medium">{row.os_version || '-'}</div>
-                        </div>
-                      </div>
-
                       <div className="space-y-1 text-[11px] text-muted-foreground">
                         <div className="flex items-center justify-between gap-2">
                           <span>{t('ops.device.header.lastSeen')}</span>
