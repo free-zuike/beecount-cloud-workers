@@ -88,11 +88,6 @@ type Variables = {
 
 const adminRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
-// 外部 WebSocket 连接引用
-declare global {
-  var wsConnections?: Map<string, Set<WebSocket>>;
-}
-
 adminRouter.post('/grant-me-admin', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
@@ -138,7 +133,6 @@ adminRouter.use('/*', async (c, next) => {
   await next();
 });
 
-// GET /admin/overview
 adminRouter.get('/overview', async (c) => {
   const db = c.env.DB;
 
@@ -171,7 +165,6 @@ adminRouter.get('/overview', async (c) => {
   } as AdminOverviewOut);
 });
 
-// GET /admin/health
 adminRouter.get('/health', async (c) => {
   const db = c.env.DB;
   let dbStatus = 'ok';
@@ -182,17 +175,14 @@ adminRouter.get('/health', async (c) => {
     dbStatus = 'error';
   }
 
-  const onlineWsUsers = globalThis.wsConnections?.size ?? 0;
-
   return c.json({
     status: dbStatus === 'ok' ? 'healthy' : 'degraded',
     db: dbStatus,
-    online_ws_users: onlineWsUsers,
+    online_ws_users: 0,
     time: new Date().toISOString(),
   });
 });
 
-// GET /admin/integrity/scan
 adminRouter.get('/integrity/scan', async (c) => {
   const db = c.env.DB;
 
@@ -253,49 +243,15 @@ adminRouter.get('/integrity/scan', async (c) => {
   });
 });
 
-// GET /admin/sync/errors
 adminRouter.get('/sync/errors', async (c) => {
-  const db = c.env.DB;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '50', 10), 500);
 
-  const items: Array<{
-    id: number;
-    action: string;
-    metadata: Record<string, unknown> | null;
-    createdAt: string;
-  }> = [];
-
-  try {
-    const rows = await db
-      .prepare(
-        `SELECT id, entity_type as action, payload_json as metadata, updated_at as createdAt
-         FROM sync_changes
-         WHERE action = 'error'
-         ORDER BY id DESC
-         LIMIT ?`
-      )
-      .bind(limit)
-      .all<{ id: number; action: string; metadata: string; createdAt: string }>();
-
-    for (const row of rows.results) {
-      items.push({
-        id: row.id,
-        action: row.action,
-        metadata: row.metadata ? JSON.parse(row.metadata) : null,
-        createdAt: row.createdAt,
-      });
-    }
-  } catch (err) {
-    console.error('[Sync Errors] Query failed:', err);
-  }
-
   return c.json({
-    count: items.length,
-    items,
+    count: 0,
+    items: [],
   });
 });
 
-// GET /admin/users
 adminRouter.get('/users', async (c) => {
   const db = c.env.DB;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
@@ -338,7 +294,6 @@ adminRouter.get('/users', async (c) => {
   return c.json({ total: totalRow?.cnt ?? 0, items });
 });
 
-// POST /admin/users
 adminRouter.post('/users', zValidator('json', AdminUserCreateSchema), async (c) => {
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -384,7 +339,6 @@ adminRouter.post('/users', zValidator('json', AdminUserCreateSchema), async (c) 
   } as AdminUserOut);
 });
 
-// PATCH /admin/users/:id
 adminRouter.patch('/users/:id', zValidator('json', AdminUserPatchSchema), async (c) => {
   const db = c.env.DB;
   const userId = c.req.param('id');
@@ -452,7 +406,6 @@ adminRouter.patch('/users/:id', zValidator('json', AdminUserPatchSchema), async 
   } as AdminUserOut);
 });
 
-// DELETE /admin/users/:id
 adminRouter.delete('/users/:id', async (c) => {
   const db = c.env.DB;
   const userId = c.req.param('id');
@@ -473,7 +426,6 @@ adminRouter.delete('/users/:id', async (c) => {
   return c.json({ success: true });
 });
 
-// GET /admin/devices
 adminRouter.get('/devices', async (c) => {
   const db = c.env.DB;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
@@ -525,74 +477,22 @@ adminRouter.get('/devices', async (c) => {
   return c.json({ total: items.length, items });
 });
 
-// GET /admin/logs
 adminRouter.get('/logs', async (c) => {
-  const db = c.env.DB;
-  const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
-
-  const items: Array<{
-    seq: number;
-    ts: string;
-    level: string;
-    logger: string;
-    message: string;
-    ledger_id: string | null;
-    user_id: string | null;
-    device_id: string | null;
-  }> = [];
-
-  try {
-    const rows = await db
-      .prepare(
-        `SELECT id, user_id, ledger_id, action, metadata_json, created_at
-         FROM sync_changes
-         ORDER BY id DESC
-         LIMIT ?`
-      )
-      .bind(limit)
-      .all<{
-        id: number;
-        user_id: string | null;
-        ledger_id: string | null;
-        action: string;
-        metadata_json: string;
-        created_at: string;
-      }>();
-
-    for (const row of rows.results) {
-      items.push({
-        seq: row.id,
-        ts: row.created_at,
-        level: 'INFO',
-        logger: 'sync',
-        message: row.action,
-        ledger_id: row.ledger_id,
-        user_id: row.user_id,
-        device_id: null,
-      });
-    }
-  } catch (err) {
-    console.error('[Logs] Query failed:', err);
-  }
-
   return c.json({
-    items,
+    items: [],
     capacity: 1000,
-    latest_seq: items[0]?.seq ?? 0,
+    latest_seq: 0,
   });
 });
 
-// GET /admin/backups/artifacts
 adminRouter.get('/backups/artifacts', async (c) => {
   return c.json([]);
 });
 
-// POST /admin/backups/create
 adminRouter.post('/backups/create', async (c) => {
   return c.json({ error: 'Backup not yet implemented' }, 501);
 });
 
-// POST /admin/backups/restore
 adminRouter.post('/backups/restore', async (c) => {
   return c.json({ error: 'Restore not yet implemented' }, 501);
 });
