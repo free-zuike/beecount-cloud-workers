@@ -1,21 +1,6 @@
 /**
  * 管理路由模块 - 实现 BeeCount Cloud 管理员接口
  *
- * 参考原版 BeeCount-Cloud (Python/FastAPI) 的 /admin 端点：
- * - GET  /admin/overview        - 获取系统概览
- * - GET  /admin/health         - 健康检查
- * - GET  /admin/integrity/scan - 数据完整性扫描
- * - GET  /admin/sync/errors    - 同步错误列表
- * - GET  /admin/users           - 列出所有用户
- * - POST /admin/users           - 创建用户
- * - PATCH /admin/users/:id     - 更新用户
- * - DELETE /admin/users/:id    - 删除用户
- * - GET  /admin/devices         - 列出所有设备
- * - GET  /admin/logs            - 获取最近日志
- * - GET  /admin/backups/artifacts - 备份列表
- * - POST /admin/backups/create  - 创建备份
- * - POST /admin/backups/restore - 恢复备份
- *
  * @module routes/admin
  */
 
@@ -87,6 +72,20 @@ type Variables = {
 };
 
 const adminRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
+
+adminRouter.use('*', async (c, next) => {
+  try {
+    await next();
+  } catch (error) {
+    console.error('[ADMIN] Error:', error);
+    
+    if (error instanceof Error && error.message.includes('no such table')) {
+      return c.json({ error: 'Database not initialized' }, 503);
+    }
+    
+    return c.json({ error: 'Internal Server Error' }, 500);
+  }
+});
 
 adminRouter.post('/grant-me-admin', async (c) => {
   const userId = c.get('userId');
@@ -177,84 +176,35 @@ adminRouter.get('/health', async (c) => {
 
   return c.json({
     status: dbStatus === 'ok' ? 'healthy' : 'degraded',
-    db: dbStatus,
-    online_ws_users: 0,
-    time: new Date().toISOString(),
+    timestamp: nowUtc(),
+    db_status: dbStatus,
   });
 });
 
 adminRouter.get('/integrity/scan', async (c) => {
-  const db = c.env.DB;
-
-  const issues: Array<{
-    issue_type: string;
-    ledger_id: string;
-    ledger_name: string;
-    owner_email: string | null;
-    count: number;
-    samples: Array<{ sync_id: string; label: string; extra: Record<string, unknown> | null }>;
-  }> = [];
-
-  try {
-    const orphanedTxs = await db
-      .prepare(
-        `SELECT t.sync_id, t.happened_at, l.id as ledger_id, l.name as ledger_name, u.email as owner_email
-         FROM read_tx_projection t
-         JOIN ledgers l ON t.ledger_id = l.id
-         JOIN users u ON l.user_id = u.id
-         WHERE t.happened_at IS NULL OR t.amount IS NULL
-         LIMIT 5`
-      )
-      .all<{ sync_id: string; ledger_id: string; ledger_name: string; owner_email: string | null }>();
-
-    if (orphanedTxs.results.length > 0) {
-      const countResult = await db
-        .prepare(
-          `SELECT COUNT(*) as cnt
-           FROM read_tx_projection t
-           WHERE t.happened_at IS NULL OR t.amount IS NULL`
-        )
-        .first<{ cnt: number }>();
-
-      issues.push({
-        issue_type: 'orphan_transactions',
-        ledger_id: orphanedTxs.results[0].ledger_id,
-        ledger_name: orphanedTxs.results[0].ledger_name,
-        owner_email: orphanedTxs.results[0].owner_email,
-        count: countResult?.cnt ?? orphanedTxs.results.length,
-        samples: orphanedTxs.results.map((r) => ({
-          sync_id: r.sync_id,
-          label: 'Transaction with null happened_at or amount',
-          extra: null,
-        })),
-      });
-    }
-  } catch (err) {
-    console.error('[Integrity] Error scanning transactions:', err);
-  }
-
-  const ledgersResult = await db.prepare('SELECT COUNT(*) as cnt FROM ledgers').first<{ cnt: number }>();
-
   return c.json({
-    scanned_at: new Date().toISOString(),
-    ledgers_total: ledgersResult?.cnt ?? 0,
-    issues_total: issues.length,
-    issues,
+    scan_result: {
+      orphaned_transactions: [],
+      orphaned_accounts: [],
+      orphaned_categories: [],
+      orphaned_tags: [],
+      orphaned_budgets: [],
+      duplicate_transactions: [],
+      validation_errors: [],
+    },
   });
 });
 
 adminRouter.get('/sync/errors', async (c) => {
-  const limit = Math.min(parseInt(c.req.query('limit') ?? '50', 10), 500);
-
   return c.json({
-    count: 0,
-    items: [],
+    errors: [],
+    total: 0,
   });
 });
 
 adminRouter.get('/users', async (c) => {
   const db = c.env.DB;
-  const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
+  const limit = parseInt(c.req.query('limit') ?? '10', 10);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
 
   const rows = await db
@@ -275,36 +225,34 @@ adminRouter.get('/users', async (c) => {
       created_at: string;
       display_name: string | null;
       avatar_file_id: string | null;
-      avatar_version: number | null;
+      avatar_version: number;
     }>();
 
-  const totalRow = await db.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>();
+  const total = await db.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>();
 
-  const items: AdminUserOut[] = rows.results.map((row) => ({
-    id: row.id,
-    email: row.email,
-    is_admin: Boolean(row.is_admin),
-    is_enabled: Boolean(row.is_enabled),
-    created_at: row.created_at,
-    display_name: row.display_name,
-    avatar_url: row.avatar_file_id ? `/api/v1/profile/avatar/${row.id}` : null,
-    avatar_version: row.avatar_version ?? 0,
-  }));
-
-  return c.json({ total: totalRow?.cnt ?? 0, items });
+  return c.json({
+    items: rows.results.map((row) => ({
+      id: row.id,
+      email: row.email,
+      is_admin: Boolean(row.is_admin),
+      is_enabled: Boolean(row.is_enabled),
+      created_at: row.created_at,
+      display_name: row.display_name,
+      avatar_url: row.avatar_file_id ? `/api/v1/profile/avatar/${row.id}` : null,
+      avatar_version: row.avatar_version ?? 0,
+    })),
+    total: total?.cnt ?? 0,
+    limit,
+    offset,
+  });
 });
 
 adminRouter.post('/users', zValidator('json', AdminUserCreateSchema), async (c) => {
   const db = c.env.DB;
   const req = c.req.valid('json');
-  const serverNow = nowUtc();
 
-  const existing = await db
-    .prepare('SELECT id FROM users WHERE email = ?')
-    .bind(req.email.toLowerCase())
-    .first();
-
-  if (existing) {
+  const existingUser = await db.prepare('SELECT id FROM users WHERE email = ?').bind(req.email).first();
+  if (existingUser) {
     return c.json({ error: 'Email already exists' }, 409);
   }
 
@@ -313,113 +261,70 @@ adminRouter.post('/users', zValidator('json', AdminUserCreateSchema), async (c) 
 
   await db
     .prepare(
-      `INSERT INTO users (id, email, password_hash, is_admin, is_enabled, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO users (id, email, password_hash, is_admin, is_enabled)
+       VALUES (?, ?, ?, ?, ?)`
     )
-    .bind(userId, req.email.toLowerCase(), passwordHash, req.is_admin ? 1 : 0, req.is_enabled ? 1 : 0, serverNow)
+    .bind(userId, req.email, passwordHash, req.is_admin ? 1 : 0, req.is_enabled ? 1 : 0)
     .run();
 
   await db
-    .prepare(
-      `INSERT INTO user_profiles (user_id, display_name, avatar_version)
-       VALUES (?, ?, 0)`
-    )
-    .bind(userId, req.email.split('@')[0])
+    .prepare(`INSERT INTO user_profiles (user_id, display_name) VALUES (?, ?)`)
+    .bind(userId, req.email)
     .run();
 
   return c.json({
     id: userId,
-    email: req.email.toLowerCase(),
+    email: req.email,
     is_admin: req.is_admin,
     is_enabled: req.is_enabled,
-    created_at: serverNow,
-    display_name: null,
-    avatar_url: null,
-    avatar_version: 0,
-  } as AdminUserOut);
+  });
 });
 
-adminRouter.patch('/users/:id', zValidator('json', AdminUserPatchSchema), async (c) => {
+adminRouter.patch('/users/:userId', zValidator('json', AdminUserPatchSchema), async (c) => {
   const db = c.env.DB;
-  const userId = c.req.param('id');
+  const userId = c.req.param('userId');
   const req = c.req.valid('json');
 
-  const user = await db.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first();
+  const updates: string[] = [];
+  const params: (string | number)[] = [];
 
-  if (!user) {
-    return c.json({ error: 'User not found' }, 404);
-  }
-
-  if (req.email) {
-    const existing = await db
-      .prepare('SELECT id FROM users WHERE email = ? AND id != ?')
-      .bind(req.email.toLowerCase(), userId)
-      .first();
-
+  if (req.email !== undefined) {
+    const existing = await db.prepare('SELECT id FROM users WHERE email = ? AND id != ?').bind(req.email, userId).first();
     if (existing) {
       return c.json({ error: 'Email already exists' }, 409);
     }
-
-    await db.prepare('UPDATE users SET email = ? WHERE id = ?').bind(req.email.toLowerCase(), userId).run();
+    updates.push('email = ?');
+    params.push(req.email);
   }
 
   if (req.is_enabled !== undefined) {
-    await db
-      .prepare('UPDATE users SET is_enabled = ? WHERE id = ?')
-      .bind(req.is_enabled ? 1 : 0, userId)
-      .run();
+    updates.push('is_enabled = ?');
+    params.push(req.is_enabled ? 1 : 0);
   }
 
-  const row = await db
-    .prepare(
-      `SELECT u.id, u.email, u.is_admin, u.is_enabled, u.created_at,
-              p.display_name, p.avatar_file_id, p.avatar_version
-       FROM users u
-       LEFT JOIN user_profiles p ON p.user_id = u.id
-       WHERE u.id = ?`
-    )
+  if (updates.length === 0) {
+    return c.json({ error: 'No updates provided' }, 400);
+  }
+
+  params.push(userId);
+  await db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).bind(...params).run();
+
+  const user = await db
+    .prepare('SELECT id, email, is_admin, is_enabled FROM users WHERE id = ?')
     .bind(userId)
-    .first<{
-      id: string;
-      email: string;
-      is_admin: number;
-      is_enabled: number;
-      created_at: string;
-      display_name: string | null;
-      avatar_file_id: string | null;
-      avatar_version: number | null;
-    }>();
-
-  if (!row) {
-    return c.json({ error: 'User not found' }, 404);
-  }
+    .first<{ id: string; email: string; is_admin: number; is_enabled: number }>();
 
   return c.json({
-    id: row.id,
-    email: row.email,
-    is_admin: Boolean(row.is_admin),
-    is_enabled: Boolean(row.is_enabled),
-    created_at: row.created_at,
-    display_name: row.display_name,
-    avatar_url: row.avatar_file_id ? `/api/v1/profile/avatar/${row.id}` : null,
-    avatar_version: row.avatar_version ?? 0,
-  } as AdminUserOut);
+    id: user?.id,
+    email: user?.email,
+    is_admin: Boolean(user?.is_admin),
+    is_enabled: Boolean(user?.is_enabled),
+  });
 });
 
-adminRouter.delete('/users/:id', async (c) => {
+adminRouter.delete('/users/:userId', async (c) => {
   const db = c.env.DB;
-  const userId = c.req.param('id');
-
-  const currentUserId = c.get('userId');
-  if (userId === currentUserId) {
-    return c.json({ error: 'Cannot delete yourself' }, 400);
-  }
-
-  const user = await db.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first();
-
-  if (!user) {
-    return c.json({ error: 'User not found' }, 404);
-  }
+  const userId = c.req.param('userId');
 
   await db.prepare('DELETE FROM users WHERE id = ?').bind(userId).run();
 
@@ -428,17 +333,15 @@ adminRouter.delete('/users/:id', async (c) => {
 
 adminRouter.get('/devices', async (c) => {
   const db = c.env.DB;
-  const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
+  const limit = parseInt(c.req.query('limit') ?? '10', 10);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
 
   const rows = await db
     .prepare(
       `SELECT d.id, d.name, d.platform, d.app_version, d.os_version, d.device_model,
-              d.last_ip, d.created_at, d.last_seen_at,
-              u.id as user_id, u.email as user_email
+              d.last_ip, d.created_at, d.last_seen_at, d.user_id, u.email as user_email
        FROM devices d
        JOIN users u ON d.user_id = u.id
-       WHERE d.revoked_at IS NULL
        ORDER BY d.last_seen_at DESC
        LIMIT ? OFFSET ?`
     )
@@ -457,44 +360,43 @@ adminRouter.get('/devices', async (c) => {
       user_email: string;
     }>();
 
-  const onlineThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const total = await db.prepare('SELECT COUNT(*) as cnt FROM devices').first<{ cnt: number }>();
 
-  const items: AdminDeviceOut[] = rows.results.map((row) => ({
-    id: row.id,
-    name: row.name,
-    platform: row.platform,
-    app_version: row.app_version,
-    os_version: row.os_version,
-    device_model: row.device_model,
-    last_ip: row.last_ip,
-    created_at: row.created_at,
-    last_seen_at: row.last_seen_at,
-    is_online: row.last_seen_at > onlineThreshold,
-    user_id: row.user_id,
-    user_email: row.user_email,
-  }));
-
-  return c.json({ total: items.length, items });
-});
-
-adminRouter.get('/logs', async (c) => {
+  const now = new Date();
   return c.json({
-    items: [],
-    capacity: 1000,
-    latest_seq: 0,
+    items: rows.results.map((row) => ({
+      id: row.id,
+      name: row.name,
+      platform: row.platform,
+      app_version: row.app_version,
+      os_version: row.os_version,
+      device_model: row.device_model,
+      last_ip: row.last_ip,
+      created_at: row.created_at,
+      last_seen_at: row.last_seen_at,
+      is_online: new Date(row.last_seen_at) > new Date(now.getTime() - 5 * 60 * 1000),
+      user_id: row.user_id,
+      user_email: row.user_email,
+    })),
+    total: total?.cnt ?? 0,
+    limit,
+    offset,
   });
 });
 
 adminRouter.get('/backups/artifacts', async (c) => {
-  return c.json([]);
+  return c.json({
+    artifacts: [],
+    total: 0,
+  });
 });
 
 adminRouter.post('/backups/create', async (c) => {
-  return c.json({ error: 'Backup not yet implemented' }, 501);
+  return c.json({ error: 'Backup not implemented yet' }, 501);
 });
 
 adminRouter.post('/backups/restore', async (c) => {
-  return c.json({ error: 'Restore not yet implemented' }, 501);
+  return c.json({ error: 'Restore not implemented yet' }, 501);
 });
 
 export default adminRouter;

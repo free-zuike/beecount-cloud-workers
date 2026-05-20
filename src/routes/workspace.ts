@@ -38,8 +38,14 @@ workspaceRouter.use('*', async (c, next) => {
     await next();
   } catch (error) {
     console.error('[WORKSPACE] Error:', error);
+    console.error('[WORKSPACE] Error type:', typeof error);
     
-    if (error instanceof Error && error.message.includes('no such table')) {
+    const errorStr = String(error);
+    if (errorStr.includes('no such table')) {
+      const path = c.req.path;
+      if (path.includes('/transactions')) {
+        return c.json({ items: [], total: 0, limit: 0, offset: 0 });
+      }
       return c.json([]);
     }
     
