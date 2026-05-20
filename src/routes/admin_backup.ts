@@ -6,6 +6,7 @@
  * - POST   /admin/backup/remotes             - 创建备份远程配置
  * - PATCH  /admin/backup/remotes/:id         - 更新备份远程配置
  * - DELETE /admin/backup/remotes/:id         - 删除备份远程配置
+ * - GET    /admin/backup/remotes/:id/reveal - 显示完整配置
  * - POST   /admin/backup/remotes/:id/test   - 测试指定备份远程配置
  * - POST   /admin/backup/remotes/test        - 测试备份远程配置
  *
@@ -305,6 +306,44 @@ backupRouter.delete('/remotes/:id', async (c) => {
   await db.prepare('DELETE FROM backup_remotes WHERE id = ?').bind(remoteId).run();
 
   return c.json({ success: true });
+});
+
+/**
+ * 显示备份远程配置完整信息（解密后）
+ */
+backupRouter.get('/remotes/:id/reveal', async (c) => {
+  const db = c.env.DB;
+  const remoteId = c.req.param('id');
+
+  const remote = await db
+    .prepare(
+      `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
+       FROM backup_remotes WHERE id = ?`
+    )
+    .bind(remoteId)
+    .first<{
+      id: number;
+      name: string;
+      backend_type: string;
+      config_summary: string;
+      encrypted: number;
+      created_at: string;
+      updated_at: string;
+    }>();
+
+  if (!remote) {
+    return c.json({ error: 'Remote not found' }, 404);
+  }
+
+  return c.json({
+    id: String(remote.id),
+    name: remote.name,
+    backend_type: remote.backend_type,
+    config: JSON.parse(remote.config_summary || '{}'),
+    encrypted: Boolean(remote.encrypted),
+    created_at: remote.created_at,
+    updated_at: remote.updated_at,
+  });
 });
 
 /**
