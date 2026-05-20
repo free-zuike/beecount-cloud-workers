@@ -141,4 +141,24 @@ authRouter.get('/me', async (c) => {
   });
 });
 
+// Get 2FA status
+authRouter.get('/2fa/status', async (c) => {
+  const db = c.env.DB;
+  const userId = c.get('userId');
+  
+  const user = await db
+    .prepare('SELECT totp_enabled, totp_enabled_at FROM users WHERE id = ?')
+    .bind(userId)
+    .first<{ totp_enabled: number; totp_enabled_at: string | null }>();
+  
+  if (!user) {
+    return c.json({ error: 'User not found' }, 404);
+  }
+  
+  return c.json({
+    enabled: Boolean(user.totp_enabled),
+    enabled_at: user.totp_enabled_at,
+  });
+});
+
 export default authRouter;
