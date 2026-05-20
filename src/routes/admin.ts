@@ -21,7 +21,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
-import { hashPassword } from '../auth';
+import { hashPassword, verifyPassword } from '../auth';
 
 // ===========================
 // 辅助函数
@@ -479,6 +479,93 @@ adminRouter.get('/devices', async (c) => {
  * - 返回最近的审计日志
  * - 用于管理员排查问题
  */
+// 修改用户密码
+adminRouter.post('/users/:id/password', zValidator('json', z.object({
+  admin_password: z.string(),
+  new_password: z.string().min(6)
+})), async (c) => {
+  const db = c.env.DB;
+  const userId = c.req.param('id');
+  const { admin_password, new_password } = c.req.valid('json');
+  const currentUserId = c.get('userId');
+
+  // 验证当前管理员的密码
+  const currentUser = await db
+    .prepare('SELECT id, password_hash FROM users WHERE id = ?')
+    .bind(currentUserId)
+    .first<{ id: string; password_hash: string }>();
+
+  if (!currentUser) {
+    return c.json({ error: 'User not found' }, 404);
+  }
+
+  const passwordValid = await verifyPassword(currentUser.password_hash, admin_password);
+  if (!passwordValid) {
+    return c.json({ error: 'Invalid admin password' }, 401);
+  }
+
+  // 检查目标用户是否存在
+  const targetUser = await db
+    .prepare('SELECT id FROM users WHERE id = ?')
+    .bind(userId)
+    .first();
+
+  if (!targetUser) {
+    return c.json({ error: 'User not found' }, 404);
+  }
+
+  // 更新密码
+  const newPasswordHash = await hashPassword(new_password);
+  await db
+    .prepare('UPDATE users SET password_hash = ? WHERE id = ?')
+    .bind(newPasswordHash, userId)
+    .run();
+
+  // 撤销该用户的所有 refresh token（强制重新登录）
+  await db
+    .prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL')
+    .bind(new Date().toISOString(), userId)
+    .run();
+
+  // 返回更新后的用户信息
+  const updatedUser = await db
+    .prepare(
+      `SELECT u.id, u.email, u.is_admin, u.is_enabled, u.created_at,
+              p.display_name, p.avatar_file_id, p.avatar_version
+       FROM users u
+       LEFT JOIN user_profiles p ON p.user_id = u.id
+       WHERE u.id = ?`
+    )
+    .bind(userId)
+    .first<{
+      id: string;
+      email: string;
+      is_admin: number;
+      is_enabled: number;
+      created_at: string;
+      display_name: string | null;
+      avatar_file_id: string | null;
+      avatar_version: number | null;
+    }>();
+
+  if (!updatedUser) {
+    return c.json({ error: 'User not found' }, 404);
+  }
+
+  const response: AdminUserOut = {
+    id: updatedUser.id,
+    email: updatedUser.email,
+    is_admin: Boolean(updatedUser.is_admin),
+    is_enabled: Boolean(updatedUser.is_enabled),
+    created_at: updatedUser.created_at,
+    display_name: updatedUser.display_name,
+    avatar_url: updatedUser.avatar_file_id,
+    avatar_version: updatedUser.avatar_version ?? 0,
+  };
+
+  return c.json(response);
+});
+
 adminRouter.get('/logs', async (c) => {
   const db = c.env.DB;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);

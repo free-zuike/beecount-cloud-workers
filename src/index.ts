@@ -7,10 +7,70 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
-import { validateAccessToken } from './auth';
+import { validateAccessToken, hashPassword } from './auth';
 
 // WebSocket 连接存储（简单实现）
 const wsConnections = new Map<string, Set<WebSocket>>();
+
+// 生成随机密码
+function generateRandomPassword(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  let password = '';
+  for (let i = 0; i < 12; i++) {
+    password += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return password;
+}
+
+// 初始化默认管理员账户
+async function initializeAdmin(db: D1Database): Promise<void> {
+  try {
+    // 检查是否已有管理员账户
+    const adminCount = await db
+      .prepare('SELECT COUNT(*) as count FROM users WHERE is_admin = 1')
+      .first<{ count: number }>();
+
+    if (adminCount && adminCount.count > 0) {
+      console.log('[INIT] Admin user already exists, skipping initialization');
+      return;
+    }
+
+    // 生成随机密码
+    const adminPassword = generateRandomPassword();
+    const adminEmail = 'admin@localhost';
+    const userId = crypto.randomUUID();
+    const passwordHash = await hashPassword(adminPassword);
+
+    // 创建管理员用户
+    await db
+      .prepare(
+        `INSERT INTO users (id, email, password_hash, is_admin, is_enabled, created_at)
+         VALUES (?, ?, ?, 1, 1, ?)`
+      )
+      .bind(userId, adminEmail, passwordHash, new Date().toISOString())
+      .run();
+
+    // 创建用户 profile
+    await db
+      .prepare(
+        `INSERT INTO user_profiles (user_id, display_name, avatar_version)
+         VALUES (?, ?, 0)`
+      )
+      .bind(userId, 'Admin')
+      .run();
+
+    console.log('========================================');
+    console.log('🐝 BeeCount Cloud - Admin Account Created');
+    console.log('========================================');
+    console.log(`Email: ${adminEmail}`);
+    console.log(`Password: ${adminPassword}`);
+    console.log('========================================');
+    console.log('Please change this password after first login!');
+    console.log('========================================');
+  } catch (error) {
+    console.error('[INIT] Failed to initialize admin user:', error);
+  }
+}
 
 import authRouter from './routes/auth';
 import twoFactorRouter from './routes/two_factor';
@@ -56,6 +116,16 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // 全局中间件
 app.use('*', cors());
+
+// 初始化中间件 - 在第一次请求时创建默认管理员
+let initialized = false;
+app.use('*', async (c, next) => {
+  if (!initialized) {
+    await initializeAdmin(c.env.DB);
+    initialized = true;
+  }
+  await next();
+});
 
 /**
  * 健康检查端点
