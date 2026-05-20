@@ -135,27 +135,54 @@ type FetchMaker = (token: string) => Promise<Response>
  * Callers provide a factory that builds the request given the current token
  * string so we can replay the call with a refreshed token.
  */
+async function isAuthError(res: Response): Promise<boolean> {
+  if (res.status === 401 || res.status === 403) return true
+  if (res.status !== 500) return false
+  try {
+    const text = await res.text()
+    const json = JSON.parse(text) as any
+    const code = json?.error_code || json?.error?.code
+    if (code && code.startsWith('AUTH_')) return true
+  } catch (_) {
+    // ignore parse errors
+  }
+  return false
+}
+
 async function authedFetch(makeRequest: FetchMaker, token: string): Promise<Response> {
   const res = await makeRequest(token)
-  if (res.status !== 401) return res
-  // Drain the body so we don't leak the connection on node/fetch implementations.
-  try {
-    await res.text()
-  } catch (_) {
-    // ignore
+  if (res.status === 401) {
+    try {
+      await res.text()
+    } catch (_) {
+      // ignore
+    }
+    if (!refreshFn) {
+      logoutFn?.()
+      return res
+    }
+    try {
+      const fresh = await doRefresh()
+      return await makeRequest(fresh)
+    } catch (_) {
+      logoutFn?.()
+      return res
+    }
   }
-  if (!refreshFn) {
-    // No refresh path configured — surface 401 so caller logs out explicitly.
-    logoutFn?.()
-    return res
+  if (res.status === 500) {
+    const text = await res.text()
+    try {
+      const json = JSON.parse(text) as any
+      const code = json?.error_code || json?.error?.code
+      if (code && code.startsWith('AUTH_')) {
+        logoutFn?.()
+      }
+    } catch (_) {
+      // ignore parse errors
+    }
+    throw await extractApiError(new Response(text, { status: res.status, headers: res.headers }))
   }
-  try {
-    const fresh = await doRefresh()
-    return await makeRequest(fresh)
-  } catch (_) {
-    logoutFn?.()
-    return res
-  }
+  return res
 }
 
 export async function authedGet<T>(path: string, token: string): Promise<T> {
