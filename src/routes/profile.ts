@@ -151,7 +151,6 @@ profileRouter.get('/me', async (c) => {
     user_id: row.id,
     email: row.email,
     display_name: row.display_name,
-    // 返回头像 API 路径而不是 file id
     avatar_url: row.avatar_file_id ? `/api/v1/profile/avatar/${row.id}` : null,
     avatar_version: row.avatar_version ?? 0,
     income_is_red: row.income_is_red !== null ? Boolean(row.income_is_red) : null,
@@ -279,7 +278,6 @@ profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => 
     user_id: row.id,
     email: row.email,
     display_name: row.display_name,
-    // 返回头像 API 路径而不是 file id
     avatar_url: row.avatar_file_id ? `/api/v1/profile/avatar/${row.id}` : null,
     avatar_version: row.avatar_version ?? 0,
     income_is_red: row.income_is_red !== null ? Boolean(row.income_is_red) : null,
@@ -292,16 +290,9 @@ profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => 
 });
 
 // ---------------------------------------------------------------------------
-// POST /profile/me/avatar - 上传头像
+// POST /profile/me/change-password - 修改密码
 // ---------------------------------------------------------------------------
 
-/**
- * 修改密码
- *
- * 请求字段：
- * - current_password: 当前密码
- * - new_password: 新密码（至少8位）
- */
 profileRouter.post('/me/change-password', zValidator('json', z.object({
   current_password: z.string(),
   new_password: z.string().min(8)
@@ -336,13 +327,17 @@ profileRouter.post('/me/change-password', zValidator('json', z.object({
   return c.json({ success: true, message: 'Password changed successfully' });
 });
 
+// ---------------------------------------------------------------------------
+// POST /profile/me/avatar - 上传头像
+// ---------------------------------------------------------------------------
+
 /**
  * 上传用户头像
  *
  * 功能说明：
  * - 接收 FormData 中的 file 字段
  * - 计算文件 SHA256 哈希
- * - 存储到 attachment_files 表（kind='category_icon' 用于头像）
+ * - 存储到 attachment_files 表
  * - 更新 user_profiles 的 avatar_file_id 和 avatar_version
  *
  * 请求：
@@ -366,8 +361,7 @@ profileRouter.post('/me/avatar', async (c) => {
  *
  * 功能说明：
  * - 公开端点，无需认证即可访问
- * - 按 user_id 查询用户头像
- * - 支持缓存（通过 v 参数控制）
+ * - 返回一个 SVG 占位符头像
  *
  * 路径参数：
  * - user_id: 用户 ID
@@ -376,13 +370,51 @@ profileRouter.post('/me/avatar', async (c) => {
  * - v: 头像版本号（用于缓存 busting）
  *
  * 响应：
- * - 200: 图片文件
- * - 404: 头像不存在
+ * - 200: SVG 图片
+ * - 500: 服务器错误
  */
 profileRouter.get('/avatar/:user_id', async (c) => {
-  // 暂时不实现实际的图片存储和返回，返回 204 No Content
-  // 这样前端可以使用默认头像，而不会崩溃
-  return c.text('', 204);
+  const userId = c.req.param('user_id');
+  const db = c.env.DB;
+  const version = c.req.query('v');
+
+  // 先尝试查询用户头像
+  try {
+    const profile = await db
+      .prepare(
+        `SELECT p.avatar_file_id, p.avatar_version
+         FROM user_profiles p
+         WHERE p.user_id = ?`
+      )
+      .bind(userId)
+      .first<{
+        avatar_file_id: string | null;
+        avatar_version: number | null;
+      }>();
+
+    if (profile && profile.avatar_file_id) {
+      // 如果有头像，返回 JSON 响应
+      return c.json({
+        error: 'Avatar not yet implemented',
+        file_id: profile.avatar_file_id,
+        version: profile.avatar_version,
+      });
+    }
+  } catch (err) {
+    console.error('[Avatar] Database query failed:', err);
+  }
+
+  // 返回默认 SVG 占位符头像
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+    <circle cx="50" cy="50" r="50" fill="#FF9800"/>
+    <circle cx="50" cy="40" r="20" fill="#FFE0B2"/>
+    <path d="M20 85 Q50 55 80 85 Z" fill="#FFE0B2"/>
+  </svg>`;
+
+  return c.html(svg, 200, {
+    'Content-Type': 'image/svg+xml',
+    'Cache-Control': version ? 'public, max-age=31536000, immutable' : 'public, max-age=86400',
+  });
 });
 
 export default profileRouter;
