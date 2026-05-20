@@ -445,9 +445,29 @@ app.get('/ws', async (c) => {
 // ===========================
 // 前端静态文件服务 (SPA 支持)
 // ===========================
-app.get('*', async (c) => {
+app.get('*', async (c, next) => {
   const url = new URL(c.req.url);
   const pathname = url.pathname;
+  
+  // 如果是 API 路由或其他后端路由，直接下一个中间件，不用处理！
+  if (pathname.startsWith('/api/v1/') || 
+      pathname.startsWith('/sync') || 
+      pathname.startsWith('/read') || 
+      pathname.startsWith('/write') || 
+      pathname.startsWith('/devices') || 
+      pathname.startsWith('/profile') || 
+      pathname.startsWith('/attachments') || 
+      pathname.startsWith('/import') || 
+      pathname.startsWith('/ai') || 
+      pathname.startsWith('/backup') || 
+      pathname.startsWith('/notifications') || 
+      pathname.startsWith('/ws') || 
+      pathname.startsWith('/2fa') || 
+      pathname.startsWith('/mcp-calls') || 
+      pathname.startsWith('/admin') || 
+      pathname.startsWith('/sys-config')) {
+    return await next();
+  }
   
   // 静态资源文件 (assets, branding, icons, manifest.webmanifest, sw.js)
   // 这些文件应该直接从 ASSETS 获取
