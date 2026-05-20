@@ -32,11 +32,33 @@ authRouter.post('/register', zValidator('json', z.object({
     VALUES (?, ?, ?, 0, 1)
   `).bind(userId, email, passwordHash).run();
 
-  // Create user profile
+  // Create user profile with default AI config
+  const defaultAiConfig = JSON.stringify({
+    providers: [
+      {
+        id: 'zhipu_glm',
+        name: '智谱GLM',
+        isBuiltIn: true,
+        apiKey: '',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        textModel: 'glm-4-flash',
+        visionModel: 'glm-4v-flash',
+        audioModel: 'glm-4-voice'
+      }
+    ],
+    binding: {
+      textProviderId: 'zhipu_glm',
+      visionProviderId: 'zhipu_glm',
+      speechProviderId: 'zhipu_glm'
+    },
+    strategy: 'cloud_first',
+    custom_prompt: ''
+  });
+  
   await db.prepare(`
-    INSERT INTO user_profiles (user_id, display_name)
-    VALUES (?, ?)
-  `).bind(userId, email).run();
+    INSERT INTO user_profiles (user_id, display_name, ai_config_json)
+    VALUES (?, ?, ?)
+  `).bind(userId, email, defaultAiConfig).run();
 
   return c.json({ success: true });
 });

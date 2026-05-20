@@ -152,13 +152,35 @@ async function initializeAdmin(db: D1Database): Promise<void> {
       .bind(userId, adminEmail, passwordHash, new Date().toISOString())
       .run();
 
-    // 创建用户 profile
+    // 创建用户 profile（包含默认 AI 配置）
+    const defaultAiConfig = JSON.stringify({
+      providers: [
+        {
+          id: 'zhipu_glm',
+          name: '智谱GLM',
+          isBuiltIn: true,
+          apiKey: '',
+          baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+          textModel: 'glm-4-flash',
+          visionModel: 'glm-4v-flash',
+          audioModel: 'glm-4-voice'
+        }
+      ],
+      binding: {
+        textProviderId: 'zhipu_glm',
+        visionProviderId: 'zhipu_glm',
+        speechProviderId: 'zhipu_glm'
+      },
+      strategy: 'cloud_first',
+      custom_prompt: ''
+    });
+    
     await db
       .prepare(
-        `INSERT INTO user_profiles (user_id, display_name, avatar_version)
-         VALUES (?, ?, 0)`
+        `INSERT INTO user_profiles (user_id, display_name, avatar_version, ai_config_json)
+         VALUES (?, ?, 0, ?)`
       )
-      .bind(userId, 'Admin')
+      .bind(userId, 'Admin', defaultAiConfig)
       .run();
 
     console.log('');
