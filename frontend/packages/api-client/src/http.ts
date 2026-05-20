@@ -60,33 +60,12 @@ export function configureHttp(opts: { refreshToken?: RefreshFn | null; onLogout?
   logoutFn = opts.onLogout ?? null
 }
 
-async function checkAuthErrorAndLogout(res: Response): Promise<{ isAuthError: boolean; text: string }> {
-  let text = ''
+async function drainResponse(res: Response): Promise<void> {
   try {
-    text = await res.text()
-  } catch (_) {
+    await res.text()
+  } catch {
     // ignore
   }
-
-  if (res.status === 401 || res.status === 403) {
-    logoutFn?.()
-    return { isAuthError: true, text }
-  }
-
-  if (res.status === 500) {
-    try {
-      const json = JSON.parse(text) as any
-      const code = json?.error_code || json?.error?.code
-      if (code && code.startsWith('AUTH_')) {
-        logoutFn?.()
-        return { isAuthError: true, text }
-      }
-    } catch (_) {
-      // ignore parse errors
-    }
-  }
-
-  return { isAuthError: false, text }
 }
 
 async function parseResponse<T>(res: Response, text?: string): Promise<T> {
@@ -166,31 +145,28 @@ type FetchMaker = (token: string) => Promise<Response>
  * Callers provide a factory that builds the request given the current token
  * string so we can replay the call with a refreshed token.
  */
-async function authedFetchAndParse<T>(makeRequest: FetchMaker, token: string): Promise<T> {
-  let res = await makeRequest(token)
-  let text: string | undefined
+async function authedFetch(makeRequest: FetchMaker, token: string): Promise<Response> {
+  const res = await makeRequest(token)
+  if (res.status !== 401) return res
 
-  if (res.status === 401 || res.status === 403 || res.status === 500) {
-    const result = await checkAuthErrorAndLogout(res)
-    text = result.text
+  await drainResponse(res)
 
-    if (res.status === 401 && refreshFn) {
-      try {
-        const fresh = await doRefresh()
-        res = await makeRequest(fresh)
-        const retryResult = await checkAuthErrorAndLogout(res)
-        return await parseResponse<T>(res, retryResult.text)
-      } catch (_) {
-        // Refresh failed, error already handled by checkAuthErrorAndLogout
-      }
-    }
+  if (!refreshFn) {
+    logoutFn?.()
+    return res
   }
 
-  return await parseResponse<T>(res, text)
+  try {
+    const fresh = await doRefresh()
+    return await makeRequest(fresh)
+  } catch (_) {
+    logoutFn?.()
+    return res
+  }
 }
 
 export async function authedGet<T>(path: string, token: string): Promise<T> {
-  return authedFetchAndParse<T>(
+  const res = await authedFetch(
     (tok) =>
       fetch(`${API_BASE}${path}`, {
         headers: authHeaders(tok),
@@ -198,6 +174,7 @@ export async function authedGet<T>(path: string, token: string): Promise<T> {
       }),
     token
   )
+  return parseResponse<T>(res)
 }
 
 export async function authedPost<T>(
@@ -206,7 +183,7 @@ export async function authedPost<T>(
   body: unknown,
   idempotencyKey?: string
 ): Promise<T> {
-  return authedFetchAndParse<T>(
+  const res = await authedFetch(
     (tok) =>
       fetch(`${API_BASE}${path}`, {
         method: 'POST',
@@ -218,10 +195,11 @@ export async function authedPost<T>(
       }),
     token
   )
+  return parseResponse<T>(res)
 }
 
 export async function authedPatch<T>(path: string, token: string, body: unknown): Promise<T> {
-  return authedFetchAndParse<T>(
+  const res = await authedFetch(
     (tok) =>
       fetch(`${API_BASE}${path}`, {
         method: 'PATCH',
@@ -233,11 +211,12 @@ export async function authedPatch<T>(path: string, token: string, body: unknown)
       }),
     token
   )
+  return parseResponse<T>(res)
 }
 
 export async function authedDelete<T>(path: string, token: string, body?: unknown): Promise<T> {
   const hasBody = typeof body !== 'undefined'
-  return authedFetchAndParse<T>(
+  const res = await authedFetch(
     (tok) =>
       fetch(`${API_BASE}${path}`, {
         method: 'DELETE',
@@ -251,4 +230,5 @@ export async function authedDelete<T>(path: string, token: string, body?: unknow
       }),
     token
   )
+  return parseResponse<T>(res)
 }
