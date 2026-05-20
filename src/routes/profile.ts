@@ -667,7 +667,9 @@ profileRouter.post('/me/avatar', async (c) => {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const sha256 = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 
-    const storagePath = `avatars/${userId}/${fileId}/${fileName}`;
+    const encodedFileName = encodeURIComponent(fileName);
+    const storagePath = `avatars/${userId}/${fileId}/${encodedFileName}`;
+    console.log('[Avatar] Uploading to storage_path:', storagePath);
 
     const s3 = new S3Service(db, c.env);
     if (await s3.isConfigured()) {
@@ -750,7 +752,9 @@ profileRouter.post('/avatar', async (c) => {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const sha256 = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 
-    const storagePath = `avatars/${userId}/${fileId}/${fileName}`;
+    const encodedFileName = encodeURIComponent(fileName);
+    const storagePath = `avatars/${userId}/${fileId}/${encodedFileName}`;
+    console.log('[Avatar] Uploading to storage_path:', storagePath);
 
     const s3 = new S3Service(db, c.env);
     if (await s3.isConfigured()) {
@@ -859,6 +863,7 @@ profileRouter.get('/avatar/:user_id', async (c) => {
       if (attachment && attachment.storage_path) {
         const s3 = new S3Service(db, c.env);
         if (await s3.isConfigured()) {
+          console.log('[Avatar] Downloading from storage_path:', attachment.storage_path);
           const s3Response = await s3.download(attachment.storage_path);
           if (s3Response) {
             return new Response(s3Response.body, {
