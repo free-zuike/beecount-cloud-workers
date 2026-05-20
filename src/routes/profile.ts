@@ -501,17 +501,8 @@ profileRouter.post('/avatar', async (c) => {
  * 功能说明：
  * - 公开端点，无需认证即可访问
  * - 按 user_id 查询用户头像
- * - 支持缓存（通过 v 参数控制）
- *
- * 路径参数：
- * - user_id: 用户 ID
- *
- * 查询参数：
- * - v: 头像版本号（用于缓存 busting）
- *
- * 响应：
- * - 200: 图片文件
- * - 404: 头像不存在
+ * - 如果有头像文件，从 R2 返回
+ * - 如果没有，返回默认的 SVG 头像
  */
 profileRouter.get('/avatar/:user_id', async (c) => {
   const userId = c.req.param('user_id');
@@ -520,51 +511,69 @@ profileRouter.get('/avatar/:user_id', async (c) => {
 
   const profile = await db
     .prepare(
-      `SELECT p.avatar_file_id, p.avatar_version
-       FROM user_profiles p
-       WHERE p.user_id = ?`
+      `SELECT u.email, p.avatar_file_id, p.avatar_version, p.display_name
+       FROM users u
+       LEFT JOIN user_profiles p ON p.user_id = u.id
+       WHERE u.id = ?`
     )
     .bind(userId)
     .first<{
+      email: string;
       avatar_file_id: string | null;
       avatar_version: number | null;
+      display_name: string | null;
     }>();
 
-  if (!profile || !profile.avatar_file_id) {
-    return c.json({ error: 'Avatar not found' }, 404);
+  if (!profile) {
+    return c.json({ error: 'User not found' }, 404);
   }
 
-  const attachment = await db
-    .prepare(
-      `SELECT id, storage_path, mime_type, file_name, size_bytes
-       FROM attachment_files
-       WHERE id = ?`
-    )
-    .bind(profile.avatar_file_id)
-    .first<{
-      id: string;
-      storage_path: string;
-      mime_type: string | null;
-      file_name: string | null;
-      size_bytes: number;
-    }>();
+  const displayName = profile.display_name || profile.email.split('@')[0];
+  const initial = displayName.charAt(0).toUpperCase();
 
-  if (!attachment) {
-    return c.json({ error: 'Avatar not found' }, 404);
+  const cacheControl = version && version === String(profile.avatar_version)
+    ? 'public, max-age=31536000, immutable'
+    : 'no-cache';
+
+  if (profile.avatar_file_id) {
+    const attachment = await db
+      .prepare(
+        `SELECT mime_type, file_name, size_bytes
+         FROM attachment_files
+         WHERE id = ?`
+      )
+      .bind(profile.avatar_file_id)
+      .first<{
+        mime_type: string | null;
+        file_name: string | null;
+        size_bytes: number;
+      }>();
+
+    if (attachment) {
+      return c.json({
+        file_id: attachment.file_name,
+        mime_type: attachment.mime_type,
+        size: attachment.size_bytes,
+        version: profile.avatar_version,
+        cache_control: cacheControl,
+        avatar_url: `/api/v1/attachments/${profile.avatar_file_id}`,
+      });
+    }
   }
 
-  const cacheControl =
-    version && version === String(profile.avatar_version)
-      ? 'public, max-age=31536000, immutable'
-      : 'no-cache';
+  const defaultAvatar = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+    <circle cx="64" cy="64" r="64" fill="#4F46E5"/>
+    <text x="64" y="72" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="white" text-anchor="middle">${initial}</text>
+  </svg>`;
 
   return c.json({
-    file_id: attachment.id,
-    mime_type: attachment.mime_type,
-    file_name: attachment.file_name,
-    size: attachment.size_bytes,
-    version: profile.avatar_version,
-    cache_control: cacheControl,
+    file_id: null,
+    mime_type: 'image/svg+xml',
+    size: new TextEncoder().encode(defaultAvatar).length,
+    version: 0,
+    cache_control: 'public, max-age=31536000',
+    avatar_url: `data:image/svg+xml;base64,${btoa(defaultAvatar)}`,
+    initial: initial,
   });
 });
 
