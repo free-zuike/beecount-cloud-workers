@@ -163,6 +163,12 @@ class S3Service {
 
     try {
       console.log('[S3Service] upload: starting upload to', key);
+      console.log('[S3Service] config:', {
+        endpoint: config.endpoint,
+        bucket: config.bucketName,
+        region: config.region,
+        accessKeyId: config.accessKeyId ? '***' : 'missing'
+      });
       const { url, headers } = await signRequest(
         config.accessKeyId,
         config.secretAccessKey,
@@ -183,9 +189,16 @@ class S3Service {
       });
 
       console.log('[S3Service] upload: response status', response.status);
+      if (!response.ok) {
+        const responseText = await response.text();
+        console.error('[S3Service] upload: failed with response:', responseText);
+      }
       return response.ok;
     } catch (err) {
       console.error('[S3Service] upload: error', err);
+      if (err instanceof Error) {
+        console.error('[S3Service] upload: error stack', err.stack);
+      }
       return false;
     }
   }
