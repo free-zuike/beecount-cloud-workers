@@ -53,19 +53,9 @@ function safeJsonStringify(obj: unknown): string | null {
 // S3 服务类（用于头像上传下载）
 // ===========================
 
-type S3Bindings = {
-  DB: D1Database;
-  JWT_SECRET: string;
-  S3_ACCESS_KEY_ID?: string;
-  S3_SECRET_ACCESS_KEY?: string;
-  S3_REGION?: string;
-  S3_BUCKET_NAME?: string;
-  S3_ENDPOINT?: string;
-};
-
 class S3Service {
   private db: D1Database;
-  private env: S3Bindings;
+  private env: Bindings;
   private s3ConfigCache: any = null;
   private s3ConfigCacheTime: number = 0;
   private CACHE_TTL_MS = 60000;
@@ -317,6 +307,13 @@ interface UserProfileOut {
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
+  S3_ENDPOINT?: string;
+  S3_REGION?: string;
+  S3_ACCESS_KEY_ID?: string;
+  S3_SECRET_ACCESS_KEY?: string;
+  S3_BUCKET_NAME?: string;
+  S3_PATH_STYLE?: string;
+  S3_CDN_DOMAIN?: string;
 };
 
 type Variables = {
