@@ -97,6 +97,12 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
       hint: '存储桶名称。备份文件会落到 <bucket>/<timestamp>.tar.gz。R2 / S3 必填。',
     },
     {
+      key: 'save_path',
+      label: 'Upload Path (头像/附件前缀)',
+      placeholder: 'avatars / attachments / 留空自动',
+      hint: '上传头像和附件时的路径前缀。头像默认用 avatars，附件默认用 attachments。',
+    },
+    {
       key: 'region',
       label: 'Region',
       placeholder: 'us-east-1 / 留空(R2 / MinIO 不需要)',
