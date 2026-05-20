@@ -267,6 +267,7 @@ async function signRequest(
     const url = `${endpoint}/${bucket}/${key}`;
     const host = new URL(endpoint).host;
     console.log('[S3] Using path style - endpoint:', endpoint, 'bucket:', bucket, 'key:', key);
+    console.log('[S3] AccessKey:', accessKey, 'SecretKey length:', secretKey.length);
     
     const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:${amzDate}\n`;
     const signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date';
@@ -279,8 +280,13 @@ async function signRequest(
     const hashedCanonicalRequest = await sha256Hex(canonicalRequest);
     const stringToSign = `${algorithm}\n${amzDate}\n${credentialScope}\n${hashedCanonicalRequest}`;
     
+    console.log('[S3] Canonical request:', canonicalRequest);
+    console.log('[S3] String to sign:', stringToSign);
+    
     const signingKey = await getSignatureKey(secretKey, dateStamp, region, service);
     const signature = await hmacHex(signingKey, stringToSign);
+    
+    console.log('[S3] Signature:', signature);
     
     const authorizationHeader = `${algorithm} Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
     
