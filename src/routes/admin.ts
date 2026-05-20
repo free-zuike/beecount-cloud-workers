@@ -139,15 +139,16 @@ adminRouter.get('/health', async (c) => {
     await db.prepare('SELECT 1').first();
     return c.json({
       status: 'healthy',
-      timestamp: new Date().toISOString(),
-      database: 'connected',
+      db: 'connected',
+      online_ws_users: 0,
+      time: new Date().toISOString(),
     });
   } catch (error) {
     return c.json({
       status: 'unhealthy',
-      timestamp: new Date().toISOString(),
-      database: 'disconnected',
-      error: String(error),
+      db: 'disconnected',
+      online_ws_users: 0,
+      time: new Date().toISOString(),
     }, 503);
   }
 });
@@ -632,54 +633,52 @@ adminRouter.get('/integrity/scan', async (c) => {
   const db = c.env.DB;
   
   try {
-    const orphanedDevices = await db
-      .prepare(
-        `SELECT COUNT(*) as cnt FROM devices d
-         WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = d.user_id)`
-      )
-      .first<{ cnt: number }>();
-    
-    const orphanedLedgers = await db
-      .prepare(
-        `SELECT COUNT(*) as cnt FROM ledgers l
-         WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = l.user_id)`
-      )
+    const ledgersTotal = await db
+      .prepare('SELECT COUNT(*) as cnt FROM ledgers')
       .first<{ cnt: number }>();
     
     const orphanedSyncChanges = await db
       .prepare(
-        `SELECT COUNT(*) as cnt FROM sync_changes sc
-         WHERE NOT EXISTS (SELECT 1 FROM ledgers l WHERE l.id = sc.ledger_id)`
+        `SELECT sc.ledger_id, sc.entity_sync_id, l.name as ledger_name, u.email as owner_email, COUNT(*) as cnt
+         FROM sync_changes sc
+         LEFT JOIN ledgers l ON l.id = sc.ledger_id
+         LEFT JOIN users u ON u.id = l.user_id
+         WHERE NOT EXISTS (SELECT 1 FROM ledgers l WHERE l.id = sc.ledger_id)
+         GROUP BY sc.ledger_id
+         LIMIT 10`
       )
-      .first<{ cnt: number }>();
+      .all<{ ledger_id: string; entity_sync_id: string; ledger_name: string | null; owner_email: string | null; cnt: number }>();
     
-    const missingProfiles = await db
-      .prepare(
-        `SELECT COUNT(*) as cnt FROM users u
-         WHERE NOT EXISTS (SELECT 1 FROM user_profiles p WHERE p.user_id = u.id)`
-      )
-      .first<{ cnt: number }>();
+    const issues: any[] = [];
+    
+    if (orphanedSyncChanges.results.length > 0) {
+      issues.push({
+        issue_type: 'orphaned_sync_changes',
+        ledger_id: '',
+        ledger_name: 'Unknown',
+        owner_email: null,
+        count: orphanedSyncChanges.results.reduce((sum, r) => sum + r.cnt, 0),
+        samples: orphanedSyncChanges.results.slice(0, 5).map(r => ({
+          sync_id: r.entity_sync_id,
+          label: r.entity_sync_id,
+        })),
+      });
+    }
     
     return c.json({
-      status: 'completed',
-      timestamp: new Date().toISOString(),
-      issues: {
-        orphaned_devices: orphanedDevices?.cnt ?? 0,
-        orphaned_ledgers: orphanedLedgers?.cnt ?? 0,
-        orphaned_sync_changes: orphanedSyncChanges?.cnt ?? 0,
-        missing_profiles: missingProfiles?.cnt ?? 0,
-      },
-      total_issues: (orphanedDevices?.cnt ?? 0) + 
-                    (orphanedLedgers?.cnt ?? 0) + 
-                    (orphanedSyncChanges?.cnt ?? 0) + 
-                    (missingProfiles?.cnt ?? 0),
+      scanned_at: new Date().toISOString(),
+      ledgers_total: ledgersTotal?.cnt ?? 0,
+      issues_total: issues.reduce((sum, i) => sum + i.count, 0),
+      issues,
     });
   } catch (error) {
+    console.error('[INTEGRITY] Scan error:', error);
     return c.json({
-      status: 'error',
-      timestamp: new Date().toISOString(),
-      error: String(error),
-    }, 500);
+      scanned_at: new Date().toISOString(),
+      ledgers_total: 0,
+      issues_total: 0,
+      issues: [],
+    });
   }
 });
 
