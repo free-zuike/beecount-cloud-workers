@@ -189,6 +189,18 @@ export function OpsDevicesPanel({ rows, onReload }: OpsDevicesPanelProps) {
                             <span className="font-mono text-[10px]">{row.last_ip}</span>
                           </div>
                         ) : null}
+                        {row.device_model ? (
+                          <div className="flex items-center justify-between gap-2">
+                            <span>{t('ops.device.header.deviceModel')}</span>
+                            <span className="text-[10px]">{row.device_model}</span>
+                          </div>
+                        ) : null}
+                        {row.os_version ? (
+                          <div className="flex items-center justify-between gap-2">
+                            <span>{t('ops.device.header.osVersion')}</span>
+                            <span className="text-[10px]">{row.os_version}</span>
+                          </div>
+                        ) : null}
                         {!showAllSessions && row.session_count > 1 ? (
                           <div className="flex items-center justify-between gap-2">
                             <span>{t('ops.device.header.sessions')}</span>
