@@ -62,6 +62,20 @@ type Variables = {
 
 const profileRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
+profileRouter.use('*', async (c, next) => {
+  try {
+    await next();
+  } catch (error) {
+    console.error('[PROFILE] Error:', error);
+    
+    if (error instanceof Error && error.message.includes('no such table')) {
+      return c.json({ error: 'Database not initialized' }, 503);
+    }
+    
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
 profileRouter.get('/me', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
