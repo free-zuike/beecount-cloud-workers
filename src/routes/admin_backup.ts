@@ -130,7 +130,7 @@ backupRouter.get('/remotes', async (c) => {
        ORDER BY created_at DESC`
     )
     .all<{
-      id: string;
+      id: number;
       name: string;
       backend_type: string;
       config_summary: string;
@@ -151,7 +151,7 @@ backupRouter.get('/remotes', async (c) => {
     }
 
     return {
-      id: row.id,
+      id: String(row.id),
       name: row.name,
       backend_type: row.backend_type,
       config: maskedConfig,
@@ -172,16 +172,14 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
-  const remoteId = randomUUID();
   const configJson = JSON.stringify(req.config);
 
-  await db
+  const result = await db
     .prepare(
-      `INSERT INTO backup_remotes (id, name, backend_type, config_summary, encrypted, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO backup_remotes (name, backend_type, config_summary, encrypted, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
     )
     .bind(
-      remoteId,
       req.name,
       req.backend_type,
       configJson,
@@ -191,6 +189,8 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
     )
     .run();
 
+  const remoteId = result.lastRowId;
+
   if (req.is_default) {
     await db
       .prepare('UPDATE backup_remotes SET encrypted = 0 WHERE id != ?')
@@ -199,7 +199,7 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
   }
 
   return c.json({
-    id: remoteId,
+    id: String(remoteId),
     name: req.name,
     backend_type: req.backend_type,
     config: req.config,
@@ -254,7 +254,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
   if (req.is_default) {
     await db
       .prepare('UPDATE backup_remotes SET encrypted = 0 WHERE id != ?')
-      .bind(id)
+      .bind(remoteId)
       .run();
   }
 
@@ -265,7 +265,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
     )
     .bind(remoteId)
     .first<{
-      id: string;
+      id: number;
       name: string;
       backend_type: string;
       config_summary: string;
@@ -275,7 +275,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
     }>();
 
   return c.json({
-    id: updated?.id,
+    id: updated ? String(updated.id) : '',
     name: updated?.name,
     backend_type: updated?.backend_type,
     config: updated?.config_summary ? JSON.parse(updated.config_summary) : {},
