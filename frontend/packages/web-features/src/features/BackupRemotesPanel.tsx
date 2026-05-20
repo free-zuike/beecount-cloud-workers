@@ -97,10 +97,10 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
       hint: '存储桶名称。备份文件会落到 <bucket>/<timestamp>.tar.gz。R2 / S3 必填。',
     },
     {
-      key: 'save_path',
-      label: 'Upload Path (头像/附件前缀)',
-      placeholder: 'avatars / attachments / 留空自动',
-      hint: '上传头像和附件时的路径前缀。头像默认用 avatars，附件默认用 attachments。',
+      key: 'root_path',
+      label: 'Root Path (主路径)',
+      placeholder: 'beecount / 留空',
+      hint: '所有上传的根路径。头像会上传到 <root>/avatars/，附件会传到 <root>/attachments/。留空则不上报到根目录。',
     },
     {
       key: 'region',

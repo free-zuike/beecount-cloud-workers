@@ -168,7 +168,7 @@ class S3Service {
                         id: 'backup_remote',
                         name: 'Backup S3',
                         type: 's3',
-                        savePath: config.save_path || 'attachments',
+                        savePath: config.root_path ? `${config.root_path.replace(/\/+$/, '')}/attachments` : 'attachments',
                         accessKeyId: config.access_key_id,
                         secretAccessKey: config.secret_access_key,
                         region: config.region || 'auto',

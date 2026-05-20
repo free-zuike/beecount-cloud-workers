@@ -100,7 +100,7 @@ class S3Service {
               id: 'backup_remote',
               name: 'Backup S3',
               type: 's3',
-              savePath: config.save_path || 'avatars',
+              savePath: config.root_path ? `${config.root_path.replace(/\/+$/, '')}/avatars` : 'avatars',
               accessKeyId: config.access_key_id,
               secretAccessKey: config.secret_access_key,
               region: config.region || 'auto',
