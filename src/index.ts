@@ -9,6 +9,9 @@ import { cors } from 'hono/cors';
 
 import { validateAccessToken } from './auth';
 
+// WebSocket 连接存储（简单实现）
+const wsConnections = new Map<string, Set<WebSocket>>();
+
 import authRouter from './routes/auth';
 import twoFactorRouter from './routes/two_factor';
 import syncRouter from './routes/sync';
@@ -179,10 +182,108 @@ app.route('/backup', backupRouter);
 app.route('/notifications', notificationsRouter);
 
 // ===========================
-// 前端静态文件服务
+// WebSocket 实时同步端点
+// ===========================
+app.get('/ws', async (c) => {
+  const token = c.req.query('token');
+  if (!token) {
+    return c.json({ error: 'Missing token' }, 400);
+  }
+
+  try {
+    const userId = await validateAccessToken(token, c.env.JWT_SECRET);
+    if (!userId) {
+      return c.json({ error: 'Invalid token' }, 401);
+    }
+
+    const upgradeHeader = c.req.header('Upgrade');
+    if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
+      return c.json({ error: 'Expected WebSocket upgrade' }, 426);
+    }
+
+    const webSocketPair = new WebSocketPair();
+    const [client, server] = Object.values(webSocketPair);
+
+    server.accept();
+
+    // 存储连接
+    if (!wsConnections.has(userId)) {
+      wsConnections.set(userId, new Set());
+    }
+    wsConnections.get(userId)!.add(server);
+
+    server.addEventListener('message', async (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        console.log('[WS] Received message:', message);
+        
+        // 广播给同一用户的其他连接
+        const connections = wsConnections.get(userId);
+        if (connections) {
+          connections.forEach((conn) => {
+            if (conn !== server && conn.readyState === WebSocket.OPEN) {
+              conn.send(event.data);
+            }
+          });
+        }
+      } catch (error) {
+        console.error('[WS] Error processing message:', error);
+      }
+    });
+
+    server.addEventListener('close', () => {
+      const connections = wsConnections.get(userId);
+      if (connections) {
+        connections.delete(server);
+        if (connections.size === 0) {
+          wsConnections.delete(userId);
+        }
+      }
+    });
+
+    server.addEventListener('error', (error) => {
+      console.error('[WS] Error:', error);
+    });
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+    });
+  } catch (error) {
+    console.error('[WS] Connection error:', error);
+    return c.json({ error: 'WebSocket connection failed' }, 500);
+  }
+});
+
+// ===========================
+// 前端静态文件服务 (SPA 支持)
 // ===========================
 app.get('*', async (c) => {
+  const url = new URL(c.req.url);
+  const pathname = url.pathname;
+  
+  // 静态资源文件 (assets, branding, icons, manifest.webmanifest, sw.js)
+  // 这些文件应该直接从 ASSETS 获取
+  const isStaticAsset = pathname.startsWith('/assets/') || 
+                       pathname.startsWith('/branding/') || 
+                       pathname.startsWith('/icons/') ||
+                       pathname === '/manifest.webmanifest' ||
+                       pathname === '/sw.js';
+  
+  // 获取请求的文件
   const res = await c.env.ASSETS.fetch(c.req.raw);
+  
+  if (isStaticAsset) {
+    // 静态资源文件直接返回
+    return res;
+  }
+  
+  // 对于其他路径，如果文件不存在，返回 index.html (SPA 路由)
+  if (res.status === 404) {
+    const indexRes = await c.env.ASSETS.fetch(new Request(`${url.origin}/index.html`, { method: 'GET' }));
+    return indexRes;
+  }
+  
   return res;
 });
 
