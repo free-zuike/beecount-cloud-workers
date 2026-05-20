@@ -144,7 +144,20 @@ authRouter.get('/me', async (c) => {
 // Get 2FA status
 authRouter.get('/2fa/status', async (c) => {
   const db = c.env.DB;
-  const userId = c.get('userId');
+  const jwtSecret = c.env.JWT_SECRET;
+  
+  // 手动验证 token
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  
+  const token = authHeader.slice(7);
+  const userId = await validateAccessToken(token, jwtSecret);
+  
+  if (!userId) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
   
   const user = await db
     .prepare('SELECT totp_enabled, totp_enabled_at FROM users WHERE id = ?')
