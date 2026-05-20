@@ -9,7 +9,6 @@ import { cors } from 'hono/cors';
 
 import { validateAccessToken } from './auth';
 
-// WebSocket 连接存储（简单实现）
 const wsConnections = new Map<string, Set<WebSocket>>();
 
 import authRouter from './routes/auth';
@@ -27,7 +26,6 @@ import attachmentsRouter from './routes/attachments';
 import importRouter from './routes/import_data';
 import aiRouter from './routes/ai';
 import backupRouter from './routes/backup';
-import adminBackupRouter from './routes/admin_backup';
 import notificationsRouter from './routes/notifications';
 import mcpCallsRouter from './routes/mcp_calls';
 import adminRouter from './routes/admin';
@@ -54,17 +52,10 @@ type Variables = {
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
-// 全局中间件
 app.use('*', cors());
 
-/**
- * 健康检查端点
- */
 app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
-/**
- * API 版本信息
- */
 app.get('/api/v1/version', (c) =>
   c.json({
     name: 'BeeCount Cloud Workers',
@@ -72,13 +63,7 @@ app.get('/api/v1/version', (c) =>
   })
 );
 
-// ===========================
-// 认证中间件
-// ===========================
-
-// 通用认证中间件处理函数
 const authMiddleware = async (c: any, next: () => Promise<void>, skipPaths: string[] = []) => {
-  // 检查是否有需要跳过的路径
   for (const skipPath of skipPaths) {
     if (c.req.path.startsWith(skipPath)) {
       return await next();
@@ -113,7 +98,6 @@ const authMiddleware = async (c: any, next: () => Promise<void>, skipPaths: stri
     return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
   }
 
-  // 从 header 获取 device_id (仅用于 last_seen_at 更新)，与原版一致
   const deviceId = c.req.header('X-Device-ID') || c.req.header('x-device-id');
 
   c.set('userId', userId);
@@ -121,22 +105,18 @@ const authMiddleware = async (c: any, next: () => Promise<void>, skipPaths: stri
   await next();
 };
 
-// /api/v1 前缀的路由认证
 app.use('/api/v1/*', async (c, next) => {
   await authMiddleware(c, next, ['/api/v1/auth']);
 });
 
-// /api/v1/auth/2fa 前缀的路由认证（Web UI 使用）
 app.use('/api/v1/auth/2fa/*', async (c, next) => {
-  await authMiddleware(c, next, ['/api/v1/auth/2fa/verify']); // verify 不需要认证
+  await authMiddleware(c, next, ['/api/v1/auth/2fa/verify']);
 });
 
-// /2fa 前缀的路由认证（蜜蜂记账 APP 使用 /2fa 路径）
 app.use('/2fa/*', async (c, next) => {
   await authMiddleware(c, next, ['/2fa/verify']);
 });
 
-// 其他蜜蜂记账 APP 兼容路由（没有 /api/v1 前缀）
 app.use('/sync/*', async (c, next) => authMiddleware(c, next));
 app.use('/read/*', async (c, next) => authMiddleware(c, next));
 app.use('/write/*', async (c, next) => authMiddleware(c, next));
@@ -148,14 +128,10 @@ app.use('/ai/*', async (c, next) => authMiddleware(c, next));
 app.use('/backup/*', async (c, next) => authMiddleware(c, next));
 app.use('/notifications/*', async (c, next) => authMiddleware(c, next));
 
-// ===========================
-// 路由注册
-// ===========================
-
 app.route('/api/v1/auth', authRouter);
-app.route('/api/v1/auth/2fa', twoFactorRouter); // Web UI 使用的路径 /auth/2fa/*
-app.route('/api/v1/2fa', twoFactorRouter); // 备用路径
-app.route('/2fa', twoFactorRouter); // 蜜蜂记账 APP 使用的路径
+app.route('/api/v1/auth/2fa', twoFactorRouter);
+app.route('/api/v1/2fa', twoFactorRouter);
+app.route('/2fa', twoFactorRouter);
 app.route('/api/v1/sync', syncRouter);
 app.route('/api/v1/read', readRouter);
 app.route('/api/v1/read/summary', summaryRouter);
@@ -172,10 +148,8 @@ app.route('/api/v1/backup', backupRouter);
 app.route('/api/v1/notifications', notificationsRouter);
 app.route('/api/v1/mcp-calls', mcpCallsRouter);
 app.route('/api/v1/admin', adminRouter);
-app.route('/api/v1/admin/backup', adminBackupRouter);
 app.route('/api/v1/sys-config', sysConfigRouter);
 
-// 蜜蜂记账 APP 兼容：添加没有 /api/v1 前缀的路由
 app.route('/sync', syncRouter);
 app.route('/read', readRouter);
 app.route('/write', writeRouter);
@@ -187,9 +161,6 @@ app.route('/ai', aiRouter);
 app.route('/backup', backupRouter);
 app.route('/notifications', notificationsRouter);
 
-// ===========================
-// WebSocket 实时同步端点
-// ===========================
 app.get('/ws', async (c) => {
   const token = c.req.query('token');
   if (!token) {
@@ -212,7 +183,6 @@ app.get('/ws', async (c) => {
 
     server.accept();
 
-    // 存储连接
     if (!wsConnections.has(userId)) {
       wsConnections.set(userId, new Set());
     }
@@ -223,7 +193,6 @@ app.get('/ws', async (c) => {
         const message = JSON.parse(event.data);
         console.log('[WS] Received message:', message);
         
-        // 广播给同一用户的其他连接
         const connections = wsConnections.get(userId);
         if (connections) {
           connections.forEach((conn) => {
@@ -261,14 +230,10 @@ app.get('/ws', async (c) => {
   }
 });
 
-// ===========================
-// 前端静态文件服务 (SPA 支持)
-// ===========================
 app.get('*', async (c, next) => {
   const url = new URL(c.req.url);
   const pathname = url.pathname;
   
-  // 如果是 API 路径或蜜蜂记账 APP 兼容路径，不处理，继续匹配后续路由
   if (pathname.startsWith('/api/') || 
       pathname.startsWith('/sync/') || 
       pathname.startsWith('/read/') || 
@@ -285,23 +250,18 @@ app.get('*', async (c, next) => {
     return next();
   }
   
-  // 静态资源文件 (assets, branding, icons, manifest.webmanifest, sw.js)
-  // 这些文件应该直接从 ASSETS 获取
   const isStaticAsset = pathname.startsWith('/assets/') || 
                        pathname.startsWith('/branding/') || 
                        pathname.startsWith('/icons/') ||
                        pathname === '/manifest.webmanifest' ||
                        pathname === '/sw.js';
   
-  // 获取请求的文件
   const res = await c.env.ASSETS.fetch(c.req.raw);
   
   if (isStaticAsset) {
-    // 静态资源文件直接返回
     return res;
   }
   
-  // 对于其他路径，如果文件不存在，返回 index.html (SPA 路由)
   if (res.status === 404) {
     const indexRes = await c.env.ASSETS.fetch(new Request(`${url.origin}/index.html`, { method: 'GET' }));
     return indexRes;
@@ -310,17 +270,9 @@ app.get('*', async (c, next) => {
   return res;
 });
 
-// ===========================
-// 错误处理
-// ===========================
-
 app.onError((err, c) => {
   console.error('Unhandled error:', err);
   return c.json({ error: 'Internal Server Error' }, 500);
 });
-
-// ===========================
-// 导出应用
-// ===========================
 
 export default app;
