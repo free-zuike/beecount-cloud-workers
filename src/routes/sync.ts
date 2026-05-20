@@ -111,6 +111,28 @@ type Variables = {
 
 const syncRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
+syncRouter.use('*', async (c, next) => {
+  try {
+    await next();
+  } catch (error) {
+    console.error('[SYNC] Error:', error);
+    
+    const errorStr = String(error);
+    if (errorStr.includes('no such table')) {
+      const path = c.req.path;
+      if (path.includes('/pull')) {
+        return c.json({ changes: [], server_cursor: 0, server_timestamp: nowUtc() });
+      }
+      if (path.includes('/ledgers')) {
+        return c.json({ ledgers: [] });
+      }
+      return c.json({});
+    }
+    
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // POST /sync/push - 增量推送：客户端推送变更到服务端
 // ---------------------------------------------------------------------------

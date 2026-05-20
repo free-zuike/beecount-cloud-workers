@@ -173,7 +173,12 @@ readRouter.use('*', async (c, next) => {
   } catch (error) {
     console.error('[READ] Error:', error);
     
-    if (error instanceof Error && error.message.includes('no such table')) {
+    const errorStr = String(error);
+    if (errorStr.includes('no such table')) {
+      const path = c.req.path;
+      if (path.includes('/ledgers')) {
+        return c.json([]);
+      }
       return c.json([]);
     }
     
