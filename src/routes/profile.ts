@@ -65,7 +65,7 @@ class S3Service {
     this.env = env;
   }
 
-  private async getS3Config(): Promise<any> {
+  async getS3Config(): Promise<any> {
     const now = Date.now();
     if (this.s3ConfigCache && (now - this.s3ConfigCacheTime) < this.CACHE_TTL_MS) {
       return this.s3ConfigCache;
@@ -100,7 +100,7 @@ class S3Service {
               id: 'backup_remote',
               name: 'Backup S3',
               type: 's3',
-              savePath: 'backup_remote',
+              savePath: config.save_path || 'avatars',
               accessKeyId: config.access_key_id,
               secretAccessKey: config.secret_access_key,
               region: config.region || 'auto',
@@ -146,6 +146,12 @@ class S3Service {
     console.log('[S3Service] No S3 config found');
     return null;
   }
+
+  getStorageKey(userId: string, fileId: string, fileName: string, savePath?: string): string {
+        const encodedFileName = encodeURIComponent(fileName);
+        const basePath = savePath && savePath !== 'custom' ? savePath.replace(/^\/+|\/+$/g, '') : 'avatars';
+        return `${basePath}/${userId}/${fileId}/${encodedFileName}`;
+    }
 
   async isConfigured(): Promise<boolean> {
     const config = await this.getS3Config();
@@ -678,16 +684,23 @@ profileRouter.post('/me/avatar', async (c) => {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const sha256 = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 
-    const encodedFileName = encodeURIComponent(fileName);
-    const storagePath = `avatars/${userId}/${fileId}/${encodedFileName}`;
-    console.log('[Avatar] Uploading to storage_path:', storagePath);
-
     const s3 = new S3Service(db, c.env);
+    let storagePath;
+    
     if (await s3.isConfigured()) {
+      const s3Config = await s3.getS3Config();
+      const savePath = s3Config?.savePath || 'avatars';
+      storagePath = s3.getStorageKey(userId, fileId, fileName, savePath);
+      console.log('[Avatar] Uploading to storage_path:', storagePath, 'savePath:', savePath);
+      
       const uploadSuccess = await s3.upload(storagePath, fileBuffer, mimeType);
       if (!uploadSuccess) {
         return c.json({ error: 'Failed to upload avatar to S3' }, 500);
       }
+    } else {
+      const encodedFileName = encodeURIComponent(fileName);
+      storagePath = `avatars/${userId}/${fileId}/${encodedFileName}`;
+      console.log('[Avatar] Uploading to storage_path:', storagePath);
     }
 
     await db
@@ -763,16 +776,23 @@ profileRouter.post('/avatar', async (c) => {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const sha256 = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 
-    const encodedFileName = encodeURIComponent(fileName);
-    const storagePath = `avatars/${userId}/${fileId}/${encodedFileName}`;
-    console.log('[Avatar] Uploading to storage_path:', storagePath);
-
     const s3 = new S3Service(db, c.env);
+    let storagePath;
+    
     if (await s3.isConfigured()) {
+      const s3Config = await s3.getS3Config();
+      const savePath = s3Config?.savePath || 'avatars';
+      storagePath = s3.getStorageKey(userId, fileId, fileName, savePath);
+      console.log('[Avatar] Uploading to storage_path:', storagePath, 'savePath:', savePath);
+      
       const uploadSuccess = await s3.upload(storagePath, fileBuffer, mimeType);
       if (!uploadSuccess) {
         return c.json({ error: 'Failed to upload avatar to S3' }, 500);
       }
+    } else {
+      const encodedFileName = encodeURIComponent(fileName);
+      storagePath = `avatars/${userId}/${fileId}/${encodedFileName}`;
+      console.log('[Avatar] Uploading to storage_path:', storagePath);
     }
 
     await db
