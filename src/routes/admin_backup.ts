@@ -788,14 +788,23 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
     return c.json({ error: 'Schedule not found' }, 404);
   }
 
+  const ledger = await db
+    .prepare('SELECT id FROM ledgers WHERE user_id = ? LIMIT 1')
+    .bind(schedule.user_id)
+    .first<{ id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found' }, 404);
+  }
+
   const runId = randomUUID();
 
   await db
     .prepare(
       `INSERT INTO backup_runs (id, schedule_id, ledger_id, remote_id, status, started_at)
-       VALUES (?, ?, NULL, NULL, 'pending', ?)`
+       VALUES (?, ?, ?, NULL, 'pending', ?)`
     )
-    .bind(runId, scheduleId, serverNow)
+    .bind(runId, scheduleId, ledger.id, serverNow)
     .run();
 
   return c.json({
