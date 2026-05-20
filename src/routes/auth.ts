@@ -43,11 +43,15 @@ authRouter.post('/register', zValidator('json', z.object({
 
 // Login
 authRouter.post('/login', zValidator('json', z.object({
-  email: z.string().email(),
+  email: z.string().min(1),
   password: z.string(),
   device_id: z.string().optional(),
   device_name: z.string().optional().default('Unknown Device'),
-  platform: z.string().optional().default('unknown')
+  platform: z.string().optional().default('unknown'),
+  client_type: z.string().optional(),
+  app_version: z.string().optional(),
+  os_version: z.string().optional(),
+  device_model: z.string().optional()
 })), async (c) => {
   const { email, password, device_id: deviceId, device_name: deviceName, platform } = c.req.valid('json');
   const resolvedDeviceId = deviceId || randomUUID();
