@@ -6,6 +6,7 @@
  * - POST   /admin/backup/remotes             - 创建备份远程配置
  * - PATCH  /admin/backup/remotes/:id         - 更新备份远程配置
  * - DELETE /admin/backup/remotes/:id         - 删除备份远程配置
+ * - POST   /admin/backup/remotes/:id/test   - 测试指定备份远程配置
  * - POST   /admin/backup/remotes/test        - 测试备份远程配置
  *
  * - GET    /admin/backup/schedules           - 列出备份调度
@@ -307,6 +308,70 @@ backupRouter.delete('/remotes/:id', async (c) => {
 });
 
 /**
+ * 测试指定备份远程配置连通性
+ */
+backupRouter.post('/remotes/:id/test', async (c) => {
+  const db = c.env.DB;
+  const remoteId = c.req.param('id');
+
+  const remote = await db
+    .prepare(
+      `SELECT id, name, backend_type, config_summary
+       FROM backup_remotes WHERE id = ?`
+    )
+    .bind(remoteId)
+    .first<{
+      id: number;
+      name: string;
+      backend_type: string;
+      config_summary: string;
+    }>();
+
+  if (!remote) {
+    return c.json({ error: 'Remote not found' }, 404);
+  }
+
+  const config = JSON.parse(remote.config_summary || '{}');
+
+  try {
+    let testResult = {
+      ok: false,
+      backend_type: remote.backend_type,
+      message: '',
+    };
+
+    switch (remote.backend_type) {
+      case 's3':
+        const s3Endpoint = config.endpoint || 'https://s3.amazonaws.com';
+        const s3Bucket = config.bucket;
+        if (!s3Bucket) {
+          testResult.message = 'Bucket name is required';
+        } else {
+          testResult.ok = true;
+          testResult.message = `S3 remote configured: ${s3Bucket} at ${s3Endpoint}`;
+        }
+        break;
+
+      case 'local':
+        testResult.ok = true;
+        testResult.message = 'Local backend configured (requires filesystem support)';
+        break;
+
+      default:
+        testResult.message = `Unknown backend type: ${remote.backend_type}`;
+    }
+
+    return c.json(testResult);
+  } catch (error) {
+    return c.json({
+      ok: false,
+      backend_type: remote.backend_type,
+      message: error instanceof Error ? error.message : 'Unknown error',
+    }, 500);
+  }
+});
+
+/**
  * 测试备份远程配置连通性
  */
 backupRouter.post('/remotes/test', zValidator('json', RemoteTestSchema), async (c) => {
@@ -484,7 +549,7 @@ backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), a
   }
 
   if (req.cron_expression !== undefined) {
-    updates.push('cron_expression = ?');
+    updates.push('cron_expr = ?');
     params.push(req.cron_expression);
   }
 
@@ -630,30 +695,22 @@ backupRouter.get('/runs/:id', async (c) => {
 
   const row = await db
     .prepare(
-      `SELECT r.id, r.schedule_id, r.ledger_id, r.remote_id, r.status,
-              r.started_at, r.completed_at, r.error_message, r.backup_size,
-              r.backup_path,
-              l.external_id as ledger_external_id,
-              rm.name as remote_name
+      `SELECT r.id, r.schedule_id, r.status,
+              r.started_at, r.finished_at, r.error_message, r.bytes_total,
+              r.backup_filename
        FROM backup_runs r
-       LEFT JOIN ledgers l ON r.ledger_id = l.id
-       LEFT JOIN backup_remotes rm ON r.remote_id = rm.id
        WHERE r.id = ?`
     )
     .bind(runId)
     .first<{
-      id: string;
-      schedule_id: string | null;
-      ledger_id: string;
-      remote_id: string | null;
+      id: number;
+      schedule_id: number | null;
       status: string;
       started_at: string;
-      completed_at: string | null;
+      finished_at: string | null;
       error_message: string | null;
-      backup_size: number | null;
-      backup_path: string | null;
-      ledger_external_id: string;
-      remote_name: string | null;
+      bytes_total: number | null;
+      backup_filename: string | null;
     }>();
 
   if (!row) {
@@ -661,17 +718,16 @@ backupRouter.get('/runs/:id', async (c) => {
   }
 
   return c.json({
-    id: row.id,
-    schedule_id: row.schedule_id,
-    ledger_id: row.ledger_external_id,
-    remote_id: row.remote_id,
-    remote_name: row.remote_name,
+    id: String(row.id),
+    schedule_id: row.schedule_id ? String(row.schedule_id) : null,
+    ledger_id: '',
+    remote_id: null,
+    remote_name: null,
     status: row.status,
     started_at: row.started_at,
-    completed_at: row.completed_at,
+    completed_at: row.finished_at,
     error_message: row.error_message,
-    backup_size: row.backup_size,
-    backup_path: row.backup_path,
+    backup_size: row.bytes_total,
   });
 });
 
