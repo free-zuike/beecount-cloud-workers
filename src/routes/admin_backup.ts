@@ -398,6 +398,60 @@ backupRouter.use('/*', async (c, next) => {
 });
 
 // ---------------------------------------------------------------------------
+// 诊断端点
+// ---------------------------------------------------------------------------
+
+backupRouter.get('/diagnose-s3', async (c) => {
+  const db = c.env.DB;
+  
+  const result: any = {
+    timestamp: new Date().toISOString(),
+    sys_config: {},
+    backup_remotes: {},
+    environment: {}
+  };
+  
+  try {
+    const settingsResult = await db.prepare(
+      'SELECT value FROM settings WHERE key = ?'
+    ).bind('manage@sysConfig@upload').first<{ value: string }>();
+    
+    if (settingsResult && settingsResult.value) {
+      const settingsKV = JSON.parse(settingsResult.value);
+      result.sys_config.has_upload_config = true;
+      result.sys_config.s3_channels = settingsKV.s3?.channels || [];
+      result.sys_config.has_enabled_s3 = settingsKV.s3?.channels?.some((ch: any) => ch.enabled) || false;
+    } else {
+      result.sys_config.has_upload_config = false;
+    }
+  } catch (err) {
+    result.sys_config.error = err instanceof Error ? err.message : 'Unknown error';
+  }
+  
+  try {
+    const remoteCount = await db.prepare(
+      'SELECT COUNT(*) as count FROM backup_remotes'
+    ).first<{ count: number }>();
+    
+    result.backup_remotes.count = remoteCount?.count || 0;
+    
+    const remoteConfigs = await db.prepare(
+      'SELECT id, name, backend_type, config, config_json FROM backup_remotes WHERE backend_type = ?'
+    ).bind('s3').all();
+    
+    result.backup_remotes.s3_remotes = remoteConfigs.results || [];
+  } catch (err) {
+    result.backup_remotes.error = err instanceof Error ? err.message : 'Unknown error';
+  }
+  
+  result.environment.has_s3_env_vars = !!(c.env.S3_ACCESS_KEY_ID && c.env.S3_BUCKET_NAME);
+  result.environment.S3_ACCESS_KEY_ID_set = !!c.env.S3_ACCESS_KEY_ID;
+  result.environment.S3_BUCKET_NAME_set = !!c.env.S3_BUCKET_NAME;
+  
+  return c.json(result);
+});
+
+// ---------------------------------------------------------------------------
 // 远程配置管理
 // ---------------------------------------------------------------------------
 
