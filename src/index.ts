@@ -386,6 +386,68 @@ app.get('/api/v1/admin/backup/diagnose-db', async (c) => {
   }
 });
 
+// 手动数据库迁移端点 - 添加缺失的列
+app.post('/api/v1/admin/backup/migrate-db', async (c) => {
+  const db = c.env.DB;
+  const results: string[] = [];
+  
+  try {
+    // 添加 ledger_id 列
+    try {
+      await db.prepare('ALTER TABLE backup_runs ADD COLUMN ledger_id TEXT').run();
+      results.push('✓ Added ledger_id column');
+    } catch (e) {
+      results.push('~ ledger_id column already exists');
+    }
+    
+    // 添加 remote_id 列
+    try {
+      await db.prepare('ALTER TABLE backup_runs ADD COLUMN remote_id TEXT').run();
+      results.push('✓ Added remote_id column');
+    } catch (e) {
+      results.push('~ remote_id column already exists');
+    }
+    
+    // 添加 backup_size 列
+    try {
+      await db.prepare('ALTER TABLE backup_runs ADD COLUMN backup_size INTEGER').run();
+      results.push('✓ Added backup_size column');
+    } catch (e) {
+      results.push('~ backup_size column already exists');
+    }
+    
+    // 添加 backup_path 列
+    try {
+      await db.prepare('ALTER TABLE backup_runs ADD COLUMN backup_path TEXT').run();
+      results.push('✓ Added backup_path column');
+    } catch (e) {
+      results.push('~ backup_path column already exists');
+    }
+    
+    // 添加 completed_at 列
+    try {
+      await db.prepare('ALTER TABLE backup_runs ADD COLUMN completed_at TEXT').run();
+      results.push('✓ Added completed_at column');
+    } catch (e) {
+      results.push('~ completed_at column already exists');
+    }
+    
+    return c.json({
+      status: 'success',
+      message: 'Database migration completed',
+      results: results,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    return c.json({
+      status: 'error',
+      error: String(error),
+      results: results,
+      timestamp: new Date().toISOString()
+    }, 500);
+  }
+});
+
 app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
   try {
     const db = c.env.DB;
