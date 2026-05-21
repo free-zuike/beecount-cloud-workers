@@ -294,6 +294,14 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
     // 获取当前用户 ID（来自认证中间件）
     const userId = c.get('userId');
 
+    // 如果 userId 不存在，返回错误
+    if (!userId) {
+      return c.json({ 
+        error: 'Unauthorized', 
+        detail: 'User ID not found in context. Please ensure you are authenticated.' 
+      }, 401);
+    }
+
     // 获取 schedule
     const schedule = await db
       .prepare('SELECT id, name, user_id FROM backup_schedules WHERE id = ?')
