@@ -402,7 +402,9 @@ async function performBackup(
             
             // 处理路径前缀（可能来自 root_path 或 savePath）
             let basePrefix = '';
-            if (remoteConfig.root_path) {
+            console.log(`[Backup] Checking root_path in remoteConfig: ${remoteConfig.root_path}`);
+            console.log(`[Backup] Type of root_path: ${typeof remoteConfig.root_path}`);
+            if (remoteConfig.root_path && remoteConfig.root_path !== '') {
                 // 来自 backup_remotes 配置的 root_path
                 basePrefix = remoteConfig.root_path.replace(/^\/+|\/+$/g, '') + '/';
                 console.log(`[Backup] Using root_path: ${basePrefix}`);
@@ -411,7 +413,7 @@ async function performBackup(
                 basePrefix = remoteConfig.savePath.replace(/^\/+|\/+$/g, '') + '/';
                 console.log(`[Backup] Using savePath: ${basePrefix}`);
             } else {
-                console.log(`[Backup] No basePrefix set (root_path or savePath not found)`);
+                console.log(`[Backup] No basePrefix set - root_path: ${remoteConfig.root_path}, savePath: ${remoteConfig.savePath}`);
             }
             
             const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
