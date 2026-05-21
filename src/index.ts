@@ -527,10 +527,18 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
 
     return c.json({
       id: runId,
-      schedule_id: scheduleId,
+      schedule_id: scheduleId.toString(),
       schedule_name: schedule.name,
+      ledger_id: ledger.id,
+      remote_id: null,
+      remote_name: null,
       status: 'pending',
       started_at: serverNow,
+      completed_at: null,
+      error_message: null,
+      backup_size: null,
+      backup_path: null,
+      remote_ids: [],
       message: 'Backup scheduled. Use /admin/backup/runs to check status.',
     }, 202);
   } catch (e) {
