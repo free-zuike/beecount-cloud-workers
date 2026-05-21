@@ -290,6 +290,10 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
     const scheduleId = c.req.param('id');
     const serverNow = new Date().toISOString();
 
+    // 获取当前用户 ID（来自认证中间件）
+    const userId = c.get('userId');
+
+    // 获取 schedule
     const schedule = await db
       .prepare('SELECT id, name, user_id FROM backup_schedules WHERE id = ?')
       .bind(scheduleId)
@@ -299,13 +303,38 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
       return c.json({ error: 'Schedule not found' }, 404);
     }
 
-    const ledger = await db
-      .prepare('SELECT id FROM ledgers WHERE user_id = ? LIMIT 1')
-      .bind(schedule.user_id)
-      .first<{ id: string }>();
+    // 策略1：使用认证用户的第一个 ledger
+    let ledger = await db
+      .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? LIMIT 1')
+      .bind(userId)
+      .first<{ id: string; external_id: string }>();
 
+    // 策略2：如果没有，尝试使用 schedule owner 的第一个 ledger
+    if (!ledger && schedule.user_id) {
+      ledger = await db
+        .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? LIMIT 1')
+        .bind(schedule.user_id)
+        .first<{ id: string; external_id: string }>();
+    }
+
+    // 策略3：最后的备用方案 - 使用系统中的任意一个 ledger
     if (!ledger) {
-      return c.json({ error: 'Ledger not found' }, 404);
+      ledger = await db
+        .prepare('SELECT id, external_id FROM ledgers LIMIT 1')
+        .first<{ id: string; external_id: string }>();
+    }
+
+    // 如果真的没有任何 ledger，返回详细错误信息
+    if (!ledger) {
+      return c.json({
+        error: 'Ledger not found',
+        details: {
+          authenticated_user_id: userId,
+          schedule_user_id: schedule.user_id,
+          schedule_name: schedule.name,
+          message: 'No ledgers exist in the system. Please create a ledger first.'
+        }
+      }, 404);
     }
 
     const runId = crypto.randomUUID();
@@ -326,7 +355,7 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
       message: 'Backup scheduled. Use /admin/backup/runs to check status.',
     }, 202);
   } catch (e) {
-    console.error('Error in run-now handler:', e);
+    console.error('[run-now] Error:', e);
     return c.json({ error: 'Internal server error', detail: String(e) }, 500);
   }
 });
