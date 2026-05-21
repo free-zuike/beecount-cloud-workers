@@ -356,6 +356,36 @@ app.post('/api/v1/admin/backup/test-public', (c) =>
   c.json({ message: 'Public test endpoint works!', time: new Date().toISOString() })
 );
 
+// 数据库诊断端点
+app.get('/api/v1/admin/backup/diagnose-db', async (c) => {
+  const db = c.env.DB;
+  
+  try {
+    // 获取 backup_runs 表结构
+    const tableInfo = await db
+      .prepare("PRAGMA table_info(backup_runs)")
+      .all();
+    
+    // 获取表是否存在
+    const tableExists = await db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='backup_runs'")
+      .first();
+    
+    return c.json({
+      status: 'ok',
+      table_exists: !!tableExists,
+      columns: tableInfo.results || [],
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    return c.json({
+      status: 'error',
+      error: String(error),
+      timestamp: new Date().toISOString()
+    }, 500);
+  }
+});
+
 app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
   try {
     const db = c.env.DB;
