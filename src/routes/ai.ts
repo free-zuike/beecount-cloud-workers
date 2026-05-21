@@ -720,9 +720,11 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
 
   if (!apiKey || !baseUrl) {
     return c.json({
-      ok: false,
-      error: `Missing API key or base URL for provider: ${providerId}`,
+      success: false,
+      error_code: 'AI_TEST_MISSING_FIELDS',
+      error_message: `Missing API key or base URL for provider: ${providerId}`,
       latency_ms: Date.now() - startTime,
+      preview: '',
     });
   }
 
@@ -731,23 +733,36 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
       { role: 'user', content: 'Hi' }
     ];
     
-    await callAiChatJson(baseUrl, apiKey, model || 'gpt-3.5-turbo', messages, 10000);
+    const content = await callAiChatJson(baseUrl, apiKey, model || 'gpt-3.5-turbo', messages, 10000);
     
     return c.json({
-      ok: true,
-      provider: req.provider,
-      model: model || 'gpt-3.5-turbo',
+      success: true,
       latency_ms: Date.now() - startTime,
-      message: 'Connection successful',
+      preview: content || 'Connection successful',
     });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Connection failed';
+    
+    // 根据错误信息判断错误类型
+    let errorCode = 'AI_TEST_UNKNOWN';
+    if (errorMsg.includes('401') || errorMsg.includes('auth') || errorMsg.includes('key')) {
+      errorCode = 'AI_TEST_AUTH';
+    } else if (errorMsg.includes('404') || errorMsg.includes('model')) {
+      errorCode = 'AI_TEST_MODEL_NOT_FOUND';
+    } else if (errorMsg.includes('timeout')) {
+      errorCode = 'AI_TEST_TIMEOUT';
+    } else if (errorMsg.includes('network') || errorMsg.includes('fetch')) {
+      errorCode = 'AI_TEST_NETWORK';
+    } else if (errorMsg.includes('rate') || errorMsg.includes('429')) {
+      errorCode = 'AI_TEST_RATE_LIMITED';
+    }
+    
     return c.json({
-      ok: false,
-      provider: req.provider,
-      model: model || 'gpt-3.5-turbo',
+      success: false,
+      error_code: errorCode,
+      error_message: errorMsg,
       latency_ms: Date.now() - startTime,
-      error: errorMsg,
+      preview: '',
     });
   }
 });
