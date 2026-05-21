@@ -521,7 +521,9 @@ backupRouter.get('/remotes', async (c) => {
   try {
     const rows = await db
       .prepare(
-        `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
+        `SELECT id, name, backend_type, config_summary, encrypted, 
+               last_test_at, last_test_ok, last_test_error, 
+               created_at, updated_at
          FROM backup_remotes
          ORDER BY created_at DESC`
       )
@@ -531,6 +533,9 @@ backupRouter.get('/remotes', async (c) => {
         backend_type: string;
         config_summary: string;
         encrypted: number;
+        last_test_at: string | null;
+        last_test_ok: number | null;
+        last_test_error: string | null;
         created_at: string;
         updated_at: string;
       }>();
@@ -554,7 +559,11 @@ backupRouter.get('/remotes', async (c) => {
         name: row.name,
         backend_type: row.backend_type,
         config: maskedConfig,
+        config_summary: maskedConfig,
         encrypted: Boolean(row.encrypted),
+        last_test_at: row.last_test_at,
+        last_test_ok: row.last_test_ok === null ? null : Boolean(row.last_test_ok),
+        last_test_error: row.last_test_error,
         created_at: row.created_at,
         updated_at: row.updated_at,
       };
@@ -562,10 +571,59 @@ backupRouter.get('/remotes', async (c) => {
 
     return c.json(remotes);
   } catch (error) {
-    console.error('Error fetching backup_remotes:', error);
-     return c.json({ error: String(error) }, 500);
-   }
- });
+    // 如果查询失败，尝试不查询新字段再试一次
+    try {
+      const rows = await db
+        .prepare(
+          `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
+           FROM backup_remotes
+           ORDER BY created_at DESC`
+        )
+        .all<{
+          id: string;
+          name: string;
+          backend_type: string;
+          config_summary: string;
+          encrypted: number;
+          created_at: string;
+          updated_at: string;
+        }>();
+
+      const remotes = (rows.results || []).map((row) => {
+        let config: Record<string, string> = {};
+        try {
+          config = JSON.parse(row.config_summary || '{}');
+        } catch {}
+        const maskedConfig: Record<string, string> = {};
+        for (const [key, value] of Object.entries(config)) {
+          if (String(key).toLowerCase().includes('pass') || String(key).toLowerCase().includes('secret')) {
+            maskedConfig[key] = value ? '***' : '';
+          } else {
+            maskedConfig[key] = String(value);
+          }
+        }
+
+        return {
+          id: String(row.id),
+          name: row.name,
+          backend_type: row.backend_type,
+          config_summary: maskedConfig,
+          encrypted: Boolean(row.encrypted),
+          last_test_at: null,
+          last_test_ok: null,
+          last_test_error: null,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+        };
+      });
+
+      return c.json(remotes);
+    } catch (fallbackError) {
+      console.error('Error fetching backup_remotes (fallback also failed):', fallbackError);
+      return c.json({ error: String(fallbackError) }, 500);
+    }
+  }
+});
 
 /**
  * 创建备份远程配置
@@ -789,8 +847,10 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         const s3Region = config.region || 'auto';
         
         if (!s3Bucket) {
+          testResult.ok = false;
           testResult.message = 'Bucket name is required';
         } else if (!s3AccessKey || !s3SecretKey) {
+          testResult.ok = false;
           testResult.message = 'Access key or secret key is missing';
         } else {
           const result = await testS3Connection(s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, s3Region);
@@ -806,6 +866,31 @@ backupRouter.post('/remotes/:id/test', async (c) => {
 
       default:
         testResult.message = `Unknown backend type: ${remote.backend_type}`;
+    }
+
+    // 更新数据库中的测试状态
+    const now = new Date().toISOString();
+    try {
+      await db
+        .prepare(
+          `UPDATE backup_remotes 
+           SET last_test_at = ?, 
+               last_test_ok = ?, 
+               last_test_error = ?,
+               updated_at = ?
+           WHERE id = ?`
+        )
+        .bind(
+          now,
+          testResult.ok ? 1 : 0,
+          testResult.ok ? null : testResult.message,
+          now,
+          remoteId
+        )
+        .run();
+    } catch (dbError) {
+      // 忽略数据库更新错误，可能是字段还不存在
+      console.log('Could not update backup_remotes test status (table may not have the new columns yet)', dbError);
     }
 
     return c.json(testResult);
@@ -842,8 +927,10 @@ backupRouter.post('/remotes/test', zValidator('json', RemoteTestSchema), async (
         const s3Region = config.region || 'auto';
         
         if (!s3Bucket) {
+          testResult.ok = false;
           testResult.message = 'Bucket name is required';
         } else if (!s3AccessKey || !s3SecretKey) {
+          testResult.ok = false;
           testResult.message = 'Access key or secret key is missing';
         } else {
           const result = await testS3Connection(s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, s3Region);
