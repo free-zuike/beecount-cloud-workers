@@ -976,6 +976,16 @@ app.get('/api/v1/version', (c) =>
   })
 );
 
+// 测试服务器基本功能
+app.get('/api/v1/test-server', (c) => {
+  return c.json({ 
+    status: 'success', 
+    message: 'Server is running',
+    timestamp: new Date().toISOString(),
+    env_keys: Object.keys(c.env).filter(k => !k.includes('SECRET') && !k.includes('KEY'))
+  });
+});
+
 // 测试数据库连接
 app.get('/api/v1/test-db', async (c) => {
   try {
@@ -995,7 +1005,8 @@ app.get('/api/v1/test-db', async (c) => {
     return c.json({ 
       status: 'error', 
       message: 'Database connection failed',
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
+      error_stack: error instanceof Error ? error.stack : undefined
     }, 500);
   }
 });
@@ -1082,6 +1093,7 @@ app.use('/api/v1/*', async (c, next) => {
     '/api/v1/test-route',
     '/api/v1/admin/backup/test-public',
     '/api/v1/test-db',
+    '/api/v1/test-server',
     '/api/v1/version'
   ]);
 });
