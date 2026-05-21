@@ -287,29 +287,22 @@ app.post('/api/v1/admin/backup/test-public', (c) =>
 app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
   try {
     const db = c.env.DB;
+    const jwtSecret = c.env.JWT_SECRET;
     const scheduleIdParam = c.req.param('id');
     const scheduleId = Number(scheduleIdParam);
     const serverNow = new Date().toISOString();
 
-    // 获取当前用户 ID（来自认证中间件）
-    const userId = c.get('userId');
-
-    // 调试：检查认证中间件是否被调用
+    // 手动验证 token（因为这个路由在认证中间件之前定义）
     const authHeader = c.req.header('Authorization');
-    console.log('[run-now] Authorization header present:', !!authHeader);
-    console.log('[run-now] userId from context:', userId);
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return c.json({ error: 'Unauthorized', detail: 'Missing Authorization header' }, 401);
+    }
 
-    // 如果 userId 不存在，返回错误
+    const token = authHeader.slice(7);
+    const userId = await validateAccessToken(token, jwtSecret);
+    
     if (!userId) {
-      return c.json({ 
-        error: 'Unauthorized', 
-        detail: 'User ID not found in context. Please ensure you are authenticated.',
-        debug: {
-          authorization_header_present: !!authHeader,
-          request_path: c.req.path,
-          request_method: c.req.method
-        }
-      }, 401);
+      return c.json({ error: 'Unauthorized', detail: 'Invalid or expired token' }, 401);
     }
 
     // 获取 schedule
