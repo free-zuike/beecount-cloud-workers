@@ -287,7 +287,8 @@ app.post('/api/v1/admin/backup/test-public', (c) =>
 app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
   try {
     const db = c.env.DB;
-    const scheduleId = c.req.param('id');
+    const scheduleIdParam = c.req.param('id');
+    const scheduleId = Number(scheduleIdParam);
     const serverNow = new Date().toISOString();
 
     // 获取当前用户 ID（来自认证中间件）
@@ -348,7 +349,7 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
 
     return c.json({
       id: runId,
-      schedule_id: Number(scheduleId),
+      schedule_id: scheduleId,
       schedule_name: schedule.name,
       status: 'pending',
       started_at: serverNow,
