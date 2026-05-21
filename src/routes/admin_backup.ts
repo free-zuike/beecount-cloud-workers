@@ -368,6 +368,7 @@ async function performBackup(
 ): Promise<{ success: boolean; message: string; backupSize?: number; backupPath?: string }> {
     try {
         console.log(`[Backup] Starting backup for ledger: ${ledgerId}`);
+        console.log(`[Backup] remoteConfig:`, JSON.stringify(remoteConfig, null, 2));
         
         const changes = await fetchLedgerChanges(db, ledgerId);
         console.log(`[Backup] Found ${changes.length} changes to backup`);
@@ -404,9 +405,13 @@ async function performBackup(
             if (remoteConfig.root_path) {
                 // 来自 backup_remotes 配置的 root_path
                 basePrefix = remoteConfig.root_path.replace(/^\/+|\/+$/g, '') + '/';
+                console.log(`[Backup] Using root_path: ${basePrefix}`);
             } else if (remoteConfig.savePath && remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
                 // 来自 sys_config 配置的 savePath
                 basePrefix = remoteConfig.savePath.replace(/^\/+|\/+$/g, '') + '/';
+                console.log(`[Backup] Using savePath: ${basePrefix}`);
+            } else {
+                console.log(`[Backup] No basePrefix set (root_path or savePath not found)`);
             }
             
             const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
