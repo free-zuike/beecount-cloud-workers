@@ -171,10 +171,18 @@ async function initializeDatabase(db: D1Database): Promise<void> {
 
     // 如果 backup_schedules 表缺少 remote_ids 列，添加它
     try {
-      await db.prepare('ALTER TABLE backup_schedules ADD COLUMN remote_ids TEXT').run();
-      console.log('[INIT] Added remote_ids column to backup_schedules');
+      const colCheck = await db
+        .prepare("PRAGMA table_info(backup_schedules)")
+        .all();
+      const hasRemoteIds = (colCheck.results || []).some((col: any) => col.name === 'remote_ids');
+      if (!hasRemoteIds) {
+        await db.prepare('ALTER TABLE backup_schedules ADD COLUMN remote_ids TEXT').run();
+        console.log('[INIT] Added remote_ids column to backup_schedules');
+      } else {
+        console.log('[INIT] remote_ids column already exists in backup_schedules');
+      }
     } catch (e) {
-      console.log('[INIT] remote_ids column already exists or error:', e);
+      console.log('[INIT] Error checking remote_ids column:', e);
     }
 
     // 如果 backup_runs 表已存在但缺少某些列，添加它们（不带 NOT NULL 约束）
