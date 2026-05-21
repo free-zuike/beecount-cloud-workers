@@ -294,11 +294,21 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
     // 获取当前用户 ID（来自认证中间件）
     const userId = c.get('userId');
 
+    // 调试：检查认证中间件是否被调用
+    const authHeader = c.req.header('Authorization');
+    console.log('[run-now] Authorization header present:', !!authHeader);
+    console.log('[run-now] userId from context:', userId);
+
     // 如果 userId 不存在，返回错误
     if (!userId) {
       return c.json({ 
         error: 'Unauthorized', 
-        detail: 'User ID not found in context. Please ensure you are authenticated.' 
+        detail: 'User ID not found in context. Please ensure you are authenticated.',
+        debug: {
+          authorization_header_present: !!authHeader,
+          request_path: c.req.path,
+          request_method: c.req.method
+        }
       }, 401);
     }
 
