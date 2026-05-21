@@ -1120,6 +1120,22 @@ app.route('/backup', backupRouter);
 app.route('/notifications', notificationsRouter);
 
 // ===========================
+// 全局错误处理中间件
+// ===========================
+app.onError((err, c) => {
+  console.error('[ERROR] Global error handler:', err);
+  console.error('[ERROR] Stack:', err.stack);
+  console.error('[ERROR] Request path:', c.req.path);
+  console.error('[ERROR] Request method:', c.req.method);
+  
+  return c.json({
+    error: 'Internal Server Error',
+    detail: process.env.NODE_ENV === 'development' ? err.message : 'An unexpected error occurred',
+    timestamp: new Date().toISOString(),
+  }, 500);
+});
+
+// ===========================
 // WebSocket 实时同步端点
 // ===========================
 app.get('/ws', async (c) => {
