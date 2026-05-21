@@ -5,7 +5,7 @@ const JWT_ALG = 'HS256';
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = await bcrypt.genSalt(10);
-  return await bcrypt.hash(password);
+  return await bcrypt.hash(password, salt);
 }
 
 export async function verifyPassword(
@@ -20,20 +20,49 @@ export async function verifyPassword(
 }
 
 function base64urlEncode(str: string): string {
-  return Buffer.from(str).toString('base64')
+  const bytes = new TextEncoder().encode(str);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary)
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=/g, '');
 }
 
-function base64urlDecode(str: string): string {
-  str = str.replace(/-/g, '+').replace(/_/g, '/');
-  while (str.length % 4) str += '=';
-  return Buffer.from(str, 'base64').toString('utf8');
+export function base64urlDecode(str: string): string | null {
+  try {
+    str = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (str.length % 4) str += '=';
+    const binary = atob(str);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return null;
+  }
 }
 
 export async function sha256(data: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+}
+
+function uint8ArrayToHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function uint8ArrayToBase64url(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
 }
 
 async function hmacSHA256(key: string, data: string): Promise<string> {
@@ -49,10 +78,7 @@ async function hmacSHA256(key: string, data: string): Promise<string> {
   );
   
   const signature = await crypto.subtle.sign('HMAC', cryptoKey, dataBytes);
-  return Buffer.from(signature).toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
+  return uint8ArrayToBase64url(new Uint8Array(signature));
 }
 
 export async function createAccessToken(
@@ -84,7 +110,7 @@ export async function createRefreshToken(
   db: D1Database
 ): Promise<{ id: string; token: string; expiresAt: Date }> {
   const token = randomUUID();
-  const tokenHash = Buffer.from(await sha256(new TextEncoder().encode(token))).toString('hex');
+  const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   const id = randomUUID();
 
@@ -101,7 +127,7 @@ export async function decodeRefreshToken(
   db: D1Database
 ): Promise<{ valid: true; userId: string; deviceId: string } | { valid: false; reason: string }> {
   try {
-    const tokenHash = Buffer.from(await sha256(new TextEncoder().encode(token))).toString('hex');
+    const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
     const now = new Date().toISOString();
     
     const result = await db.prepare(`
@@ -129,7 +155,7 @@ export async function revokeRefreshToken(
   db: D1Database
 ): Promise<boolean> {
   try {
-    const tokenHash = Buffer.from(await sha256(new TextEncoder().encode(token))).toString('hex');
+    const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
     const now = new Date().toISOString();
     
     const result = await db.prepare(`
@@ -157,7 +183,10 @@ export async function validateAccessToken(
     const expectedSignature = await hmacSHA256(secret, `${headerB64}.${payloadB64}`);
     if (signature !== expectedSignature) return null;
     
-    const payload = JSON.parse(base64urlDecode(payloadB64));
+    const payloadStr = base64urlDecode(payloadB64);
+    if (!payloadStr) return null;
+    
+    const payload = JSON.parse(payloadStr);
     if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
       return { expired: true };
     }

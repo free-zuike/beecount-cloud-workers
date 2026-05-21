@@ -187,7 +187,7 @@ export async function fetchWorkspaceLedgerCounts(
   if (options?.userId) query.set('user_id', options.userId)
   const suffix = query.toString() ? `?${query.toString()}` : ''
   return authedGet<WorkspaceLedgerCounts>(
-    `/read/workspace/ledger-counts${suffix}`,
+    `/read/summary/workspace/ledger-counts${suffix}`,
     token
   )
 }

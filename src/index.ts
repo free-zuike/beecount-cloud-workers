@@ -7,7 +7,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
-import { validateAccessToken, hashPassword } from './auth';
+import { validateAccessToken, hashPassword, base64urlDecode } from './auth';
 
 // WebSocket 连接存储（简单实现）
 const wsConnections = new Map<string, Set<WebSocket>>();
@@ -25,108 +25,245 @@ function generateRandomPassword(): string {
 // 初始化数据库表（备用方案）
 async function initializeDatabase(db: D1Database): Promise<void> {
   try {
-    // 检查 users 表是否存在
-    const usersTableCheck = await db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
-      .first();
+    console.log('[INIT] Checking and creating database tables...');
 
-    // 检查备份表是否存在
-    const backupRunsTableCheck = await db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='backup_runs'")
-      .first();
+    // 创建所有表（总是使用 IF NOT EXISTS，避免重复创建错误）
+    
+    // Users table
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        is_admin BOOLEAN DEFAULT 0 NOT NULL,
+        is_enabled BOOLEAN DEFAULT 1 NOT NULL,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        totp_secret_encrypted TEXT,
+        totp_enabled BOOLEAN DEFAULT 0 NOT NULL,
+        totp_enabled_at TEXT
+      )
+    `).run();
 
-    if (usersTableCheck && backupRunsTableCheck) {
-      console.log('[INIT] Database tables already exist');
-      return;
-    }
+    // User profiles table
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS user_profiles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        display_name TEXT,
+        avatar_file_id TEXT,
+        avatar_version INTEGER DEFAULT 0,
+        income_is_red BOOLEAN DEFAULT 1,
+        theme_primary_color TEXT,
+        appearance_json TEXT,
+        ai_config_json TEXT,
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
 
-    console.log('[INIT] Creating database tables...');
+    // Devices table
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS devices (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        platform TEXT,
+        last_ip TEXT,
+        last_seen_at TEXT,
+        revoked_at TEXT,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
 
-    // 如果 users 表已存在但备份表不存在，只创建备份表
-    if (usersTableCheck && !backupRunsTableCheck) {
-      console.log('[INIT] Users table exists, creating missing backup tables...');
-    }
+    // Refresh tokens table
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS refresh_tokens (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at TEXT NOT NULL,
+        revoked_at TEXT,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
 
-    // 如果 users 表不存在，创建基础表
-    if (!usersTableCheck) {
-      await db.prepare(`
-        CREATE TABLE IF NOT EXISTS users (
-          id TEXT PRIMARY KEY,
-          email TEXT UNIQUE NOT NULL,
-          password_hash TEXT NOT NULL,
-          is_admin BOOLEAN DEFAULT 0 NOT NULL,
-          is_enabled BOOLEAN DEFAULT 1 NOT NULL,
-          created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
-          totp_secret_encrypted TEXT,
-          totp_enabled BOOLEAN DEFAULT 0 NOT NULL,
-          totp_enabled_at TEXT
-        )
-      `).run();
+    // Ledgers table
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS ledgers (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        external_id TEXT NOT NULL,
+        name TEXT,
+        currency TEXT DEFAULT 'CNY' NOT NULL,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        UNIQUE(user_id, external_id)
+      )
+    `).run();
 
-      await db.prepare(`
-        CREATE TABLE IF NOT EXISTS user_profiles (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          display_name TEXT,
-          avatar_file_id TEXT,
-          avatar_version INTEGER DEFAULT 0,
-          income_is_red BOOLEAN DEFAULT 1,
-          theme_primary_color TEXT,
-          appearance_json TEXT,
-          ai_config_json TEXT,
-          updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
-        )
-      `).run();
+    // Sync changes table
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS sync_changes (
+        change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        entity_type TEXT NOT NULL,
+        entity_sync_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        updated_by_device_id TEXT,
+        updated_by_user_id TEXT
+      )
+    `).run();
 
-      await db.prepare(`
-        CREATE TABLE IF NOT EXISTS ledgers (
-          id TEXT PRIMARY KEY,
-          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          external_id TEXT NOT NULL,
-          name TEXT,
-          currency TEXT DEFAULT 'CNY' NOT NULL,
-          created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
-          UNIQUE(user_id, external_id)
-        )
-      `).run();
+    // Attachment files table
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS attachment_files (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ledger_id TEXT REFERENCES ledgers(id) ON DELETE CASCADE,
+        attachment_kind TEXT NOT NULL,
+        file_id TEXT NOT NULL,
+        file_name TEXT,
+        file_size INTEGER,
+        file_sha256 TEXT,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
 
-      await db.prepare(`
-        CREATE TABLE IF NOT EXISTS sync_changes (
-          change_id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
-          entity_type TEXT NOT NULL,
-          entity_sync_id TEXT NOT NULL,
-          action TEXT NOT NULL,
-          payload_json TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          updated_by_device_id TEXT,
-          updated_by_user_id TEXT
-        )
-      `).run();
+    // MCP call logs table
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS mcp_call_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tool_name TEXT NOT NULL,
+        args_json TEXT NOT NULL,
+        result_json TEXT,
+        error_message TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        success BOOLEAN DEFAULT 0
+      )
+    `).run();
 
-      await db.prepare(`
-        CREATE TABLE IF NOT EXISTS read_category_projection (
-          ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
-          sync_id TEXT NOT NULL,
-          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          name TEXT,
-          kind TEXT,
-          level INTEGER,
-          sort_order INTEGER,
-          icon TEXT,
-          icon_type TEXT,
-          custom_icon_path TEXT,
-          icon_cloud_file_id TEXT,
-          icon_cloud_sha256 TEXT,
-          parent_name TEXT,
-          source_change_id INTEGER DEFAULT 0,
-          PRIMARY KEY (ledger_id, sync_id)
-        )
-      `).run();
-    }
+    // Personal Access Tokens table
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS pats (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        last_used_at TEXT,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        expires_at TEXT
+      )
+    `).run();
 
-    // 创建备份相关的表（总是尝试创建，使用 IF NOT EXISTS）
+    // Read projections tables
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS read_category_projection (
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        sync_id TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT,
+        kind TEXT,
+        level INTEGER,
+        sort_order INTEGER,
+        icon TEXT,
+        icon_type TEXT,
+        custom_icon_path TEXT,
+        icon_cloud_file_id TEXT,
+        icon_cloud_sha256 TEXT,
+        parent_name TEXT,
+        source_change_id INTEGER DEFAULT 0,
+        PRIMARY KEY (ledger_id, sync_id)
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS read_account_projection (
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        sync_id TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT,
+        account_type TEXT,
+        currency TEXT,
+        initial_balance INTEGER,
+        note TEXT,
+        credit_limit INTEGER,
+        billing_day INTEGER,
+        payment_due_day INTEGER,
+        bank_name TEXT,
+        card_last_four TEXT,
+        source_change_id INTEGER DEFAULT 0,
+        PRIMARY KEY (ledger_id, sync_id)
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS read_tag_projection (
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        sync_id TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT,
+        color TEXT,
+        source_change_id INTEGER DEFAULT 0,
+        PRIMARY KEY (ledger_id, sync_id)
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS read_budget_projection (
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        sync_id TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        budget_type TEXT,
+        category_sync_id TEXT,
+        amount INTEGER,
+        period TEXT,
+        start_day INTEGER,
+        enabled BOOLEAN,
+        source_change_id INTEGER DEFAULT 0,
+        PRIMARY KEY (ledger_id, sync_id)
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS read_tx_projection (
+        id TEXT,
+        sync_id TEXT NOT NULL,
+        ledger_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        tx_type TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        happened_at TEXT NOT NULL,
+        note TEXT,
+        attachments_json TEXT,
+        tag_sync_ids_json TEXT,
+        account_id TEXT,
+        account_name TEXT,
+        account_sync_id TEXT,
+        from_account_sync_id TEXT,
+        from_account_name TEXT,
+        to_account_sync_id TEXT,
+        to_account_name TEXT,
+        category_id TEXT,
+        category_sync_id TEXT,
+        category_name TEXT,
+        category_kind TEXT,
+        tags_csv TEXT,
+        created_at TEXT NOT NULL,
+        created_by TEXT,
+        created_by_user_id TEXT,
+        updated_at TEXT NOT NULL,
+        tx_index INTEGER DEFAULT 0,
+        source_change_id INTEGER DEFAULT 0,
+        PRIMARY KEY (ledger_id, sync_id)
+      )
+    `).run();
+
+    // Backup tables
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_remotes (
         id TEXT PRIMARY KEY,
@@ -164,85 +301,30 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         error_message TEXT,
         backup_size INTEGER,
         backup_path TEXT,
+        backup_filename TEXT,
+        bytes_total INTEGER,
+        finished_at TEXT,
         started_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
         completed_at TEXT
       )
     `).run();
 
-    // 如果 backup_schedules 表缺少 remote_ids 列，添加它
-    try {
-      const colCheck = await db
-        .prepare("PRAGMA table_info(backup_schedules)")
-        .all();
-      const hasRemoteIds = (colCheck.results || []).some((col: any) => col.name === 'remote_ids');
-      if (!hasRemoteIds) {
-        await db.prepare('ALTER TABLE backup_schedules ADD COLUMN remote_ids TEXT').run();
-        console.log('[INIT] Added remote_ids column to backup_schedules');
-      } else {
-        console.log('[INIT] remote_ids column already exists in backup_schedules');
-      }
-    } catch (e) {
-      console.log('[INIT] Error checking remote_ids column:', e);
-    }
-
-    // 如果 backup_runs 表已存在但缺少某些列，添加它们（不带 NOT NULL 约束）
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN ledger_id TEXT').run();
-      console.log('[INIT] Added ledger_id column to backup_runs');
-      await db.prepare('UPDATE backup_runs SET ledger_id = "" WHERE ledger_id IS NULL').run();
-    } catch (e) {
-      console.log('[INIT] ledger_id column already exists or error:', e);
-    }
-    
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN remote_id TEXT').run();
-      console.log('[INIT] Added remote_id column to backup_runs');
-    } catch (e) {
-      console.log('[INIT] remote_id column already exists or error:', e);
-    }
-    
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN backup_size INTEGER').run();
-      console.log('[INIT] Added backup_size column to backup_runs');
-    } catch (e) {
-      console.log('[INIT] backup_size column already exists or error:', e);
-    }
-    
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN backup_path TEXT').run();
-      console.log('[INIT] Added backup_path column to backup_runs');
-    } catch (e) {
-      console.log('[INIT] backup_path column already exists or error:', e);
-    }
-    
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN finished_at TEXT').run();
-      console.log('[INIT] Added finished_at column to backup_runs');
-    } catch (e) {
-      console.log('[INIT] finished_at column already exists or error:', e);
-    }
-    
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN bytes_total INTEGER').run();
-      console.log('[INIT] Added bytes_total column to backup_runs');
-    } catch (e) {
-      console.log('[INIT] bytes_total column already exists or error:', e);
-    }
-    
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN backup_filename TEXT').run();
-      console.log('[INIT] Added backup_filename column to backup_runs');
-    } catch (e) {
-      console.log('[INIT] backup_filename column already exists or error:', e);
-    }
-
     // 创建索引
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_ledger_id ON sync_changes(ledger_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_schedules_user_id ON backup_schedules(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_runs_schedule_id ON backup_runs(schedule_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_runs_ledger_id ON backup_runs(ledger_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_runs_status ON backup_runs(status)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_tx_projection_user_id ON read_tx_projection(user_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_tx_projection_happened_at ON read_tx_projection(happened_at)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_tx_projection_tx_type ON read_tx_projection(tx_type)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_devices_user_id ON devices(user_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token_hash)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledgers_user_id ON ledgers(user_id)').run();
 
-    console.log('[INIT] Database tables created successfully');
+    console.log('[INIT] Database tables created/verified successfully');
+    
   } catch (error) {
     console.error('[INIT] Failed to initialize database:', error);
   }
@@ -260,74 +342,76 @@ async function initializeAdmin(db: D1Database): Promise<void> {
 
     if (adminCount && adminCount.count > 0) {
       console.log('✅ [INIT] Admin user already exists, skipping initialization');
-      return;
+    } else {
+      console.log('🆕 [INIT] Creating default admin user...');
+
+      // 生成随机密码
+      const adminPassword = generateRandomPassword();
+      const adminEmail = 'admin@localhost';
+      const userId = crypto.randomUUID();
+      const passwordHash = await hashPassword(adminPassword);
+
+      // 创建管理员用户
+      await db
+        .prepare(
+          `INSERT INTO users (id, email, password_hash, is_admin, is_enabled, created_at)
+           VALUES (?, ?, ?, 1, 1, ?)`
+        )
+        .bind(userId, adminEmail, passwordHash, new Date().toISOString())
+        .run();
+
+      // 创建用户 profile（包含默认 AI 配置）
+      const defaultAiConfig = JSON.stringify({
+        providers: [
+          {
+            id: 'zhipu_glm',
+            name: '智谱GLM',
+            isBuiltIn: true,
+            apiKey: '',
+            baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+            textModel: 'glm-4-flash',
+            visionModel: 'glm-4v-flash',
+            audioModel: 'glm-4-voice'
+          }
+        ],
+        binding: {
+          textProviderId: 'zhipu_glm',
+          visionProviderId: 'zhipu_glm',
+          speechProviderId: 'zhipu_glm'
+        },
+        strategy: 'cloud_first',
+        custom_prompt: ''
+      });
+      
+      await db
+        .prepare(
+          `INSERT INTO user_profiles (user_id, display_name, avatar_version, ai_config_json)
+           VALUES (?, ?, 0, ?)`
+        )
+        .bind(userId, 'Admin', defaultAiConfig)
+        .run();
+
+      console.log('');
+      console.log('╔════════════════════════════════════════════════════════════╗');
+      console.log('║                                                            ║');
+      console.log('║    🐝 BEECOUNT CLOUD - ADMIN ACCOUNT CREATED! 🐝          ║');
+      console.log('║                                                            ║');
+      console.log('╠════════════════════════════════════════════════════════════╣');
+      console.log('║  Email:    admin@localhost                                 ║');
+      console.log('║  Password: ' + adminPassword.padEnd(42) + '║');
+      console.log('╠════════════════════════════════════════════════════════════╣');
+      console.log('║  PLEASE LOGIN AND CHANGE THIS PASSWORD IMMEDIATELY!        ║');
+      console.log('╚════════════════════════════════════════════════════════════╝');
+      console.log('');
+      
+      // 同时也输出多行，确保能看到
+      console.log('📧 ADMIN EMAIL: admin@localhost');
+      console.log('🔑 ADMIN PASSWORD: ' + adminPassword);
+      console.log('📝 REMINDER: Change password after first login!');
     }
-
-    console.log('🆕 [INIT] Creating default admin user...');
-
-    // 生成随机密码
-    const adminPassword = generateRandomPassword();
-    const adminEmail = 'admin@localhost';
-    const userId = crypto.randomUUID();
-    const passwordHash = await hashPassword(adminPassword);
-
-    // 创建管理员用户
-    await db
-      .prepare(
-        `INSERT INTO users (id, email, password_hash, is_admin, is_enabled, created_at)
-         VALUES (?, ?, ?, 1, 1, ?)`
-      )
-      .bind(userId, adminEmail, passwordHash, new Date().toISOString())
-      .run();
-
-    // 创建用户 profile（包含默认 AI 配置）
-    const defaultAiConfig = JSON.stringify({
-      providers: [
-        {
-          id: 'zhipu_glm',
-          name: '智谱GLM',
-          isBuiltIn: true,
-          apiKey: '',
-          baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-          textModel: 'glm-4-flash',
-          visionModel: 'glm-4v-flash',
-          audioModel: 'glm-4-voice'
-        }
-      ],
-      binding: {
-        textProviderId: 'zhipu_glm',
-        visionProviderId: 'zhipu_glm',
-        speechProviderId: 'zhipu_glm'
-      },
-      strategy: 'cloud_first',
-      custom_prompt: ''
-    });
     
-    await db
-      .prepare(
-        `INSERT INTO user_profiles (user_id, display_name, avatar_version, ai_config_json)
-         VALUES (?, ?, 0, ?)`
-      )
-      .bind(userId, 'Admin', defaultAiConfig)
-      .run();
-
-    console.log('');
-    console.log('╔════════════════════════════════════════════════════════════╗');
-    console.log('║                                                            ║');
-    console.log('║    🐝 BEECOUNT CLOUD - ADMIN ACCOUNT CREATED! 🐝          ║');
-    console.log('║                                                            ║');
-    console.log('╠════════════════════════════════════════════════════════════╣');
-    console.log('║  Email:    admin@localhost                                 ║');
-    console.log('║  Password: ' + adminPassword.padEnd(42) + '║');
-    console.log('╠════════════════════════════════════════════════════════════╣');
-    console.log('║  PLEASE LOGIN AND CHANGE THIS PASSWORD IMMEDIATELY!        ║');
-    console.log('╚════════════════════════════════════════════════════════════╝');
-    console.log('');
-    
-    // 同时也输出多行，确保能看到
-    console.log('📧 ADMIN EMAIL: admin@localhost');
-    console.log('🔑 ADMIN PASSWORD: ' + adminPassword);
-    console.log('📝 REMINDER: Change password after first login!');
+    // 不再自动创建测试用户
+    // 用户可以自己注册账号使用
     
   } catch (error) {
     console.error('❌ [INIT] Failed to initialize admin user:', error);
@@ -823,11 +907,15 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
     }
 
     const token = authHeader.slice(7);
-    const userId = await validateAccessToken(token, jwtSecret);
+    const validationResult = await validateAccessToken(token, jwtSecret);
     
-    if (!userId) {
+    if (!validationResult || !('userId' in validationResult)) {
       return c.json({ error: 'Unauthorized', detail: 'Invalid or expired token' }, 401);
     }
+    if (validationResult.expired) {
+      return c.json({ error: 'Token expired' }, 401);
+    }
+    const userId = validationResult.userId;
 
     const schedule = await db
       .prepare('SELECT id, name, user_id, remote_ids FROM backup_schedules WHERE id = ?')
@@ -986,7 +1074,8 @@ app.get('/api/v1/test-server', (c) => {
       timestamp: new Date().toISOString(),
       env_keys: envKeys,
       has_env: !!c.env,
-      has_db: !!c.env?.DB
+      has_db: !!c.env?.DB,
+      jwt_secret_set: !!c.env?.JWT_SECRET
     });
   } catch (error) {
     return c.json({ 
@@ -997,7 +1086,7 @@ app.get('/api/v1/test-server', (c) => {
   }
 });
 
-// 测试认证变量是否正确传递
+// 测试认证变量是否正确传递（受保护端点）
 app.get('/api/v1/test-auth', async (c) => {
   try {
     const userId = c.get('userId');
@@ -1016,6 +1105,25 @@ app.get('/api/v1/test-auth', async (c) => {
     return c.json({ 
       status: 'error', 
       message: 'Failed to check auth variables',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
+});
+
+// 测试认证失败的端点 - 这个端点需要认证，用于测试 Token 过期处理
+app.get('/api/v1/test-auth-fail', async (c) => {
+  try {
+    const userId = c.get('userId');
+    return c.json({ 
+      status: 'success', 
+      message: 'Authentication successful',
+      user_id: userId,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    return c.json({ 
+      status: 'error', 
+      message: 'Failed',
       error: error instanceof Error ? error.message : 'Unknown error'
     }, 500);
   }
@@ -1052,106 +1160,86 @@ app.get('/api/v1/test-db', async (c) => {
 
 // 通用认证中间件处理函数
 const authMiddleware = async (c: any, next: () => Promise<void>, skipPaths: string[] = []) => {
-  try {
-    // 检查是否有需要跳过的路径
-    for (const skipPath of skipPaths) {
-      // 对于头像路径，只跳过 GET 请求，不跳过 POST 上传
-      if (skipPath.includes('/profile/avatar')) {
-        if (c.req.method === 'GET' && c.req.path.startsWith(skipPath)) {
-          return await next();
-        }
-      } else if (c.req.path.startsWith(skipPath)) {
-        return await next();
-      }
+  for (const skipPath of skipPaths) {
+    if (c.req.path.startsWith(skipPath)) {
+      return next();
     }
-
-    const authHeader = c.req.header('Authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return c.json({ error: 'Unauthorized', detail: 'Missing Authorization header' }, 401);
-    }
-
-    const token = authHeader.slice(7);
-    
-    try {
-      const parts = token.split('.');
-      if (parts.length !== 3) {
-        return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
-      }
-      
-      const payloadB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-      const payload = JSON.parse(atob(payloadB64));
-      
-      if (payload.type !== 'access') {
-        return c.json({ error: 'Invalid token type', detail: 'Token must be type=access' }, 401);
-      }
-    } catch {
-      return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
-    }
-    
-    // 检查 JWT_SECRET 是否存在
-    if (!c.env?.JWT_SECRET) {
-      console.error('[AUTH] JWT_SECRET is not set');
-      return c.json({ error: 'Internal Server Error', detail: 'JWT secret not configured' }, 500);
-    }
-    
-    const validationResult = await validateAccessToken(token, c.env.JWT_SECRET);
-    if (!validationResult) {
-      return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
-    }
-    if ('expired' in validationResult && validationResult.expired) {
-      return c.json({ error: 'TokenExpired', detail: 'Token has expired, please login again' }, 401);
-    }
-    const userId = validationResult.userId;
-
-    // 从 header 获取 device_id (仅用于 last_seen_at 更新)，与原版一致
-    const deviceId = c.req.header('X-Device-ID') || c.req.header('x-device-id');
-
-    // 更新设备最后活跃时间（用于显示在线状态）
-    if (deviceId && c.executionCtx) {
-      const now = new Date().toISOString();
-      const clientIp = c.req.header('CF-Connecting-IP');
-      try {
-        c.executionCtx.waitUntil(
-          c.env.DB
-            .prepare('UPDATE devices SET last_seen_at = ?, last_ip = ? WHERE id = ?')
-            .bind(now, clientIp ?? null, deviceId)
-            .run()
-        );
-      } catch {
-        // 忽略更新失败的情况，不影响主流程
-      }
-    }
-
-    c.set('userId', userId);
-    c.set('deviceId', deviceId ?? null);
-    await next();
-  } catch (error) {
-    console.error('[AUTH ERROR] Unexpected error:', error);
-    console.error('[AUTH ERROR] Stack:', error.stack);
-    return c.json({ 
-      error: 'Internal Server Error', 
-      detail: error instanceof Error ? error.message : 'Unknown authentication error'
-    }, 500);
   }
+
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  const token = authHeader.slice(7);
+  
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const payloadStr = base64urlDecode(parts[1]);
+    if (!payloadStr) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    const payload = JSON.parse(payloadStr);
+    
+    if (payload.type !== 'access') {
+      return c.json({ error: 'Invalid token type' }, 401);
+    }
+  } catch {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  
+  if (!c.env?.JWT_SECRET) {
+    console.error('[AUTH] JWT_SECRET is not set');
+    return c.json({ error: 'Internal Server Error' }, 500);
+  }
+  
+  const validationResult = await validateAccessToken(token, c.env.JWT_SECRET);
+  if (!validationResult) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  if ('expired' in validationResult && validationResult.expired) {
+    return c.json({ error: 'TokenExpired' }, 401);
+  }
+  const userId = validationResult.userId;
+
+  const deviceId = c.req.header('X-Device-ID') || c.req.header('x-device-id');
+
+  if (deviceId && c.executionCtx) {
+    const now = new Date().toISOString();
+    const clientIp = c.req.header('CF-Connecting-IP');
+    c.executionCtx.waitUntil(
+      c.env.DB
+        .prepare('UPDATE devices SET last_seen_at = ?, last_ip = ? WHERE id = ?')
+        .bind(now, clientIp ?? null, deviceId)
+        .run()
+    );
+  }
+
+  c.set('userId', userId);
+  c.set('deviceId', deviceId ?? null);
+  return next();
 };
 
 // /api/v1 前缀的路由认证
 app.use('/api/v1/*', async (c, next) => {
-  await authMiddleware(c, next, [
+  return authMiddleware(c, next, [
     '/api/v1/auth', 
     '/api/v1/profile/avatar',
     '/api/v1/test-route',
     '/api/v1/admin/backup/test-public',
     '/api/v1/test-db',
     '/api/v1/test-server',
-    '/api/v1/test-auth',
     '/api/v1/version'
   ]);
 });
 
 // /2fa 前缀的路由认证（蜜蜂记账 APP 使用 /2fa 路径）
 app.use('/2fa/*', async (c, next) => {
-  await authMiddleware(c, next, ['/2fa/verify']);
+  return authMiddleware(c, next, ['/2fa/verify']);
 });
 
 // 其他蜜蜂记账 APP 兼容路由（没有 /api/v1 前缀）
@@ -1199,6 +1287,7 @@ app.route('/api/v1/profile/mcp-calls', mcpCallsRouter);
 // 蜜蜂记账 APP 兼容：添加没有 /api/v1 前缀的路由
 app.route('/sync', syncRouter);
 app.route('/read', readRouter);
+app.route('/read/summary', summaryRouter);
 app.route('/write', writeRouter);
 app.route('/devices', devicesRouter);
 app.route('/profile', profileRouter);
@@ -1212,14 +1301,11 @@ app.route('/notifications', notificationsRouter);
 // 全局错误处理中间件
 // ===========================
 app.onError((err, c) => {
-  console.error('[ERROR] Global error handler:', err);
-  console.error('[ERROR] Stack:', err.stack);
-  console.error('[ERROR] Request path:', c.req.path);
-  console.error('[ERROR] Request method:', c.req.method);
+  console.error('[ERROR]', err.message);
   
   return c.json({
     error: 'Internal Server Error',
-    detail: process.env.NODE_ENV === 'development' ? err.message : 'An unexpected error occurred',
+    detail: err.message,
     timestamp: new Date().toISOString(),
   }, 500);
 });
@@ -1234,10 +1320,14 @@ app.get('/ws', async (c) => {
   }
 
   try {
-    const userId = await validateAccessToken(token, c.env.JWT_SECRET);
-    if (!userId) {
+    const validationResult = await validateAccessToken(token, c.env.JWT_SECRET);
+    if (!validationResult || !('userId' in validationResult)) {
       return c.json({ error: 'Invalid token' }, 401);
     }
+    if (validationResult.expired) {
+      return c.json({ error: 'Token expired' }, 401);
+    }
+    const userId = validationResult.userId;
 
     const upgradeHeader = c.req.header('Upgrade');
     if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
@@ -1348,15 +1438,6 @@ app.get('*', async (c, next) => {
   }
   
   return res;
-});
-
-// ===========================
-// 错误处理
-// ===========================
-
-app.onError((err, c) => {
-  console.error('Unhandled error:', err);
-  return c.json({ error: 'Internal Server Error' }, 500);
 });
 
 // ===========================

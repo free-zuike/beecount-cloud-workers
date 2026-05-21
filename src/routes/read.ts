@@ -323,6 +323,180 @@ readRouter.get('/ledgers', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /read/workspace/transactions - 获取工作区交易列表（年度报告使用）
+// ---------------------------------------------------------------------------
+
+async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise<void> {
+  const sample = await db
+    .prepare('SELECT COUNT(*) as cnt FROM read_tx_projection WHERE user_id = ?')
+    .bind(userId)
+    .first<{ cnt: number }>();
+  
+  if (sample && sample.cnt > 0) return;
+  
+  console.log('[READ] read_tx_projection is empty, syncing from sync_changes...');
+  
+  const ledgers = await db
+    .prepare('SELECT id FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .all<{ id: string }>();
+  
+  for (const ledger of ledgers.results) {
+    const changes = await db
+      .prepare(
+        `SELECT change_id, entity_type, entity_sync_id, action, payload_json, user_id, updated_at, updated_by_user_id
+         FROM sync_changes 
+         WHERE ledger_id = ? AND entity_type = 'transaction' AND action != 'delete'
+         ORDER BY change_id ASC`
+      )
+      .bind(ledger.id)
+      .all<{
+        change_id: number;
+        entity_type: string;
+        entity_sync_id: string;
+        action: string;
+        payload_json: string;
+        user_id: string;
+        updated_at: string;
+        updated_by_user_id: string | null;
+      }>();
+    
+    for (const change of changes.results) {
+      try {
+        const payload = JSON.parse(change.payload_json);
+        
+        await db
+          .prepare(
+            `INSERT OR REPLACE INTO read_tx_projection
+             (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
+              category_sync_id, category_name, category_kind,
+              account_sync_id, account_name,
+              from_account_sync_id, from_account_name,
+              to_account_sync_id, to_account_name,
+              tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id,
+              created_at, created_by, created_by_user_id, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            ledger.id,
+            change.entity_sync_id,
+            change.user_id,
+            payload.tx_type || 'expense',
+            Math.round((payload.amount || 0) * 100),
+            payload.happened_at || change.updated_at,
+            payload.note || null,
+            payload.category_sync_id || null,
+            payload.category_name || null,
+            payload.category_kind || null,
+            payload.account_sync_id || null,
+            payload.account_name || null,
+            payload.from_account_sync_id || null,
+            payload.from_account_name || null,
+            payload.to_account_sync_id || null,
+            payload.to_account_name || null,
+            payload.tags ? payload.tags.join(',') : null,
+            payload.tag_sync_ids ? JSON.stringify(payload.tag_sync_ids) : null,
+            payload.attachments ? JSON.stringify(payload.attachments) : null,
+            payload.tx_index ?? 0,
+            change.change_id,
+            change.updated_at,
+            null,
+            change.updated_by_user_id,
+            change.updated_at,
+          )
+          .run();
+      } catch (err) {
+        console.error('[READ] Error syncing transaction:', change.entity_sync_id, err);
+      }
+    }
+  }
+  
+  console.log('[READ] Sync completed');
+}
+
+readRouter.get('/workspace/transactions', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+
+  const ledgerId = c.req.query('ledger_id') ?? null;
+  const dateFrom = c.req.query('date_from') ?? null;
+  const dateTo = c.req.query('date_to') ?? null;
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '200', 10), 5000);
+  const offset = parseInt(c.req.query('offset') ?? '0', 10);
+
+  console.log('[READ] /workspace/transactions called, ledgerId:', ledgerId, 'dateFrom:', dateFrom, 'dateTo:', dateTo, 'limit:', limit, 'offset:', offset);
+
+  await ensureTxProjectionSynced(db, userId);
+
+  let query = 'SELECT * FROM read_tx_projection WHERE user_id = ?';
+  const bindings: (string | number)[] = [userId];
+
+  if (ledgerId) {
+    const ledger = await db
+      .prepare('SELECT id FROM ledgers WHERE user_id = ? AND external_id = ?')
+      .bind(userId, ledgerId)
+      .first<{ id: string }>();
+    
+    if (ledger) {
+      query += ' AND ledger_id = ?';
+      bindings.push(ledger.id);
+    }
+  }
+
+  if (dateFrom) {
+    query += ' AND happened_at >= ?';
+    bindings.push(dateFrom);
+  }
+
+  if (dateTo) {
+    query += ' AND happened_at < ?';
+    bindings.push(dateTo);
+  }
+
+  query += ' ORDER BY happened_at DESC LIMIT ? OFFSET ?';
+  bindings.push(limit, offset);
+
+  const rows = await db.prepare(query).bind(...bindings).all<Record<string, unknown>>();
+
+  const items = rows.results.map((row) => {
+    const tagIds = safeJsonParse<string[]>(row.tag_sync_ids_json as string | null) ?? [];
+    const attachments = safeJsonParse<Array<Record<string, unknown>>>(
+      row.attachments_json as string | null
+    ) ?? [];
+
+    return {
+      id: (row.id as string) || (row.sync_id as string),
+      sync_id: row.sync_id as string,
+      ledger_id: row.ledger_id as string,
+      tx_type: row.tx_type as string,
+      amount: row.amount as number,
+      happened_at: row.happened_at as string,
+      note: row.note as string | null,
+      tags_list: tagIds,
+      attachments: attachments,
+      account_id: row.account_id as string | null,
+      account_name: row.account_name as string | null,
+      category_id: row.category_id as string | null,
+      category_sync_id: row.category_sync_id as string | null,
+      category_name: row.category_name as string | null,
+      category_kind: row.category_kind as string | null,
+      created_at: row.created_at as string,
+      created_by: row.created_by as string | null,
+      created_by_user_id: row.created_by_user_id as string | null,
+      created_by_avatar_url: null,
+      updated_at: row.updated_at as string,
+    };
+  });
+
+  return c.json({
+    items,
+    total: rows.results.length,
+    limit,
+    offset,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /read/ledgers/:ledgerExternalId - 获取单个账本详情
 // ---------------------------------------------------------------------------
 
