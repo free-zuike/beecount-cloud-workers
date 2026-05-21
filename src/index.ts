@@ -169,6 +169,14 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       )
     `).run();
 
+    // 如果 backup_schedules 表缺少 remote_ids 列，添加它
+    try {
+      await db.prepare('ALTER TABLE backup_schedules ADD COLUMN remote_ids TEXT').run();
+      console.log('[INIT] Added remote_ids column to backup_schedules');
+    } catch (e) {
+      console.log('[INIT] remote_ids column already exists or error:', e);
+    }
+
     // 如果 backup_runs 表已存在但缺少某些列，添加它们（不带 NOT NULL 约束）
     try {
       await db.prepare('ALTER TABLE backup_runs ADD COLUMN ledger_id TEXT').run();
@@ -432,6 +440,14 @@ app.post('/api/v1/admin/backup/migrate-db', async (c) => {
   const results: string[] = [];
   
   try {
+    // 添加 remote_ids 列到 backup_schedules 表
+    try {
+      await db.prepare('ALTER TABLE backup_schedules ADD COLUMN remote_ids TEXT').run();
+      results.push('✓ Added remote_ids column to backup_schedules');
+    } catch (e) {
+      results.push('~ remote_ids column already exists in backup_schedules');
+    }
+    
     // 添加 ledger_id 列
     try {
       await db.prepare('ALTER TABLE backup_runs ADD COLUMN ledger_id TEXT').run();
