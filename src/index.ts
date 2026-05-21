@@ -1052,72 +1052,87 @@ app.get('/api/v1/test-db', async (c) => {
 
 // 通用认证中间件处理函数
 const authMiddleware = async (c: any, next: () => Promise<void>, skipPaths: string[] = []) => {
-  // 检查是否有需要跳过的路径
-  for (const skipPath of skipPaths) {
-    // 对于头像路径，只跳过 GET 请求，不跳过 POST 上传
-    if (skipPath.includes('/profile/avatar')) {
-      if (c.req.method === 'GET' && c.req.path.startsWith(skipPath)) {
+  try {
+    // 检查是否有需要跳过的路径
+    for (const skipPath of skipPaths) {
+      // 对于头像路径，只跳过 GET 请求，不跳过 POST 上传
+      if (skipPath.includes('/profile/avatar')) {
+        if (c.req.method === 'GET' && c.req.path.startsWith(skipPath)) {
+          return await next();
+        }
+      } else if (c.req.path.startsWith(skipPath)) {
         return await next();
       }
-    } else if (c.req.path.startsWith(skipPath)) {
-      return await next();
     }
-  }
 
-  const authHeader = c.req.header('Authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return c.json({ error: 'Unauthorized', detail: 'Missing Authorization header' }, 401);
-  }
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return c.json({ error: 'Unauthorized', detail: 'Missing Authorization header' }, 401);
+    }
 
-  const token = authHeader.slice(7);
-  
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) {
+    const token = authHeader.slice(7);
+    
+    try {
+      const parts = token.split('.');
+      if (parts.length !== 3) {
+        return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
+      }
+      
+      const payloadB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const payload = JSON.parse(atob(payloadB64));
+      
+      if (payload.type !== 'access') {
+        return c.json({ error: 'Invalid token type', detail: 'Token must be type=access' }, 401);
+      }
+    } catch {
       return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
     }
     
-    const payloadB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const payload = JSON.parse(atob(payloadB64));
+    // 检查 JWT_SECRET 是否存在
+    if (!c.env?.JWT_SECRET) {
+      console.error('[AUTH] JWT_SECRET is not set');
+      return c.json({ error: 'Internal Server Error', detail: 'JWT secret not configured' }, 500);
+    }
     
-    if (payload.type !== 'access') {
-      return c.json({ error: 'Invalid token type', detail: 'Token must be type=access' }, 401);
+    const validationResult = await validateAccessToken(token, c.env.JWT_SECRET);
+    if (!validationResult) {
+      return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
     }
-  } catch {
-    return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
-  }
-  
-  const validationResult = await validateAccessToken(token, c.env.JWT_SECRET);
-  if (!validationResult) {
-    return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
-  }
-  if ('expired' in validationResult && validationResult.expired) {
-    return c.json({ error: 'TokenExpired', detail: 'Token has expired, please login again' }, 401);
-  }
-  const userId = validationResult.userId;
-
-  // 从 header 获取 device_id (仅用于 last_seen_at 更新)，与原版一致
-  const deviceId = c.req.header('X-Device-ID') || c.req.header('x-device-id');
-
-  // 更新设备最后活跃时间（用于显示在线状态）
-  if (deviceId && c.executionCtx) {
-    const now = new Date().toISOString();
-    const clientIp = c.req.header('CF-Connecting-IP');
-    try {
-      c.executionCtx.waitUntil(
-        c.env.DB
-          .prepare('UPDATE devices SET last_seen_at = ?, last_ip = ? WHERE id = ?')
-          .bind(now, clientIp ?? null, deviceId)
-          .run()
-      );
-    } catch {
-      // 忽略更新失败的情况，不影响主流程
+    if ('expired' in validationResult && validationResult.expired) {
+      return c.json({ error: 'TokenExpired', detail: 'Token has expired, please login again' }, 401);
     }
-  }
+    const userId = validationResult.userId;
 
-  c.set('userId', userId);
-  c.set('deviceId', deviceId ?? null);
-  await next();
+    // 从 header 获取 device_id (仅用于 last_seen_at 更新)，与原版一致
+    const deviceId = c.req.header('X-Device-ID') || c.req.header('x-device-id');
+
+    // 更新设备最后活跃时间（用于显示在线状态）
+    if (deviceId && c.executionCtx) {
+      const now = new Date().toISOString();
+      const clientIp = c.req.header('CF-Connecting-IP');
+      try {
+        c.executionCtx.waitUntil(
+          c.env.DB
+            .prepare('UPDATE devices SET last_seen_at = ?, last_ip = ? WHERE id = ?')
+            .bind(now, clientIp ?? null, deviceId)
+            .run()
+        );
+      } catch {
+        // 忽略更新失败的情况，不影响主流程
+      }
+    }
+
+    c.set('userId', userId);
+    c.set('deviceId', deviceId ?? null);
+    await next();
+  } catch (error) {
+    console.error('[AUTH ERROR] Unexpected error:', error);
+    console.error('[AUTH ERROR] Stack:', error.stack);
+    return c.json({ 
+      error: 'Internal Server Error', 
+      detail: error instanceof Error ? error.message : 'Unknown authentication error'
+    }, 500);
+  }
 };
 
 // /api/v1 前缀的路由认证
