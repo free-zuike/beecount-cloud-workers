@@ -1030,15 +1030,19 @@ const authMiddleware = async (c: any, next: () => Promise<void>, skipPaths: stri
   const deviceId = c.req.header('X-Device-ID') || c.req.header('x-device-id');
 
   // 更新设备最后活跃时间（用于显示在线状态）
-  if (deviceId) {
+  if (deviceId && c.executionCtx) {
     const now = new Date().toISOString();
     const clientIp = c.req.header('CF-Connecting-IP');
-    c.executionCtx.waitUntil(
-      c.env.DB
-        .prepare('UPDATE devices SET last_seen_at = ?, last_ip = ? WHERE id = ?')
-        .bind(now, clientIp ?? null, deviceId)
-        .run()
-    );
+    try {
+      c.executionCtx.waitUntil(
+        c.env.DB
+          .prepare('UPDATE devices SET last_seen_at = ?, last_ip = ? WHERE id = ?')
+          .bind(now, clientIp ?? null, deviceId)
+          .run()
+      );
+    } catch {
+      // 忽略更新失败的情况，不影响主流程
+    }
   }
 
   c.set('userId', userId);
