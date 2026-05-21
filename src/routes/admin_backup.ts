@@ -126,27 +126,50 @@ async function testS3Connection(
     region: string
 ): Promise<{ ok: boolean; message: string }> {
     try {
+        if (!endpoint) {
+            return { ok: false, message: 'Endpoint is required' };
+        }
+        
+        if (!bucket) {
+            return { ok: false, message: 'Bucket name is required' };
+        }
+        
+        if (!accessKey || !secretKey) {
+            return { ok: false, message: 'Access key and secret key are required' };
+        }
+        
+        const cleanBucket = bucket.replace(/^\/+/, '').replace(/\/+$/, '');
+        if (!cleanBucket) {
+            return { ok: false, message: 'Bucket name cannot be empty or only slashes' };
+        }
+        
+        console.log('[Backup S3 Test] Testing connection to endpoint:', endpoint);
+        console.log('[Backup S3 Test] Bucket:', cleanBucket);
+        console.log('[Backup S3 Test] Region:', region);
+        
         const { url, headers } = await signS3Request(
             accessKey,
             secretKey,
             region,
             endpoint,
-            bucket.replace(/^\/+/, ''),
+            cleanBucket,
             '',
             'HEAD'
         );
         
-        console.log('[Backup S3 Test] Testing connection to:', url);
+        console.log('[Backup S3 Test] Full URL:', url);
         
         const response = await fetch(url, {
             method: 'HEAD',
-            headers
+            headers,
+            signal: AbortSignal.timeout(10000)
         });
         
         console.log('[Backup S3 Test] Response status:', response.status);
+        console.log('[Backup S3 Test] Response headers:', Object.fromEntries(response.headers.entries()));
         
         if (response.ok) {
-            return { ok: true, message: `S3 connection successful: ${bucket} at ${endpoint}` };
+            return { ok: true, message: `S3 connection successful: ${cleanBucket} at ${endpoint}` };
         } else {
             const errorText = await response.text().catch(() => '');
             return { ok: false, message: `S3 connection failed: HTTP ${response.status} ${response.statusText} ${errorText}`.slice(0, 200) };
@@ -154,6 +177,9 @@ async function testS3Connection(
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         console.error('[Backup S3 Test] Error:', errorMsg);
+        if (errorMsg.includes('timeout') || errorMsg.includes('Timeout')) {
+            return { ok: false, message: `S3 connection timeout: Unable to reach ${endpoint}` };
+        }
         return { ok: false, message: `S3 connection error: ${errorMsg}` };
     }
 }
