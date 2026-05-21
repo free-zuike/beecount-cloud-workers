@@ -279,7 +279,18 @@ const AiParseTxTextSchema = z.object({
 });
 
 const AiTestProviderSchema = z.object({
-  provider: z.string(),
+  provider: z.union([
+    z.string(),
+    z.object({
+      id: z.string(),
+      apiKey: z.string(),
+      baseUrl: z.string(),
+      textModel: z.string().optional(),
+      visionModel: z.string().optional(),
+      name: z.string().optional(),
+    }),
+  ]),
+  capability: z.enum(['text', 'vision', 'speech']).optional(),
   model: z.string().optional(),
   api_key: z.string().optional(),
   base_url: z.string().optional(),
@@ -660,31 +671,57 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
   const req = c.req.valid('json');
   const startTime = Date.now();
 
-  const profile = await db
-    .prepare('SELECT ai_config_json FROM user_profiles WHERE user_id = ?')
-    .bind(userId)
-    .first<{ ai_config_json: string | null }>();
-
-  const aiConfig = parseAiConfig(profile?.ai_config_json);
-  
   let apiKey = req.api_key ?? '';
   let baseUrl = req.base_url ?? '';
   let model = req.model ?? '';
+  let providerId: string;
   
-  if (!apiKey || !baseUrl) {
-    const providerId = req.provider;
-    const provider = aiConfig.providers?.find(p => p.id === providerId);
-    if (provider) {
-      apiKey = apiKey || provider.apiKey;
-      baseUrl = baseUrl || provider.baseUrl;
-      model = model || provider.textModel || '';
+  // 处理 provider 字段：可以是字符串 ID 或完整对象
+  if (typeof req.provider === 'object' && req.provider !== null) {
+    // provider 是对象，直接使用其中的配置
+    const providerObj = req.provider as {
+      id: string;
+      apiKey: string;
+      baseUrl: string;
+      textModel?: string;
+      visionModel?: string;
+    };
+    providerId = providerObj.id;
+    apiKey = apiKey || providerObj.apiKey;
+    baseUrl = baseUrl || providerObj.baseUrl;
+    
+    // 根据 capability 选择模型
+    const capability = req.capability || 'text';
+    if (capability === 'vision' && providerObj.visionModel) {
+      model = model || providerObj.visionModel;
+    } else {
+      model = model || providerObj.textModel || '';
+    }
+  } else {
+    // provider 是字符串 ID，从数据库配置中查找
+    providerId = req.provider as string;
+    
+    const profile = await db
+      .prepare('SELECT ai_config_json FROM user_profiles WHERE user_id = ?')
+      .bind(userId)
+      .first<{ ai_config_json: string | null }>();
+
+    const aiConfig = parseAiConfig(profile?.ai_config_json);
+    
+    if (!apiKey || !baseUrl) {
+      const provider = aiConfig.providers?.find(p => p.id === providerId);
+      if (provider) {
+        apiKey = apiKey || provider.apiKey;
+        baseUrl = baseUrl || provider.baseUrl;
+        model = model || provider.textModel || '';
+      }
     }
   }
 
   if (!apiKey || !baseUrl) {
     return c.json({
       ok: false,
-      error: `Missing API key or base URL for provider: ${req.provider}`,
+      error: `Missing API key or base URL for provider: ${providerId}`,
       latency_ms: Date.now() - startTime,
     });
   }
