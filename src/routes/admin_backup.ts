@@ -1291,7 +1291,10 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
         
         if (remote) {
           const configStr = remote.config_summary || '{}';
+          console.log('[Backup] configStr from backup_remotes:', configStr);
           const parsedConfig = JSON.parse(configStr);
+          console.log('[Backup] parsedConfig keys:', Object.keys(parsedConfig));
+          console.log('[Backup] parsedConfig.root_path:', parsedConfig.root_path);
           if (Object.keys(parsedConfig).length > 0 && parsedConfig.bucket) {
             console.log('[Backup] Found remote config:', remote.backend_type);
             remoteConfig = {
