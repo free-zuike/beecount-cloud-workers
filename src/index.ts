@@ -742,10 +742,10 @@ async function performBackupIndex(db: D1Database, runId: string, ledgerId: strin
         backupPath: backupKey
       };
     } else if (remoteConfig.backend_type === 'local') {
-      console.log('[Backup] Local backend - skipping upload (simulated)');
+      console.log('[Backup] Local backend - skipping upload (simulated). No remote storage configured.');
       return {
         success: true,
-        message: 'Backup completed (local storage)',
+        message: 'Backup completed successfully (local storage only - no remote S3 configured)',
         backupSize,
         backupPath: `local://backup_${runId}.json`
       };
