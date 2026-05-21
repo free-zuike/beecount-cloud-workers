@@ -152,7 +152,43 @@ class S3Service {
             console.error('[S3] Error getting config from database:', error);
         }
 
-        // 移除从 backup_remotes 读取 S3 配置的逻辑，避免与 sys_config 冲突
+        // 尝试从备份配置中读取 S3 配置（用于附件上传）
+        try {
+            const backupRemote = await this.db
+                .prepare(
+                    'SELECT config_json, config FROM backup_remotes WHERE backend_type = ? AND encrypted = 0 ORDER BY id DESC LIMIT 1'
+                )
+                .bind('s3')
+                .first<{ config_json: string; config: string }>();
+
+            if (backupRemote) {
+                const configStr = backupRemote.config_json || backupRemote.config || '{}';
+                const config = JSON.parse(configStr);
+                if (config.access_key_id && config.secret_access_key && config.bucket) {
+                    const backupConfig = {
+                        id: 'backup_remote',
+                        name: config.name || 'Backup S3',
+                        type: 's3',
+                        savePath: config.root_path ? config.root_path.replace(/^\/+|\/+$/g, '') : 'custom',
+                        accessKeyId: config.access_key_id,
+                        secretAccessKey: config.secret_access_key,
+                        region: config.region || 'auto',
+                        bucketName: config.bucket.replace(/^\/+|\/+$/g, ''),
+                        endpoint: config.endpoint || 'https://s3.amazonaws.com',
+                        pathStyle: config.path_style !== undefined ? Boolean(config.path_style) : true,
+                        cdnDomain: config.cdn_domain || '',
+                        enabled: true,
+                        fixed: true
+                    };
+                    this.s3ConfigCache = backupConfig;
+                    this.s3ConfigCacheTime = now;
+                    console.log('[S3] Using config from backup_remotes');
+                    return backupConfig;
+                }
+            }
+        } catch (err) {
+            console.error('[S3] Failed to load config from backup_remotes:', err);
+        }
 
         // 回退到环境变量配置
         if (this.env.S3_ACCESS_KEY_ID) {
