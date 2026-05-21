@@ -169,6 +169,17 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       )
     `).run();
 
+    // 如果 backup_runs 表已存在但缺少 ledger_id 列，添加它（不带 NOT NULL 约束）
+    try {
+      await db.prepare('ALTER TABLE backup_runs ADD COLUMN ledger_id TEXT').run();
+      console.log('[INIT] Added ledger_id column to backup_runs');
+      // 更新现有行设置默认值
+      await db.prepare('UPDATE backup_runs SET ledger_id = "" WHERE ledger_id IS NULL').run();
+    } catch (e) {
+      // 如果列已存在或其他错误，忽略
+      console.log('[INIT] ledger_id column already exists or error:', e);
+    }
+
     // 创建索引
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_schedules_user_id ON backup_schedules(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_runs_schedule_id ON backup_runs(schedule_id)').run();
