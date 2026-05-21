@@ -147,33 +147,64 @@ async function testS3Connection(
         console.log('[Backup S3 Test] Bucket:', cleanBucket);
         console.log('[Backup S3 Test] Region:', region);
         
-        const { url, headers } = await signS3Request(
+        const testKey = `__beecount_connection_test__/${Date.now()}.txt`;
+        const testContent = 'Beecount S3 connection test file';
+        
+        const { url: putUrl, headers: putHeaders } = await signS3Request(
             accessKey,
             secretKey,
             region,
             endpoint,
             cleanBucket,
-            '',
-            'HEAD'
+            testKey,
+            'PUT'
         );
         
-        console.log('[Backup S3 Test] Full URL:', url);
+        console.log('[Backup S3 Test] Testing with PUT to:', putUrl);
         
-        const response = await fetch(url, {
-            method: 'HEAD',
-            headers,
-            signal: AbortSignal.timeout(10000)
+        const putResponse = await fetch(putUrl, {
+            method: 'PUT',
+            headers: {
+                ...putHeaders,
+                'Content-Type': 'text/plain',
+                'Content-Length': String(testContent.length)
+            },
+            body: testContent
         });
         
-        console.log('[Backup S3 Test] Response status:', response.status);
-        console.log('[Backup S3 Test] Response headers:', Object.fromEntries(response.headers.entries()));
+        console.log('[Backup S3 Test] PUT Response status:', putResponse.status);
         
-        if (response.ok) {
-            return { ok: true, message: `S3 connection successful: ${cleanBucket} at ${endpoint}` };
-        } else {
-            const errorText = await response.text().catch(() => '');
-            return { ok: false, message: `S3 connection failed: HTTP ${response.status} ${response.statusText} ${errorText}`.slice(0, 200) };
+        if (!putResponse.ok) {
+            let errorMessage = `S3 connection failed: HTTP ${putResponse.status} ${putResponse.statusText}`;
+            if (putResponse.status === 403) {
+                errorMessage = `S3 access denied: Bucket "${cleanBucket}" may not exist or credentials have insufficient permissions (HTTP 403)`;
+            } else if (putResponse.status === 404) {
+                errorMessage = `S3 bucket not found: "${cleanBucket}" does not exist at ${endpoint} (HTTP 404)`;
+            }
+            return { ok: false, message: errorMessage };
         }
+        
+        const etag = putResponse.headers.get('ETag') || '';
+        console.log('[Backup S3 Test] Upload successful, ETag:', etag);
+        
+        const { url: deleteUrl, headers: deleteHeaders } = await signS3Request(
+            accessKey,
+            secretKey,
+            region,
+            endpoint,
+            cleanBucket,
+            testKey,
+            'DELETE'
+        );
+        
+        await fetch(deleteUrl, {
+            method: 'DELETE',
+            headers: deleteHeaders
+        });
+        
+        console.log('[Backup S3 Test] Cleanup DELETE sent');
+        
+        return { ok: true, message: `S3 connection successful: ${cleanBucket} at ${endpoint}` };
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         console.error('[Backup S3 Test] Error:', errorMsg);
