@@ -661,7 +661,7 @@ backupRouter.get('/remotes/:id/reveal', async (c) => {
 
   const remote = await db
     .prepare(
-      `SELECT id, name, backend_type, config_json, encrypted, created_at, updated_at
+      `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
        FROM backup_remotes WHERE id = ?`
     )
     .bind(remoteId)
@@ -669,7 +669,7 @@ backupRouter.get('/remotes/:id/reveal', async (c) => {
       id: string;
       name: string;
       backend_type: string;
-      config_json: string;
+      config_summary: string;
       encrypted: number;
       created_at: string;
       updated_at: string;
@@ -683,7 +683,7 @@ backupRouter.get('/remotes/:id/reveal', async (c) => {
     id: String(remote.id),
     name: remote.name,
     backend_type: remote.backend_type,
-    config: JSON.parse(remote.config_json || '{}'),
+    config: JSON.parse(remote.config_summary || '{}'),
     encrypted: Boolean(remote.encrypted),
     created_at: remote.created_at,
     updated_at: remote.updated_at,
@@ -699,7 +699,7 @@ backupRouter.post('/remotes/:id/test', async (c) => {
 
   const remote = await db
     .prepare(
-      `SELECT id, name, backend_type, config_json
+      `SELECT id, name, backend_type, config_summary
        FROM backup_remotes WHERE id = ?`
     )
     .bind(remoteId)
@@ -707,14 +707,14 @@ backupRouter.post('/remotes/:id/test', async (c) => {
       id: string;
       name: string;
       backend_type: string;
-      config_json: string;
+      config_summary: string;
     }>();
 
   if (!remote) {
     return c.json({ error: 'Remote not found' }, 404);
   }
 
-  const config = JSON.parse(remote.config_json || '{}');
+  const config = JSON.parse(remote.config_summary || '{}');
 
   try {
     let testResult = {
