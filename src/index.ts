@@ -444,6 +444,14 @@ app.get('/api/v1/admin/backup/diagnose-db', async (c) => {
       sampleRun = { error: String(e) };
     }
     
+    // 获取所有备份计划
+    let schedules = null;
+    try {
+      schedules = await db.prepare('SELECT * FROM backup_schedules').all();
+    } catch (e) {
+      schedules = { error: String(e) };
+    }
+    
     return c.json({
       status: 'ok',
       backup_runs_table_exists: !!runsTableExists,
@@ -451,6 +459,7 @@ app.get('/api/v1/admin/backup/diagnose-db', async (c) => {
       backup_runs_columns: runsTableInfo.results || [],
       backup_schedules_columns: schedulesTableInfo.results || [],
       sample_run: sampleRun,
+      schedules: schedules?.results || schedules,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -492,6 +501,36 @@ app.post('/api/v1/admin/backup/migrate-db', async (c) => {
       results.push('✓ Added remote_id column');
     } catch (e) {
       results.push('~ remote_id column already exists');
+    }
+    
+    // 迁移 backup_remotes 表：从 config 列迁移到 config_json 列
+    try {
+      // 检查 config_json 列是否存在
+      const pragmaResult = await db.prepare("PRAGMA table_info(backup_remotes)").all();
+      const columns = (pragmaResult.results || []) as { name: string }[];
+      const hasConfigJson = columns.some(col => col.name === 'config_json');
+      
+      if (!hasConfigJson) {
+        // 检查 config 列是否存在
+        const hasConfig = columns.some(col => col.name === 'config');
+        
+        if (hasConfig) {
+          // 添加 config_json 列并复制 config 的值
+          await db.prepare('ALTER TABLE backup_remotes ADD COLUMN config_json TEXT').run();
+          results.push('✓ Added config_json column to backup_remotes');
+          
+          await db.prepare('UPDATE backup_remotes SET config_json = config WHERE config_json IS NULL').run();
+          results.push('✓ Copied config values to config_json');
+        } else {
+          // 如果 config 列也不存在，直接添加 config_json
+          await db.prepare('ALTER TABLE backup_remotes ADD COLUMN config_json TEXT').run();
+          results.push('✓ Added config_json column to backup_remotes');
+        }
+      } else {
+        results.push('~ config_json column already exists in backup_remotes');
+      }
+    } catch (e) {
+      results.push('~ Error checking/migrating backup_remotes: ' + String(e));
     }
     
     // 添加 backup_size 列
@@ -827,14 +866,14 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
         if (remoteIds.length > 0) {
           remoteId = String(remoteIds[0]);
           const remote = await db
-            .prepare('SELECT backend_type, config_summary FROM backup_remotes WHERE id = ?')
+            .prepare('SELECT backend_type, config_json FROM backup_remotes WHERE id = ?')
             .bind(remoteId)
-            .first<{ backend_type: string; config_summary: string }>();
+            .first<{ backend_type: string; config_json: string }>();
           
           if (remote) {
             remoteConfig = {
               backend_type: remote.backend_type,
-              ...JSON.parse(remote.config_summary || '{}')
+              ...JSON.parse(remote.config_json || '{}')
             };
           }
         }

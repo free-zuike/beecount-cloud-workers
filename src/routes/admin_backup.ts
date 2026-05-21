@@ -30,6 +30,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import { getFirstEnabledS3Config } from './sys_config';
 
 function nowUtc(): string {
   return new Date().toISOString();
@@ -394,46 +395,54 @@ backupRouter.use('/*', async (c, next) => {
 backupRouter.get('/remotes', async (c) => {
   const db = c.env.DB;
 
-  const rows = await db
-    .prepare(
-      `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
-       FROM backup_remotes
-       ORDER BY created_at DESC`
-    )
-    .all<{
-      id: number;
-      name: string;
-      backend_type: string;
-      config_summary: string;
-      encrypted: number;
-      created_at: string;
-      updated_at: string;
-    }>();
+  try {
+    const rows = await db
+      .prepare(
+        `SELECT id, name, backend_type, config_json, encrypted, created_at, updated_at
+         FROM backup_remotes
+         ORDER BY created_at DESC`
+      )
+      .all<{
+        id: string;
+        name: string;
+        backend_type: string;
+        config_json: string;
+        encrypted: number;
+        created_at: string;
+        updated_at: string;
+      }>();
 
-  const remotes = rows.results.map((row) => {
-    const config = JSON.parse(row.config_summary || '{}');
-    const maskedConfig: Record<string, string> = {};
-    for (const [key, value] of Object.entries(config)) {
-      if (String(key).toLowerCase().includes('pass') || String(key).toLowerCase().includes('secret')) {
-        maskedConfig[key] = value ? '***' : '';
-      } else {
-        maskedConfig[key] = String(value);
+    const remotes = (rows.results || []).map((row) => {
+      let config: Record<string, string> = {};
+      try {
+        config = JSON.parse(row.config_json || '{}');
+      } catch {}
+      const maskedConfig: Record<string, string> = {};
+      for (const [key, value] of Object.entries(config)) {
+        if (String(key).toLowerCase().includes('pass') || String(key).toLowerCase().includes('secret')) {
+          maskedConfig[key] = value ? '***' : '';
+        } else {
+          maskedConfig[key] = String(value);
+        }
       }
-    }
 
-    return {
-      id: String(row.id),
-      name: row.name,
-      backend_type: row.backend_type,
-      config: maskedConfig,
-      encrypted: Boolean(row.encrypted),
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-    };
-  });
+      return {
+        id: String(row.id),
+        name: row.name,
+        backend_type: row.backend_type,
+        config: maskedConfig,
+        encrypted: Boolean(row.encrypted),
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      };
+    });
 
-  return c.json(remotes);
-});
+    return c.json(remotes);
+  } catch (error) {
+    console.error('Error fetching backup_remotes:', error);
+     return c.json({ error: String(error) }, 500);
+   }
+ });
 
 /**
  * 创建备份远程配置
@@ -447,7 +456,7 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
 
   const result = await db
     .prepare(
-      `INSERT INTO backup_remotes (name, backend_type, config_summary, encrypted, created_at, updated_at)
+      `INSERT INTO backup_remotes (name, backend_type, config_json, encrypted, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`
     )
     .bind(
@@ -507,7 +516,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
   }
 
   if (req.config !== undefined) {
-    updates.push('config_summary = ?');
+    updates.push('config_json = ?');
     params.push(JSON.stringify(req.config));
   }
   if (req.is_default !== undefined) {
@@ -531,15 +540,15 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
 
   const updated = await db
     .prepare(
-      `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
+      `SELECT id, name, backend_type, config_json, encrypted, created_at, updated_at
        FROM backup_remotes WHERE id = ?`
     )
     .bind(remoteId)
     .first<{
-      id: number;
+      id: string;
       name: string;
       backend_type: string;
-      config_summary: string;
+      config_json: string;
       encrypted: number;
       created_at: string;
       updated_at: string;
@@ -549,7 +558,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
     id: updated ? String(updated.id) : '',
     name: updated?.name,
     backend_type: updated?.backend_type,
-    config: updated?.config_summary ? JSON.parse(updated.config_summary) : {},
+    config: updated?.config_json ? JSON.parse(updated.config_json) : {},
     encrypted: Boolean(updated?.encrypted),
     created_at: updated?.created_at,
     updated_at: updated?.updated_at,
@@ -586,15 +595,15 @@ backupRouter.get('/remotes/:id/reveal', async (c) => {
 
   const remote = await db
     .prepare(
-      `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
+      `SELECT id, name, backend_type, config_json, encrypted, created_at, updated_at
        FROM backup_remotes WHERE id = ?`
     )
     .bind(remoteId)
     .first<{
-      id: number;
+      id: string;
       name: string;
       backend_type: string;
-      config_summary: string;
+      config_json: string;
       encrypted: number;
       created_at: string;
       updated_at: string;
@@ -608,7 +617,7 @@ backupRouter.get('/remotes/:id/reveal', async (c) => {
     id: String(remote.id),
     name: remote.name,
     backend_type: remote.backend_type,
-    config: JSON.parse(remote.config_summary || '{}'),
+    config: JSON.parse(remote.config_json || '{}'),
     encrypted: Boolean(remote.encrypted),
     created_at: remote.created_at,
     updated_at: remote.updated_at,
@@ -624,22 +633,22 @@ backupRouter.post('/remotes/:id/test', async (c) => {
 
   const remote = await db
     .prepare(
-      `SELECT id, name, backend_type, config_summary
+      `SELECT id, name, backend_type, config_json
        FROM backup_remotes WHERE id = ?`
     )
     .bind(remoteId)
     .first<{
-      id: number;
+      id: string;
       name: string;
       backend_type: string;
-      config_summary: string;
+      config_json: string;
     }>();
 
   if (!remote) {
     return c.json({ error: 'Remote not found' }, 404);
   }
 
-  const config = JSON.parse(remote.config_summary || '{}');
+  const config = JSON.parse(remote.config_json || '{}');
 
   try {
     let testResult = {
@@ -752,8 +761,8 @@ backupRouter.get('/schedules', async (c) => {
 
   const rows = await db
     .prepare(
-      `SELECT s.id, s.name, s.cron_expr,
-              s.retention_days, s.include_attachments, s.enabled, s.created_at,
+      `SELECT s.id, s.name, s.cron_expr, s.remote_ids,
+              s.retention_days, s.include_attachments, s.enabled, s.created_at, s.updated_at,
               s.next_run_at, s.last_run_at, s.last_run_status
        FROM backup_schedules s
        ORDER BY s.created_at DESC`
@@ -763,6 +772,7 @@ backupRouter.get('/schedules', async (c) => {
       name: string;
       user_id: string;
       cron_expr: string;
+      remote_ids: string;
       retention_days: number | null;
       include_attachments: number;
       enabled: number;
@@ -773,19 +783,28 @@ backupRouter.get('/schedules', async (c) => {
       last_run_status: string | null;
     }>();
 
-  const schedules = rows.results.map((row) => ({
-    id: Number(row.id),
-    name: row.name,
-    cron_expr: row.cron_expr,
-    retention_days: row.retention_days ?? 30,
-    include_attachments: Boolean(row.include_attachments),
-    enabled: Boolean(row.enabled),
-    next_run_at: row.next_run_at,
-    last_run_at: row.last_run_at,
-    last_run_status: row.last_run_status,
-    remote_ids: [],
-    created_at: row.created_at,
-  }));
+  const schedules = rows.results.map((row) => {
+    let parsedRemoteIds: (string | number)[] = [];
+    if (row.remote_ids) {
+      try {
+        parsedRemoteIds = JSON.parse(row.remote_ids);
+      } catch {}
+    }
+    return {
+      id: Number(row.id),
+      name: row.name,
+      cron_expr: row.cron_expr,
+      retention_days: row.retention_days ?? 30,
+      include_attachments: Boolean(row.include_attachments),
+      enabled: Boolean(row.enabled),
+      next_run_at: row.next_run_at,
+      last_run_at: row.last_run_at,
+      last_run_status: row.last_run_status,
+      remote_ids: parsedRemoteIds,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  });
 
   return c.json(schedules);
 });
@@ -954,22 +973,56 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
   if (schedule.remote_ids) {
     try {
       const remoteIds = JSON.parse(schedule.remote_ids);
+      console.log('[Backup] Parsed remote_ids:', remoteIds);
       if (remoteIds.length > 0) {
         remoteId = String(remoteIds[0]);
+        console.log('[Backup] Querying backup_remotes with id:', remoteId);
         const remote = await db
-          .prepare('SELECT backend_type, config_summary FROM backup_remotes WHERE id = ?')
+          .prepare('SELECT backend_type, config, config_json FROM backup_remotes WHERE id = ?')
           .bind(remoteId)
-          .first<{ backend_type: string; config_summary: string }>();
+          .first<{ backend_type: string; config: string; config_json: string }>();
+        console.log('[Backup] Query result:', remote);
         
         if (remote) {
-          remoteConfig = {
-            backend_type: remote.backend_type,
-            ...JSON.parse(remote.config_summary || '{}')
-          };
+          const configStr = remote.config_json || remote.config || '{}';
+          const parsedConfig = JSON.parse(configStr);
+          if (Object.keys(parsedConfig).length > 0 && parsedConfig.bucket) {
+            console.log('[Backup] Found remote config:', remote.backend_type);
+            remoteConfig = {
+              backend_type: remote.backend_type,
+              ...parsedConfig
+            };
+            console.log('[Backup] Full remoteConfig:', JSON.stringify(remoteConfig));
+          } else {
+            console.log('[Backup] backup_remotes config is empty, trying sys_config');
+          }
         }
       }
-    } catch {
-      console.log('[Backup] Failed to parse remote_ids, using local backend');
+    } catch (err) {
+      console.log('[Backup] Failed to parse remote_ids, trying sys_config. Error:', err);
+    }
+  }
+
+  if (remoteConfig.backend_type === 'local' || !remoteConfig.bucket) {
+    console.log('[Backup] Trying to get S3 config from sys_config');
+    try {
+      const sysConfig = await getFirstEnabledS3Config(db, c.env);
+      if (sysConfig && sysConfig.bucketName) {
+        console.log('[Backup] Found S3 config in sys_config:', sysConfig.name);
+        remoteConfig = {
+          backend_type: 's3',
+          endpoint: sysConfig.endpoint || 'https://s3.amazonaws.com',
+          bucket: sysConfig.bucketName,
+          access_key_id: sysConfig.accessKeyId,
+          secret_access_key: sysConfig.secretAccessKey,
+          region: sysConfig.region || 'auto',
+        };
+        console.log('[Backup] Using sys_config S3 config, endpoint:', remoteConfig.endpoint);
+      } else {
+        console.log('[Backup] No S3 config found in sys_config either');
+      }
+    } catch (err) {
+      console.log('[Backup] Failed to get sys_config S3 config:', err);
     }
   }
 
