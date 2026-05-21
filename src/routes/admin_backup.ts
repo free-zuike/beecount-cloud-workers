@@ -860,16 +860,15 @@ backupRouter.get('/runs', async (c) => {
   const runs = rows.results.map((row) => ({
     id: String(row.id),
     schedule_id: row.schedule_id ? String(row.schedule_id) : null,
-    ledger_id: '',
-    remote_id: null,
-    remote_name: null,
+    schedule_name: null,
     status: row.status,
     started_at: row.started_at,
-    completed_at: row.finished_at,
+    finished_at: row.finished_at,
+    backup_filename: row.backup_filename,
+    bytes_total: row.bytes_total,
     error_message: row.error_message,
-    backup_size: row.bytes_total,
-    remote_ids: [],
-    backup_path: null,
+    log_text: null,
+    targets: [],
   }));
 
   return c.json({
@@ -950,16 +949,15 @@ backupRouter.get('/runs/:id', async (c) => {
   return c.json({
     id: String(row.id),
     schedule_id: row.schedule_id ? String(row.schedule_id) : null,
-    ledger_id: '',
-    remote_id: null,
-    remote_name: null,
+    schedule_name: null,
     status: row.status,
     started_at: row.started_at,
-    completed_at: row.finished_at,
+    finished_at: row.finished_at,
+    backup_filename: row.backup_filename,
+    bytes_total: row.bytes_total,
     error_message: row.error_message,
-    backup_size: row.bytes_total,
-    remote_ids: [],
-    backup_path: null,
+    log_text: null,
+    targets: [],
   });
 });
 
