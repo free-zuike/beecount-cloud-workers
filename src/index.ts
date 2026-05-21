@@ -976,6 +976,30 @@ app.get('/api/v1/version', (c) =>
   })
 );
 
+// 测试数据库连接
+app.get('/api/v1/test-db', async (c) => {
+  try {
+    const db = c.env.DB;
+    if (!db) {
+      return c.json({ status: 'error', message: 'DB is undefined' }, 500);
+    }
+    
+    const result = await db.prepare('SELECT 1 as test').first();
+    return c.json({ 
+      status: 'success', 
+      message: 'Database connection is working',
+      result: result 
+    });
+  } catch (error) {
+    console.error('[TEST-DB] Error:', error);
+    return c.json({ 
+      status: 'error', 
+      message: 'Database connection failed',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
+});
+
 // ===========================
 // 认证中间件
 // ===========================
@@ -1056,7 +1080,9 @@ app.use('/api/v1/*', async (c, next) => {
     '/api/v1/auth', 
     '/api/v1/profile/avatar',
     '/api/v1/test-route',
-    '/api/v1/admin/backup/test-public'
+    '/api/v1/admin/backup/test-public',
+    '/api/v1/test-db',
+    '/api/v1/version'
   ]);
 });
 
