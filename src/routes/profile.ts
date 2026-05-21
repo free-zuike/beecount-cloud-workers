@@ -84,42 +84,7 @@ class S3Service {
       // ignore
     }
 
-    // 尝试从备份配置中读取
-    try {
-      const backupRemote = await this.db
-        .prepare(
-          'SELECT config_json FROM backup_remotes WHERE backend_type = ? AND encrypted = 0 ORDER BY id DESC LIMIT 1'
-        )
-        .bind('s3')
-        .first<{ config_json: string }>();
-
-      if (backupRemote && backupRemote.config_json) {
-          const config = JSON.parse(backupRemote.config_json);
-          if (config.access_key_id && config.secret_access_key && config.bucket) {
-            const backupConfig = {
-              id: 'backup_remote',
-              name: 'Backup S3',
-              type: 's3',
-              savePath: config.root_path ? `${config.root_path.replace(/\/+$/, '')}/avatars` : 'avatars',
-              accessKeyId: config.access_key_id,
-              secretAccessKey: config.secret_access_key,
-              region: config.region || 'auto',
-              bucketName: config.bucket.replace(/^\/+/, ''),
-              endpoint: config.endpoint || 'https://s3.amazonaws.com',
-              pathStyle: config.path_style !== undefined ? Boolean(config.path_style) : true,
-              cdnDomain: config.cdn_domain || '',
-              enabled: true,
-              fixed: true
-            };
-            this.s3ConfigCache = backupConfig;
-            this.s3ConfigCacheTime = now;
-            console.log('[S3Service] Using config from backup_remotes');
-            return backupConfig;
-          }
-        }
-    } catch (err) {
-      console.error('[S3Service] Failed to load config from backup_remotes:', err);
-    }
+    // 移除从 backup_remotes 读取 S3 配置的逻辑，避免与 sys_config 冲突
 
     if (this.env.S3_ACCESS_KEY_ID) {
       const envConfig = {

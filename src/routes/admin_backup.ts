@@ -256,8 +256,20 @@ async function performBackup(
                 return { success: false, message: 'S3 configuration incomplete' };
             }
             
+            // 处理路径前缀（可能来自 root_path 或 savePath）
+            let basePrefix = '';
+            if (remoteConfig.root_path) {
+                // 来自 backup_remotes 配置的 root_path
+                basePrefix = remoteConfig.root_path.replace(/^\/+|\/+$/g, '') + '/';
+            } else if (remoteConfig.savePath && remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
+                // 来自 sys_config 配置的 savePath
+                basePrefix = remoteConfig.savePath.replace(/^\/+|\/+$/g, '') + '/';
+            }
+            
             const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-            const backupKey = `backups/${ledgerId}/${timestamp}_backup.json`;
+            const backupKey = `${basePrefix}backups/${ledgerId}/${timestamp}_backup.json`;
+            
+            console.log(`[Backup] Uploading to S3 key: ${backupKey}`);
             
             const uploadResult = await uploadToS3(
                 s3Endpoint,
@@ -1016,8 +1028,9 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
           access_key_id: sysConfig.accessKeyId,
           secret_access_key: sysConfig.secretAccessKey,
           region: sysConfig.region || 'auto',
+          savePath: sysConfig.savePath,
         };
-        console.log('[Backup] Using sys_config S3 config, endpoint:', remoteConfig.endpoint);
+        console.log('[Backup] Using sys_config S3 config, endpoint:', remoteConfig.endpoint, 'savePath:', remoteConfig.savePath);
       } else {
         console.log('[Backup] No S3 config found in sys_config either');
       }
