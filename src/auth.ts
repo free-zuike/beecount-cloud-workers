@@ -5,7 +5,7 @@ const JWT_ALG = 'HS256';
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = await bcrypt.genSalt(10);
-  return await bcrypt.hash(password, salt);
+  return await bcrypt.hash(password);
 }
 
 export async function verifyPassword(
@@ -57,14 +57,16 @@ async function hmacSHA256(key: string, data: string): Promise<string> {
 
 export async function createAccessToken(
   userId: string,
-  secret: string
+  secret: string,
+  clientType: string = 'app',
+  scopes: string[] = ['app_write', 'web_write']
 ): Promise<string> {
   const header = JSON.stringify({ alg: JWT_ALG, typ: 'JWT' });
   const payload = JSON.stringify({
     sub: userId,
     type: 'access',
-    client_type: 'app',
-    scopes: ['app_write', 'web_write'],
+    client_type: clientType,
+    scopes: scopes,
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + 60 * 60
   });
@@ -92,6 +94,54 @@ export async function createRefreshToken(
   `).bind(id, userId, deviceId, tokenHash, expiresAt.toISOString()).run();
 
   return { id, token, expiresAt };
+}
+
+export async function decodeRefreshToken(
+  token: string,
+  db: D1Database
+): Promise<{ valid: true; userId: string; deviceId: string } | { valid: false; reason: string }> {
+  try {
+    const tokenHash = Buffer.from(await sha256(new TextEncoder().encode(token))).toString('hex');
+    const now = new Date().toISOString();
+    
+    const result = await db.prepare(`
+      SELECT user_id, device_id, expires_at 
+      FROM refresh_tokens 
+      WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?
+    `).bind(tokenHash, now).first<{ user_id: string; device_id: string; expires_at: string }>();
+    
+    if (!result) {
+      return { valid: false, reason: 'Refresh token expired or not found' };
+    }
+    
+    return { 
+      valid: true, 
+      userId: result.user_id, 
+      deviceId: result.device_id 
+    };
+  } catch (error) {
+    return { valid: false, reason: 'Invalid refresh token' };
+  }
+}
+
+export async function revokeRefreshToken(
+  token: string,
+  db: D1Database
+): Promise<boolean> {
+  try {
+    const tokenHash = Buffer.from(await sha256(new TextEncoder().encode(token))).toString('hex');
+    const now = new Date().toISOString();
+    
+    const result = await db.prepare(`
+      UPDATE refresh_tokens 
+      SET revoked_at = ? 
+      WHERE token_hash = ? AND revoked_at IS NULL
+    `).bind(now, tokenHash).run();
+    
+    return (result as any).changes > 0;
+  } catch (error) {
+    return false;
+  }
 }
 
 export async function validateAccessToken(
