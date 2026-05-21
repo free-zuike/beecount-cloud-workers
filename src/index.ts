@@ -757,8 +757,19 @@ async function performBackupIndex(db: D1Database, runId: string, ledgerId: strin
         return { success: false, message: 'S3 configuration incomplete' };
       }
       
+      // 处理路径前缀（可能来自 root_path 或 savePath）
+      let basePrefix = '';
+      if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' && 
+          remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
+        basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+        console.log(`[Backup] Using savePath: ${basePrefix}`);
+      } else if (remoteConfig.root_path && typeof remoteConfig.root_path === 'string' && remoteConfig.root_path.trim() !== '') {
+        basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+        console.log(`[Backup] Using root_path: ${basePrefix}`);
+      }
+      
       const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `backups/${ledgerId}/${timestamp}_backup.json`;
+      const backupKey = `${basePrefix}backups/${ledgerId}/${timestamp}_backup.json`;
       
       const uploadResult = await uploadToS3(
         s3Endpoint,
@@ -871,9 +882,11 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
             .first<{ backend_type: string; config_summary: string }>();
           
           if (remote) {
+            const parsedConfig = JSON.parse(remote.config_summary || '{}');
             remoteConfig = {
               backend_type: remote.backend_type,
-              ...JSON.parse(remote.config_summary || '{}')
+              ...parsedConfig,
+              savePath: parsedConfig.root_path ? parsedConfig.root_path.replace(/^\/+|\/+$/g, '') : 'custom'
             };
           }
         }
