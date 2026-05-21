@@ -978,12 +978,23 @@ app.get('/api/v1/version', (c) =>
 
 // 测试服务器基本功能
 app.get('/api/v1/test-server', (c) => {
-  return c.json({ 
-    status: 'success', 
-    message: 'Server is running',
-    timestamp: new Date().toISOString(),
-    env_keys: Object.keys(c.env).filter(k => !k.includes('SECRET') && !k.includes('KEY'))
-  });
+  try {
+    const envKeys = c.env ? Object.keys(c.env).filter(k => !k.includes('SECRET') && !k.includes('KEY')) : [];
+    return c.json({ 
+      status: 'success', 
+      message: 'Server is running',
+      timestamp: new Date().toISOString(),
+      env_keys: envKeys,
+      has_env: !!c.env,
+      has_db: !!c.env?.DB
+    });
+  } catch (error) {
+    return c.json({ 
+      status: 'error', 
+      message: 'Failed to access environment',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
 });
 
 // 测试数据库连接
