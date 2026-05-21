@@ -513,14 +513,17 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
       }, 404);
     }
 
-    const runId = crypto.randomUUID();
     await db
       .prepare(
-        `INSERT INTO backup_runs (id, schedule_id, ledger_id, remote_id, status, started_at)
-         VALUES (?, ?, ?, NULL, 'pending', ?)`
+        `INSERT INTO backup_runs (schedule_id, ledger_id, remote_id, status, started_at)
+         VALUES (?, ?, NULL, 'pending', ?)`
       )
-      .bind(runId, scheduleId, ledger.id, serverNow)
+      .bind(scheduleId, ledger.id, serverNow)
       .run();
+
+    // 获取刚插入的行的 ID
+    const result = await db.prepare('SELECT last_insert_rowid() as id').first<{ id: number }>();
+    const runId = result?.id?.toString() || crypto.randomUUID();
 
     return c.json({
       id: runId,
