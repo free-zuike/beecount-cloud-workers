@@ -799,11 +799,13 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
   const serverNow = nowUtc();
   const userId = c.get('userId');
 
+  const remoteIdsJson = req.remote_ids && req.remote_ids.length > 0 ? JSON.stringify(req.remote_ids) : null;
+
   const insertResult = await db
     .prepare(
       `INSERT INTO backup_schedules
-       (name, user_id, cron_expr, retention_days, include_attachments, enabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       req.name,
@@ -812,6 +814,7 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
       req.retention_days ?? 30,
       req.include_attachments !== false ? 1 : 0,
       req.enabled !== false ? 1 : 0,
+      remoteIdsJson,
       serverNow,
       serverNow
     )
@@ -861,9 +864,9 @@ backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), a
   }
 
   if (req.remote_ids !== undefined) {
-    const remoteId = req.remote_ids.length > 0 ? String(req.remote_ids[0]) : null;
-    updates.push('remote_id = ?');
-    params.push(remoteId);
+    const remoteIdsJson = req.remote_ids.length > 0 ? JSON.stringify(req.remote_ids) : null;
+    updates.push('remote_ids = ?');
+    params.push(remoteIdsJson);
   }
 
   if (req.cron_expr !== undefined) {
