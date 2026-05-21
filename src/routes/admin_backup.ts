@@ -147,6 +147,48 @@ async function testS3Connection(
         console.log('[Backup S3 Test] Bucket:', cleanBucket);
         console.log('[Backup S3 Test] Region:', region);
         
+        // 首先尝试列出 bucket 中的对象，这是更直接的检测方法
+        const { url: listUrl, headers: listHeaders } = await signS3Request(
+            accessKey,
+            secretKey,
+            region,
+            endpoint,
+            cleanBucket,
+            '',
+            'GET'
+        );
+        
+        console.log('[Backup S3 Test] Testing with LIST to:', listUrl);
+        
+        const listResponse = await fetch(listUrl, {
+            method: 'GET',
+            headers: listHeaders
+        });
+        
+        console.log('[Backup S3 Test] LIST Response status:', listResponse.status);
+        console.log('[Backup S3 Test] LIST Response headers:', Object.fromEntries(listResponse.headers.entries()));
+        
+        // 读取响应体以获取更多错误信息
+        const listResponseText = await listResponse.text().catch(() => '');
+        console.log('[Backup S3 Test] LIST Response body:', listResponseText);
+        
+        if (!listResponse.ok) {
+            let errorMessage = `S3 connection failed: HTTP ${listResponse.status} ${listResponse.statusText}`;
+            if (listResponse.status === 403) {
+                errorMessage = `S3 access denied: Bucket "${cleanBucket}" may not exist or credentials have insufficient permissions (HTTP 403)`;
+            } else if (listResponse.status === 404) {
+                errorMessage = `S3 bucket not found: "${cleanBucket}" does not exist at ${endpoint} (HTTP 404)`;
+            }
+            // 如果有错误响应体，也添加到错误信息中
+            if (listResponseText) {
+                errorMessage += ` - ${listResponseText.substring(0, 200)}`;
+            }
+            return { ok: false, message: errorMessage };
+        }
+        
+        console.log('[Backup S3 Test] LIST test passed');
+        
+        // 然后尝试上传测试文件（这是更严格的测试）
         const testKey = `__beecount_connection_test__/${Date.now()}.txt`;
         const testContent = 'Beecount S3 connection test file';
         
@@ -187,6 +229,7 @@ async function testS3Connection(
         const etag = putResponse.headers.get('ETag') || '';
         console.log('[Backup S3 Test] Upload successful, ETag:', etag);
         
+        // 清理：删除测试文件
         const { url: deleteUrl, headers: deleteHeaders } = await signS3Request(
             accessKey,
             secretKey,
