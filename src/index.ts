@@ -26,93 +26,154 @@ function generateRandomPassword(): string {
 async function initializeDatabase(db: D1Database): Promise<void> {
   try {
     // 检查 users 表是否存在
-    const tableCheck = await db
+    const usersTableCheck = await db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
       .first();
 
-    if (tableCheck) {
+    // 检查备份表是否存在
+    const backupRunsTableCheck = await db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='backup_runs'")
+      .first();
+
+    if (usersTableCheck && backupRunsTableCheck) {
       console.log('[INIT] Database tables already exist');
       return;
     }
 
     console.log('[INIT] Creating database tables...');
 
-    // 创建所有表
-    await db.prepare(`
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        email TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        is_admin BOOLEAN DEFAULT 0 NOT NULL,
-        is_enabled BOOLEAN DEFAULT 1 NOT NULL,
-        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
-        totp_secret_encrypted TEXT,
-        totp_enabled BOOLEAN DEFAULT 0 NOT NULL,
-        totp_enabled_at TEXT
-      )
-    `).run();
+    // 如果 users 表已存在但备份表不存在，只创建备份表
+    if (usersTableCheck && !backupRunsTableCheck) {
+      console.log('[INIT] Users table exists, creating missing backup tables...');
+    }
 
+    // 如果 users 表不存在，创建基础表
+    if (!usersTableCheck) {
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          email TEXT UNIQUE NOT NULL,
+          password_hash TEXT NOT NULL,
+          is_admin BOOLEAN DEFAULT 0 NOT NULL,
+          is_enabled BOOLEAN DEFAULT 1 NOT NULL,
+          created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+          totp_secret_encrypted TEXT,
+          totp_enabled BOOLEAN DEFAULT 0 NOT NULL,
+          totp_enabled_at TEXT
+        )
+      `).run();
+
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS user_profiles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          display_name TEXT,
+          avatar_file_id TEXT,
+          avatar_version INTEGER DEFAULT 0,
+          income_is_red BOOLEAN DEFAULT 1,
+          theme_primary_color TEXT,
+          appearance_json TEXT,
+          ai_config_json TEXT,
+          updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+        )
+      `).run();
+
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS ledgers (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          external_id TEXT NOT NULL,
+          name TEXT,
+          currency TEXT DEFAULT 'CNY' NOT NULL,
+          created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+          UNIQUE(user_id, external_id)
+        )
+      `).run();
+
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS sync_changes (
+          change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+          entity_type TEXT NOT NULL,
+          entity_sync_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          updated_by_device_id TEXT,
+          updated_by_user_id TEXT
+        )
+      `).run();
+
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS read_category_projection (
+          ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+          sync_id TEXT NOT NULL,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          name TEXT,
+          kind TEXT,
+          level INTEGER,
+          sort_order INTEGER,
+          icon TEXT,
+          icon_type TEXT,
+          custom_icon_path TEXT,
+          icon_cloud_file_id TEXT,
+          icon_cloud_sha256 TEXT,
+          parent_name TEXT,
+          source_change_id INTEGER DEFAULT 0,
+          PRIMARY KEY (ledger_id, sync_id)
+        )
+      `).run();
+    }
+
+    // 创建备份相关的表（总是尝试创建，使用 IF NOT EXISTS）
     await db.prepare(`
-      CREATE TABLE IF NOT EXISTS user_profiles (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        display_name TEXT,
-        avatar_file_id TEXT,
-        avatar_version INTEGER DEFAULT 0,
-        income_is_red BOOLEAN DEFAULT 1,
-        theme_primary_color TEXT,
-        appearance_json TEXT,
-        ai_config_json TEXT,
+      CREATE TABLE IF NOT EXISTS backup_remotes (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        backend_type TEXT NOT NULL,
+        config_json TEXT NOT NULL,
+        is_default BOOLEAN DEFAULT 0 NOT NULL,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
         updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
     `).run();
 
     await db.prepare(`
-      CREATE TABLE IF NOT EXISTS ledgers (
-        id TEXT PRIMARY KEY,
+      CREATE TABLE IF NOT EXISTS backup_schedules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        external_id TEXT NOT NULL,
-        name TEXT,
-        currency TEXT DEFAULT 'CNY' NOT NULL,
+        cron_expr TEXT NOT NULL,
+        remote_ids TEXT,
+        retention_days INTEGER DEFAULT 30,
+        include_attachments BOOLEAN DEFAULT 0 NOT NULL,
+        enabled BOOLEAN DEFAULT 1 NOT NULL,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
-        UNIQUE(user_id, external_id)
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
     `).run();
 
     await db.prepare(`
-      CREATE TABLE IF NOT EXISTS sync_changes (
-        change_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
-        entity_type TEXT NOT NULL,
-        entity_sync_id TEXT NOT NULL,
-        action TEXT NOT NULL,
-        payload_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        updated_by_device_id TEXT,
-        updated_by_user_id TEXT
+      CREATE TABLE IF NOT EXISTS backup_runs (
+        id TEXT PRIMARY KEY,
+        schedule_id INTEGER,
+        ledger_id TEXT NOT NULL,
+        remote_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        error_message TEXT,
+        backup_size INTEGER,
+        backup_path TEXT,
+        started_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        completed_at TEXT
       )
     `).run();
 
-    await db.prepare(`
-      CREATE TABLE IF NOT EXISTS read_category_projection (
-        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
-        sync_id TEXT NOT NULL,
-        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        name TEXT,
-        kind TEXT,
-        level INTEGER,
-        sort_order INTEGER,
-        icon TEXT,
-        icon_type TEXT,
-        custom_icon_path TEXT,
-        icon_cloud_file_id TEXT,
-        icon_cloud_sha256 TEXT,
-        parent_name TEXT,
-        source_change_id INTEGER DEFAULT 0,
-        PRIMARY KEY (ledger_id, sync_id)
-      )
-    `).run();
+    // 创建索引
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_schedules_user_id ON backup_schedules(user_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_runs_schedule_id ON backup_runs(schedule_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_runs_ledger_id ON backup_runs(ledger_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_runs_status ON backup_runs(status)').run();
 
     console.log('[INIT] Database tables created successfully');
   } catch (error) {
