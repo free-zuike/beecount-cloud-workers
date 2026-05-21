@@ -1120,6 +1120,26 @@ writeRouter.post('/categories', zValidator('json', WriteCategoryCreateSchema), a
     return c.json({ error: 'No ledger found' }, 400);
   }
 
+  // 检查是否已存在同名同类型的分类
+  const normalizedName = req.name.trim().toLowerCase();
+  const normalizedKind = req.kind.trim().toLowerCase();
+  
+  const existingCategory = await db
+    .prepare(
+      `SELECT id, name, kind FROM read_category_projection 
+       WHERE user_id = ? AND LOWER(name) = ? AND LOWER(kind) = ? LIMIT 1`
+    )
+    .bind(userId, normalizedName, normalizedKind)
+    .first<{ id: string; name: string; kind: string }>();
+  
+  if (existingCategory) {
+    return c.json({
+      error: 'Category already exists',
+      detail: `A category named "${existingCategory.name}" with kind "${existingCategory.kind}" already exists`,
+      existing_id: existingCategory.id,
+    }, 409);
+  }
+
   const syncId = randomUUID();
   const payload: Record<string, unknown> = {
     name: req.name,
