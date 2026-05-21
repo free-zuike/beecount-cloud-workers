@@ -1541,4 +1541,48 @@ backupRouter.get('/runs/:id', async (c) => {
   });
 });
 
+/**
+ * 删除备份运行记录
+ */
+backupRouter.delete('/runs/:id', async (c) => {
+  const db = c.env.DB;
+  const runId = c.req.param('id');
+
+  const existing = await db
+    .prepare('SELECT id FROM backup_runs WHERE id = ?')
+    .bind(runId)
+    .first();
+
+  if (!existing) {
+    return c.json({ error: 'Run not found' }, 404);
+  }
+
+  await db.prepare('DELETE FROM backup_runs WHERE id = ?').bind(runId).run();
+
+  return c.json({ success: true });
+});
+
+/**
+ * 批量删除备份运行记录（按状态筛选）
+ */
+backupRouter.post('/runs/cleanup', async (c) => {
+  const db = c.env.DB;
+  const body = await c.req.json();
+  const status = body.status as string;
+
+  if (!status) {
+    return c.json({ error: 'Status is required' }, 400);
+  }
+
+  const result = await db
+    .prepare('DELETE FROM backup_runs WHERE status = ?')
+    .bind(status)
+    .run();
+
+  return c.json({ 
+    success: true, 
+    deleted_count: (result as any).changes || 0 
+  });
+});
+
 export default backupRouter;
