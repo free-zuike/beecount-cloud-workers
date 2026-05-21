@@ -418,19 +418,39 @@ app.get('/api/v1/admin/backup/diagnose-db', async (c) => {
   
   try {
     // 获取 backup_runs 表结构
-    const tableInfo = await db
+    const runsTableInfo = await db
       .prepare("PRAGMA table_info(backup_runs)")
       .all();
     
+    // 获取 backup_schedules 表结构
+    const schedulesTableInfo = await db
+      .prepare("PRAGMA table_info(backup_schedules)")
+      .all();
+    
     // 获取表是否存在
-    const tableExists = await db
+    const runsTableExists = await db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='backup_runs'")
       .first();
     
+    const schedulesTableExists = await db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='backup_schedules'")
+      .first();
+    
+    // 获取一条示例数据
+    let sampleRun = null;
+    try {
+      sampleRun = await db.prepare('SELECT * FROM backup_runs LIMIT 1').first();
+    } catch (e) {
+      sampleRun = { error: String(e) };
+    }
+    
     return c.json({
       status: 'ok',
-      table_exists: !!tableExists,
-      columns: tableInfo.results || [],
+      backup_runs_table_exists: !!runsTableExists,
+      backup_schedules_table_exists: !!schedulesTableExists,
+      backup_runs_columns: runsTableInfo.results || [],
+      backup_schedules_columns: schedulesTableInfo.results || [],
+      sample_run: sampleRun,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -823,15 +843,16 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
       }
     }
 
-    const runId = crypto.randomUUID();
-
     await db
       .prepare(
-        `INSERT INTO backup_runs (id, schedule_id, ledger_id, remote_id, status, started_at)
-         VALUES (?, ?, ?, ?, 'pending', ?)`
+        `INSERT INTO backup_runs (schedule_id, ledger_id, remote_id, status, started_at)
+         VALUES (?, ?, ?, 'pending', ?)`
       )
-      .bind(runId, scheduleId, ledger.id, remoteId, serverNow)
+      .bind(scheduleId, ledger.id, remoteId, serverNow)
       .run();
+
+    const result = await db.prepare('SELECT last_insert_rowid() as id').first<{ id: number }>();
+    const runId = result?.id?.toString() || crypto.randomUUID();
 
     const backupResult = await performBackupIndex(db, runId, ledger.id, remoteConfig);
     
