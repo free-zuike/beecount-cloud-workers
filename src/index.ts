@@ -997,6 +997,30 @@ app.get('/api/v1/test-server', (c) => {
   }
 });
 
+// 测试认证变量是否正确传递
+app.get('/api/v1/test-auth', async (c) => {
+  try {
+    const userId = c.get('userId');
+    const deviceId = c.get('deviceId');
+    
+    return c.json({ 
+      status: 'success', 
+      message: 'Auth variables check',
+      user_id: userId ?? 'NOT_SET',
+      device_id: deviceId ?? 'NOT_SET',
+      has_user_id: !!userId,
+      has_device_id: !!deviceId,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    return c.json({ 
+      status: 'error', 
+      message: 'Failed to check auth variables',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
+});
+
 // 测试数据库连接
 app.get('/api/v1/test-db', async (c) => {
   try {
@@ -1105,6 +1129,7 @@ app.use('/api/v1/*', async (c, next) => {
     '/api/v1/admin/backup/test-public',
     '/api/v1/test-db',
     '/api/v1/test-server',
+    '/api/v1/test-auth',
     '/api/v1/version'
   ]);
 });
