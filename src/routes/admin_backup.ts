@@ -168,9 +168,32 @@ async function testS3Connection(
         console.log('[Backup S3 Test] LIST Response status:', listResponse.status);
         console.log('[Backup S3 Test] LIST Response headers:', Object.fromEntries(listResponse.headers.entries()));
         
-        // 读取响应体以获取更多错误信息
+        // 读取响应体以获取更多信息
         const listResponseText = await listResponse.text().catch(() => '');
         console.log('[Backup S3 Test] LIST Response body:', listResponseText);
+        
+        // 即使状态码是 200，我们也需要验证响应是否真的表示成功
+        // 检查响应体是否包含错误信息
+        if (listResponseText.includes('<Error>') || listResponseText.includes('<Code>')) {
+            let errorMessage = `S3 connection failed: Response contains error`;
+            // 尝试提取错误代码
+            const codeMatch = listResponseText.match(/<Code>([^<]+)<\/Code>/);
+            if (codeMatch) {
+                const errorCode = codeMatch[1];
+                errorMessage = `S3 error: ${errorCode}`;
+                if (errorCode === 'NoSuchBucket') {
+                    errorMessage = `S3 bucket not found: "${cleanBucket}" does not exist at ${endpoint}`;
+                } else if (errorCode === 'AccessDenied') {
+                    errorMessage = `S3 access denied: Bucket "${cleanBucket}" may not exist or credentials have insufficient permissions`;
+                }
+            }
+            return { ok: false, message: errorMessage };
+        }
+        
+        // 检查响应体是否包含有效的 ListBucketResult（这才是真正的成功）
+        if (!listResponseText.includes('<ListBucketResult') && !listResponseText.includes('<?xml')) {
+            return { ok: false, message: `S3 bucket verification failed: Invalid response from ${endpoint} for bucket "${cleanBucket}"` };
+        }
         
         if (!listResponse.ok) {
             let errorMessage = `S3 connection failed: HTTP ${listResponse.status} ${listResponse.statusText}`;
@@ -216,6 +239,20 @@ async function testS3Connection(
         
         console.log('[Backup S3 Test] PUT Response status:', putResponse.status);
         
+        // 验证 PUT 响应
+        const putResponseText = await putResponse.text().catch(() => '');
+        console.log('[Backup S3 Test] PUT Response body:', putResponseText);
+        
+        if (putResponseText.includes('<Error>') || putResponseText.includes('<Code>')) {
+            let errorMessage = `S3 upload failed: Response contains error`;
+            const codeMatch = putResponseText.match(/<Code>([^<]+)<\/Code>/);
+            if (codeMatch) {
+                const errorCode = codeMatch[1];
+                errorMessage = `S3 upload error: ${errorCode}`;
+            }
+            return { ok: false, message: errorMessage };
+        }
+        
         if (!putResponse.ok) {
             let errorMessage = `S3 connection failed: HTTP ${putResponse.status} ${putResponse.statusText}`;
             if (putResponse.status === 403) {
@@ -228,6 +265,12 @@ async function testS3Connection(
         
         const etag = putResponse.headers.get('ETag') || '';
         console.log('[Backup S3 Test] Upload successful, ETag:', etag);
+        
+        // 验证 ETag 是否有效（真正的成功应该有 ETag）
+        if (!etag || etag === 'null') {
+            console.log('[Backup S3 Test] Warning: No valid ETag in response');
+            // 虽然没有 ETag，但我们先继续，因为有些服务可能不返回 ETag
+        }
         
         // 清理：删除测试文件
         const { url: deleteUrl, headers: deleteHeaders } = await signS3Request(
