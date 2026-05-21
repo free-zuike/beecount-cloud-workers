@@ -403,16 +403,16 @@ async function performBackup(
             // 处理路径前缀（可能来自 root_path 或 savePath）
             let basePrefix = '';
             
-            // 优先使用 backup_remotes 配置的 root_path
-            if (remoteConfig.root_path && typeof remoteConfig.root_path === 'string' && remoteConfig.root_path.trim() !== '') {
+            // 优先使用 savePath（与 attachments.ts 中的 getS3Config 保持一致）
+            if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' && 
+                remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
+                basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+                console.log(`[Backup] Using savePath: ${basePrefix}`);
+            } 
+            // 其次使用 backup_remotes 配置的 root_path
+            else if (remoteConfig.root_path && typeof remoteConfig.root_path === 'string' && remoteConfig.root_path.trim() !== '') {
                 basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
                 console.log(`[Backup] Using root_path from backup_remotes: ${basePrefix}`);
-            } 
-            // 其次使用 sys_config 配置的 savePath
-            else if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' && 
-                     remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
-                basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
-                console.log(`[Backup] Using savePath from sys_config: ${basePrefix}`);
             }
             // 如果都没有设置，使用默认路径
             else {
@@ -1299,7 +1299,9 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
             console.log('[Backup] Found remote config:', remote.backend_type);
             remoteConfig = {
               backend_type: remote.backend_type,
-              ...parsedConfig
+              ...parsedConfig,
+              // 将 root_path 转换为 savePath（与 attachments.ts 中的 getS3Config 保持一致）
+              savePath: parsedConfig.root_path ? parsedConfig.root_path.replace(/^\/+|\/+$/g, '') : 'custom'
             };
             console.log('[Backup] Full remoteConfig:', JSON.stringify(remoteConfig));
           } else {
