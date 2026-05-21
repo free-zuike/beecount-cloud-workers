@@ -958,6 +958,8 @@ backupRouter.get('/runs/:id', async (c) => {
     completed_at: row.finished_at,
     error_message: row.error_message,
     backup_size: row.bytes_total,
+    remote_ids: [],
+    backup_path: null,
   });
 });
 
