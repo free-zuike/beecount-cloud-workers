@@ -402,18 +402,21 @@ async function performBackup(
             
             // 处理路径前缀（可能来自 root_path 或 savePath）
             let basePrefix = '';
-            console.log(`[Backup] Checking root_path in remoteConfig: ${remoteConfig.root_path}`);
-            console.log(`[Backup] Type of root_path: ${typeof remoteConfig.root_path}`);
-            if (remoteConfig.root_path && remoteConfig.root_path !== '') {
-                // 来自 backup_remotes 配置的 root_path
-                basePrefix = remoteConfig.root_path.replace(/^\/+|\/+$/g, '') + '/';
-                console.log(`[Backup] Using root_path: ${basePrefix}`);
-            } else if (remoteConfig.savePath && remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
-                // 来自 sys_config 配置的 savePath
-                basePrefix = remoteConfig.savePath.replace(/^\/+|\/+$/g, '') + '/';
-                console.log(`[Backup] Using savePath: ${basePrefix}`);
-            } else {
-                console.log(`[Backup] No basePrefix set - root_path: ${remoteConfig.root_path}, savePath: ${remoteConfig.savePath}`);
+            
+            // 优先使用 backup_remotes 配置的 root_path
+            if (remoteConfig.root_path && typeof remoteConfig.root_path === 'string' && remoteConfig.root_path.trim() !== '') {
+                basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+                console.log(`[Backup] Using root_path from backup_remotes: ${basePrefix}`);
+            } 
+            // 其次使用 sys_config 配置的 savePath
+            else if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' && 
+                     remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
+                basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+                console.log(`[Backup] Using savePath from sys_config: ${basePrefix}`);
+            }
+            // 如果都没有设置，使用默认路径
+            else {
+                console.log(`[Backup] No path prefix configured. remoteConfig keys:`, Object.keys(remoteConfig));
             }
             
             const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
