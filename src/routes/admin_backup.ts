@@ -436,7 +436,7 @@ backupRouter.get('/diagnose-s3', async (c) => {
     result.backup_remotes.count = remoteCount?.count || 0;
     
     const remoteConfigs = await db.prepare(
-      'SELECT id, name, backend_type, config, config_json FROM backup_remotes WHERE backend_type = ?'
+      'SELECT id, name, backend_type, config_summary FROM backup_remotes WHERE backend_type = ?'
     ).bind('s3').all();
     
     result.backup_remotes.s3_remotes = remoteConfigs.results || [];
@@ -464,7 +464,7 @@ backupRouter.get('/remotes', async (c) => {
   try {
     const rows = await db
       .prepare(
-        `SELECT id, name, backend_type, config_json, encrypted, created_at, updated_at
+        `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
          FROM backup_remotes
          ORDER BY created_at DESC`
       )
@@ -472,7 +472,7 @@ backupRouter.get('/remotes', async (c) => {
         id: string;
         name: string;
         backend_type: string;
-        config_json: string;
+        config_summary: string;
         encrypted: number;
         created_at: string;
         updated_at: string;
@@ -481,7 +481,7 @@ backupRouter.get('/remotes', async (c) => {
     const remotes = (rows.results || []).map((row) => {
       let config: Record<string, string> = {};
       try {
-        config = JSON.parse(row.config_json || '{}');
+        config = JSON.parse(row.config_summary || '{}');
       } catch {}
       const maskedConfig: Record<string, string> = {};
       for (const [key, value] of Object.entries(config)) {
@@ -522,7 +522,7 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
 
   const result = await db
     .prepare(
-      `INSERT INTO backup_remotes (name, backend_type, config_json, encrypted, created_at, updated_at)
+      `INSERT INTO backup_remotes (name, backend_type, config_summary, encrypted, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`
     )
     .bind(
@@ -582,7 +582,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
   }
 
   if (req.config !== undefined) {
-    updates.push('config_json = ?');
+    updates.push('config_summary = ?');
     params.push(JSON.stringify(req.config));
   }
   if (req.is_default !== undefined) {
@@ -606,7 +606,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
 
   const updated = await db
     .prepare(
-      `SELECT id, name, backend_type, config_json, encrypted, created_at, updated_at
+      `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
        FROM backup_remotes WHERE id = ?`
     )
     .bind(remoteId)
@@ -614,7 +614,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
       id: string;
       name: string;
       backend_type: string;
-      config_json: string;
+      config_summary: string;
       encrypted: number;
       created_at: string;
       updated_at: string;
@@ -624,7 +624,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
     id: updated ? String(updated.id) : '',
     name: updated?.name,
     backend_type: updated?.backend_type,
-    config: updated?.config_json ? JSON.parse(updated.config_json) : {},
+    config: updated?.config_summary ? JSON.parse(updated.config_summary) : {},
     encrypted: Boolean(updated?.encrypted),
     created_at: updated?.created_at,
     updated_at: updated?.updated_at,
@@ -1044,13 +1044,13 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
         remoteId = String(remoteIds[0]);
         console.log('[Backup] Querying backup_remotes with id:', remoteId);
         const remote = await db
-          .prepare('SELECT backend_type, config, config_json FROM backup_remotes WHERE id = ?')
+          .prepare('SELECT backend_type, config_summary FROM backup_remotes WHERE id = ?')
           .bind(remoteId)
-          .first<{ backend_type: string; config: string; config_json: string }>();
+          .first<{ backend_type: string; config_summary: string }>();
         console.log('[Backup] Query result:', remote);
         
         if (remote) {
-          const configStr = remote.config_json || remote.config || '{}';
+          const configStr = remote.config_summary || '{}';
           const parsedConfig = JSON.parse(configStr);
           if (Object.keys(parsedConfig).length > 0 && parsedConfig.bucket) {
             console.log('[Backup] Found remote config:', remote.backend_type);

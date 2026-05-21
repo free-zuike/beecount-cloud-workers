@@ -866,14 +866,14 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
         if (remoteIds.length > 0) {
           remoteId = String(remoteIds[0]);
           const remote = await db
-            .prepare('SELECT backend_type, config_json FROM backup_remotes WHERE id = ?')
+            .prepare('SELECT backend_type, config_summary FROM backup_remotes WHERE id = ?')
             .bind(remoteId)
-            .first<{ backend_type: string; config_json: string }>();
+            .first<{ backend_type: string; config_summary: string }>();
           
           if (remote) {
             remoteConfig = {
               backend_type: remote.backend_type,
-              ...JSON.parse(remote.config_json || '{}')
+              ...JSON.parse(remote.config_summary || '{}')
             };
           }
         }

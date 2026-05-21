@@ -88,14 +88,13 @@ class S3Service {
     try {
       const backupRemote = await this.db
         .prepare(
-          'SELECT config_json, config FROM backup_remotes WHERE backend_type = ? AND encrypted = 0 ORDER BY id DESC LIMIT 1'
+          'SELECT config_summary FROM backup_remotes WHERE backend_type = ? AND encrypted = 0 ORDER BY id DESC LIMIT 1'
         )
         .bind('s3')
-        .first<{ config_json: string; config: string }>();
+        .first<{ config_summary: string }>();
 
-      if (backupRemote) {
-        const configStr = backupRemote.config_json || backupRemote.config || '{}';
-        const config = JSON.parse(configStr);
+      if (backupRemote && backupRemote.config_summary) {
+        const config = JSON.parse(backupRemote.config_summary);
         if (config.access_key_id && config.secret_access_key && config.bucket) {
           const backupConfig = {
             id: 'backup_remote',
