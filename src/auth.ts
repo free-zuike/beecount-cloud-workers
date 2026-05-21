@@ -97,7 +97,7 @@ export async function createRefreshToken(
 export async function validateAccessToken(
   token: string,
   secret: string
-): Promise<string | null> {
+): Promise<{ userId: string } | { expired: true } | null> {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
@@ -109,10 +109,10 @@ export async function validateAccessToken(
     
     const payload = JSON.parse(base64urlDecode(payloadB64));
     if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
-      return null;
+      return { expired: true };
     }
     
-    return payload.sub as string;
+    return { userId: payload.sub as string };
   } catch {
     return null;
   }

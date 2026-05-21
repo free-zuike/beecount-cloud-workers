@@ -554,6 +554,47 @@ backupRouter.use('/*', async (c, next) => {
 // 诊断端点
 // ---------------------------------------------------------------------------
 
+/**
+ * 获取 rclone 配置信息
+ */
+backupRouter.get('/rclone-config', async (c) => {
+  const db = c.env.DB;
+  
+  try {
+    const remotes = await db
+      .prepare('SELECT id, name, backend_type, config_summary FROM backup_remotes')
+      .all();
+    
+    const configs = (remotes.results || []).map((row: any) => {
+      let config: Record<string, string> = {};
+      try {
+        config = JSON.parse(row.config_summary || '{}');
+      } catch {}
+      
+      return {
+        id: String(row.id),
+        name: row.name,
+        backend_type: row.backend_type,
+        config: config,
+      };
+    });
+    
+    return c.json({
+      remotes: configs,
+      has_remote: configs.length > 0,
+    });
+  } catch (error) {
+    console.error('[rclone-config] Error:', error);
+    return c.json({
+      remotes: [],
+      has_remote: false,
+      error: String(error),
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+
 backupRouter.get('/diagnose-s3', async (c) => {
   const db = c.env.DB;
   

@@ -1017,10 +1017,14 @@ const authMiddleware = async (c: any, next: () => Promise<void>, skipPaths: stri
     return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
   }
   
-  const userId = await validateAccessToken(token, c.env.JWT_SECRET);
-  if (!userId) {
+  const validationResult = await validateAccessToken(token, c.env.JWT_SECRET);
+  if (!validationResult) {
     return c.json({ error: 'Unauthorized', detail: 'Invalid token' }, 401);
   }
+  if ('expired' in validationResult && validationResult.expired) {
+    return c.json({ error: 'TokenExpired', detail: 'Token has expired, please login again' }, 401);
+  }
+  const userId = validationResult.userId;
 
   // 从 header 获取 device_id (仅用于 last_seen_at 更新)，与原版一致
   const deviceId = c.req.header('X-Device-ID') || c.req.header('x-device-id');
