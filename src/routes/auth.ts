@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
-import { hashPassword, verifyPassword, createAccessToken, createRefreshToken, validateAccessToken } from '../auth';
+import { hashPassword, verifyPassword, createAccessToken, createRefreshToken, validateAccessToken, sha256 } from '../auth';
 
 type Bindings = {
   DB: D1Database;
@@ -142,8 +142,50 @@ authRouter.post('/login', zValidator('json', z.object({
 authRouter.post('/refresh', zValidator('json', z.object({
   refresh_token: z.string()
 })), async (c) => {
-  // TODO: Implement refresh token logic
-  return c.json({ error: 'Not implemented' }, 501);
+  const { refresh_token: refreshToken } = c.req.valid('json');
+  const db = c.env.DB;
+  const jwtSecret = c.env.JWT_SECRET;
+
+  try {
+    // 计算 token 的哈希值（与存储时相同）
+    const tokenHash = Buffer.from(await sha256(new TextEncoder().encode(refreshToken))).toString('hex');
+
+    // 查找 refresh token
+    const tokenRecord = await db
+      .prepare('SELECT id, user_id, device_id, expires_at FROM refresh_tokens WHERE token_hash = ?')
+      .bind(tokenHash)
+      .first<{ id: string; user_id: string; device_id: string; expires_at: string }>();
+
+    if (!tokenRecord) {
+      return c.json({ error: 'Invalid refresh token' }, 401);
+    }
+
+    // 检查 token 是否过期
+    const expiresAt = new Date(tokenRecord.expires_at);
+    if (expiresAt < new Date()) {
+      // 删除过期的 token
+      await db.prepare('DELETE FROM refresh_tokens WHERE id = ?').bind(tokenRecord.id).run();
+      return c.json({ error: 'Refresh token expired' }, 401);
+    }
+
+    // 创建新的 access token
+    const accessToken = await createAccessToken(tokenRecord.user_id, jwtSecret);
+
+    // 创建新的 refresh token（刷新 token）
+    const newRefreshToken = await createRefreshToken(tokenRecord.user_id, tokenRecord.device_id, db);
+
+    // 删除旧的 refresh token
+    await db.prepare('DELETE FROM refresh_tokens WHERE id = ?').bind(tokenRecord.id).run();
+
+    return c.json({
+      access_token: accessToken,
+      refresh_token: newRefreshToken.token,
+      expires_at: Math.floor(Date.now() / 1000) + 60 * 60
+    });
+  } catch (error) {
+    console.error('Refresh token error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
 });
 
 // Get current user (Web UI 使用)
