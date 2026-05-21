@@ -223,8 +223,8 @@ class S3Service {
 
     getStorageKey(ledgerId: string, fileId: string, fileName: string, savePath?: string): string {
         const encodedFileName = encodeURIComponent(fileName);
-        const basePath = savePath && savePath !== 'custom' ? savePath.replace(/^\/+|\/+$/g, '') : 'attachments';
-        return `${basePath}/${ledgerId}/${fileId}/${encodedFileName}`;
+        const basePath = savePath && savePath !== 'custom' ? savePath.replace(/^\/+|\/+$/g, '') : '';
+        return `${basePath ? basePath + '/' : ''}attachments/${ledgerId}/${fileId}/${encodedFileName}`;
     }
 
     async upload(key: string, body: ArrayBuffer, contentType: string): Promise<boolean> {

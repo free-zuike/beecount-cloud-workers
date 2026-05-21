@@ -149,8 +149,8 @@ class S3Service {
 
   getStorageKey(userId: string, fileId: string, fileName: string, savePath?: string): string {
         const encodedFileName = encodeURIComponent(fileName);
-        const basePath = savePath && savePath !== 'custom' ? savePath.replace(/^\/+|\/+$/g, '') : 'avatars';
-        return `${basePath}/${userId}/${fileId}/${encodedFileName}`;
+        const basePath = savePath && savePath !== 'custom' ? savePath.replace(/^\/+|\/+$/g, '') : '';
+        return `${basePath ? basePath + '/' : ''}avatars/${userId}/${fileId}/${encodedFileName}`;
     }
 
   async isConfigured(): Promise<boolean> {
