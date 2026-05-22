@@ -122,7 +122,7 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
     const createdIds: string[] = [];
     const deviceId = req.device_id ?? 'batch-write';
 
-    // 处理 auto_ai_tag
+    // 处理 auto_ai_tag - 如果不存在则自动创建
     let aiTagName: string | null = null;
     if (req.auto_ai_tag) {
       // 查找是否已有 AI 记账标签
@@ -133,10 +133,32 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
 
       if (existingAiTag) {
         aiTagName = existingAiTag.sync_id;
+      } else {
+        // 自动创建 AI 记账标签
+        const aiTagSyncId = randomUUID();
+        await db
+          .prepare(
+            `INSERT INTO sync_changes
+             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(userId, ledger.id, 'tag', aiTagSyncId, 'upsert', safeJsonStringify({ name: 'AI 记账', color: '#8B5CF6' }), serverNow, userId)
+          .run();
+
+        await db
+          .prepare(
+            `INSERT INTO read_tag_projection
+             (ledger_id, sync_id, user_id, name, color, source_change_id)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          )
+          .bind(ledger.id, aiTagSyncId, userId, 'AI 记账', '#8B5CF6', 0)
+          .run();
+
+        aiTagName = aiTagSyncId;
       }
     }
 
-    // 处理 extra_tag_name
+    // 处理 extra_tag_name - 如果不存在则自动创建
     let extraTagSyncId: string | null = null;
     if (req.extra_tag_name) {
       const existingExtraTag = await db
@@ -146,6 +168,28 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
 
       if (existingExtraTag) {
         extraTagSyncId = existingExtraTag.sync_id;
+      } else {
+        // 自动创建额外标签
+        const newTagSyncId = randomUUID();
+        await db
+          .prepare(
+            `INSERT INTO sync_changes
+             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(userId, ledger.id, 'tag', newTagSyncId, 'upsert', safeJsonStringify({ name: req.extra_tag_name, color: null }), serverNow, userId)
+          .run();
+
+        await db
+          .prepare(
+            `INSERT INTO read_tag_projection
+             (ledger_id, sync_id, user_id, name, color, source_change_id)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          )
+          .bind(ledger.id, newTagSyncId, userId, req.extra_tag_name, null, 0)
+          .run();
+
+        extraTagSyncId = newTagSyncId;
       }
     }
 
