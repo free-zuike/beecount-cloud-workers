@@ -141,6 +141,22 @@ async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_call_logs_tool_name ON mcp_call_logs(tool_name)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_call_logs_status ON mcp_call_logs(status)').run();
 
+    // Audit logs table
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        ledger_id TEXT,
+        action TEXT NOT NULL,
+        metadata_json TEXT,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
+
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time ON audit_logs(user_id, created_at DESC)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC)').run();
+
     // Devices table
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS devices (
@@ -1987,8 +2003,10 @@ app.get('/api/v1/test-db', async (c) => {
 
 // 通用认证中间件处理函数
 const authMiddleware = async (c: any, next: () => Promise<void>, skipPaths: string[] = []) => {
+  const requestPath = c.req.path;
   for (const skipPath of skipPaths) {
-    if (c.req.path.startsWith(skipPath)) {
+    // 支持匹配带 /api/v1 前缀和不带前缀的路径
+    if (requestPath === skipPath || requestPath === '/api/v1' + skipPath) {
       return next();
     }
   }
