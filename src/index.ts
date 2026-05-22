@@ -964,38 +964,42 @@ app.post('/api/v1/setup', async (c) => {
     
     // 创建第一个管理员账户
     if (admin_email && admin_password) {
-      const { hashPassword } = await import('../auth');
-      const { randomUUID } = await import('crypto');
-      
-      const userId = randomUUID();
+      const userId = crypto.randomUUID();
       const passwordHash = await hashPassword(admin_password);
       
-      await db
-        .prepare(`
-          INSERT INTO users (id, email, password_hash, is_admin, is_enabled, created_at, updated_at)
-          VALUES (?, ?, ?, 1, 1, ?, ?)
-        `)
-        .bind(
-          userId,
-          admin_email.toLowerCase(),
-          passwordHash,
-          serverNow,
-          serverNow
-        )
-        .run();
+      // Create user
+      await db.prepare(`
+        INSERT INTO users (id, email, password_hash, is_admin, is_enabled)
+        VALUES (?, ?, ?, 1, 1)
+      `).bind(userId, admin_email.toLowerCase(), passwordHash).run();
       
-      // 创建用户 profile (原版表名为 user_profiles)
-      await db
-        .prepare(`
-          INSERT INTO user_profiles (user_id, display_name, updated_at)
-          VALUES (?, ?, ?)
-        `)
-        .bind(
-          userId,
-          admin_email.split('@')[0],
-          serverNow
-        )
-        .run();
+      // Create user profile with default AI config
+      const defaultAiConfig = JSON.stringify({
+        providers: [
+          {
+            id: 'zhipu_glm',
+            name: '智谱GLM',
+            isBuiltIn: true,
+            apiKey: '',
+            baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+            textModel: 'glm-4-flash',
+            visionModel: 'glm-4v-flash',
+            audioModel: 'glm-4-voice'
+          }
+        ],
+        binding: {
+          textProviderId: 'zhipu_glm',
+          visionProviderId: 'zhipu_glm',
+          speechProviderId: 'zhipu_glm'
+        },
+        strategy: 'cloud_first',
+        custom_prompt: ''
+      });
+      
+      await db.prepare(`
+        INSERT INTO user_profiles (user_id, display_name, ai_config_json)
+        VALUES (?, ?, ?)
+      `).bind(userId, admin_email.split('@')[0], defaultAiConfig).run();
       
       return c.json({
         success: true,
@@ -1014,7 +1018,8 @@ app.post('/api/v1/setup', async (c) => {
     console.error('[Setup] Error saving settings:', error);
     return c.json({
       success: false,
-      error: '保存设置失败'
+      error: '保存设置失败',
+      details: error instanceof Error ? error.message : String(error)
     }, 500);
   }
 });
