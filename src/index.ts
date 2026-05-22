@@ -1289,250 +1289,255 @@ app.get('/api/v1/setup', async (c) => {
 });
 
 function getSetupPageHTML(): string {
-  // 使用数组拼接来避免复杂的模板字符串转义问题
-  const htmlParts = [
-    '<!DOCTYPE html>',
-    '<html lang="zh-CN">',
-    '<head>',
-    '  <meta charset="UTF-8">',
-    '  <meta name="viewport" content="width=device-width, initial-scale=1.0">',
-    '  <title>蜜蜂记账 - 初始设置</title>',
-    '  <style>',
-    '    * { margin: 0; padding: 0; box-sizing: border-box; }',
-    '    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 40px 20px; }',
-    '    .setup-container { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); width: 100%; max-width: 700px; margin: 0 auto; max-height: 90vh; overflow-y: auto; }',
-    '    h1 { text-align: center; color: #667eea; margin-bottom: 10px; font-size: 28px; }',
-    '    .subtitle { text-align: center; color: #666; margin-bottom: 30px; }',
-    '    .section { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #f0f0f0; }',
-    '    .section:last-child { border-bottom: none; }',
-    '    .section-title { color: #333; font-size: 18px; font-weight: 600; margin-bottom: 15px; display: flex; align-items: center; gap: 8px; }',
-    '    .form-group { margin-bottom: 15px; }',
-    '    label { display: block; margin-bottom: 6px; color: #555; font-weight: 500; font-size: 14px; }',
-    '    input, select { width: 100%; padding: 10px 12px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px; }',
-    '    input:focus, select:focus { outline: none; border-color: #667eea; }',
-    '    .checkbox-group { display: flex; align-items: center; gap: 8px; }',
-    '    .checkbox-group input[type="checkbox"] { width: 18px; height: 18px; }',
-    '    button { width: 100%; padding: 14px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; }',
-    '    button:hover { transform: translateY(-2px); transition: transform 0.2s; }',
-    '    button:disabled { opacity: 0.6; cursor: not-allowed; }',
-    '    .message { padding: 12px; border-radius: 6px; margin-bottom: 20px; display: none; }',
-    '    .message.error { background: #fee; color: #c33; display: block; }',
-    '    .message.success { background: #efe; color: #3c3; display: block; }',
-    '    .hint { font-size: 12px; color: #888; margin-top: 4px; }',
-    '    .copy-btn { padding: 4px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; margin-left: 8px; }',
-    '    .copy-btn.green { background: #28a745; }',
-    '    .result-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }',
-    '    .result-input { flex: 1; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace; }',
-    '  </style>',
-    '</head>',
-    '<body>',
-    '  <div class="setup-container">',
-    '    <h1>🐝 蜜蜂记账</h1>',
-    '    <p class="subtitle">首次设置向导</p>',
-    '    <div id="message" class="message"></div>',
-    '    <form id="setupForm">',
-    '      <div class="section">',
-    '        <div class="section-title">👤 管理员账户</div>',
-    '        <div class="form-group">',
-    '          <label><input type="radio" name="admin_mode" value="auto" checked> 自动创建管理员账户（推荐）</label>',
-    '          <div class="hint">系统将自动生成管理员账户和随机密码，请务必记录</div>',
-    '        </div>',
-    '        <div class="form-group">',
-    '          <label><input type="radio" name="admin_mode" value="manual"> 手动设置管理员账户</label>',
-    '          <div class="hint">手动输入邮箱和密码</div>',
-    '        </div>',
-    '        <div id="manualAdminFields" style="display: none;">',
-    '          <div class="form-group">',
-    '            <label for="admin_email">邮箱地址</label>',
-    '            <input type="email" id="admin_email" name="admin_email" placeholder="admin@example.com">',
-    '          </div>',
-    '          <div class="form-group">',
-    '            <label for="admin_password">密码</label>',
-    '            <input type="password" id="admin_password" name="admin_password" placeholder="••••••••" minlength="6">',
-    '          </div>',
-    '          <div class="form-group">',
-    '            <label for="admin_password_confirm">确认密码</label>',
-    '            <input type="password" id="admin_password_confirm" name="admin_password_confirm" placeholder="••••••••" minlength="6">',
-    '          </div>',
-    '        </div>',
-    '      </div>',
-    '      <div class="section">',
-    '        <div class="section-title">🌍 时区设置</div>',
-    '        <div class="form-group">',
-    '          <label for="timezone">选择时区</label>',
-    '          <select id="timezone" name="timezone_offset">',
-    '            <option value="-43200">UTC-12 (贝克岛)</option>',
-    '            <option value="-39600">UTC-11 (美属萨摩亚)</option>',
-    '            <option value="-36000">UTC-10 (夏威夷)</option>',
-    '            <option value="-32400">UTC-9 (阿拉斯加)</option>',
-    '            <option value="-28800">UTC-8 (洛杉矶、温哥华)</option>',
-    '            <option value="-25200">UTC-7 (丹佛、凤凰城)</option>',
-    '            <option value="-21600">UTC-6 (芝加哥、墨西哥城)</option>',
-    '            <option value="-18000">UTC-5 (纽约、多伦多)</option>',
-    '            <option value="-14400">UTC-4 (圣地亚哥、哈利法克斯)</option>',
-    '            <option value="-12600">UTC-3:30 (纽芬兰)</option>',
-    '            <option value="-10800">UTC-3 (圣保罗、布宜诺斯艾利斯)</option>',
-    '            <option value="-7200">UTC-2 (大西洋中部)</option>',
-    '            <option value="-3600">UTC-1 (亚速尔群岛)</option>',
-    '            <option value="0">UTC+0 (伦敦、都柏林、里斯本)</option>',
-    '            <option value="3600">UTC+1 (巴黎、柏林、罗马)</option>',
-    '            <option value="7200">UTC+2 (雅典、赫尔辛基、基辅)</option>',
-    '            <option value="10800">UTC+3 (莫斯科、伊斯坦布尔)</option>',
-    '            <option value="12600">UTC+3:30 (德黑兰)</option>',
-    '            <option value="14400">UTC+4 (迪拜、巴库)</option>',
-    '            <option value="16200">UTC+4:30 (喀布尔)</option>',
-    '            <option value="18000">UTC+5 (卡拉奇、塔什干)</option>',
-    '            <option value="19800">UTC+5:30 (孟买、新德里、科伦坡)</option>',
-    '            <option value="20700">UTC+5:45 (加德满都)</option>',
-    '            <option value="21600">UTC+6 (达卡、新西伯利亚)</option>',
-    '            <option value="23400">UTC+6:30 (仰光)</option>',
-    '            <option value="25200">UTC+7 (曼谷、雅加达)</option>',
-    '            <option value="28800" selected>UTC+8 (北京时间、香港、新加坡)</option>',
-    '            <option value="32400">UTC+9 (东京、首尔、雅库茨克)</option>',
-    '            <option value="34200">UTC+9:30 (阿德莱德、达尔文)</option>',
-    '            <option value="36000">UTC+10 (悉尼、墨尔本、布里斯班)</option>',
-    '            <option value="37800">UTC+10:30 (豪勋爵岛)</option>',
-    '            <option value="39600">UTC+11 (所罗门群岛)</option>',
-    '            <option value="41400">UTC+11:30 (诺福克岛)</option>',
-    '            <option value="43200">UTC+12 (奥克兰、斐济)</option>',
-    '            <option value="45000">UTC+12:45 (查塔姆群岛)</option>',
-    '            <option value="46800">UTC+13 (努库阿洛法)</option>',
-    '            <option value="50400">UTC+14 (基里蒂马蒂岛)</option>',
-    '          </select>',
-    '        </div>',
-    '      </div>',
-    '      <div class="section">',
-    '        <div class="section-title">☁️ 云存储设置（可选）</div>',
-    '        <div class="form-group">',
-    '          <div class="checkbox-group">',
-    '            <input type="checkbox" id="cloud_enabled" name="cloud_enabled">',
-    '            <label for="cloud_enabled" style="margin-bottom: 0;">启用云存储备份</label>',
-    '          </div>',
-    '        </div>',
-    '      </div>',
-    '      <button type="button" id="submitBtn">保存设置并继续</button>',
-    '    </form>',
-    '  </div>',
-    '  <script>',
-    '    document.addEventListener("DOMContentLoaded", function() {',
-    '      // 管理员模式切换',
-    '      const adminRadios = document.querySelectorAll("input[name=\"admin_mode\"]");',
-    '      adminRadios.forEach(radio => {',
-    '        radio.addEventListener("change", function() {',
-    '          const manualFields = document.getElementById("manualAdminFields");',
-    '          manualFields.style.display = this.value === "manual" ? "block" : "none";',
-    '        });',
-    '      });',
-    '      // 提交按钮点击',
-    '      const submitBtn = document.getElementById("submitBtn");',
-    '      submitBtn.addEventListener("click", async function() {',
-    '        const form = document.getElementById("setupForm");',
-    '        const messageEl = document.getElementById("message");',
-    '        submitBtn.disabled = true;',
-    '        submitBtn.textContent = "保存中...";',
-    '        const formData = new FormData(form);',
-    '        const adminMode = formData.get("admin_mode");',
-    '        const adminEmail = formData.get("admin_email");',
-    '        const adminPassword = formData.get("admin_password");',
-    '        const adminPasswordConfirm = formData.get("admin_password_confirm");',
-    '        if (adminMode === "manual") {',
-    '          if (!adminEmail || !adminPassword) {',
-    '            messageEl.className = "message error";',
-    '            messageEl.textContent = "请填写管理员邮箱和密码";',
-    '            submitBtn.disabled = false;',
-    '            submitBtn.textContent = "保存设置并继续";',
-    '            return;',
-    '          }',
-    '          if (adminPassword !== adminPasswordConfirm) {',
-    '            messageEl.className = "message error";',
-    '            messageEl.textContent = "两次输入的密码不一致";',
-    '            submitBtn.disabled = false;',
-    '            submitBtn.textContent = "保存设置并继续";',
-    '            return;',
-    '          }',
-    '        }',
-    '        try {',
-    '          const response = await fetch("/api/v1/setup", {',
-    '            method: "POST",',
-    '            headers: { "Content-Type": "application/json" },',
-    '            body: JSON.stringify({',
-    '              timezone_offset: parseInt(formData.get("timezone_offset")),',
-    '              cloud_config: null,',
-    '              admin_mode: adminMode,',
-    '              admin_email: adminEmail,',
-    '              admin_password: adminPassword',
-    '            })',
-    '          });',
-    '          const result = await response.json();',
-    '          if (response.ok && result.success) {',
-    '            messageEl.className = "message success";',
-    '            let html = "✓ " + (result.message || "设置已保存") + "<br><br>";',
-    '            if (result.user_email) {',
-    '              html += "<div class=\"result-row\"><span>管理员账户:</span>";',
-    '              html += "<input type=\"text\" id=\"res-email\" class=\"result-input\" value=\"" + result.user_email + "\" readonly>";',
-    '              html += "<button class=\"copy-btn\" id=\"copy-email\">复制</button>";',
-    '              html += "</div>";',
-    '            }',
-    '            if (result.auto_generated_password) {',
-    '              html += "<div class=\"result-row\"><span>密码:</span>";',
-    '              html += "<input type=\"text\" id=\"res-pwd\" class=\"result-input\" value=\"" + result.auto_generated_password + "\" readonly>";',
-    '              html += "<button class=\"copy-btn green\" id=\"copy-pwd\">复制</button>";',
-    '              html += "</div>";',
-    '              html += "<small style=\"color: #666;\">请务必记录此密码！</small><br>";',
-    '            }',
-    '            html += "<br>正在跳转登录页面...";',
-    '            messageEl.innerHTML = html;',
-    '            const copyEmailBtn = document.getElementById("copy-email");',
-    '            if (copyEmailBtn) {',
-    '              copyEmailBtn.addEventListener("click", function() {',
-    '                const emailInput = document.getElementById("res-email");',
-    '                if (emailInput) {',
-    '                  navigator.clipboard.writeText(emailInput.value).then(() => {',
-    '                    const orig = copyEmailBtn.textContent;',
-    '                    copyEmailBtn.textContent = "已复制";',
-    '                    setTimeout(() => copyEmailBtn.textContent = orig, 2000);',
-    '                  });',
-    '                }',
-    '              });',
-    '            }',
-    '            const copyPwdBtn = document.getElementById("copy-pwd");',
-    '            if (copyPwdBtn) {',
-    '              copyPwdBtn.addEventListener("click", function() {',
-    '                const pwdInput = document.getElementById("res-pwd");',
-    '                if (pwdInput) {',
-    '                  navigator.clipboard.writeText(pwdInput.value).then(() => {',
-    '                    const orig = copyPwdBtn.textContent;',
-    '                    copyPwdBtn.textContent = "已复制";',
-    '                    setTimeout(() => copyPwdBtn.textContent = orig, 2000);',
-    '                  });',
-    '                }',
-    '              });',
-    '            }',
-    '            setTimeout(() => window.top.location.href = "/", 8000);',
-    '          } else {',
-    '            messageEl.className = "message error";',
-    '            messageEl.textContent = result.error || "保存失败，请重试";',
-    '            submitBtn.disabled = false;',
-    '            submitBtn.textContent = "保存设置并继续";',
-    '          }',
-    '        } catch (e) {',
-    '          messageEl.className = "message error";',
-    '          messageEl.textContent = "网络错误，请重试";',
-    '          submitBtn.disabled = false;',
-    '          submitBtn.textContent = "保存设置并继续";',
-    '        }',
-    '      });',
-    '      fetch("/api/v1/setup")',
-    '        .then(r => r.json())',
-    '        .then(data => { if (data.setup_completed) window.location.href = "/login"; })',
-    '        .catch(() => {});',
-    '    });',
-    '  </script>',
-    '</body>',
-    '</html>'
-  ];
-  
-  return htmlParts.join('\n');
+  // 最安全的方式：不使用任何嵌套引号
+  const html = `
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>蜜蜂记账 - 初始设置</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 40px 20px; }
+    .setup-container { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); width: 100%; max-width: 700px; margin: 0 auto; max-height: 90vh; overflow-y: auto; }
+    h1 { text-align: center; color: #667eea; margin-bottom: 10px; font-size: 28px; }
+    .subtitle { text-align: center; color: #666; margin-bottom: 30px; }
+    .section { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #f0f0f0; }
+    .section:last-child { border-bottom: none; }
+    .section-title { color: #333; font-size: 18px; font-weight: 600; margin-bottom: 15px; display: flex; align-items: center; gap: 8px; }
+    .form-group { margin-bottom: 15px; }
+    label { display: block; margin-bottom: 6px; color: #555; font-weight: 500; font-size: 14px; }
+    input, select { width: 100%; padding: 10px 12px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px; }
+    input:focus, select:focus { outline: none; border-color: #667eea; }
+    .checkbox-group { display: flex; align-items: center; gap: 8px; }
+    .checkbox-group input[type=checkbox] { width: 18px; height: 18px; }
+    button { width: 100%; padding: 14px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; }
+    button:hover { transform: translateY(-2px); transition: transform 0.2s; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .message { padding: 12px; border-radius: 6px; margin-bottom: 20px; display: none; }
+    .message.error { background: #fee; color: #c33; display: block; }
+    .message.success { background: #efe; color: #3c3; display: block; }
+    .hint { font-size: 12px; color: #888; margin-top: 4px; }
+    .copy-btn { padding: 4px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; margin-left: 8px; }
+    .copy-btn.green { background: #28a745; }
+    .result-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+    .result-input { flex: 1; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <div class="setup-container">
+    <h1>🐝 蜜蜂记账</h1>
+    <p class="subtitle">首次设置向导</p>
+    <div id="message" class="message"></div>
+    <form id="setupForm">
+      <div class="section">
+        <div class="section-title">👤 管理员账户</div>
+        <div class="form-group">
+          <label><input type="radio" name="admin_mode" value="auto" checked> 自动创建管理员账户（推荐）</label>
+          <div class="hint">系统将自动生成管理员账户和随机密码，请务必记录</div>
+        </div>
+        <div class="form-group">
+          <label><input type="radio" name="admin_mode" value="manual"> 手动设置管理员账户</label>
+          <div class="hint">手动输入邮箱和密码</div>
+        </div>
+        <div id="manualAdminFields" style="display: none;">
+          <div class="form-group">
+            <label for="admin_email">邮箱地址</label>
+            <input type="email" id="admin_email" name="admin_email" placeholder="admin@example.com">
+          </div>
+          <div class="form-group">
+            <label for="admin_password">密码</label>
+            <input type="password" id="admin_password" name="admin_password" placeholder="••••••••" minlength="6">
+          </div>
+          <div class="form-group">
+            <label for="admin_password_confirm">确认密码</label>
+            <input type="password" id="admin_password_confirm" name="admin_password_confirm" placeholder="••••••••" minlength="6">
+          </div>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-title">🌍 时区设置</div>
+        <div class="form-group">
+          <label for="timezone">选择时区</label>
+          <select id="timezone" name="timezone_offset">
+            <option value="-43200">UTC-12 (贝克岛)</option>
+            <option value="-39600">UTC-11 (美属萨摩亚)</option>
+            <option value="-36000">UTC-10 (夏威夷)</option>
+            <option value="-32400">UTC-9 (阿拉斯加)</option>
+            <option value="-28800">UTC-8 (洛杉矶、温哥华)</option>
+            <option value="-25200">UTC-7 (丹佛、凤凰城)</option>
+            <option value="-21600">UTC-6 (芝加哥、墨西哥城)</option>
+            <option value="-18000">UTC-5 (纽约、多伦多)</option>
+            <option value="-14400">UTC-4 (圣地亚哥、哈利法克斯)</option>
+            <option value="-12600">UTC-3:30 (纽芬兰)</option>
+            <option value="-10800">UTC-3 (圣保罗、布宜诺斯艾利斯)</option>
+            <option value="-7200">UTC-2 (大西洋中部)</option>
+            <option value="-3600">UTC-1 (亚速尔群岛)</option>
+            <option value="0">UTC+0 (伦敦、都柏林、里斯本)</option>
+            <option value="3600">UTC+1 (巴黎、柏林、罗马)</option>
+            <option value="7200">UTC+2 (雅典、赫尔辛基、基辅)</option>
+            <option value="10800">UTC+3 (莫斯科、伊斯坦布尔)</option>
+            <option value="12600">UTC+3:30 (德黑兰)</option>
+            <option value="14400">UTC+4 (迪拜、巴库)</option>
+            <option value="16200">UTC+4:30 (喀布尔)</option>
+            <option value="18000">UTC+5 (卡拉奇、塔什干)</option>
+            <option value="19800">UTC+5:30 (孟买、新德里、科伦坡)</option>
+            <option value="20700">UTC+5:45 (加德满都)</option>
+            <option value="21600">UTC+6 (达卡、新西伯利亚)</option>
+            <option value="23400">UTC+6:30 (仰光)</option>
+            <option value="25200">UTC+7 (曼谷、雅加达)</option>
+            <option value="28800" selected>UTC+8 (北京时间、香港、新加坡)</option>
+            <option value="32400">UTC+9 (东京、首尔、雅库茨克)</option>
+            <option value="34200">UTC+9:30 (阿德莱德、达尔文)</option>
+            <option value="36000">UTC+10 (悉尼、墨尔本、布里斯班)</option>
+            <option value="37800">UTC+10:30 (豪勋爵岛)</option>
+            <option value="39600">UTC+11 (所罗门群岛)</option>
+            <option value="41400">UTC+11:30 (诺福克岛)</option>
+            <option value="43200">UTC+12 (奥克兰、斐济)</option>
+            <option value="45000">UTC+12:45 (查塔姆群岛)</option>
+            <option value="46800">UTC+13 (努库阿洛法)</option>
+            <option value="50400">UTC+14 (基里蒂马蒂岛)</option>
+          </select>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-title">☁️ 云存储设置（可选）</div>
+        <div class="form-group">
+          <div class="checkbox-group">
+            <input type="checkbox" id="cloud_enabled" name="cloud_enabled">
+            <label for="cloud_enabled" style="margin-bottom: 0;">启用云存储备份</label>
+          </div>
+        </div>
+      </div>
+      <button type="button" id="submitBtn">保存设置并继续</button>
+    </form>
+  </div>
+  <script>
+    function initSetup() {
+      // 管理员模式切换
+      const radios = document.getElementsByName('admin_mode');
+      for (let i = 0; i < radios.length; i++) {
+        radios[i].addEventListener('change', function() {
+          const manualFields = document.getElementById('manualAdminFields');
+          manualFields.style.display = this.value === 'manual' ? 'block' : 'none';
+        });
+      }
+      // 提交按钮点击
+      const submitBtn = document.getElementById('submitBtn');
+      submitBtn.addEventListener('click', async function() {
+        const form = document.getElementById('setupForm');
+        const messageEl = document.getElementById('message');
+        submitBtn.disabled = true;
+        submitBtn.textContent = '保存中...';
+        const formData = new FormData(form);
+        const adminMode = formData.get('admin_mode');
+        const adminEmail = formData.get('admin_email');
+        const adminPassword = formData.get('admin_password');
+        const adminPasswordConfirm = formData.get('admin_password_confirm');
+        if (adminMode === 'manual') {
+          if (!adminEmail || !adminPassword) {
+            messageEl.className = 'message error';
+            messageEl.textContent = '请填写管理员邮箱和密码';
+            submitBtn.disabled = false;
+            submitBtn.textContent = '保存设置并继续';
+            return;
+          }
+          if (adminPassword !== adminPasswordConfirm) {
+            messageEl.className = 'message error';
+            messageEl.textContent = '两次输入的密码不一致';
+            submitBtn.disabled = false;
+            submitBtn.textContent = '保存设置并继续';
+            return;
+          }
+        }
+        try {
+          const response = await fetch('/api/v1/setup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              timezone_offset: parseInt(formData.get('timezone_offset')),
+              cloud_config: null,
+              admin_mode: adminMode,
+              admin_email: adminEmail,
+              admin_password: adminPassword
+            })
+          });
+          const result = await response.json();
+          if (response.ok && result.success) {
+            messageEl.className = 'message success';
+            let html = '✓ ' + (result.message || '设置已保存') + '<br><br>';
+            if (result.user_email) {
+              html += '<div class="result-row"><span>管理员账户:</span>';
+              html += '<input type="text" id="res-email" class="result-input" value="' + result.user_email + '" readonly>';
+              html += '<button class="copy-btn" id="copy-email">复制</button>';
+              html += '</div>';
+            }
+            if (result.auto_generated_password) {
+              html += '<div class="result-row"><span>密码:</span>';
+              html += '<input type="text" id="res-pwd" class="result-input" value="' + result.auto_generated_password + '" readonly>';
+              html += '<button class="copy-btn green" id="copy-pwd">复制</button>';
+              html += '</div>';
+              html += '<small style="color: #666;">请务必记录此密码！</small><br>';
+            }
+            html += '<br>正在跳转登录页面...';
+            messageEl.innerHTML = html;
+            const copyEmailBtn = document.getElementById('copy-email');
+            if (copyEmailBtn) {
+              copyEmailBtn.addEventListener('click', function() {
+                const emailInput = document.getElementById('res-email');
+                if (emailInput) {
+                  navigator.clipboard.writeText(emailInput.value).then(function() {
+                    const orig = copyEmailBtn.textContent;
+                    copyEmailBtn.textContent = '已复制';
+                    setTimeout(function() { copyEmailBtn.textContent = orig; }, 2000);
+                  });
+                }
+              });
+            }
+            const copyPwdBtn = document.getElementById('copy-pwd');
+            if (copyPwdBtn) {
+              copyPwdBtn.addEventListener('click', function() {
+                const pwdInput = document.getElementById('res-pwd');
+                if (pwdInput) {
+                  navigator.clipboard.writeText(pwdInput.value).then(function() {
+                    const orig = copyPwdBtn.textContent;
+                    copyPwdBtn.textContent = '已复制';
+                    setTimeout(function() { copyPwdBtn.textContent = orig; }, 2000);
+                  });
+                }
+              });
+            }
+            setTimeout(function() { window.top.location.href = '/'; }, 8000);
+          } else {
+            messageEl.className = 'message error';
+            messageEl.textContent = result.error || '保存失败，请重试';
+            submitBtn.disabled = false;
+            submitBtn.textContent = '保存设置并继续';
+          }
+        } catch (e) {
+          messageEl.className = 'message error';
+          messageEl.textContent = '网络错误，请重试';
+          submitBtn.disabled = false;
+          submitBtn.textContent = '保存设置并继续';
+        }
+      });
+      // 检查是否已设置
+      fetch('/api/v1/setup')
+        .then(function(r) { return r.json(); })
+        .then(function(data) { if (data.setup_completed) { window.location.href = '/login'; } })
+        .catch(function() {});
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initSetup);
+    } else {
+      initSetup();
+    }
+  </script>
+</body>
+</html>
+  `.trim();
+  return html;
 }
 
 async function signS3Request(
