@@ -997,13 +997,13 @@ app.post('/api/v1/setup', async (c) => {
         userId = crypto.randomUUID();
         passwordHash = await hashPassword(adminPassword);
         
-        // Create user
+        // 创建用户
         await db.prepare(`
           INSERT INTO users (id, email, password_hash, is_admin, is_enabled)
           VALUES (?, ?, ?, 1, 1)
         `).bind(userId, userEmail, passwordHash).run();
         
-        // Create user profile with default AI config
+        // 创建用户 profile
         const defaultAiConfig = JSON.stringify({
           providers: [
             {
@@ -1030,6 +1030,13 @@ app.post('/api/v1/setup', async (c) => {
           INSERT INTO user_profiles (user_id, display_name, ai_config_json)
           VALUES (?, ?, ?)
         `).bind(userId, 'admin', defaultAiConfig).run();
+        
+        // 打印到日志
+        console.log('========================================');
+        console.log('🐝 BeeCount 管理员账户已创建:');
+        console.log('邮箱:', userEmail);
+        console.log('密码:', adminPassword);
+        console.log('========================================');
         
         return c.json({
           success: true,
@@ -1751,12 +1758,6 @@ function getSetupPageHTML(): string {
           }
           message += '正在跳转登录页面...';
           messageEl.innerHTML = message;
-          
-          console.log('========================================');
-          console.log('🐝 BeeCount 设置完成！管理员账户信息：');
-          console.log('邮箱: ' + (result.user_email || adminEmail));
-          console.log('密码: ' + (result.auto_generated_password || adminPassword));
-          console.log('========================================');
           
           setTimeout(() => {
             window.top.location.href = '/';
