@@ -912,7 +912,7 @@ app.post('/api/v1/setup', async (c) => {
   
   try {
     const body = await c.req.json();
-    const { timezone_offset, cloud_config } = body;
+    const { timezone_offset, cloud_config, admin_email, admin_password } = body;
     
     // 检查是否已经设置过
     const existing = await db
@@ -960,6 +960,52 @@ app.post('/api/v1/setup', async (c) => {
           serverNow
         )
         .run();
+    }
+    
+    // 创建第一个管理员账户
+    if (admin_email && admin_password) {
+      const { hashPassword } = await import('../auth');
+      const { randomUUID } = await import('crypto');
+      
+      const userId = randomUUID();
+      const passwordHash = await hashPassword(admin_password);
+      
+      await db
+        .prepare(`
+          INSERT INTO users (id, email, password_hash, is_admin, is_enabled, created_at, updated_at)
+          VALUES (?, ?, ?, 1, 1, ?, ?)
+        `)
+        .bind(
+          userId,
+          admin_email.toLowerCase(),
+          passwordHash,
+          serverNow,
+          serverNow
+        )
+        .run();
+      
+      // 创建用户 profile
+      await db
+        .prepare(`
+          INSERT INTO profiles (id, user_id, display_name, currency, language, timezone, created_at, updated_at)
+          VALUES (?, ?, ?, 'CNY', 'zh-CN', ?, ?, ?)
+        `)
+        .bind(
+          randomUUID(),
+          userId,
+          admin_email.split('@')[0],
+          timezone_offset || 0,
+          serverNow,
+          serverNow
+        )
+        .run();
+      
+      return c.json({
+        success: true,
+        message: '系统设置已保存，管理员账户已创建',
+        timezone_offset: timezone_offset || 0,
+        user_email: admin_email.toLowerCase()
+      });
     }
     
     return c.json({
@@ -1179,6 +1225,24 @@ function getSetupPageHTML(): string {
     <div id="message" class="message"></div>
     
     <form id="setupForm">
+      <div class="section">
+        <div class="section-title">👤 管理员账户</div>
+        <div class="form-group">
+          <label for="admin_email">邮箱地址</label>
+          <input type="email" id="admin_email" name="admin_email" placeholder="admin@example.com" required>
+          <div class="hint">这将是您的管理员账户，用于登录系统</div>
+        </div>
+        <div class="form-group">
+          <label for="admin_password">密码</label>
+          <input type="password" id="admin_password" name="admin_password" placeholder="••••••••" required minlength="6">
+          <div class="hint">至少 6 个字符</div>
+        </div>
+        <div class="form-group">
+          <label for="admin_password_confirm">确认密码</label>
+          <input type="password" id="admin_password_confirm" name="admin_password_confirm" placeholder="••••••••" required minlength="6">
+        </div>
+      </div>
+      
       <div class="section">
         <div class="section-title">🌍 时区设置</div>
         <div class="form-group">
@@ -1449,6 +1513,36 @@ function getSetupPageHTML(): string {
       submitBtn.textContent = '保存中...';
       
       const formData = new FormData(e.target);
+      
+      // 验证管理员密码
+      const adminEmail = formData.get('admin_email');
+      const adminPassword = formData.get('admin_password');
+      const adminPasswordConfirm = formData.get('admin_password_confirm');
+      
+      if (!adminEmail || !adminPassword) {
+        messageEl.className = 'message error';
+        messageEl.textContent = '请填写管理员邮箱和密码';
+        submitBtn.disabled = false;
+        submitBtn.textContent = '保存设置并继续';
+        return;
+      }
+      
+      if (adminPassword !== adminPasswordConfirm) {
+        messageEl.className = 'message error';
+        messageEl.textContent = '两次输入的密码不一致';
+        submitBtn.disabled = false;
+        submitBtn.textContent = '保存设置并继续';
+        return;
+      }
+      
+      if (adminPassword.length < 6) {
+        messageEl.className = 'message error';
+        messageEl.textContent = '密码至少需要 6 个字符';
+        submitBtn.disabled = false;
+        submitBtn.textContent = '保存设置并继续';
+        return;
+      }
+      
       const backendType = formData.get('backend_type');
       
       // 构建配置数据
@@ -1520,7 +1614,9 @@ function getSetupPageHTML(): string {
       
       const data = {
         timezone_offset: parseInt(formData.get('timezone_offset')),
-        cloud_config: cloudConfig
+        cloud_config: cloudConfig,
+        admin_email: adminEmail,
+        admin_password: adminPassword
       };
       
       try {
@@ -1534,10 +1630,10 @@ function getSetupPageHTML(): string {
         
         if (response.ok && result.success) {
           messageEl.className = 'message success';
-          messageEl.textContent = '设置已保存！正在跳转...';
+          messageEl.innerHTML = '✓ ' + (result.message || '设置已保存') + '<br>管理员账户: ' + (result.user_email || adminEmail) + '<br>正在跳转登录页面...';
           setTimeout(() => {
             window.location.href = '/login';
-          }, 1000);
+          }, 2000);
         } else {
           messageEl.className = 'message error';
           messageEl.textContent = result.error || '保存失败，请重试';
