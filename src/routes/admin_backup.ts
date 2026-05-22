@@ -1164,14 +1164,17 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
   const req = c.req.valid('json');
   const serverNow = nowUtc();
   const userId = c.get('userId');
+  
+  // 计算首次运行时间
+  const nextRunAt = calculateNextRun(req.cron_expr);
 
   const remoteIdsJson = req.remote_ids && req.remote_ids.length > 0 ? JSON.stringify(req.remote_ids) : null;
 
   const insertResult = await db
     .prepare(
       `INSERT INTO backup_schedules
-       (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, next_run_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       req.name,
@@ -1181,6 +1184,7 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
       req.include_attachments !== false ? 1 : 0,
       req.enabled !== false ? 1 : 0,
       remoteIdsJson,
+      nextRunAt,
       serverNow,
       serverNow
     )
@@ -1195,13 +1199,51 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
     retention_days: req.retention_days ?? 30,
     include_attachments: req.include_attachments ?? true,
     enabled: req.enabled ?? true,
-    next_run_at: null,
+    next_run_at: nextRunAt,
     last_run_at: null,
     last_run_status: null,
     remote_ids: req.remote_ids,
     created_at: serverNow,
   }, 201);
 });
+
+/**
+ * 计算下次运行时间
+ */
+function calculateNextRun(cronExpr: string): string {
+  try {
+    const parts = cronExpr.trim().split(/\s+/);
+    
+    let nextDate = new Date();
+    nextDate.setMinutes(nextDate.getMinutes() + 5);
+    
+    if (parts.length >= 5) {
+      if (parts[0] !== '*') {
+        nextDate = new Date();
+        nextDate.setMinutes(nextDate.getMinutes() + parseInt(parts[0]) || 30);
+      } else if (parts[1] !== '*') {
+        nextDate = new Date();
+        nextDate.setHours(nextDate.getHours() + 1);
+        nextDate.setMinutes(parseInt(parts[1]) || 0);
+      } else if (parts[2] !== '*') {
+        nextDate = new Date();
+        nextDate.setDate(nextDate.getDate() + 1);
+        nextDate.setHours(parseInt(parts[2]) || 0);
+        nextDate.setMinutes(0);
+      } else {
+        nextDate = new Date();
+        nextDate.setMinutes(nextDate.getMinutes() + 5);
+      }
+    }
+    
+    return nextDate.toISOString();
+  } catch (e) {
+    console.error('[Schedule] Error parsing cron expression:', cronExpr, e);
+    const nextDate = new Date();
+    nextDate.setMinutes(nextDate.getMinutes() + 5);
+    return nextDate.toISOString();
+  }
+}
 
 /**
  * 更新备份调度
@@ -1238,6 +1280,10 @@ backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), a
   if (req.cron_expr !== undefined) {
     updates.push('cron_expr = ?');
     params.push(req.cron_expr);
+    // 更新 cron 表达式时重新计算下次运行时间
+    const nextRunAt = calculateNextRun(req.cron_expr);
+    updates.push('next_run_at = ?');
+    params.push(nextRunAt);
   }
 
   if (req.retention_days !== undefined) {
@@ -1253,6 +1299,20 @@ backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), a
   if (req.enabled !== undefined) {
     updates.push('enabled = ?');
     params.push(req.enabled ? 1 : 0);
+    // 如果启用了，也重新计算下次运行时间
+    if (req.enabled) {
+      const existingSchedule = await db
+        .prepare('SELECT cron_expr FROM backup_schedules WHERE id = ?')
+        .bind(scheduleId)
+        .first<{ cron_expr: string }>();
+      
+      if (existingSchedule) {
+        const cronToUse = req.cron_expr || existingSchedule.cron_expr;
+        const nextRunAt = calculateNextRun(cronToUse);
+        updates.push('next_run_at = ?');
+        params.push(nextRunAt);
+      }
+    }
   }
 
   params.push(scheduleId);

@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
+# 定时任务触发器 - 每5分钟检查一次
+[triggers]
+crons = ["*/5 * * * *"]
+
 [alias]
 tslib = "tslib"
 

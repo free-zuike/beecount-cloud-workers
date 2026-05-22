@@ -286,6 +286,9 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         retention_days INTEGER DEFAULT 30,
         include_attachments BOOLEAN DEFAULT 0 NOT NULL,
         enabled BOOLEAN DEFAULT 1 NOT NULL,
+        next_run_at TEXT,
+        last_run_at TEXT,
+        last_run_status TEXT,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
         updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
@@ -567,6 +570,30 @@ app.post('/api/v1/admin/backup/migrate-db', async (c) => {
       results.push('✓ Added remote_ids column to backup_schedules');
     } catch (e) {
       results.push('~ remote_ids column already exists in backup_schedules');
+    }
+    
+    // 添加 next_run_at 列到 backup_schedules 表
+    try {
+      await db.prepare('ALTER TABLE backup_schedules ADD COLUMN next_run_at TEXT').run();
+      results.push('✓ Added next_run_at column to backup_schedules');
+    } catch (e) {
+      results.push('~ next_run_at column already exists in backup_schedules');
+    }
+    
+    // 添加 last_run_at 列到 backup_schedules 表
+    try {
+      await db.prepare('ALTER TABLE backup_schedules ADD COLUMN last_run_at TEXT').run();
+      results.push('✓ Added last_run_at column to backup_schedules');
+    } catch (e) {
+      results.push('~ last_run_at column already exists in backup_schedules');
+    }
+    
+    // 添加 last_run_status 列到 backup_schedules 表
+    try {
+      await db.prepare('ALTER TABLE backup_schedules ADD COLUMN last_run_status TEXT').run();
+      results.push('✓ Added last_run_status column to backup_schedules');
+    } catch (e) {
+      results.push('~ last_run_status column already exists in backup_schedules');
     }
     
     // 添加 ledger_id 列
@@ -1444,4 +1471,227 @@ app.get('*', async (c, next) => {
 // 导出应用
 // ===========================
 
-export default app;
+// ===========================
+// 定时任务处理 (Cron Trigger)
+// ===========================
+
+export default {
+  // HTTP 请求处理
+  fetch: app.fetch,
+  
+  // 定时任务调度处理
+  async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+    console.log('[CRON] Scheduled event triggered:', new Date().toISOString());
+    
+    const db = env.DB;
+    
+    try {
+      // 获取所有启用的备份计划
+      const schedulesResult = await db
+        .prepare('SELECT * FROM backup_schedules WHERE enabled = 1')
+        .all();
+      
+      const schedules = schedulesResult.results || [];
+      console.log(`[CRON] Found ${schedules.length} enabled backup schedules`);
+      
+      for (const schedule of schedules) {
+        try {
+          await processBackupSchedule(db, schedule);
+        } catch (scheduleError) {
+          console.error(`[CRON] Error processing schedule ${schedule.id}:`, scheduleError);
+        }
+      }
+      
+      console.log('[CRON] Scheduled event completed');
+    } catch (error) {
+      console.error('[CRON] Error in scheduled event:', error);
+    }
+  }
+};
+
+// ===========================
+// 备份计划处理函数
+// ===========================
+
+async function processBackupSchedule(db: D1Database, schedule: any) {
+  console.log(`[CRON] Processing schedule ${schedule.id}: ${schedule.name}`);
+  
+  // 如果没有 next_run_at，先计算一个
+  if (!schedule.next_run_at) {
+    const nextRun = calculateNextRun(schedule.cron_expr);
+    await db
+      .prepare('UPDATE backup_schedules SET next_run_at = ? WHERE id = ?')
+      .bind(nextRun, schedule.id)
+      .run();
+    console.log(`[CRON] Set initial next_run_at for schedule ${schedule.id}: ${nextRun}`);
+    return;
+  }
+  
+  const now = new Date().toISOString();
+  
+  // 检查是否到达执行时间
+  if (now < schedule.next_run_at) {
+    console.log(`[CRON] Schedule ${schedule.id} not due yet. Next run: ${schedule.next_run_at}`);
+    return;
+  }
+  
+  console.log(`[CRON] Executing schedule ${schedule.id}: ${schedule.name}`);
+  
+  // 获取该用户的账本
+  let ledger = await db
+    .prepare('SELECT id FROM ledgers WHERE user_id = ? LIMIT 1')
+    .bind(schedule.user_id)
+    .first<{ id: string }>();
+  
+  if (!ledger) {
+    console.log(`[CRON] No ledger found for schedule ${schedule.id}, skipping`);
+    return;
+  }
+  
+  // 解析远程配置
+  let remoteId: string | null = null;
+  let remoteConfig: Record<string, string> = { backend_type: 'local' };
+  
+  if (schedule.remote_ids) {
+    try {
+      const remoteIds = JSON.parse(schedule.remote_ids);
+      if (remoteIds.length > 0) {
+        remoteId = String(remoteIds[0]);
+        const remote = await db
+          .prepare('SELECT backend_type, config_summary FROM backup_remotes WHERE id = ?')
+          .bind(remoteId)
+          .first<{ backend_type: string; config_summary: string }>();
+        
+        if (remote) {
+          const parsedConfig = JSON.parse(remote.config_summary || '{}');
+          remoteConfig = {
+            backend_type: remote.backend_type,
+            ...parsedConfig,
+            savePath: parsedConfig.root_path ? parsedConfig.root_path.replace(/^\/+|\/+$/g, '') : 'custom'
+          };
+        }
+      }
+    } catch (e) {
+      console.log(`[CRON] Failed to parse remote config for schedule ${schedule.id}:`, e);
+    }
+  }
+  
+  // 创建备份运行记录
+  const runId = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
+  
+  await db
+    .prepare(
+      'INSERT INTO backup_runs (id, schedule_id, ledger_id, remote_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)'
+    )
+    .bind(runId, schedule.id, ledger.id, remoteId, 'pending', startedAt)
+    .run();
+  
+  // 执行备份
+  try {
+    const backupResult = await performBackupIndex(db, runId, ledger.id, remoteConfig);
+    const finishedAt = new Date().toISOString();
+    
+    if (backupResult.success) {
+      await db
+        .prepare(
+          'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ? WHERE id = ?'
+        )
+        .bind('completed', finishedAt, backupResult.backupSize, 
+              backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath, runId)
+        .run();
+      
+      console.log(`[CRON] Backup completed for schedule ${schedule.id}`);
+    } else {
+      await db
+        .prepare(
+          'UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?'
+        )
+        .bind('failed', finishedAt, backupResult.message, runId)
+        .run();
+      
+      console.log(`[CRON] Backup failed for schedule ${schedule.id}:`, backupResult.message);
+    }
+    
+    // 更新计划的最后运行时间
+    const nextRun = calculateNextRun(schedule.cron_expr);
+    await db
+      .prepare(
+        'UPDATE backup_schedules SET last_run_at = ?, last_run_status = ?, next_run_at = ?, updated_at = ? WHERE id = ?'
+      )
+      .bind(startedAt, backupResult.success ? 'completed' : 'failed', nextRun, startedAt, schedule.id)
+      .run();
+    
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    const finishedAt = new Date().toISOString();
+    
+    await db
+      .prepare(
+        'UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?'
+      )
+      .bind('failed', finishedAt, errorMsg, runId)
+      .run();
+    
+    // 更新计划的失败状态
+    const nextRun = calculateNextRun(schedule.cron_expr);
+    await db
+      .prepare(
+        'UPDATE backup_schedules SET last_run_at = ?, last_run_status = ?, next_run_at = ?, updated_at = ? WHERE id = ?'
+      )
+      .bind(startedAt, 'failed', nextRun, startedAt, schedule.id)
+      .run();
+    
+    console.error(`[CRON] Exception during backup for schedule ${schedule.id}:`, error);
+  }
+}
+
+// ===========================
+// Cron 表达式解析和计算
+// ===========================
+
+function calculateNextRun(cronExpr: string): string {
+  try {
+    // 简单的 cron 解析（支持基本格式）
+    const parts = cronExpr.trim().split(/\s+/);
+    
+    // 默认每5分钟执行一次（如果解析失败）
+    let nextDate = new Date();
+    nextDate.setMinutes(nextDate.getMinutes() + 5);
+    
+    if (parts.length >= 5) {
+      // 这里是一个简单的实现
+      // 完整实现需要复杂的 cron 解析库
+      // 为了简化，我们固定为：每小时执行一次，或者每天执行一次
+      
+      if (parts[0] !== '*') {
+        // 每分钟模式
+        nextDate = new Date();
+        nextDate.setMinutes(nextDate.getMinutes() + parseInt(parts[0]) || 30);
+      } else if (parts[1] !== '*') {
+        // 每小时模式
+        nextDate = new Date();
+        nextDate.setHours(nextDate.getHours() + 1);
+        nextDate.setMinutes(parseInt(parts[1]) || 0);
+      } else if (parts[2] !== '*') {
+        // 每天模式
+        nextDate = new Date();
+        nextDate.setDate(nextDate.getDate() + 1);
+        nextDate.setHours(parseInt(parts[2]) || 0);
+        nextDate.setMinutes(0);
+      } else {
+        // 默认：5分钟后
+        nextDate = new Date();
+        nextDate.setMinutes(nextDate.getMinutes() + 5);
+      }
+    }
+    
+    return nextDate.toISOString();
+  } catch (e) {
+    console.error('[CRON] Error parsing cron expression:', cronExpr, e);
+    // 出错时5分钟后
+    const nextDate = new Date();
+    nextDate.setMinutes(nextDate.getMinutes() + 5);
+    return nextDate.toISOString();
+  }
+}
