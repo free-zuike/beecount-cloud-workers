@@ -1108,29 +1108,56 @@ backupRouter.post('/remotes/test', zValidator('json', RemoteTestSchema), async (
 backupRouter.get('/schedules', async (c) => {
   const db = c.env.DB;
 
-  const rows = await db
-    .prepare(
-      `SELECT s.id, s.name, s.cron_expr, s.remote_ids,
-              s.retention_days, s.include_attachments, s.enabled, s.created_at, s.updated_at,
-              s.next_run_at, s.last_run_at, s.last_run_status
-       FROM backup_schedules s
-       ORDER BY s.created_at DESC`
-    )
-    .all<{
-      id: number;
-      name: string;
-      user_id: string;
-      cron_expr: string;
-      remote_ids: string;
-      retention_days: number | null;
-      include_attachments: number;
-      enabled: number;
-      created_at: string;
-      updated_at: string;
-      next_run_at: string | null;
-      last_run_at: string | null;
-      last_run_status: string | null;
-    }>();
+  let rows;
+  try {
+    // 先尝试查询带所有新字段的版本
+    rows = await db
+      .prepare(
+        `SELECT s.id, s.name, s.cron_expr, s.remote_ids,
+                s.retention_days, s.include_attachments, s.enabled, s.created_at, s.updated_at,
+                s.next_run_at, s.last_run_at, s.last_run_status, s.timezone_offset
+         FROM backup_schedules s
+         ORDER BY s.created_at DESC`
+      )
+      .all<{
+        id: number;
+        name: string;
+        user_id: string;
+        cron_expr: string;
+        remote_ids: string;
+        retention_days: number | null;
+        include_attachments: number;
+        enabled: number;
+        created_at: string;
+        updated_at: string;
+        next_run_at: string | null;
+        last_run_at: string | null;
+        last_run_status: string | null;
+        timezone_offset?: number;
+      }>();
+  } catch (error) {
+    // 如果失败，回退到查询旧字段版本
+    console.log('[Backup] Falling back to query without timezone_offset');
+    rows = await db
+      .prepare(
+        `SELECT s.id, s.name, s.cron_expr, s.remote_ids,
+                s.retention_days, s.include_attachments, s.enabled, s.created_at, s.updated_at
+         FROM backup_schedules s
+         ORDER BY s.created_at DESC`
+      )
+      .all<{
+        id: number;
+        name: string;
+        user_id: string;
+        cron_expr: string;
+        remote_ids: string;
+        retention_days: number | null;
+        include_attachments: number;
+        enabled: number;
+        created_at: string;
+        updated_at: string;
+      }>();
+  }
 
   const schedules = rows.results.map((row) => {
     let parsedRemoteIds: (string | number)[] = [];
@@ -1146,9 +1173,10 @@ backupRouter.get('/schedules', async (c) => {
       retention_days: row.retention_days ?? 30,
       include_attachments: Boolean(row.include_attachments),
       enabled: Boolean(row.enabled),
-      next_run_at: row.next_run_at,
-      last_run_at: row.last_run_at,
-      last_run_status: row.last_run_status,
+      timezone_offset: (row as any).timezone_offset ?? 0,
+      next_run_at: (row as any).next_run_at,
+      last_run_at: (row as any).last_run_at,
+      last_run_status: (row as any).last_run_status,
       remote_ids: parsedRemoteIds,
       created_at: row.created_at,
       updated_at: row.updated_at,
@@ -1172,26 +1200,52 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
 
   const remoteIdsJson = req.remote_ids && req.remote_ids.length > 0 ? JSON.stringify(req.remote_ids) : null;
 
-  const insertResult = await db
-    .prepare(
-      `INSERT INTO backup_schedules
-       (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, timezone_offset, next_run_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .bind(
-      req.name,
-      userId,
-      req.cron_expr,
-      req.retention_days ?? 30,
-      req.include_attachments !== false ? 1 : 0,
-      req.enabled !== false ? 1 : 0,
-      remoteIdsJson,
-      req.timezone_offset ?? 0,
-      nextRunAt,
-      serverNow,
-      serverNow
-    )
-    .run();
+  // 先尝试插入带 timezone_offset 的版本
+  let insertResult;
+  try {
+    insertResult = await db
+      .prepare(
+        `INSERT INTO backup_schedules
+         (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, timezone_offset, next_run_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        req.name,
+        userId,
+        req.cron_expr,
+        req.retention_days ?? 30,
+        req.include_attachments !== false ? 1 : 0,
+        req.enabled !== false ? 1 : 0,
+        remoteIdsJson,
+        req.timezone_offset ?? 0,
+        nextRunAt,
+        serverNow,
+        serverNow
+      )
+      .run();
+  } catch (error) {
+    // 如果失败，尝试不带 timezone_offset 的版本
+    console.log('[Backup] Creating schedule without timezone_offset:', error);
+    insertResult = await db
+      .prepare(
+        `INSERT INTO backup_schedules
+         (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, next_run_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        req.name,
+        userId,
+        req.cron_expr,
+        req.retention_days ?? 30,
+        req.include_attachments !== false ? 1 : 0,
+        req.enabled !== false ? 1 : 0,
+        remoteIdsJson,
+        nextRunAt,
+        serverNow,
+        serverNow
+      )
+      .run();
+  }
 
   const scheduleId = Number((insertResult as any).lastRowId);
 
@@ -1307,10 +1361,15 @@ backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), a
   if (req.cron_expr !== undefined) {
     updates.push('cron_expr = ?');
     params.push(req.cron_expr);
-    // 更新 cron 表达式时重新计算下次运行时间
-    const nextRunAt = calculateNextRun(req.cron_expr);
+    // 更新 cron 表达式时重新计算下次运行时间（使用时区偏移）
+    const nextRunAt = calculateNextRun(req.cron_expr, req.timezone_offset ?? 0);
     updates.push('next_run_at = ?');
     params.push(nextRunAt);
+  }
+
+  if (req.timezone_offset !== undefined) {
+    updates.push('timezone_offset = ?');
+    params.push(req.timezone_offset);
   }
 
   if (req.retention_days !== undefined) {
@@ -1335,7 +1394,7 @@ backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), a
       
       if (existingSchedule) {
         const cronToUse = req.cron_expr || existingSchedule.cron_expr;
-        const nextRunAt = calculateNextRun(cronToUse);
+        const nextRunAt = calculateNextRun(cronToUse, req.timezone_offset ?? 0);
         updates.push('next_run_at = ?');
         params.push(nextRunAt);
       }
@@ -1344,10 +1403,30 @@ backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), a
 
   params.push(scheduleId);
 
-  await db
-    .prepare(`UPDATE backup_schedules SET ${updates.join(', ')} WHERE id = ?`)
-    .bind(...params)
-    .run();
+  // 尝试执行更新，如果 timezone_offset 不存在则移除它再重试
+  try {
+    await db
+      .prepare(`UPDATE backup_schedules SET ${updates.join(', ')} WHERE id = ?`)
+      .bind(...params)
+      .run();
+  } catch (error) {
+    // 如果错误是关于 timezone_offset 列不存在，则移除该字段重试
+    const errorStr = String(error);
+    if (errorStr.includes('timezone_offset') && req.timezone_offset !== undefined) {
+      console.log('[Backup] Retrying update without timezone_offset');
+      // 移除 timezone_offset 相关的更新
+      const filteredUpdates = updates.filter(u => !u.includes('timezone_offset'));
+      const filteredParams = params.filter((_, i) => i < params.length - 1);
+      filteredParams.push(scheduleId);
+      
+      await db
+        .prepare(`UPDATE backup_schedules SET ${filteredUpdates.join(', ')} WHERE id = ?`)
+        .bind(...filteredParams)
+        .run();
+    } else {
+      throw error;
+    }
+  }
 
   return c.json({ success: true });
 });
