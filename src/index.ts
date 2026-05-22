@@ -1248,7 +1248,6 @@ function getSetupPageHTML(): string {
               <option value="webdav">WebDAV (Nextcloud / ownCloud)</option>
               <option value="sftp">SFTP</option>
               <option value="ftp">FTP</option>
-              <option value="local">本地存储</option>
             </select>
             <div class="hint">选择您要使用的云存储服务类型</div>
           </div>
@@ -1412,14 +1411,6 @@ function getSetupPageHTML(): string {
             <div class="form-group">
               <label for="ftp_pass">Password</label>
               <input type="password" id="ftp_pass" name="ftp_pass">
-            </div>
-          </div>
-          
-          <div id="localFields" class="storage-fields" style="display:none;">
-            <div class="form-group">
-              <label for="local_path">存储路径</label>
-              <input type="text" id="local_path" name="local_path" placeholder="/path/to/storage" disabled>
-              <div class="hint">本地存储将在服务器本地创建（需要额外配置）</div>
             </div>
           </div>
         </div>
