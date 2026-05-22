@@ -313,6 +313,23 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       )
     `).run();
 
+    // System settings table
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        id TEXT PRIMARY KEY,
+        timezone_offset INTEGER DEFAULT 0,
+        s3_access_key TEXT,
+        s3_secret_key TEXT,
+        s3_bucket TEXT,
+        s3_region TEXT,
+        s3_endpoint TEXT,
+        s3_enabled BOOLEAN DEFAULT 0,
+        setup_completed BOOLEAN DEFAULT 0 NOT NULL,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
+
     // 创建索引
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_ledger_id ON sync_changes(ledger_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_schedules_user_id ON backup_schedules(user_id)').run();
@@ -716,6 +733,567 @@ app.post('/api/v1/admin/backup/migrate-db', async (c) => {
     }, 500);
   }
 });
+
+// 检查系统是否已初始化
+app.get('/setup', async (c) => {
+  const db = c.env.DB;
+  
+  const settings = await db
+    .prepare('SELECT setup_completed FROM system_settings WHERE id = ?')
+    .bind('default')
+    .first<{ setup_completed: number }>();
+  
+  if (settings && settings.setup_completed === 1) {
+    return c.redirect('/login');
+  }
+  
+  return c.html(getSetupPageHTML());
+});
+
+// 获取设置页面
+app.get('/login', async (c) => {
+  const db = c.env.DB;
+  
+  const settings = await db
+    .prepare('SELECT setup_completed FROM system_settings WHERE id = ?')
+    .bind('default')
+    .first<{ setup_completed: number }>();
+  
+  if (!settings || settings.setup_completed === 0) {
+    return c.redirect('/setup');
+  }
+  
+  return c.html(`
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>蜜蜂记账 - 登录</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-container {
+      background: white;
+      padding: 40px;
+      border-radius: 12px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+      width: 100%;
+      max-width: 400px;
+    }
+    h1 {
+      text-align: center;
+      color: #667eea;
+      margin-bottom: 30px;
+      font-size: 28px;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #333;
+      font-weight: 500;
+    }
+    input {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      font-size: 16px;
+      transition: border-color 0.3s;
+    }
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    button {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+    button:hover {
+      transform: translateY(-2px);
+    }
+    .message {
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      display: none;
+    }
+    .message.error {
+      background: #fee;
+      color: #c33;
+      display: block;
+    }
+    .message.success {
+      background: #efe;
+      color: #3c3;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <h1>🐝 蜜蜂记账</h1>
+    <div id="message" class="message"></div>
+    <form id="loginForm">
+      <div class="form-group">
+        <label for="email">邮箱</label>
+        <input type="email" id="email" name="email" required placeholder="admin@example.com">
+      </div>
+      <div class="form-group">
+        <label for="password">密码</label>
+        <input type="password" id="password" name="password" required placeholder="请输入密码">
+      </div>
+      <button type="submit">登录</button>
+    </form>
+  </div>
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      const email = formData.get('email');
+      const password = formData.get('password');
+      const messageEl = document.getElementById('message');
+      
+      try {
+        const response = await fetch('/api/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+          localStorage.setItem('token', data.token);
+          messageEl.className = 'message success';
+          messageEl.textContent = '登录成功！';
+          setTimeout(() => {
+            window.location.href = '/app';
+          }, 1000);
+        } else {
+          messageEl.className = 'message error';
+          messageEl.textContent = data.error || '登录失败';
+        }
+      } catch (error) {
+        messageEl.className = 'message error';
+        messageEl.textContent = '网络错误，请重试';
+      }
+    });
+  </script>
+</body>
+</html>
+  `);
+});
+
+// 处理初始化设置提交
+app.post('/api/v1/setup', async (c) => {
+  const db = c.env.DB;
+  
+  try {
+    const body = await c.req.json();
+    const { timezone_offset, s3_access_key, s3_secret_key, s3_bucket, s3_region, s3_endpoint, s3_enabled } = body;
+    
+    // 检查是否已经设置过
+    const existing = await db
+      .prepare('SELECT id FROM system_settings WHERE id = ?')
+      .bind('default')
+      .first();
+    
+    const serverNow = new Date().toISOString();
+    
+    if (existing) {
+      // 更新现有设置
+      await db
+        .prepare(`
+          UPDATE system_settings SET
+            timezone_offset = ?,
+            s3_access_key = ?,
+            s3_secret_key = ?,
+            s3_bucket = ?,
+            s3_region = ?,
+            s3_endpoint = ?,
+            s3_enabled = ?,
+            updated_at = ?
+          WHERE id = ?
+        `)
+        .bind(
+          timezone_offset || 0,
+          s3_access_key || null,
+          s3_secret_key || null,
+          s3_bucket || null,
+          s3_region || 'us-east-1',
+          s3_endpoint || null,
+          s3_enabled ? 1 : 0,
+          serverNow,
+          'default'
+        )
+        .run();
+    } else {
+      // 创建新设置
+      await db
+        .prepare(`
+          INSERT INTO system_settings
+            (id, timezone_offset, s3_access_key, s3_secret_key, s3_bucket, s3_region, s3_endpoint, s3_enabled, setup_completed, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .bind(
+          'default',
+          timezone_offset || 0,
+          s3_access_key || null,
+          s3_secret_key || null,
+          s3_bucket || null,
+          s3_region || 'us-east-1',
+          s3_endpoint || null,
+          s3_enabled ? 1 : 0,
+          1,
+          serverNow,
+          serverNow
+        )
+        .run();
+    }
+    
+    return c.json({
+      success: true,
+      message: '系统设置已保存',
+      timezone_offset: timezone_offset || 0
+    });
+  } catch (error) {
+    console.error('[Setup] Error saving settings:', error);
+    return c.json({
+      success: false,
+      error: '保存设置失败'
+    }, 500);
+  }
+});
+
+// 获取当前系统设置
+app.get('/api/v1/setup', async (c) => {
+  const db = c.env.DB;
+  
+  try {
+    const settings = await db
+      .prepare('SELECT * FROM system_settings WHERE id = ?')
+      .bind('default')
+      .first();
+    
+    if (!settings) {
+      return c.json({
+        setup_completed: false,
+        timezone_offset: 0,
+        s3_enabled: false
+      });
+    }
+    
+    return c.json({
+      setup_completed: Boolean((settings as any).setup_completed),
+      timezone_offset: (settings as any).timezone_offset || 0,
+      s3_access_key: (settings as any).s3_access_key ? '***' : null,
+      s3_bucket: (settings as any).s3_bucket,
+      s3_region: (settings as any).s3_region || 'us-east-1',
+      s3_endpoint: (settings as any).s3_endpoint,
+      s3_enabled: Boolean((settings as any).s3_enabled)
+    });
+  } catch (error) {
+    return c.json({
+      setup_completed: false,
+      timezone_offset: 0,
+      s3_enabled: false
+    });
+  }
+});
+
+function getSetupPageHTML(): string {
+  return `
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>蜜蜂记账 - 初始设置</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+    .setup-container {
+      background: white;
+      padding: 40px;
+      border-radius: 12px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+      width: 100%;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    h1 {
+      text-align: center;
+      color: #667eea;
+      margin-bottom: 10px;
+      font-size: 28px;
+    }
+    .subtitle {
+      text-align: center;
+      color: #666;
+      margin-bottom: 30px;
+    }
+    .section {
+      margin-bottom: 30px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid #f0f0f0;
+    }
+    .section:last-child {
+      border-bottom: none;
+    }
+    .section-title {
+      color: #333;
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 15px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .form-group {
+      margin-bottom: 15px;
+    }
+    label {
+      display: block;
+      margin-bottom: 6px;
+      color: #555;
+      font-weight: 500;
+      font-size: 14px;
+    }
+    input, select {
+      width: 100%;
+      padding: 10px 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      font-size: 14px;
+      transition: border-color 0.3s;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .checkbox-group input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+    }
+    .s3-config {
+      margin-top: 15px;
+      padding: 15px;
+      background: #f8f9fa;
+      border-radius: 6px;
+      display: none;
+    }
+    .s3-config.visible {
+      display: block;
+    }
+    button {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+    button:hover {
+      transform: translateY(-2px);
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .message {
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      display: none;
+    }
+    .message.error {
+      background: #fee;
+      color: #c33;
+      display: block;
+    }
+    .message.success {
+      background: #efe;
+      color: #3c3;
+      display: block;
+    }
+    .hint {
+      font-size: 12px;
+      color: #888;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="setup-container">
+    <h1>🐝 蜜蜂记账</h1>
+    <p class="subtitle">首次设置向导</p>
+    
+    <div id="message" class="message"></div>
+    
+    <form id="setupForm">
+      <div class="section">
+        <div class="section-title">🌍 时区设置</div>
+        <div class="form-group">
+          <label for="timezone">选择时区</label>
+          <select id="timezone" name="timezone_offset">
+            <option value="0">UTC (世界协调时间)</option>
+            <option value="-480" selected>UTC+8 (北京时间)</option>
+            <option value="-540">UTC+9 (东京时间)</option>
+            <option value="-420">UTC+7 (曼谷时间)</option>
+            <option value="300">UTC-5 (美国东部时间)</option>
+            <option value="-360">UTC-6 (美国中部时间)</option>
+            <option value="-420">UTC-7 (美国山区时间)</option>
+            <option value="-480">UTC-8 (美国太平洋时间)</option>
+          </select>
+          <div class="hint">选择您所在的时区，备份计划将根据此时区执行</div>
+        </div>
+      </div>
+      
+      <div class="section">
+        <div class="section-title">☁️ S3 云存储设置（可选）</div>
+        <div class="form-group">
+          <div class="checkbox-group">
+            <input type="checkbox" id="s3_enabled" name="s3_enabled">
+            <label for="s3_enabled" style="margin-bottom: 0;">启用 S3 云备份</label>
+          </div>
+          <div class="hint">启用后，备份数据将自动上传到您配置的 S3 存储桶</div>
+        </div>
+        
+        <div class="s3-config" id="s3Config">
+          <div class="form-group">
+            <label for="s3_endpoint">S3 端点</label>
+            <input type="text" id="s3_endpoint" name="s3_endpoint" placeholder="https://s3.amazonaws.com">
+            <div class="hint">S3 兼容存储的服务端点（留空使用 AWS S3）</div>
+          </div>
+          <div class="form-group">
+            <label for="s3_region">区域</label>
+            <input type="text" id="s3_region" name="s3_region" value="us-east-1" placeholder="us-east-1">
+          </div>
+          <div class="form-group">
+            <label for="s3_bucket">存储桶名称</label>
+            <input type="text" id="s3_bucket" name="s3_bucket" placeholder="my-bucket-name">
+          </div>
+          <div class="form-group">
+            <label for="s3_access_key">访问密钥 (Access Key)</label>
+            <input type="text" id="s3_access_key" name="s3_access_key" placeholder="AKIAIOSFODNN7EXAMPLE">
+          </div>
+          <div class="form-group">
+            <label for="s3_secret_key">秘密密钥 (Secret Key)</label>
+            <input type="password" id="s3_secret_key" name="s3_secret_key" placeholder="••••••••">
+          </div>
+        </div>
+      </div>
+      
+      <button type="submit" id="submitBtn">保存设置并继续</button>
+    </form>
+  </div>
+  
+  <script>
+    // 显示/隐藏 S3 配置
+    document.getElementById('s3_enabled').addEventListener('change', function() {
+      const s3Config = document.getElementById('s3Config');
+      s3Config.classList.toggle('visible', this.checked);
+    });
+    
+    // 提交表单
+    document.getElementById('setupForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const submitBtn = document.getElementById('submitBtn');
+      const messageEl = document.getElementById('message');
+      
+      submitBtn.disabled = true;
+      submitBtn.textContent = '保存中...';
+      
+      const formData = new FormData(e.target);
+      const data = {
+        timezone_offset: parseInt(formData.get('timezone_offset')),
+        s3_enabled: formData.get('s3_enabled') === 'on',
+        s3_endpoint: formData.get('s3_endpoint') || null,
+        s3_region: formData.get('s3_region') || 'us-east-1',
+        s3_bucket: formData.get('s3_bucket') || null,
+        s3_access_key: formData.get('s3_access_key') || null,
+        s3_secret_key: formData.get('s3_secret_key') || null
+      };
+      
+      try {
+        const response = await fetch('/api/v1/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok && result.success) {
+          messageEl.className = 'message success';
+          messageEl.textContent = '设置已保存！正在跳转...';
+          setTimeout(() => {
+            window.location.href = '/login';
+          }, 1000);
+        } else {
+          messageEl.className = 'message error';
+          messageEl.textContent = result.error || '保存失败，请重试';
+          submitBtn.disabled = false;
+          submitBtn.textContent = '保存设置并继续';
+        }
+      } catch (error) {
+        messageEl.className = 'message error';
+        messageEl.textContent = '网络错误，请重试';
+        submitBtn.disabled = false;
+        submitBtn.textContent = '保存设置并继续';
+      }
+    });
+    
+    // 检测是否已设置过
+    fetch('/api/v1/setup')
+      .then(res => res.json())
+      .then(data => {
+        if (data.setup_completed) {
+          // 已设置过，直接跳转到登录页
+          window.location.href = '/login';
+        }
+      })
+      .catch(() => {
+        // 出错时显示表单
+      });
+  </script>
+</body>
+</html>
+  `;
+}
 
 async function signS3Request(
   accessKey: string,
