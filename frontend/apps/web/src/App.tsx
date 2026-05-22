@@ -144,9 +144,19 @@ function AppRoutes() {
 
   useEffect(() => {
     const checkSetup = async () => {
-      const result = await checkSetupStatus()
-      setSetupCompleted(result.setupCompleted)
-      setSetupChecked(true)
+      try {
+        const result = await checkSetupStatus()
+        setSetupCompleted(result.setupCompleted)
+        setSetupChecked(true)
+        
+        // 如果设置未完成且不在 /setup 页面，重定向到设置页面
+        if (!result.setupCompleted && !window.location.pathname.startsWith('/setup')) {
+          window.location.href = '/setup'
+        }
+      } catch {
+        setSetupCompleted(false)
+        setSetupChecked(true)
+      }
     }
     checkSetup()
   }, [])
@@ -194,7 +204,15 @@ function AppRoutes() {
   }
 
   if (!setupCompleted) {
-    return <iframe src={`${window.location.origin}/setup`} style={{ width: '100%', height: '100vh', border: 'none' }} title="Setup" />
+    // 重定向逻辑已在 useEffect 中处理，这里显示加载状态
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="text-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted border-t-primary mx-auto mb-4" />
+          <p className="text-muted-foreground">正在跳转到设置页面...</p>
+        </div>
+      </div>
+    )
   }
 
   return (
