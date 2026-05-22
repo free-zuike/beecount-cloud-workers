@@ -9,6 +9,16 @@ import { RequireAuth } from './app/router'
 import { LoginPage } from './pages/LoginPage'
 import { clearCursor } from './state/sync-client'
 
+async function checkSetupStatus(): Promise<{ setupCompleted: boolean }> {
+  try {
+    const response = await fetch('/api/v1/setup')
+    const data = await response.json()
+    return { setupCompleted: data.setup_completed || false }
+  } catch {
+    return { setupCompleted: true }
+  }
+}
+
 // Section 页面全部懒加载 — 首屏只下载当前 route 需要的 chunk,显著降低
 // 首次进入 /app/overview 的 JS 体积。每个页面会是独立 chunk,后续切到
 // 其他 section 时按需 fetch。
@@ -116,6 +126,8 @@ function AppRoutes() {
     if (scoped) return scoped
     return localStorage.getItem(LEGACY_TOKEN_KEY) || ''
   })
+  const [setupChecked, setSetupChecked] = useState(false)
+  const [setupCompleted, setSetupCompleted] = useState(true)
 
   useEffect(() => {
     if (token) {
@@ -126,6 +138,15 @@ function AppRoutes() {
       localStorage.removeItem(LEGACY_TOKEN_KEY)
     }
   }, [token])
+
+  useEffect(() => {
+    const checkSetup = async () => {
+      const result = await checkSetupStatus()
+      setSetupCompleted(result.setupCompleted)
+      setSetupChecked(true)
+    }
+    checkSetup()
+  }, [])
 
   const handleLogout = useCallback(() => {
     const prev = getStoredUserId()
@@ -160,6 +181,18 @@ function AppRoutes() {
       <AppShell token={token} onLogout={handleLogout} />
     </RequireAuth>
   )
+
+  if (!setupChecked) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted border-t-primary" />
+      </div>
+    )
+  }
+
+  if (!setupCompleted) {
+    return <Navigate to="/setup" replace />
+  }
 
   return (
     <Routes>
