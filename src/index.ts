@@ -1652,37 +1652,49 @@ async function processBackupSchedule(db: D1Database, schedule: any) {
 
 function calculateNextRun(cronExpr: string): string {
   try {
-    // 简单的 cron 解析（支持基本格式）
+    // Cron 表达式格式: 分钟 小时 日期 月份 星期
     const parts = cronExpr.trim().split(/\s+/);
     
-    // 默认每5分钟执行一次（如果解析失败）
-    let nextDate = new Date();
-    nextDate.setMinutes(nextDate.getMinutes() + 5);
+    if (parts.length < 5) {
+      // 格式不正确，返回5分钟后
+      const nextDate = new Date();
+      nextDate.setMinutes(nextDate.getMinutes() + 5);
+      return nextDate.toISOString();
+    }
     
-    if (parts.length >= 5) {
-      // 这里是一个简单的实现
-      // 完整实现需要复杂的 cron 解析库
-      // 为了简化，我们固定为：每小时执行一次，或者每天执行一次
-      
-      if (parts[0] !== '*') {
-        // 每分钟模式
-        nextDate = new Date();
-        nextDate.setMinutes(nextDate.getMinutes() + parseInt(parts[0]) || 30);
-      } else if (parts[1] !== '*') {
-        // 每小时模式
-        nextDate = new Date();
-        nextDate.setHours(nextDate.getHours() + 1);
-        nextDate.setMinutes(parseInt(parts[1]) || 0);
-      } else if (parts[2] !== '*') {
-        // 每天模式
-        nextDate = new Date();
-        nextDate.setDate(nextDate.getDate() + 1);
-        nextDate.setHours(parseInt(parts[2]) || 0);
-        nextDate.setMinutes(0);
-      } else {
-        // 默认：5分钟后
-        nextDate = new Date();
-        nextDate.setMinutes(nextDate.getMinutes() + 5);
+    const minuteStr = parts[0];
+    const hourStr = parts[1];
+    const dayStr = parts[2];
+    const monthStr = parts[3];
+    const weekdayStr = parts[4];
+    
+    // 解析数值
+    const targetMinute = minuteStr === '*' ? 0 : parseInt(minuteStr, 10);
+    const targetHour = hourStr === '*' ? 0 : parseInt(hourStr, 10);
+    
+    const now = new Date();
+    let nextDate = new Date(now.getTime());
+    
+    // 设置目标时间
+    nextDate.setMinutes(targetMinute);
+    nextDate.setHours(targetHour);
+    nextDate.setSeconds(0);
+    nextDate.setMilliseconds(0);
+    
+    // 如果目标时间已经过了今天，设置为明天
+    if (nextDate.getTime() <= now.getTime()) {
+      nextDate.setDate(nextDate.getDate() + 1);
+    }
+    
+    // 如果指定了具体日期（dayStr不是*），调整日期
+    if (dayStr !== '*') {
+      const targetDay = parseInt(dayStr, 10);
+      if (!isNaN(targetDay) && targetDay > 0 && targetDay <= 31) {
+        // 如果日期已经过了，设置到下个月
+        if (targetDay < nextDate.getDate()) {
+          nextDate.setMonth(nextDate.getMonth() + 1);
+        }
+        nextDate.setDate(targetDay);
       }
     }
     

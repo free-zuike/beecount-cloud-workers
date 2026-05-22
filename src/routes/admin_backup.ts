@@ -1209,30 +1209,44 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
 
 /**
  * 计算下次运行时间
+ * Cron 表达式格式: 分钟 小时 日期 月份 星期
  */
 function calculateNextRun(cronExpr: string): string {
   try {
     const parts = cronExpr.trim().split(/\s+/);
     
-    let nextDate = new Date();
-    nextDate.setMinutes(nextDate.getMinutes() + 5);
+    if (parts.length < 5) {
+      const nextDate = new Date();
+      nextDate.setMinutes(nextDate.getMinutes() + 5);
+      return nextDate.toISOString();
+    }
     
-    if (parts.length >= 5) {
-      if (parts[0] !== '*') {
-        nextDate = new Date();
-        nextDate.setMinutes(nextDate.getMinutes() + parseInt(parts[0]) || 30);
-      } else if (parts[1] !== '*') {
-        nextDate = new Date();
-        nextDate.setHours(nextDate.getHours() + 1);
-        nextDate.setMinutes(parseInt(parts[1]) || 0);
-      } else if (parts[2] !== '*') {
-        nextDate = new Date();
-        nextDate.setDate(nextDate.getDate() + 1);
-        nextDate.setHours(parseInt(parts[2]) || 0);
-        nextDate.setMinutes(0);
-      } else {
-        nextDate = new Date();
-        nextDate.setMinutes(nextDate.getMinutes() + 5);
+    const minuteStr = parts[0];
+    const hourStr = parts[1];
+    const dayStr = parts[2];
+    
+    const targetMinute = minuteStr === '*' ? 0 : parseInt(minuteStr, 10);
+    const targetHour = hourStr === '*' ? 0 : parseInt(hourStr, 10);
+    
+    const now = new Date();
+    let nextDate = new Date(now.getTime());
+    
+    nextDate.setMinutes(targetMinute);
+    nextDate.setHours(targetHour);
+    nextDate.setSeconds(0);
+    nextDate.setMilliseconds(0);
+    
+    if (nextDate.getTime() <= now.getTime()) {
+      nextDate.setDate(nextDate.getDate() + 1);
+    }
+    
+    if (dayStr !== '*') {
+      const targetDay = parseInt(dayStr, 10);
+      if (!isNaN(targetDay) && targetDay > 0 && targetDay <= 31) {
+        if (targetDay < nextDate.getDate()) {
+          nextDate.setMonth(nextDate.getMonth() + 1);
+        }
+        nextDate.setDate(targetDay);
       }
     }
     
