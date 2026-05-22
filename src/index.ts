@@ -318,12 +318,7 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       CREATE TABLE IF NOT EXISTS system_settings (
         id TEXT PRIMARY KEY,
         timezone_offset INTEGER DEFAULT 0,
-        s3_access_key TEXT,
-        s3_secret_key TEXT,
-        s3_bucket TEXT,
-        s3_region TEXT,
-        s3_endpoint TEXT,
-        s3_enabled BOOLEAN DEFAULT 0,
+        cloud_config_json TEXT,
         setup_completed BOOLEAN DEFAULT 0 NOT NULL,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
         updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
@@ -622,6 +617,14 @@ app.post('/api/v1/admin/backup/migrate-db', async (c) => {
       results.push('~ timezone_offset column already exists in backup_schedules');
     }
     
+    // 添加 cloud_config_json 列到 system_settings 表
+    try {
+      await db.prepare('ALTER TABLE system_settings ADD COLUMN cloud_config_json TEXT').run();
+      results.push('✓ Added cloud_config_json column to system_settings');
+    } catch (e) {
+      results.push('~ cloud_config_json column already exists in system_settings');
+    }
+    
     // 添加 ledger_id 列
     try {
       await db.prepare('ALTER TABLE backup_runs ADD COLUMN ledger_id TEXT').run();
@@ -909,7 +912,7 @@ app.post('/api/v1/setup', async (c) => {
   
   try {
     const body = await c.req.json();
-    const { timezone_offset, s3_access_key, s3_secret_key, s3_bucket, s3_region, s3_endpoint, s3_enabled } = body;
+    const { timezone_offset, cloud_config } = body;
     
     // 检查是否已经设置过
     const existing = await db
@@ -919,29 +922,23 @@ app.post('/api/v1/setup', async (c) => {
     
     const serverNow = new Date().toISOString();
     
+    // 序列化云存储配置
+    const cloudConfigJson = cloud_config ? JSON.stringify(cloud_config) : null;
+    
     if (existing) {
       // 更新现有设置
       await db
         .prepare(`
           UPDATE system_settings SET
             timezone_offset = ?,
-            s3_access_key = ?,
-            s3_secret_key = ?,
-            s3_bucket = ?,
-            s3_region = ?,
-            s3_endpoint = ?,
-            s3_enabled = ?,
+            cloud_config_json = ?,
+            setup_completed = 1,
             updated_at = ?
           WHERE id = ?
         `)
         .bind(
           timezone_offset || 0,
-          s3_access_key || null,
-          s3_secret_key || null,
-          s3_bucket || null,
-          s3_region || 'us-east-1',
-          s3_endpoint || null,
-          s3_enabled ? 1 : 0,
+          cloudConfigJson,
           serverNow,
           'default'
         )
@@ -951,18 +948,13 @@ app.post('/api/v1/setup', async (c) => {
       await db
         .prepare(`
           INSERT INTO system_settings
-            (id, timezone_offset, s3_access_key, s3_secret_key, s3_bucket, s3_region, s3_endpoint, s3_enabled, setup_completed, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, timezone_offset, cloud_config_json, setup_completed, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
         `)
         .bind(
           'default',
           timezone_offset || 0,
-          s3_access_key || null,
-          s3_secret_key || null,
-          s3_bucket || null,
-          s3_region || 'us-east-1',
-          s3_endpoint || null,
-          s3_enabled ? 1 : 0,
+          cloudConfigJson,
           1,
           serverNow,
           serverNow
@@ -998,24 +990,38 @@ app.get('/api/v1/setup', async (c) => {
       return c.json({
         setup_completed: false,
         timezone_offset: 0,
-        s3_enabled: false
+        cloud_config: null
       });
     }
     
+    // 解析云存储配置
+    let cloudConfig = null;
+    const settingsAny = settings as any;
+    if (settingsAny.cloud_config_json) {
+      try {
+        cloudConfig = JSON.parse(settingsAny.cloud_config_json);
+        // 隐藏敏感信息
+        if (cloudConfig && cloudConfig.config) {
+          if (cloudConfig.config.access_key_id) cloudConfig.config.access_key_id = '***';
+          if (cloudConfig.config.secret_access_key) cloudConfig.config.secret_access_key = '***';
+          if (cloudConfig.config.key) cloudConfig.config.key = '***';
+          if (cloudConfig.config.client_secret) cloudConfig.config.client_secret = '***';
+          if (cloudConfig.config.pass) cloudConfig.config.pass = '***';
+          if (cloudConfig.config.token) cloudConfig.config.token = '***';
+        }
+      } catch {}
+    }
+    
     return c.json({
-      setup_completed: Boolean((settings as any).setup_completed),
-      timezone_offset: (settings as any).timezone_offset || 0,
-      s3_access_key: (settings as any).s3_access_key ? '***' : null,
-      s3_bucket: (settings as any).s3_bucket,
-      s3_region: (settings as any).s3_region || 'us-east-1',
-      s3_endpoint: (settings as any).s3_endpoint,
-      s3_enabled: Boolean((settings as any).s3_enabled)
+      setup_completed: Boolean(settingsAny.setup_completed),
+      timezone_offset: settingsAny.timezone_offset || 0,
+      cloud_config: cloudConfig
     });
   } catch (error) {
     return c.json({
       setup_completed: false,
       timezone_offset: 0,
-      s3_enabled: false
+      cloud_config: null
     });
   }
 });
@@ -1042,8 +1048,10 @@ function getSetupPageHTML(): string {
       border-radius: 12px;
       box-shadow: 0 10px 40px rgba(0,0,0,0.2);
       width: 100%;
-      max-width: 600px;
+      max-width: 700px;
       margin: 0 auto;
+      max-height: 90vh;
+      overflow-y: auto;
     }
     h1 {
       text-align: center;
@@ -1083,7 +1091,7 @@ function getSetupPageHTML(): string {
       font-weight: 500;
       font-size: 14px;
     }
-    input, select {
+    input, select, textarea {
       width: 100%;
       padding: 10px 12px;
       border: 2px solid #e0e0e0;
@@ -1091,7 +1099,11 @@ function getSetupPageHTML(): string {
       font-size: 14px;
       transition: border-color 0.3s;
     }
-    input:focus, select:focus {
+    textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+    input:focus, select:focus, textarea:focus {
       outline: none;
       border-color: #667eea;
     }
@@ -1104,15 +1116,18 @@ function getSetupPageHTML(): string {
       width: 18px;
       height: 18px;
     }
-    .s3-config {
+    .cloud-config {
       margin-top: 15px;
       padding: 15px;
       background: #f8f9fa;
       border-radius: 6px;
       display: none;
     }
-    .s3-config.visible {
+    .cloud-config.visible {
       display: block;
+    }
+    .storage-fields {
+      margin-top: 15px;
     }
     button {
       width: 100%;
@@ -1169,50 +1184,243 @@ function getSetupPageHTML(): string {
         <div class="form-group">
           <label for="timezone">选择时区</label>
           <select id="timezone" name="timezone_offset">
-            <option value="0">UTC (世界协调时间)</option>
-            <option value="-480" selected>UTC+8 (北京时间)</option>
-            <option value="-540">UTC+9 (东京时间)</option>
-            <option value="-420">UTC+7 (曼谷时间)</option>
-            <option value="300">UTC-5 (美国东部时间)</option>
-            <option value="-360">UTC-6 (美国中部时间)</option>
-            <option value="-420">UTC-7 (美国山区时间)</option>
-            <option value="-480">UTC-8 (美国太平洋时间)</option>
+            <option value="-43200">UTC-12 (贝克岛)</option>
+            <option value="-39600">UTC-11 (美属萨摩亚)</option>
+            <option value="-36000">UTC-10 (夏威夷)</option>
+            <option value="-32400">UTC-9 (阿拉斯加)</option>
+            <option value="-28800">UTC-8 (洛杉矶、温哥华)</option>
+            <option value="-25200">UTC-7 (丹佛、凤凰城)</option>
+            <option value="-21600">UTC-6 (芝加哥、墨西哥城)</option>
+            <option value="-18000">UTC-5 (纽约、多伦多)</option>
+            <option value="-14400">UTC-4 (圣地亚哥、哈利法克斯)</option>
+            <option value="-12600">UTC-3:30 (纽芬兰)</option>
+            <option value="-10800">UTC-3 (圣保罗、布宜诺斯艾利斯)</option>
+            <option value="-7200">UTC-2 (大西洋中部)</option>
+            <option value="-3600">UTC-1 (亚速尔群岛)</option>
+            <option value="0">UTC+0 (伦敦、都柏林、里斯本)</option>
+            <option value="3600">UTC+1 (巴黎、柏林、罗马)</option>
+            <option value="7200">UTC+2 (雅典、赫尔辛基、基辅)</option>
+            <option value="10800">UTC+3 (莫斯科、伊斯坦布尔)</option>
+            <option value="12600">UTC+3:30 (德黑兰)</option>
+            <option value="14400">UTC+4 (迪拜、巴库)</option>
+            <option value="16200">UTC+4:30 (喀布尔)</option>
+            <option value="18000">UTC+5 (卡拉奇、塔什干)</option>
+            <option value="19800">UTC+5:30 (孟买、新德里、科伦坡)</option>
+            <option value="20700">UTC+5:45 (加德满都)</option>
+            <option value="21600">UTC+6 (达卡、新西伯利亚)</option>
+            <option value="23400">UTC+6:30 (仰光)</option>
+            <option value="25200">UTC+7 (曼谷、雅加达)</option>
+            <option value="28800" selected>UTC+8 (北京时间、香港、新加坡)</option>
+            <option value="32400">UTC+9 (东京、首尔、雅库茨克)</option>
+            <option value="34200">UTC+9:30 (阿德莱德、达尔文)</option>
+            <option value="36000">UTC+10 (悉尼、墨尔本、布里斯班)</option>
+            <option value="37800">UTC+10:30 (豪勋爵岛)</option>
+            <option value="39600">UTC+11 (所罗门群岛)</option>
+            <option value="41400">UTC+11:30 (诺福克岛)</option>
+            <option value="43200">UTC+12 (奥克兰、斐济)</option>
+            <option value="45000">UTC+12:45 (查塔姆群岛)</option>
+            <option value="46800">UTC+13 (努库阿洛法)</option>
+            <option value="50400">UTC+14 (基里蒂马蒂岛)</option>
           </select>
           <div class="hint">选择您所在的时区，备份计划将根据此时区执行</div>
         </div>
       </div>
       
       <div class="section">
-        <div class="section-title">☁️ S3 云存储设置（可选）</div>
+        <div class="section-title">☁️ 云存储设置（可选）</div>
         <div class="form-group">
           <div class="checkbox-group">
-            <input type="checkbox" id="s3_enabled" name="s3_enabled">
-            <label for="s3_enabled" style="margin-bottom: 0;">启用 S3 云备份</label>
+            <input type="checkbox" id="cloud_enabled" name="cloud_enabled">
+            <label for="cloud_enabled" style="margin-bottom: 0;">启用云存储备份</label>
           </div>
-          <div class="hint">启用后，备份数据将自动上传到您配置的 S3 存储桶</div>
+          <div class="hint">启用后，备份数据将自动上传到您配置的云存储服务</div>
         </div>
         
-        <div class="s3-config" id="s3Config">
+        <div class="cloud-config" id="cloudConfig">
           <div class="form-group">
-            <label for="s3_endpoint">S3 端点</label>
-            <input type="text" id="s3_endpoint" name="s3_endpoint" placeholder="https://s3.amazonaws.com">
-            <div class="hint">S3 兼容存储的服务端点（留空使用 AWS S3）</div>
+            <label for="backend_type">存储类型</label>
+            <select id="backend_type" name="backend_type">
+              <option value="s3">S3 兼容存储 (AWS S3 / Cloudflare R2 / 阿里云 OSS / MinIO)</option>
+              <option value="b2">Backblaze B2</option>
+              <option value="drive">Google Drive</option>
+              <option value="onedrive">OneDrive</option>
+              <option value="dropbox">Dropbox</option>
+              <option value="webdav">WebDAV (Nextcloud / ownCloud)</option>
+              <option value="sftp">SFTP</option>
+              <option value="ftp">FTP</option>
+              <option value="local">本地存储</option>
+            </select>
+            <div class="hint">选择您要使用的云存储服务类型</div>
           </div>
-          <div class="form-group">
-            <label for="s3_region">区域</label>
-            <input type="text" id="s3_region" name="s3_region" value="us-east-1" placeholder="us-east-1">
+          
+          <div id="s3Fields" class="storage-fields">
+            <div class="form-group">
+              <label for="s3_provider">Provider</label>
+              <select id="s3_provider" name="s3_provider">
+                <option value="AWS">AWS S3</option>
+                <option value="Cloudflare">Cloudflare R2</option>
+                <option value="Alibaba">阿里云 OSS</option>
+                <option value="Tencent">腾讯云 COS</option>
+                <option value="Backblaze">Backblaze B2 (S3 API)</option>
+                <option value="Wasabi">Wasabi</option>
+                <option value="DigitalOcean">DigitalOcean Spaces</option>
+                <option value="Minio">MinIO 自建</option>
+                <option value="IBMCOS">IBM COS</option>
+                <option value="Other">其它 (自定义 endpoint)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="s3_access_key">Access Key ID</label>
+              <input type="text" id="s3_access_key" name="s3_access_key" placeholder="AKIAIOSFODNN7EXAMPLE">
+            </div>
+            <div class="form-group">
+              <label for="s3_secret_key">Secret Access Key</label>
+              <input type="password" id="s3_secret_key" name="s3_secret_key" placeholder="••••••••">
+            </div>
+            <div class="form-group">
+              <label for="s3_bucket">Bucket</label>
+              <input type="text" id="s3_bucket" name="s3_bucket" placeholder="my-backup-bucket">
+              <div class="hint">存储桶名称，备份文件会落到 &lt;bucket&gt;/&lt;timestamp&gt;.tar.gz</div>
+            </div>
+            <div class="form-group">
+              <label for="s3_region">Region</label>
+              <input type="text" id="s3_region" name="s3_region" placeholder="us-east-1 / 留空(R2/MinIO不需要)">
+            </div>
+            <div class="form-group">
+              <label for="s3_endpoint">Endpoint</label>
+              <input type="text" id="s3_endpoint" name="s3_endpoint" placeholder="https://s3.amazonaws.com">
+              <div class="hint">R2: https://&lt;account-id&gt;.r2.cloudflarestorage.com；自建 MinIO: 你的服务器地址</div>
+            </div>
+            <div class="form-group">
+              <label for="s3_root_path">Root Path (可选)</label>
+              <input type="text" id="s3_root_path" name="s3_root_path" placeholder="beecount / 留空">
+              <div class="hint">所有上传文件的根路径前缀</div>
+            </div>
           </div>
-          <div class="form-group">
-            <label for="s3_bucket">存储桶名称</label>
-            <input type="text" id="s3_bucket" name="s3_bucket" placeholder="my-bucket-name">
+          
+          <div id="b2Fields" class="storage-fields" style="display:none;">
+            <div class="form-group">
+              <label for="b2_account">Account ID</label>
+              <input type="text" id="b2_account" name="b2_account" placeholder="your-account-id">
+            </div>
+            <div class="form-group">
+              <label for="b2_key">Application Key</label>
+              <input type="password" id="b2_key" name="b2_key" placeholder="••••••••">
+            </div>
+            <div class="form-group">
+              <label for="b2_bucket">Bucket</label>
+              <input type="text" id="b2_bucket" name="b2_bucket" placeholder="my-backup-bucket">
+            </div>
           </div>
-          <div class="form-group">
-            <label for="s3_access_key">访问密钥 (Access Key)</label>
-            <input type="text" id="s3_access_key" name="s3_access_key" placeholder="AKIAIOSFODNN7EXAMPLE">
+          
+          <div id="driveFields" class="storage-fields" style="display:none;">
+            <div class="form-group">
+              <label for="drive_client_id">Client ID</label>
+              <input type="text" id="drive_client_id" name="drive_client_id">
+            </div>
+            <div class="form-group">
+              <label for="drive_client_secret">Client Secret</label>
+              <input type="password" id="drive_client_secret" name="drive_client_secret">
+            </div>
+            <div class="form-group">
+              <label for="drive_token">OAuth Token (JSON)</label>
+              <textarea id="drive_token" name="drive_token" rows="3" placeholder="OAuth token JSON"></textarea>
+            </div>
           </div>
-          <div class="form-group">
-            <label for="s3_secret_key">秘密密钥 (Secret Key)</label>
-            <input type="password" id="s3_secret_key" name="s3_secret_key" placeholder="••••••••">
+          
+          <div id="onedriveFields" class="storage-fields" style="display:none;">
+            <div class="form-group">
+              <label for="onedrive_client_id">Client ID</label>
+              <input type="text" id="onedrive_client_id" name="onedrive_client_id">
+            </div>
+            <div class="form-group">
+              <label for="onedrive_client_secret">Client Secret</label>
+              <input type="password" id="onedrive_client_secret" name="onedrive_client_secret">
+            </div>
+            <div class="form-group">
+              <label for="onedrive_token">OAuth Token (JSON)</label>
+              <textarea id="onedrive_token" name="onedrive_token" rows="3" placeholder="OAuth token JSON"></textarea>
+            </div>
+          </div>
+          
+          <div id="dropboxFields" class="storage-fields" style="display:none;">
+            <div class="form-group">
+              <label for="dropbox_client_id">Client ID</label>
+              <input type="text" id="dropbox_client_id" name="dropbox_client_id">
+            </div>
+            <div class="form-group">
+              <label for="dropbox_client_secret">Client Secret</label>
+              <input type="password" id="dropbox_client_secret" name="dropbox_client_secret">
+            </div>
+            <div class="form-group">
+              <label for="dropbox_token">OAuth Token (JSON)</label>
+              <textarea id="dropbox_token" name="dropbox_token" rows="3" placeholder="OAuth token JSON"></textarea>
+            </div>
+          </div>
+          
+          <div id="webdavFields" class="storage-fields" style="display:none;">
+            <div class="form-group">
+              <label for="webdav_url">URL</label>
+              <input type="text" id="webdav_url" name="webdav_url" placeholder="https://example.com/dav">
+            </div>
+            <div class="form-group">
+              <label for="webdav_vendor">Vendor</label>
+              <input type="text" id="webdav_vendor" name="webdav_vendor" placeholder="nextcloud / owncloud / other">
+            </div>
+            <div class="form-group">
+              <label for="webdav_user">User</label>
+              <input type="text" id="webdav_user" name="webdav_user">
+            </div>
+            <div class="form-group">
+              <label for="webdav_pass">Password</label>
+              <input type="password" id="webdav_pass" name="webdav_pass">
+            </div>
+          </div>
+          
+          <div id="sftpFields" class="storage-fields" style="display:none;">
+            <div class="form-group">
+              <label for="sftp_host">Host</label>
+              <input type="text" id="sftp_host" name="sftp_host" placeholder="example.com">
+            </div>
+            <div class="form-group">
+              <label for="sftp_port">Port</label>
+              <input type="text" id="sftp_port" name="sftp_port" value="22" placeholder="22">
+            </div>
+            <div class="form-group">
+              <label for="sftp_user">User</label>
+              <input type="text" id="sftp_user" name="sftp_user">
+            </div>
+            <div class="form-group">
+              <label for="sftp_pass">Password</label>
+              <input type="password" id="sftp_pass" name="sftp_pass">
+            </div>
+          </div>
+          
+          <div id="ftpFields" class="storage-fields" style="display:none;">
+            <div class="form-group">
+              <label for="ftp_host">Host</label>
+              <input type="text" id="ftp_host" name="ftp_host" placeholder="example.com">
+            </div>
+            <div class="form-group">
+              <label for="ftp_port">Port</label>
+              <input type="text" id="ftp_port" name="ftp_port" value="21" placeholder="21">
+            </div>
+            <div class="form-group">
+              <label for="ftp_user">User</label>
+              <input type="text" id="ftp_user" name="ftp_user">
+            </div>
+            <div class="form-group">
+              <label for="ftp_pass">Password</label>
+              <input type="password" id="ftp_pass" name="ftp_pass">
+            </div>
+          </div>
+          
+          <div id="localFields" class="storage-fields" style="display:none;">
+            <div class="form-group">
+              <label for="local_path">存储路径</label>
+              <input type="text" id="local_path" name="local_path" placeholder="/path/to/storage" disabled>
+              <div class="hint">本地存储将在服务器本地创建（需要额外配置）</div>
+            </div>
           </div>
         </div>
       </div>
@@ -1222,10 +1430,22 @@ function getSetupPageHTML(): string {
   </div>
   
   <script>
-    // 显示/隐藏 S3 配置
-    document.getElementById('s3_enabled').addEventListener('change', function() {
-      const s3Config = document.getElementById('s3Config');
-      s3Config.classList.toggle('visible', this.checked);
+    // 显示/隐藏云存储配置
+    document.getElementById('cloud_enabled').addEventListener('change', function() {
+      const cloudConfig = document.getElementById('cloudConfig');
+      cloudConfig.classList.toggle('visible', this.checked);
+    });
+    
+    // 根据后端类型显示/隐藏对应字段
+    document.getElementById('backend_type').addEventListener('change', function() {
+      const backendType = this.value;
+      const allFields = document.querySelectorAll('.storage-fields');
+      allFields.forEach(el => el.style.display = 'none');
+      
+      const targetFields = document.getElementById(backendType + 'Fields');
+      if (targetFields) {
+        targetFields.style.display = 'block';
+      }
     });
     
     // 提交表单
@@ -1238,14 +1458,78 @@ function getSetupPageHTML(): string {
       submitBtn.textContent = '保存中...';
       
       const formData = new FormData(e.target);
+      const backendType = formData.get('backend_type');
+      
+      // 构建配置数据
+      let cloudConfig = null;
+      if (formData.get('cloud_enabled') === 'on') {
+        cloudConfig = {
+          backend_type: backendType,
+          enabled: true
+        };
+        
+        // 根据后端类型添加配置字段
+        if (backendType === 's3') {
+          cloudConfig.config = {
+            provider: formData.get('s3_provider'),
+            access_key_id: formData.get('s3_access_key'),
+            secret_access_key: formData.get('s3_secret_key'),
+            bucket: formData.get('s3_bucket'),
+            region: formData.get('s3_region') || 'auto',
+            endpoint: formData.get('s3_endpoint') || null,
+            root_path: formData.get('s3_root_path') || null
+          };
+        } else if (backendType === 'b2') {
+          cloudConfig.config = {
+            account: formData.get('b2_account'),
+            key: formData.get('b2_key'),
+            bucket: formData.get('b2_bucket')
+          };
+        } else if (backendType === 'drive') {
+          cloudConfig.config = {
+            client_id: formData.get('drive_client_id'),
+            client_secret: formData.get('drive_client_secret'),
+            token: formData.get('drive_token')
+          };
+        } else if (backendType === 'onedrive') {
+          cloudConfig.config = {
+            client_id: formData.get('onedrive_client_id'),
+            client_secret: formData.get('onedrive_client_secret'),
+            token: formData.get('onedrive_token')
+          };
+        } else if (backendType === 'dropbox') {
+          cloudConfig.config = {
+            client_id: formData.get('dropbox_client_id'),
+            client_secret: formData.get('dropbox_client_secret'),
+            token: formData.get('dropbox_token')
+          };
+        } else if (backendType === 'webdav') {
+          cloudConfig.config = {
+            url: formData.get('webdav_url'),
+            vendor: formData.get('webdav_vendor'),
+            user: formData.get('webdav_user'),
+            pass: formData.get('webdav_pass')
+          };
+        } else if (backendType === 'sftp') {
+          cloudConfig.config = {
+            host: formData.get('sftp_host'),
+            port: formData.get('sftp_port'),
+            user: formData.get('sftp_user'),
+            pass: formData.get('sftp_pass')
+          };
+        } else if (backendType === 'ftp') {
+          cloudConfig.config = {
+            host: formData.get('ftp_host'),
+            port: formData.get('ftp_port'),
+            user: formData.get('ftp_user'),
+            pass: formData.get('ftp_pass')
+          };
+        }
+      }
+      
       const data = {
         timezone_offset: parseInt(formData.get('timezone_offset')),
-        s3_enabled: formData.get('s3_enabled') === 'on',
-        s3_endpoint: formData.get('s3_endpoint') || null,
-        s3_region: formData.get('s3_region') || 'us-east-1',
-        s3_bucket: formData.get('s3_bucket') || null,
-        s3_access_key: formData.get('s3_access_key') || null,
-        s3_secret_key: formData.get('s3_secret_key') || null
+        cloud_config: cloudConfig
       };
       
       try {
@@ -1282,13 +1566,10 @@ function getSetupPageHTML(): string {
       .then(res => res.json())
       .then(data => {
         if (data.setup_completed) {
-          // 已设置过，直接跳转到登录页
           window.location.href = '/login';
         }
       })
-      .catch(() => {
-        // 出错时显示表单
-      });
+      .catch(() => {});
   </script>
 </body>
 </html>
