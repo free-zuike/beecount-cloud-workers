@@ -191,15 +191,11 @@ function AppRoutes() {
   }
 
   if (!setupCompleted) {
-    return <Navigate to="/setup" replace />
+    return <iframe src={`${window.location.origin}/setup`} style={{ width: '100%', height: '100vh', border: 'none' }} title="Setup" />
   }
 
   return (
     <Routes>
-      <Route
-        path="/setup"
-        element={<iframe src="/setup" style={{ width: '100%', height: '100vh', border: 'none' }} title="Setup" />}
-      />
       <Route
         path="/login"
         element={
