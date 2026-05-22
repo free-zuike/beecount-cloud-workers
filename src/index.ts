@@ -65,13 +65,15 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       CREATE TABLE IF NOT EXISTS devices (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        name TEXT NOT NULL,
-        platform TEXT,
+        name TEXT DEFAULT 'Unknown Device',
+        platform TEXT DEFAULT 'unknown',
+        app_version TEXT,
+        os_version TEXT,
+        device_model TEXT,
         last_ip TEXT,
-        last_seen_at TEXT,
+        last_seen_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
         revoked_at TEXT,
-        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
-        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
     `).run();
 
@@ -335,6 +337,8 @@ async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_tx_projection_happened_at ON read_tx_projection(happened_at)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_tx_projection_tx_type ON read_tx_projection(tx_type)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_devices_user_id ON devices(user_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_devices_last_seen_at ON devices(last_seen_at)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_devices_revoked_at ON devices(revoked_at)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token_hash)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledgers_user_id ON ledgers(user_id)').run();
@@ -719,6 +723,30 @@ app.post('/api/v1/admin/backup/migrate-db', async (c) => {
       results.push('✓ Added backup_filename column');
     } catch (e) {
       results.push('~ backup_filename column already exists');
+    }
+    
+    // 添加 app_version 列到 devices 表
+    try {
+      await db.prepare('ALTER TABLE devices ADD COLUMN app_version TEXT').run();
+      results.push('✓ Added app_version column to devices');
+    } catch (e) {
+      results.push('~ app_version column already exists in devices');
+    }
+    
+    // 添加 os_version 列到 devices 表
+    try {
+      await db.prepare('ALTER TABLE devices ADD COLUMN os_version TEXT').run();
+      results.push('✓ Added os_version column to devices');
+    } catch (e) {
+      results.push('~ os_version column already exists in devices');
+    }
+    
+    // 添加 device_model 列到 devices 表
+    try {
+      await db.prepare('ALTER TABLE devices ADD COLUMN device_model TEXT').run();
+      results.push('✓ Added device_model column to devices');
+    } catch (e) {
+      results.push('~ device_model column already exists in devices');
     }
     
     return c.json({
