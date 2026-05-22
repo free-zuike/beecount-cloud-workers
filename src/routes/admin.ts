@@ -138,7 +138,7 @@ adminRouter.get('/health', async (c) => {
   try {
     await db.prepare('SELECT 1').first();
     
-    // 获取系统设置的时区
+    // 获取系统设置的时区（以分钟为单位，东八区是 +480）
     let timezoneOffset = 0;
     try {
       const settings = await db.prepare('SELECT timezone_offset FROM system_settings WHERE id = ?').bind('default').first<{ timezone_offset: number }>();
@@ -147,8 +147,11 @@ adminRouter.get('/health', async (c) => {
       }
     } catch {}
     
-    // 根据设置的时区调整时间
+    // 根据设置的时区调整时间：
+    // 获取当前UTC时间，然后根据存储的时区偏移（分钟）计算目标时间
     const now = new Date();
+    // Date 对象存储的是 UTC 时间，要获取指定时区的时间，需要正确计算
+    // 计算UTC时间加上时区偏移（分钟）后的时间
     const localTime = new Date(now.getTime() + timezoneOffset * 60 * 1000);
     
     // 查询在线用户数（5分钟内有活动视为在线）

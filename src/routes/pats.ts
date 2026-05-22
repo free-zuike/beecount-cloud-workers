@@ -67,6 +67,7 @@ const PatCreateSchema = z.object({
 /** 更新 PAT 请求 */
 const PatUpdateSchema = z.object({
   name: z.string().min(1).max(128).optional(),
+  scopes: z.array(z.enum(['mcp:read', 'mcp:write'])).optional(),
   expires_in_days: z.number().int().min(1).max(36500).nullable().optional(),
 });
 
@@ -221,7 +222,7 @@ patsRouter.post('/', zValidator('json', PatCreateSchema), async (c) => {
  * 更新指定的 PAT
  *
  * 功能说明：
- * - 支持更新名称和过期时间
+ * - 支持更新名称、过期时间和授权范围
  * - 只有未撤销的 PAT 才能更新
  */
 patsRouter.patch('/:id', zValidator('json', PatUpdateSchema), async (c) => {
@@ -250,6 +251,11 @@ patsRouter.patch('/:id', zValidator('json', PatUpdateSchema), async (c) => {
   if (req.name !== undefined) {
     updates.push('name = ?');
     bindings.push(req.name);
+  }
+
+  if (req.scopes !== undefined) {
+    updates.push('scopes_json = ?');
+    bindings.push(JSON.stringify(req.scopes));
   }
 
   if (req.expires_in_days !== undefined) {
