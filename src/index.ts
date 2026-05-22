@@ -1718,6 +1718,22 @@ function getSetupPageHTML(): string {
   </div>
   
   <script>
+    // 复制到剪贴板函数
+    function copyToClipboard(text, button) {
+      navigator.clipboard.writeText(text).then(() => {
+        const originalText = button.textContent;
+        button.textContent = '已复制';
+        button.style.background = '#6c757d';
+        setTimeout(() => {
+          button.textContent = originalText;
+          button.style.background = button.textContent === '复制' && button.previousElementSibling?.id === 'admin-password' ? '#28a745' : '#007bff';
+        }, 2000);
+      }).catch(err => {
+        console.error('复制失败:', err);
+        alert('复制失败，请手动复制');
+      });
+    }
+    
     // 管理员模式切换
     const adminModeRadios = document.querySelectorAll('input[name="admin_mode"]');
     adminModeRadios.forEach(radio => {
@@ -1877,20 +1893,28 @@ function getSetupPageHTML(): string {
         
         if (response.ok && result.success) {
           messageEl.className = 'message success';
-          let message = '✓ ' + (result.message || '设置已保存') + '<br>';
+          let message = '✓ ' + (result.message || '设置已保存') + '<br><br>';
           if (result.user_email) {
-            message += '管理员账户: ' + result.user_email + '<br>';
+            message += '<div style="display: flex; align-items: center; gap: 8px; margin: 8px 0;">';
+            message += '<span>管理员账户:</span>';
+            message += '<input type="text" value="' + result.user_email + '" readonly style="flex: 1; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace;" id="admin-email">';
+            message += '<button onclick="copyToClipboard(document.getElementById(\'admin-email\').value, this)" style="padding: 4px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">复制</button>';
+            message += '</div>';
           }
           if (result.auto_generated_password) {
-            message += '<strong>密码: ' + result.auto_generated_password + '</strong><br>';
-            message += '<small>请务必记录此密码！</small><br>';
+            message += '<div style="display: flex; align-items: center; gap: 8px; margin: 8px 0;">';
+            message += '<span>密码:</span>';
+            message += '<input type="text" value="' + result.auto_generated_password + '" readonly style="flex: 1; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace;" id="admin-password">';
+            message += '<button onclick="copyToClipboard(document.getElementById(\'admin-password\').value, this)" style="padding: 4px 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">复制</button>';
+            message += '</div>';
+            message += '<small style="color: #666;">请务必记录此密码！</small><br>';
           }
-          message += '正在跳转登录页面...';
+          message += '<br>正在跳转登录页面...';
           messageEl.innerHTML = message;
           
           setTimeout(() => {
             window.top.location.href = '/';
-          }, 5000);
+          }, 8000);
         } else {
           messageEl.className = 'message error';
           messageEl.textContent = result.error || '保存失败，请重试';
