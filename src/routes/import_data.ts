@@ -43,6 +43,13 @@ interface ImportSession {
   expires_at: string;
 }
 
+const ImportPreviewSchema = z.object({
+  mapping: z.record(z.string()).optional(),
+  target_ledger_id: z.string().nullable().optional(),
+  dedup_strategy: z.enum(['skip_duplicates', 'insert_all']).optional(),
+  auto_tag_names: z.array(z.string()).optional(),
+});
+
 const ImportExecuteSchema = z.object({
   field_mapping: z.record(z.string()),
   ledger_id: z.string().optional(),
@@ -194,13 +201,170 @@ importRouter.get('/:token/preview', async (c) => {
   }
 
   return c.json({
-    token,
+    import_token: token,
     file_name: session.file_name,
     row_count: session.row_count,
     headers: session.headers,
     preview_rows: session.rows.slice(0, 10),
     status: session.status,
     expires_at: session.expires_at,
+    suggested_mapping: {},
+    current_mapping: {},
+    target_ledger_id: null,
+    dedup_strategy: 'skip_duplicates',
+    auto_tag_names: [],
+    stats: {
+      total_rows: session.row_count,
+      time_range_start: null,
+      time_range_end: null,
+      total_signed_amount: '0',
+      by_type: {
+        expense_count: 0,
+        expense_total: '0',
+        income_count: 0,
+        income_total: '0',
+        transfer_count: 0,
+      },
+      accounts: { new_names: [], matched_names: [] },
+      categories: { new_names: [], matched_names: [] },
+      tags: { new_names: [], matched_names: [] },
+      skipped_dedup: 0,
+      parse_errors: [],
+      parse_errors_total: 0,
+      parse_warnings: [],
+      parse_warnings_total: 0,
+    },
+    sample_rows: session.rows.slice(0, 10),
+    sample_transactions: [],
+  });
+});
+
+importRouter.post('/:token/preview', zValidator('json', ImportPreviewSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const kv = c.env.IMPORT_SESSIONS;
+  const token = c.req.param('token');
+  const req = c.req.valid('json');
+
+  const session = await getSession(kv, token);
+  if (!session) {
+    return c.json({ error: 'Import token not found or expired' }, 404);
+  }
+
+  if (session.status === 'cancelled') {
+    return c.json({ error: 'Import cancelled' }, 400);
+  }
+
+  const fieldMapping = req.mapping || {};
+  const targetLedgerId = req.target_ledger_id;
+  const dedupStrategy = req.dedup_strategy || 'skip_duplicates';
+  const autoTagNames = req.auto_tag_names || [];
+
+  let ledgerId: string | null = null;
+  if (targetLedgerId) {
+    const ledger = await db
+      .prepare('SELECT id FROM ledgers WHERE user_id = ? AND external_id = ?')
+      .bind(userId, targetLedgerId)
+      .first<{ id: string }>();
+    if (ledger) {
+      ledgerId = ledger.id;
+    }
+  } else {
+    const defaultLedger = await db
+      .prepare('SELECT id FROM ledgers WHERE user_id = ? LIMIT 1')
+      .bind(userId)
+      .first<{ id: string }>();
+    if (defaultLedger) {
+      ledgerId = defaultLedger.id;
+    }
+  }
+
+  const colIndex: Record<string, number> = {};
+  for (const [colName, fieldName] of Object.entries(fieldMapping)) {
+    const idx = session.headers.indexOf(colName);
+    if (idx >= 0) {
+      colIndex[fieldName] = idx;
+    }
+  }
+
+  const sampleTransactions: Array<{
+    tx_type: 'expense' | 'income' | 'transfer';
+    amount: string;
+    happened_at: string;
+    note: string | null;
+    category_name: string | null;
+    parent_category_name: string | null;
+    account_name: string | null;
+    from_account_name: string | null;
+    to_account_name: string | null;
+    tag_names: string[];
+    source_row_number: number;
+  }> = [];
+
+  const previewRows = session.rows.slice(0, 10);
+  for (let i = 0; i < previewRows.length; i++) {
+    const row = previewRows[i];
+    const amount = colIndex['amount'] !== undefined ? parseFloat(row[colIndex['amount']] ?? '0') : 0;
+    const happenedAt = colIndex['happened_at'] !== undefined ? row[colIndex['happened_at']] : new Date().toISOString().slice(0, 10);
+    const txTypeRaw = colIndex['tx_type'] !== undefined ? row[colIndex['tx_type']] ?? '' : '';
+    const note = colIndex['note'] !== undefined ? row[colIndex['note']] ?? '' : '';
+    const categoryName = colIndex['category_name'] !== undefined ? row[colIndex['category_name']] ?? '' : '';
+    const accountName = colIndex['account_name'] !== undefined ? row[colIndex['account_name']] ?? '' : '';
+    const tags = colIndex['tags'] !== undefined ? row[colIndex['tags']] ?? '' : '';
+
+    let txType: 'expense' | 'income' | 'transfer' = 'expense';
+    const lowerTxType = txTypeRaw.toLowerCase();
+    if (/收|income/.test(lowerTxType)) txType = 'income';
+    else if (/转|transfer/.test(lowerTxType)) txType = 'transfer';
+
+    sampleTransactions.push({
+      tx_type: txType,
+      amount: amount.toString(),
+      happened_at: happenedAt,
+      note: note || null,
+      category_name: categoryName || null,
+      parent_category_name: null,
+      account_name: accountName || null,
+      from_account_name: null,
+      to_account_name: null,
+      tag_names: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [],
+      source_row_number: i + 2,
+    });
+  }
+
+  return c.json({
+    import_token: token,
+    expires_at: session.expires_at,
+    source_format: 'generic' as ImportSourceFormat,
+    headers: session.headers,
+    suggested_mapping: {},
+    current_mapping: fieldMapping,
+    target_ledger_id: targetLedgerId || null,
+    dedup_strategy: dedupStrategy,
+    auto_tag_names: autoTagNames,
+    stats: {
+      total_rows: session.row_count,
+      time_range_start: null,
+      time_range_end: null,
+      total_signed_amount: '0',
+      by_type: {
+        expense_count: 0,
+        expense_total: '0',
+        income_count: 0,
+        income_total: '0',
+        transfer_count: 0,
+      },
+      accounts: { new_names: [], matched_names: [] },
+      categories: { new_names: [], matched_names: [] },
+      tags: { new_names: autoTagNames, matched_names: [] },
+      skipped_dedup: 0,
+      parse_errors: [],
+      parse_errors_total: 0,
+      parse_warnings: [],
+      parse_warnings_total: 0,
+    },
+    sample_rows: previewRows,
+    sample_transactions: sampleTransactions,
   });
 });
 
