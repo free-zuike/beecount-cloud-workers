@@ -47,6 +47,7 @@ const ImportExecuteSchema = z.object({
   field_mapping: z.record(z.string()),
   ledger_id: z.string().optional(),
   deduplicate: z.boolean().default(true),
+  auto_tag_names: z.array(z.string()).optional(),
 });
 
 type Bindings = {
@@ -257,7 +258,45 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
 
   const fieldMapping = req.field_mapping;
   const deduplicate = req.deduplicate;
+  const autoTagNames = req.auto_tag_names || [];
   const encoder = new TextEncoder();
+
+  // 自动创建 auto_tag_names 中指定的标签（如果不存在）
+  const autoTagSyncIds: string[] = [];
+  for (const tagName of autoTagNames) {
+    const existingTag = await db
+      .prepare('SELECT sync_id FROM read_tag_projection WHERE ledger_id = ? AND name = ? LIMIT 1')
+      .bind(ledgerId, tagName)
+      .first<{ sync_id: string }>();
+
+    if (existingTag) {
+      autoTagSyncIds.push(existingTag.sync_id);
+    } else {
+      // 自动创建标签
+      const tagSyncId = randomUUID();
+      const serverNow = nowUtc();
+
+      await db
+        .prepare(
+          `INSERT INTO sync_changes
+           (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(userId, ledgerId, 'tag', tagSyncId, 'upsert', safeJsonStringify({ name: tagName, color: null }), serverNow, userId)
+        .run();
+
+      await db
+        .prepare(
+          `INSERT INTO read_tag_projection
+           (ledger_id, sync_id, user_id, name, color, source_change_id)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .bind(ledgerId, tagSyncId, userId, tagName, null, 0)
+        .run();
+
+      autoTagSyncIds.push(tagSyncId);
+    }
+  }
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -307,6 +346,13 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
               const syncId = randomUUID();
               const serverNow = nowUtc();
 
+              // 合并自动标签和行中的标签
+              let combinedTags = tags;
+              if (autoTagSyncIds.length > 0) {
+                const autoTagsStr = autoTagSyncIds.join(',');
+                combinedTags = combinedTags ? `${combinedTags},${autoTagsStr}` : autoTagsStr;
+              }
+
               const payload: Record<string, unknown> = {
                 tx_type: txType,
                 amount,
@@ -314,7 +360,7 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
                 note,
                 category_name: categoryName || null,
                 account_name: accountName || null,
-                tags,
+                tags: combinedTags,
               };
 
               const changeResult = await db
@@ -335,7 +381,7 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
                     category_name, account_name, tags_csv, source_change_id)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
                 )
-                .bind(ledgerId, syncId, userId, txType, amount, happenedAt, note, categoryName || null, accountName || null, tags || null, newChangeId)
+                .bind(ledgerId, syncId, userId, txType, amount, happenedAt, note, categoryName || null, accountName || null, combinedTags || null, newChangeId)
                 .run();
 
               success++;
