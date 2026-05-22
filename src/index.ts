@@ -1751,9 +1751,16 @@ function getSetupPageHTML(): string {
           }
           message += '正在跳转登录页面...';
           messageEl.innerHTML = message;
+          
+          console.log('========================================');
+          console.log('🐝 BeeCount 设置完成！管理员账户信息：');
+          console.log('邮箱: ' + (result.user_email || adminEmail));
+          console.log('密码: ' + (result.auto_generated_password || adminPassword));
+          console.log('========================================');
+          
           setTimeout(() => {
             window.top.location.href = '/';
-          }, 3000);
+          }, 5000);
         } else {
           messageEl.className = 'message error';
           messageEl.textContent = result.error || '保存失败，请重试';
