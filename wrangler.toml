@@ -13,7 +13,7 @@ tslib = "tslib"
 [[d1_databases]]
 binding = "DB"
 database_name = "beecount-cloud"
-database_id = "d89703cc-bd36-4411-83c5-da5332dd5e44"
+database_id = "9d108e1a-aa9a-4593-8d19-c79ba3cded53"
 
 [vars]
 API_PREFIX = "/api/v1"

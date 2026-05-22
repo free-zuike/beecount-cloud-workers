@@ -483,12 +483,12 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 // 全局中间件
 app.use('*', cors());
 
-// 初始化中间件 - 在第一次请求时创建数据库表和管理员
+// 初始化中间件 - 在第一次请求时创建数据库表
 let initialized = false;
 app.use('*', async (c, next) => {
   if (!initialized) {
     await initializeDatabase(c.env.DB);
-    await initializeAdmin(c.env.DB);
+    // 不再自动创建管理员账户，由设置向导创建
     initialized = true;
   }
   await next();
