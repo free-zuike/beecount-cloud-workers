@@ -137,11 +137,26 @@ adminRouter.get('/health', async (c) => {
   
   try {
     await db.prepare('SELECT 1').first();
+    
+    // 获取系统设置的时区
+    let timezoneOffset = 0;
+    try {
+      const settings = await db.prepare('SELECT timezone_offset FROM system_settings WHERE id = ?').bind('default').first<{ timezone_offset: number }>();
+      if (settings && settings.timezone_offset !== null) {
+        timezoneOffset = settings.timezone_offset;
+      }
+    } catch {}
+    
+    // 根据设置的时区调整时间
+    const now = new Date();
+    const localTime = new Date(now.getTime() + timezoneOffset * 60 * 1000);
+    
     return c.json({
       status: 'healthy',
       db: 'connected',
       online_ws_users: 0,
-      time: new Date().toISOString(),
+      time: localTime.toISOString(),
+      timezone_offset: timezoneOffset,
     });
   } catch (error) {
     return c.json({

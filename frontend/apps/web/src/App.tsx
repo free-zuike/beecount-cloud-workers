@@ -12,10 +12,13 @@ import { clearCursor } from './state/sync-client'
 async function checkSetupStatus(): Promise<{ setupCompleted: boolean }> {
   try {
     const response = await fetch('/api/v1/setup')
+    if (!response.ok) {
+      return { setupCompleted: false }
+    }
     const data = await response.json()
     return { setupCompleted: data.setup_completed || false }
   } catch {
-    return { setupCompleted: true }
+    return { setupCompleted: false }
   }
 }
 
