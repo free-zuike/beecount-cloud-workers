@@ -236,43 +236,36 @@ const mappingRules: FieldMappingRule[] = [
   { target: 'tags', patterns: ['标签', 'tags', 'tag', 'label'] },
 ];
 
-function generateSuggestedMapping(headers: string[], sourceFormat: string): Record<string, string> {
-  const mapping: Record<string, string> = {};
+function generateSuggestedMapping(headers: string[]): Record<string, string | null> {
+  const mapping: Record<string, string | null> = {
+    tx_type: null,
+    amount: null,
+    happened_at: null,
+    category_name: null,
+    subcategory_name: null,
+    account_name: null,
+    from_account_name: null,
+    to_account_name: null,
+    note: null,
+  };
   const lowerHeaders = headers.map(h => h.toLowerCase().trim());
 
-  for (const rule of mappingRules) {
-    for (let i = 0; i < headers.length; i++) {
-      const header = lowerHeaders[i];
-      const originalHeader = headers[i];
+  for (let i = 0; i < headers.length; i++) {
+    const header = lowerHeaders[i];
+    const originalHeader = headers[i];
 
-      if (rule.patterns.some(pattern => header.includes(pattern.toLowerCase()))) {
-        mapping[originalHeader] = rule.target;
-        break;
-      }
-    }
-  }
-
-  if (sourceFormat === 'alipay') {
-    for (let i = 0; i < headers.length; i++) {
-      const header = lowerHeaders[i];
-      const originalHeader = headers[i];
-      if (header.includes('金额') && !mapping[originalHeader]) mapping[originalHeader] = 'amount';
-      if (header.includes('交易创建时间') && !mapping[originalHeader]) mapping[originalHeader] = 'happened_at';
-      if (header.includes('交易类型') && !mapping[originalHeader]) mapping[originalHeader] = 'tx_type';
-      if (header.includes('交易备注') && !mapping[originalHeader]) mapping[originalHeader] = 'note';
-      if (header.includes('商品名称') && !mapping[originalHeader]) mapping[originalHeader] = 'category_name';
-    }
-  }
-
-  if (sourceFormat === 'wechat') {
-    for (let i = 0; i < headers.length; i++) {
-      const header = lowerHeaders[i];
-      const originalHeader = headers[i];
-      if (header.includes('金额') && !mapping[originalHeader]) mapping[originalHeader] = 'amount';
-      if (header.includes('交易时间') && !mapping[originalHeader]) mapping[originalHeader] = 'happened_at';
-      if (header.includes('交易类型') && !mapping[originalHeader]) mapping[originalHeader] = 'tx_type';
-      if (header.includes('备注') && !mapping[originalHeader]) mapping[originalHeader] = 'note';
-      if (header.includes('商品') && !mapping[originalHeader]) mapping[originalHeader] = 'category_name';
+    if (!mapping.amount && (header.includes('金额') || header.includes('amount') || header.includes('amt'))) {
+      mapping.amount = originalHeader;
+    } else if (!mapping.happened_at && (header.includes('时间') || header.includes('日期') || header.includes('happened_at') || header.includes('date'))) {
+      mapping.happened_at = originalHeader;
+    } else if (!mapping.tx_type && (header.includes('类型') || header.includes('tx_type') || header.includes('收支'))) {
+      mapping.tx_type = originalHeader;
+    } else if (!mapping.note && (header.includes('备注') || header.includes('note') || header.includes('描述'))) {
+      mapping.note = originalHeader;
+    } else if (!mapping.category_name && (header.includes('分类') || header.includes('category') || header.includes('商品'))) {
+      mapping.category_name = originalHeader;
+    } else if (!mapping.account_name && (header.includes('账户') || header.includes('account') || header.includes('支付方式'))) {
+      mapping.account_name = originalHeader;
     }
   }
 
@@ -337,17 +330,41 @@ importRouter.post('/upload', async (c) => {
     await saveSession(kv, session);
 
     const sourceFormat = detectSourceFormat(fileName, headers, rows[0] || []);
-    const suggestedMapping = generateSuggestedMapping(headers, sourceFormat);
+    const suggestedMapping = generateSuggestedMapping(headers);
 
     return c.json({
-      token,
-      file_name: fileName,
-      row_count: rows.length,
-      headers,
-      preview_rows: rows.slice(0, 10),
-      suggested_mapping: suggestedMapping,
+      import_token: token,
+      expires_at: expiresAt,
       source_format: sourceFormat,
-      expires_in_seconds: 1800,
+      headers,
+      suggested_mapping: suggestedMapping,
+      current_mapping: suggestedMapping,
+      target_ledger_id: null,
+      dedup_strategy: 'skip_duplicates',
+      auto_tag_names: [],
+      stats: {
+        total_rows: rows.length,
+        time_range_start: null,
+        time_range_end: null,
+        total_signed_amount: '0',
+        by_type: {
+          expense_count: 0,
+          expense_total: '0',
+          income_count: 0,
+          income_total: '0',
+          transfer_count: 0,
+        },
+        accounts: { new_names: [], matched_names: [] },
+        categories: { new_names: [], matched_names: [] },
+        tags: { new_names: [], matched_names: [] },
+        skipped_dedup: 0,
+        parse_errors: [],
+        parse_errors_total: 0,
+        parse_warnings: [],
+        parse_warnings_total: 0,
+      },
+      sample_rows: rows.slice(0, 10),
+      sample_transactions: [],
     });
   } catch (err) {
     return c.json({ error: 'Failed to parse file' }, 400);
@@ -776,6 +793,183 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
         }
       }
 
+      // 统计需要创建的实体数量
+      const allAccountNames = new Set<string>();
+      const allCategoryNames = new Set<string>();
+      const allTagNames = new Set<string>();
+      
+      for (const row of session.rows) {
+        const categoryName = colIndex['category_name'] !== undefined ? row[colIndex['category_name']] ?? '' : '';
+        const accountName = colIndex['account_name'] !== undefined ? row[colIndex['account_name']] ?? '' : '';
+        const tags = colIndex['tags'] !== undefined ? row[colIndex['tags']] ?? '' : '';
+        
+        if (categoryName.trim()) allCategoryNames.add(categoryName.trim());
+        if (accountName.trim()) allAccountNames.add(accountName.trim());
+        splitTags(tags).forEach(t => t.trim() && allTagNames.add(t.trim()));
+      }
+      
+      // 添加自动标签
+      autoTagNames.forEach(t => t.trim() && allTagNames.add(t.trim()));
+
+      // 阶段1: 创建账户
+      const accountNamesArray = Array.from(allAccountNames);
+      controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'accounts', done: 0, total: accountNamesArray.length })}\n\n`));
+      
+      for (let i = 0; i < accountNamesArray.length; i++) {
+        const accountName = accountNamesArray[i];
+        if (!createdAccounts.has(accountName)) {
+          const existingAccount = await db
+            .prepare('SELECT sync_id FROM read_account_projection WHERE ledger_id = ? AND name = ? LIMIT 1')
+            .bind(ledgerId, accountName)
+            .first<{ sync_id: string }>();
+            
+          if (existingAccount) {
+            createdAccounts.set(accountName, existingAccount.sync_id);
+          } else {
+            const accountSyncId = randomUUID();
+            const serverNow = nowUtc();
+            const payload: Record<string, unknown> = {
+              name: accountName,
+              account_type: null,
+              currency: null,
+              initial_balance: 0,
+              note: null,
+              credit_limit: null,
+              billing_day: null,
+              payment_due_day: null,
+              bank_name: null,
+              card_last_four: null,
+            };
+            
+            await db
+              .prepare(
+                `INSERT INTO sync_changes
+                 (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+              )
+              .bind(userId, ledgerId, 'account', accountSyncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
+              .run();
+
+            await db
+              .prepare(
+                `INSERT INTO read_account_projection
+                 (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+                  note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              )
+              .bind(ledgerId, accountSyncId, userId, accountName, null, null, 0, null, null, null, null, null, null, 0)
+              .run();
+            
+            createdAccounts.set(accountName, accountSyncId);
+          }
+        }
+        controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'accounts', done: i + 1, total: accountNamesArray.length })}\n\n`));
+      }
+
+      // 阶段2: 创建分类
+      const categoryNamesArray = Array.from(allCategoryNames);
+      controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'categories', done: 0, total: categoryNamesArray.length })}\n\n`));
+      
+      for (let i = 0; i < categoryNamesArray.length; i++) {
+        const categoryName = categoryNamesArray[i];
+        if (!createdCategories.has(categoryName)) {
+          const existingCategory = await db
+            .prepare('SELECT sync_id, kind FROM read_category_projection WHERE ledger_id = ? AND name = ? LIMIT 1')
+            .bind(ledgerId, categoryName)
+            .first<{ sync_id: string; kind: string }>();
+            
+          if (existingCategory) {
+            createdCategories.set(categoryName, existingCategory.sync_id);
+          } else {
+            const categorySyncId = randomUUID();
+            const serverNow = nowUtc();
+            const payload: Record<string, unknown> = {
+              name: categoryName,
+              kind: 'expense',
+              level: null,
+              sort_order: null,
+              icon: null,
+              icon_type: null,
+              custom_icon_path: null,
+              icon_cloud_file_id: null,
+              icon_cloud_sha256: null,
+              parent_name: null,
+            };
+            
+            await db
+              .prepare(
+                `INSERT INTO sync_changes
+                 (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+              )
+              .bind(userId, ledgerId, 'category', categorySyncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
+              .run();
+
+            await db
+              .prepare(
+                `INSERT INTO read_category_projection
+                 (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+                  icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+                  parent_name, source_change_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              )
+              .bind(ledgerId, categorySyncId, userId, categoryName, 'expense', null, null, null, null, null, null, null, null, 0)
+              .run();
+            
+            createdCategories.set(categoryName, categorySyncId);
+          }
+        }
+        controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'categories', done: i + 1, total: categoryNamesArray.length })}\n\n`));
+      }
+
+      // 阶段3: 创建标签
+      const tagNamesArray = Array.from(allTagNames);
+      controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'tags', done: 0, total: tagNamesArray.length })}\n\n`));
+      
+      for (let i = 0; i < tagNamesArray.length; i++) {
+        const tagName = tagNamesArray[i];
+        if (!createdTags.has(tagName)) {
+          const existingTag = await db
+            .prepare('SELECT sync_id FROM read_tag_projection WHERE ledger_id = ? AND name = ? LIMIT 1')
+            .bind(ledgerId, tagName)
+            .first<{ sync_id: string }>();
+            
+          if (existingTag) {
+            createdTags.set(tagName, existingTag.sync_id);
+          } else {
+            const tagSyncId = randomUUID();
+            const serverNow = nowUtc();
+            
+            await db
+              .prepare(
+                `INSERT INTO sync_changes
+                 (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+              )
+              .bind(userId, ledgerId, 'tag', tagSyncId, 'upsert', safeJsonStringify({ name: tagName, color: null }), serverNow, userId)
+              .run();
+
+            await db
+              .prepare(
+                `INSERT INTO read_tag_projection
+                 (ledger_id, sync_id, user_id, name, color, source_change_id)
+                 VALUES (?, ?, ?, ?, ?, ?)`
+              )
+              .bind(ledgerId, tagSyncId, userId, tagName, null, 0)
+              .run();
+            
+            createdTags.set(tagName, tagSyncId);
+          }
+        }
+        controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'tags', done: i + 1, total: tagNamesArray.length })}\n\n`));
+      }
+
+      // 阶段4: 创建交易
+      controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'transactions', done: 0, total: total, skipped: 0 })}\n\n`));
+      
+      let skippedCount = 0;
+      let lastChangeId = 0;
+      
       try {
         for (let i = 0; i < total; i++) {
           const row = session.rows[i];
@@ -792,18 +986,19 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
 
             const txType = parseTxType(txTypeRaw, amount);
 
-            // 如果金额是负数，根据类型调整符号
             let finalAmount = Math.abs(amount);
             let finalTxType = txType;
+            let categoryKind: 'expense' | 'income' | 'transfer' = 'expense';
             
             if (amount < 0 && txType === 'income') {
               finalTxType = 'expense';
             } else if (amount > 0 && txType === 'expense') {
               // 支出保持正数
             } else if (txType === 'transfer') {
-              // 转账保持原样
               finalAmount = amount;
             }
+            
+            categoryKind = finalTxType === 'income' ? 'income' : 'expense';
 
             let skip = false;
             if (deduplicate) {
@@ -814,6 +1009,7 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
 
               if (existing) {
                 skip = true;
+                skippedCount++;
               }
             }
 
@@ -821,171 +1017,29 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
               const syncId = randomUUID();
               const serverNow = nowUtc();
 
-              // 处理标签 - 合并自动标签和行中的标签
               const rowTagNames = splitTags(tags);
-              const allTagSyncIds: string[] = [...autoTagSyncIds];
+              const allTagSyncIds: string[] = [];
               
               for (const tagName of rowTagNames) {
                 if (!tagName.trim()) continue;
-                
-                if (createdTags.has(tagName)) {
-                  if (!allTagSyncIds.includes(createdTags.get(tagName)!)) {
-                    allTagSyncIds.push(createdTags.get(tagName)!);
-                  }
-                } else {
-                  // 查询或创建标签
-                  const existingTag = await db
-                    .prepare('SELECT sync_id FROM read_tag_projection WHERE ledger_id = ? AND name = ? LIMIT 1')
-                    .bind(ledgerId, tagName)
-                    .first<{ sync_id: string }>();
-                    
-                  if (existingTag) {
-                    if (!allTagSyncIds.includes(existingTag.sync_id)) {
-                      allTagSyncIds.push(existingTag.sync_id);
-                    }
-                    createdTags.set(tagName, existingTag.sync_id);
-                  } else {
-                    // 创建新标签
-                    const tagSyncId = randomUUID();
-                    await db
-                      .prepare(
-                        `INSERT INTO sync_changes
-                         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-                      )
-                      .bind(userId, ledgerId, 'tag', tagSyncId, 'upsert', safeJsonStringify({ name: tagName, color: null }), serverNow, userId)
-                      .run();
-
-                    await db
-                      .prepare(
-                        `INSERT INTO read_tag_projection
-                         (ledger_id, sync_id, user_id, name, color, source_change_id)
-                         VALUES (?, ?, ?, ?, ?, ?)`
-                      )
-                      .bind(ledgerId, tagSyncId, userId, tagName, null, 0)
-                      .run();
-                      
-                    allTagSyncIds.push(tagSyncId);
-                    createdTags.set(tagName, tagSyncId);
-                  }
+                const tagSyncId = createdTags.get(tagName);
+                if (tagSyncId && !allTagSyncIds.includes(tagSyncId)) {
+                  allTagSyncIds.push(tagSyncId);
+                }
+              }
+              
+              for (const tagName of autoTagNames) {
+                if (!tagName.trim()) continue;
+                const tagSyncId = createdTags.get(tagName);
+                if (tagSyncId && !allTagSyncIds.includes(tagSyncId)) {
+                  allTagSyncIds.push(tagSyncId);
                 }
               }
               
               const tagsCsv = allTagSyncIds.length > 0 ? allTagSyncIds.join(',') : null;
               
-              // 处理账户 - 自动创建不存在的账户
-              let accountSyncId: string | null = null;
-              if (accountName.trim()) {
-                if (createdAccounts.has(accountName)) {
-                  accountSyncId = createdAccounts.get(accountName)!;
-                } else {
-                  const existingAccount = await db
-                    .prepare('SELECT sync_id FROM read_account_projection WHERE ledger_id = ? AND name = ? LIMIT 1')
-                    .bind(ledgerId, accountName)
-                    .first<{ sync_id: string }>();
-                    
-                  if (existingAccount) {
-                    accountSyncId = existingAccount.sync_id;
-                    createdAccounts.set(accountName, accountSyncId);
-                  } else {
-                    // 创建新账户
-                    accountSyncId = randomUUID();
-                    const payload: Record<string, unknown> = {
-                      name: accountName,
-                      account_type: null,
-                      currency: null,
-                      initial_balance: 0,
-                      note: null,
-                      credit_limit: null,
-                      billing_day: null,
-                      payment_due_day: null,
-                      bank_name: null,
-                      card_last_four: null,
-                    };
-                    
-                    await db
-                      .prepare(
-                        `INSERT INTO sync_changes
-                         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-                      )
-                      .bind(userId, ledgerId, 'account', accountSyncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
-                      .run();
-
-                    await db
-                      .prepare(
-                        `INSERT INTO read_account_projection
-                         (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
-                          note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-                      )
-                      .bind(ledgerId, accountSyncId, userId, accountName, null, null, 0, null, null, null, null, null, null, 0)
-                      .run();
-                      
-                    createdAccounts.set(accountName, accountSyncId);
-                  }
-                }
-              }
-              
-              // 处理分类 - 自动创建不存在的分类
-              let categorySyncId: string | null = null;
-              let categoryKind: 'expense' | 'income' | 'transfer' = 'expense';
-              
-              if (categoryName.trim()) {
-                categoryKind = finalTxType === 'income' ? 'income' : 'expense';
-                
-                if (createdCategories.has(categoryName)) {
-                  categorySyncId = createdCategories.get(categoryName)!;
-                } else {
-                  const existingCategory = await db
-                    .prepare('SELECT sync_id, kind FROM read_category_projection WHERE ledger_id = ? AND name = ? LIMIT 1')
-                    .bind(ledgerId, categoryName)
-                    .first<{ sync_id: string; kind: string }>();
-                    
-                  if (existingCategory) {
-                    categorySyncId = existingCategory.sync_id;
-                    categoryKind = existingCategory.kind as any;
-                    createdCategories.set(categoryName, categorySyncId);
-                  } else {
-                    // 创建新分类
-                    categorySyncId = randomUUID();
-                    const payload: Record<string, unknown> = {
-                      name: categoryName,
-                      kind: categoryKind,
-                      level: null,
-                      sort_order: null,
-                      icon: null,
-                      icon_type: null,
-                      custom_icon_path: null,
-                      icon_cloud_file_id: null,
-                      icon_cloud_sha256: null,
-                      parent_name: null,
-                    };
-                    
-                    await db
-                      .prepare(
-                        `INSERT INTO sync_changes
-                         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-                      )
-                      .bind(userId, ledgerId, 'category', categorySyncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
-                      .run();
-
-                    await db
-                      .prepare(
-                        `INSERT INTO read_category_projection
-                         (ledger_id, sync_id, user_id, name, kind, level, sort_order,
-                          icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
-                          parent_name, source_change_id)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-                      )
-                      .bind(ledgerId, categorySyncId, userId, categoryName, categoryKind, null, null, null, null, null, null, null, null, 0)
-                      .run();
-                      
-                    createdCategories.set(categoryName, categorySyncId);
-                  }
-                }
-              }
+              const accountSyncId = accountName.trim() ? createdAccounts.get(accountName.trim()) || null : null;
+              const categorySyncId = categoryName.trim() ? createdCategories.get(categoryName.trim()) || null : null;
 
               const payload: Record<string, unknown> = {
                 tx_type: finalTxType,
@@ -1010,7 +1064,7 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
                 .bind(userId, ledgerId, 'transaction', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
                 .run();
 
-              const newChangeId = changeResult.meta.last_row_id as number;
+              lastChangeId = changeResult.meta.last_row_id as number;
 
               await db
                 .prepare(
@@ -1024,35 +1078,32 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
                 .bind(ledgerId, syncId, userId, finalTxType, finalAmount, happenedAt, note || null,
                       categorySyncId, categoryName || null, categoryKind,
                       accountSyncId, accountName || null,
-                      tagsCsv, allTagSyncIds.length > 0 ? safeJsonStringify(allTagSyncIds) : null, newChangeId)
+                      tagsCsv, allTagSyncIds.length > 0 ? safeJsonStringify(allTagSyncIds) : null, lastChangeId)
                 .run();
 
               success++;
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ row: { index: i, success: true, tx_sync_id: syncId } })}\n\n`));
-            } else {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ row: { index: i, success: false, error: 'duplicate skipped' } })}\n\n`));
+            }
+            
+            if (i % 10 === 0 || i === total - 1) {
+              controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'transactions', done: success + skippedCount, total: total, skipped: skippedCount })}\n\n`));
             }
           } catch (rowErr) {
             failed++;
             const errorMsg = rowErr instanceof Error ? rowErr.message : 'Unknown error';
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ row: { index: i, success: false, error: errorMsg } })}\n\n`));
-          }
-
-          if (i % 10 === 0) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: { current: i + 1, total, success, failed } })}\n\n`));
+            controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ code: 'ROW_ERROR', row_number: i + 2, field_name: null, message: errorMsg })}\n\n`));
           }
         }
 
         session.status = 'done';
         await saveSession(kv, session);
 
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: { total, success, failed } })}\n\n`));
+        controller.enqueue(encoder.encode(`event: complete\ndata: ${JSON.stringify({ created_tx_count: success, skipped_count: skippedCount, new_change_id: lastChangeId })}\n\n`));
         controller.close();
       } catch (err) {
         session.status = 'cancelled';
         await saveSession(kv, session);
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: errorMsg, done: { total, success, failed } })}\n\n`));
+        controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ code: 'IMPORT_ERROR', row_number: null, field_name: null, message: errorMsg })}\n\n`));
         controller.close();
       }
     },
