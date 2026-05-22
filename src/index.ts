@@ -1468,46 +1468,14 @@ function getSetupPageHTML(): string {
             messageEl.className = 'message success';
             let html = '✓ ' + (result.message || '设置已保存') + '<br><br>';
             if (result.user_email) {
-              html += '<div class="result-row"><span>管理员账户:</span>';
-              html += '<input type="text" id="res-email" class="result-input" value="' + result.user_email + '" readonly>';
-              html += '<button class="copy-btn" id="copy-email">复制</button>';
-              html += '</div>';
+              html += '<div style="margin: 8px 0;"><strong>管理员账户:</strong> <code style="background: #f0f0f0; padding: 4px 8px; border-radius: 4px;">' + result.user_email + '</code></div>';
             }
             if (result.auto_generated_password) {
-              html += '<div class="result-row"><span>密码:</span>';
-              html += '<input type="text" id="res-pwd" class="result-input" value="' + result.auto_generated_password + '" readonly>';
-              html += '<button class="copy-btn green" id="copy-pwd">复制</button>';
-              html += '</div>';
+              html += '<div style="margin: 8px 0;"><strong>密码:</strong> <code style="background: #f0f0f0; padding: 4px 8px; border-radius: 4px;">' + result.auto_generated_password + '</code></div>';
               html += '<small style="color: #666;">请务必记录此密码！</small><br>';
             }
             html += '<br>正在跳转登录页面...';
             messageEl.innerHTML = html;
-            const copyEmailBtn = document.getElementById('copy-email');
-            if (copyEmailBtn) {
-              copyEmailBtn.addEventListener('click', function() {
-                const emailInput = document.getElementById('res-email');
-                if (emailInput) {
-                  navigator.clipboard.writeText(emailInput.value).then(function() {
-                    const orig = copyEmailBtn.textContent;
-                    copyEmailBtn.textContent = '已复制';
-                    setTimeout(function() { copyEmailBtn.textContent = orig; }, 2000);
-                  });
-                }
-              });
-            }
-            const copyPwdBtn = document.getElementById('copy-pwd');
-            if (copyPwdBtn) {
-              copyPwdBtn.addEventListener('click', function() {
-                const pwdInput = document.getElementById('res-pwd');
-                if (pwdInput) {
-                  navigator.clipboard.writeText(pwdInput.value).then(function() {
-                    const orig = copyPwdBtn.textContent;
-                    copyPwdBtn.textContent = '已复制';
-                    setTimeout(function() { copyPwdBtn.textContent = orig; }, 2000);
-                  });
-                }
-              });
-            }
             setTimeout(function() { window.top.location.href = '/'; }, 8000);
           } else {
             messageEl.className = 'message error';

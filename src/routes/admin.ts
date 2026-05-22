@@ -151,10 +151,23 @@ adminRouter.get('/health', async (c) => {
     const now = new Date();
     const localTime = new Date(now.getTime() + timezoneOffset * 60 * 1000);
     
+    // 查询在线用户数（5分钟内有活动视为在线）
+    let onlineCount = 0;
+    try {
+      const onlineThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const onlineResult = await db
+        .prepare(`SELECT COUNT(DISTINCT user_id) as count 
+                  FROM devices 
+                  WHERE last_seen_at > ?`)
+        .bind(onlineThreshold)
+        .first<{ count: number }>();
+      onlineCount = onlineResult?.count || 0;
+    } catch {}
+    
     return c.json({
       status: 'healthy',
       db: 'connected',
-      online_ws_users: 0,
+      online_ws_users: onlineCount,
       time: localTime.toISOString(),
       timezone_offset: timezoneOffset,
     });

@@ -64,6 +64,12 @@ const PatCreateSchema = z.object({
   expires_in_days: z.number().int().min(1).max(36500).nullable().optional(),
 });
 
+/** 更新 PAT 请求 */
+const PatUpdateSchema = z.object({
+  name: z.string().min(1).max(128).optional(),
+  expires_in_days: z.number().int().min(1).max(36500).nullable().optional(),
+});
+
 // ===========================
 // 类型定义
 // ===========================
@@ -204,6 +210,93 @@ patsRouter.post('/', zValidator('json', PatCreateSchema), async (c) => {
     scopes: req.scopes,
     expires_at: expiresAt,
     created_at: serverNow,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /profile/pats/:id - 更新 PAT
+// ---------------------------------------------------------------------------
+
+/**
+ * 更新指定的 PAT
+ *
+ * 功能说明：
+ * - 支持更新名称和过期时间
+ * - 只有未撤销的 PAT 才能更新
+ */
+patsRouter.patch('/:id', zValidator('json', PatUpdateSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const patId = c.req.param('id');
+  const req = c.req.valid('json');
+  const serverNow = nowUtc();
+
+  // 验证归属
+  const pat = await db
+    .prepare(
+      'SELECT id, expires_at FROM personal_access_tokens WHERE id = ? AND user_id = ? AND revoked_at IS NULL'
+    )
+    .bind(patId, userId)
+    .first<{ id: string; expires_at: string | null }>();
+
+  if (!pat) {
+    return c.json({ error: 'PAT not found' }, 404);
+  }
+
+  // 构建更新语句
+  const updates: string[] = [];
+  const bindings: (string | number | null)[] = [];
+
+  if (req.name !== undefined) {
+    updates.push('name = ?');
+    bindings.push(req.name);
+  }
+
+  if (req.expires_in_days !== undefined) {
+    let expiresAt: string | null = null;
+    if (req.expires_in_days !== null) {
+      const expiresDate = new Date(Date.now() + req.expires_in_days * 24 * 60 * 60 * 1000);
+      expiresAt = expiresDate.toISOString();
+    }
+    updates.push('expires_at = ?');
+    bindings.push(expiresAt);
+  }
+
+  if (updates.length === 0) {
+    return c.json({ error: 'No updates provided' }, 400);
+  }
+
+  bindings.push(patId);
+
+  await db
+    .prepare(`UPDATE personal_access_tokens SET ${updates.join(', ')} WHERE id = ?`)
+    .bind(...bindings)
+    .run();
+
+  // 返回更新后的 PAT
+  const updatedPat = await db
+    .prepare(
+      'SELECT id, name, prefix, scopes_json, expires_at, last_used_at, created_at FROM personal_access_tokens WHERE id = ?'
+    )
+    .bind(patId)
+    .first<{
+      id: string;
+      name: string;
+      prefix: string;
+      scopes_json: string;
+      expires_at: string | null;
+      last_used_at: string | null;
+      created_at: string;
+    }>();
+
+  return c.json({
+    id: updatedPat.id,
+    name: updatedPat.name,
+    prefix: updatedPat.prefix,
+    scopes: JSON.parse(updatedPat.scopes_json || '[]'),
+    expires_at: updatedPat.expires_at,
+    last_used_at: updatedPat.last_used_at,
+    created_at: updatedPat.created_at,
   });
 });
 
