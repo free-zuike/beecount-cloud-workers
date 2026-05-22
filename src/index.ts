@@ -984,18 +984,15 @@ app.post('/api/v1/setup', async (c) => {
         )
         .run();
       
-      // 创建用户 profile
+      // 创建用户 profile (原版表名为 user_profiles)
       await db
         .prepare(`
-          INSERT INTO profiles (id, user_id, display_name, currency, language, timezone, created_at, updated_at)
-          VALUES (?, ?, ?, 'CNY', 'zh-CN', ?, ?, ?)
+          INSERT INTO user_profiles (user_id, display_name, updated_at)
+          VALUES (?, ?, ?)
         `)
         .bind(
-          randomUUID(),
           userId,
           admin_email.split('@')[0],
-          timezone_offset || 0,
-          serverNow,
           serverNow
         )
         .run();
