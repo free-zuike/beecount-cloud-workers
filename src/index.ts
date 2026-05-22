@@ -633,6 +633,134 @@ app.post('/api/v1/admin/backup/test-public', (c) =>
   c.json({ message: 'Public test endpoint works!', time: new Date().toISOString() })
 );
 
+// 用户登录诊断端点
+app.get('/api/v1/diagnose-users', async (c) => {
+  const db = c.env.DB;
+  
+  try {
+    // 获取所有用户
+    const users = await db.prepare('SELECT id, email, is_admin, is_enabled, created_at FROM users').all();
+    
+    // 检查是否有管理员用户
+    const adminCount = await db.prepare('SELECT COUNT(*) as count FROM users WHERE is_admin = 1').first();
+    
+    return c.json({
+      status: 'ok',
+      users: users.results || [],
+      admin_count: adminCount,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    return c.json({
+      status: 'error',
+      error: String(error),
+      timestamp: new Date().toISOString()
+    }, 500);
+  }
+});
+
+// 重置管理员密码端点
+app.post('/api/v1/reset-admin-password', async (c) => {
+  const db = c.env.DB;
+  
+  try {
+    // 查找或创建管理员用户
+    const existingAdmin = await db
+      .prepare('SELECT id FROM users WHERE email = ?')
+      .bind('admin@localhost')
+      .first();
+    
+    // 生成新密码
+    const newPassword = generateRandomPassword();
+    const passwordHash = await hashPassword(newPassword);
+    
+    if (existingAdmin) {
+      // 更新现有管理员密码
+      await db
+        .prepare('UPDATE users SET password_hash = ?, is_enabled = 1 WHERE id = ?')
+        .bind(passwordHash, existingAdmin.id)
+        .run();
+      
+      console.log('========================================');
+      console.log('🔑 管理员密码已重置:');
+      console.log('邮箱: admin@localhost');
+      console.log('新密码:', newPassword);
+      console.log('========================================');
+      
+      return c.json({
+        status: 'ok',
+        message: '管理员密码已重置',
+        email: 'admin@localhost',
+        new_password: newPassword,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      // 创建新管理员用户
+      const userId = crypto.randomUUID();
+      
+      await db
+        .prepare(
+          `INSERT INTO users (id, email, password_hash, is_admin, is_enabled, created_at)
+           VALUES (?, ?, ?, 1, 1, ?)`
+        )
+        .bind(userId, 'admin@localhost', passwordHash, new Date().toISOString())
+        .run();
+      
+      // 创建用户 profile
+      const defaultAiConfig = JSON.stringify({
+        providers: [
+          {
+            id: 'zhipu_glm',
+            name: '智谱GLM',
+            isBuiltIn: true,
+            apiKey: '',
+            baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+            textModel: 'glm-4-flash',
+            visionModel: 'glm-4v-flash',
+            audioModel: 'glm-4-voice'
+          }
+        ],
+        binding: {
+          textProviderId: 'zhipu_glm',
+          visionProviderId: 'zhipu_glm',
+          speechProviderId: 'zhipu_glm'
+        },
+        strategy: 'cloud_first',
+        custom_prompt: ''
+      });
+      
+      await db
+        .prepare(
+          `INSERT INTO user_profiles (user_id, display_name, avatar_version, ai_config_json)
+           VALUES (?, ?, 0, ?)`
+        )
+        .bind(userId, 'Admin', defaultAiConfig)
+        .run();
+      
+      console.log('========================================');
+      console.log('🐝 管理员账户已创建:');
+      console.log('邮箱: admin@localhost');
+      console.log('密码:', newPassword);
+      console.log('========================================');
+      
+      return c.json({
+        status: 'ok',
+        message: '管理员账户已创建',
+        email: 'admin@localhost',
+        new_password: newPassword,
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error) {
+    console.error('重置管理员密码失败:', error);
+    return c.json({
+      status: 'error',
+      error: String(error),
+      timestamp: new Date().toISOString()
+    }, 500);
+  }
+});
+
 // 数据库诊断端点
 app.get('/api/v1/admin/backup/diagnose-db', async (c) => {
   const db = c.env.DB;
