@@ -1653,10 +1653,10 @@ async function processBackupSchedule(db: D1Database, schedule: any) {
 function calculateNextRun(cronExpr: string): string {
   try {
     // Cron 表达式格式: 分钟 小时 日期 月份 星期
+    // 用户设置的时间是本地时间，需要转换为UTC时间存储
     const parts = cronExpr.trim().split(/\s+/);
     
     if (parts.length < 5) {
-      // 格式不正确，返回5分钟后
       const nextDate = new Date();
       nextDate.setMinutes(nextDate.getMinutes() + 5);
       return nextDate.toISOString();
@@ -1665,43 +1665,43 @@ function calculateNextRun(cronExpr: string): string {
     const minuteStr = parts[0];
     const hourStr = parts[1];
     const dayStr = parts[2];
-    const monthStr = parts[3];
-    const weekdayStr = parts[4];
     
-    // 解析数值
     const targetMinute = minuteStr === '*' ? 0 : parseInt(minuteStr, 10);
     const targetHour = hourStr === '*' ? 0 : parseInt(hourStr, 10);
     
     const now = new Date();
-    let nextDate = new Date(now.getTime());
+    const timezoneOffset = now.getTimezoneOffset();
     
-    // 设置目标时间
-    nextDate.setMinutes(targetMinute);
-    nextDate.setHours(targetHour);
-    nextDate.setSeconds(0);
-    nextDate.setMilliseconds(0);
+    // 创建本地时间的目标时刻
+    let targetLocal = new Date();
+    targetLocal.setHours(targetHour);
+    targetLocal.setMinutes(targetMinute);
+    targetLocal.setSeconds(0);
+    targetLocal.setMilliseconds(0);
     
     // 如果目标时间已经过了今天，设置为明天
-    if (nextDate.getTime() <= now.getTime()) {
-      nextDate.setDate(nextDate.getDate() + 1);
+    if (targetLocal.getTime() <= now.getTime()) {
+      targetLocal.setDate(targetLocal.getDate() + 1);
     }
     
-    // 如果指定了具体日期（dayStr不是*），调整日期
+    // 如果指定了具体日期，调整日期
     if (dayStr !== '*') {
       const targetDay = parseInt(dayStr, 10);
       if (!isNaN(targetDay) && targetDay > 0 && targetDay <= 31) {
-        // 如果日期已经过了，设置到下个月
-        if (targetDay < nextDate.getDate()) {
-          nextDate.setMonth(nextDate.getMonth() + 1);
+        if (targetDay < targetLocal.getDate()) {
+          targetLocal.setMonth(targetLocal.getMonth() + 1);
         }
-        nextDate.setDate(targetDay);
+        targetLocal.setDate(targetDay);
       }
     }
     
-    return nextDate.toISOString();
+    // 转换为UTC时间（getTimezoneOffset返回的是本地时间与UTC的分钟差，东八区是-480）
+    // UTC = 本地时间 + timezoneOffset分钟
+    const targetUtc = new Date(targetLocal.getTime() + timezoneOffset * 60000);
+    
+    return targetUtc.toISOString();
   } catch (e) {
     console.error('[CRON] Error parsing cron expression:', cronExpr, e);
-    // 出错时5分钟后
     const nextDate = new Date();
     nextDate.setMinutes(nextDate.getMinutes() + 5);
     return nextDate.toISOString();
