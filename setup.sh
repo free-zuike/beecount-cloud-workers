@@ -40,9 +40,8 @@ if [ -z "$DB_EXISTS" ]; then
     echo "⏳ 等待数据库就绪..."
     sleep 5
     
-    # 初始化数据库表
-    echo "🗄️ 初始化数据库表..."
-    npx wrangler d1 execute beecount-cloud --remote --file=./schema.sql
+    # 初始化数据库表（首次部署时会自动创建）
+    echo "🗄️ 数据库将在首次部署时自动初始化..."
 else
     echo "✅ D1 数据库已存在"
 fi
