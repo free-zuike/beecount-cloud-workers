@@ -493,6 +493,7 @@ const ScheduleCreateSchema = z.object({
   enabled: z.boolean().optional(),
   remote_ids: z.array(z.union([z.string(), z.number()])).optional().default([]),
   include_attachments: z.boolean().optional().default(true),
+  timezone_offset: z.number().optional().default(0),
 });
 
 const ScheduleUpdateSchema = z.object({
@@ -502,6 +503,7 @@ const ScheduleUpdateSchema = z.object({
   enabled: z.boolean().optional(),
   remote_ids: z.array(z.union([z.string(), z.number()])).optional(),
   include_attachments: z.boolean().optional(),
+  timezone_offset: z.number().optional(),
 });
 
 const RunNowSchema = z.object({
@@ -1165,16 +1167,16 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
   const serverNow = nowUtc();
   const userId = c.get('userId');
   
-  // 计算首次运行时间
-  const nextRunAt = calculateNextRun(req.cron_expr);
+  // 计算首次运行时间（使用用户提供的时区偏移）
+  const nextRunAt = calculateNextRun(req.cron_expr, req.timezone_offset ?? 0);
 
   const remoteIdsJson = req.remote_ids && req.remote_ids.length > 0 ? JSON.stringify(req.remote_ids) : null;
 
   const insertResult = await db
     .prepare(
       `INSERT INTO backup_schedules
-       (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, next_run_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, timezone_offset, next_run_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       req.name,
@@ -1184,6 +1186,7 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
       req.include_attachments !== false ? 1 : 0,
       req.enabled !== false ? 1 : 0,
       remoteIdsJson,
+      req.timezone_offset ?? 0,
       nextRunAt,
       serverNow,
       serverNow
@@ -1199,6 +1202,7 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
     retention_days: req.retention_days ?? 30,
     include_attachments: req.include_attachments ?? true,
     enabled: req.enabled ?? true,
+    timezone_offset: req.timezone_offset ?? 0,
     next_run_at: nextRunAt,
     last_run_at: null,
     last_run_status: null,
@@ -1210,9 +1214,10 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
 /**
  * 计算下次运行时间
  * Cron 表达式格式: 分钟 小时 日期 月份 星期
- * 用户设置的时间是本地时间，需要转换为UTC时间存储
+ * @param cronExpr cron表达式
+ * @param timezoneOffset 用户时区偏移（分钟，东八区为-480）
  */
-function calculateNextRun(cronExpr: string): string {
+function calculateNextRun(cronExpr: string, timezoneOffset: number = 0): string {
   try {
     const parts = cronExpr.trim().split(/\s+/);
     
@@ -1230,9 +1235,8 @@ function calculateNextRun(cronExpr: string): string {
     const targetHour = hourStr === '*' ? 0 : parseInt(hourStr, 10);
     
     const now = new Date();
-    const timezoneOffset = now.getTimezoneOffset();
     
-    // 创建本地时间的目标时刻
+    // 创建目标时刻（用户本地时间）
     let targetLocal = new Date();
     targetLocal.setHours(targetHour);
     targetLocal.setMinutes(targetMinute);
@@ -1255,7 +1259,7 @@ function calculateNextRun(cronExpr: string): string {
       }
     }
     
-    // 转换为UTC时间（getTimezoneOffset返回的是本地时间与UTC的分钟差，东八区是-480）
+    // 转换为UTC时间（timezoneOffset是本地时间与UTC的分钟差，东八区是-480）
     // UTC = 本地时间 + timezoneOffset分钟
     const targetUtc = new Date(targetLocal.getTime() + timezoneOffset * 60000);
     

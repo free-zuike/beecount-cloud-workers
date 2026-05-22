@@ -286,6 +286,7 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         retention_days INTEGER DEFAULT 30,
         include_attachments BOOLEAN DEFAULT 0 NOT NULL,
         enabled BOOLEAN DEFAULT 1 NOT NULL,
+        timezone_offset INTEGER DEFAULT 0,
         next_run_at TEXT,
         last_run_at TEXT,
         last_run_status TEXT,
@@ -594,6 +595,14 @@ app.post('/api/v1/admin/backup/migrate-db', async (c) => {
       results.push('✓ Added last_run_status column to backup_schedules');
     } catch (e) {
       results.push('~ last_run_status column already exists in backup_schedules');
+    }
+    
+    // 添加 timezone_offset 列到 backup_schedules 表
+    try {
+      await db.prepare('ALTER TABLE backup_schedules ADD COLUMN timezone_offset INTEGER DEFAULT 0').run();
+      results.push('✓ Added timezone_offset column to backup_schedules');
+    } catch (e) {
+      results.push('~ timezone_offset column already exists in backup_schedules');
     }
     
     // 添加 ledger_id 列
@@ -1516,9 +1525,12 @@ export default {
 async function processBackupSchedule(db: D1Database, schedule: any) {
   console.log(`[CRON] Processing schedule ${schedule.id}: ${schedule.name}`);
   
+  // 获取时区偏移（默认为0）
+  const timezoneOffset = schedule.timezone_offset || 0;
+  
   // 如果没有 next_run_at，先计算一个
   if (!schedule.next_run_at) {
-    const nextRun = calculateNextRun(schedule.cron_expr);
+    const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
     await db
       .prepare('UPDATE backup_schedules SET next_run_at = ? WHERE id = ?')
       .bind(nextRun, schedule.id)
@@ -1613,8 +1625,8 @@ async function processBackupSchedule(db: D1Database, schedule: any) {
       console.log(`[CRON] Backup failed for schedule ${schedule.id}:`, backupResult.message);
     }
     
-    // 更新计划的最后运行时间
-    const nextRun = calculateNextRun(schedule.cron_expr);
+    // 更新计划的最后运行时间（使用时区偏移）
+    const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
     await db
       .prepare(
         'UPDATE backup_schedules SET last_run_at = ?, last_run_status = ?, next_run_at = ?, updated_at = ? WHERE id = ?'
@@ -1633,8 +1645,8 @@ async function processBackupSchedule(db: D1Database, schedule: any) {
       .bind('failed', finishedAt, errorMsg, runId)
       .run();
     
-    // 更新计划的失败状态
-    const nextRun = calculateNextRun(schedule.cron_expr);
+    // 更新计划的失败状态（使用时区偏移）
+    const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
     await db
       .prepare(
         'UPDATE backup_schedules SET last_run_at = ?, last_run_status = ?, next_run_at = ?, updated_at = ? WHERE id = ?'
@@ -1650,10 +1662,14 @@ async function processBackupSchedule(db: D1Database, schedule: any) {
 // Cron 表达式解析和计算
 // ===========================
 
-function calculateNextRun(cronExpr: string): string {
+/**
+ * 计算下次运行时间
+ * Cron 表达式格式: 分钟 小时 日期 月份 星期
+ * @param cronExpr cron表达式
+ * @param timezoneOffset 用户时区偏移（分钟，东八区为-480）
+ */
+function calculateNextRun(cronExpr: string, timezoneOffset: number = 0): string {
   try {
-    // Cron 表达式格式: 分钟 小时 日期 月份 星期
-    // 用户设置的时间是本地时间，需要转换为UTC时间存储
     const parts = cronExpr.trim().split(/\s+/);
     
     if (parts.length < 5) {
@@ -1670,9 +1686,8 @@ function calculateNextRun(cronExpr: string): string {
     const targetHour = hourStr === '*' ? 0 : parseInt(hourStr, 10);
     
     const now = new Date();
-    const timezoneOffset = now.getTimezoneOffset();
     
-    // 创建本地时间的目标时刻
+    // 创建目标时刻（用户本地时间）
     let targetLocal = new Date();
     targetLocal.setHours(targetHour);
     targetLocal.setMinutes(targetMinute);
@@ -1695,7 +1710,7 @@ function calculateNextRun(cronExpr: string): string {
       }
     }
     
-    // 转换为UTC时间（getTimezoneOffset返回的是本地时间与UTC的分钟差，东八区是-480）
+    // 转换为UTC时间（timezoneOffset是本地时间与UTC的分钟差，东八区是-480）
     // UTC = 本地时间 + timezoneOffset分钟
     const targetUtc = new Date(targetLocal.getTime() + timezoneOffset * 60000);
     
