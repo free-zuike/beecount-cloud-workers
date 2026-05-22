@@ -1440,7 +1440,7 @@ function getSetupPageHTML(): string {
     
     <div id="message" class="message"></div>
     
-    <form id="setupForm">
+    <form id="setupForm" onsubmit="return false;">
       <div class="section">
         <div class="section-title">👤 管理员账户</div>
         <div class="form-group">
@@ -1713,7 +1713,7 @@ function getSetupPageHTML(): string {
         </div>
       </div>
       
-      <button type="submit" id="submitBtn">保存设置并继续</button>
+      <button type="button" id="submitBtn" onclick="submitForm()">保存设置并继续</button>
     </form>
   </div>
   
@@ -1761,16 +1761,16 @@ function getSetupPageHTML(): string {
       }
     });
     
-    // 提交表单
-    document.getElementById('setupForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
+    // 提交表单函数
+    async function submitForm() {
       const submitBtn = document.getElementById('submitBtn');
       const messageEl = document.getElementById('message');
+      const form = document.getElementById('setupForm');
       
       submitBtn.disabled = true;
       submitBtn.textContent = '保存中...';
       
-      const formData = new FormData(e.target);
+      const formData = new FormData(form);
       
       // 获取管理员模式
       const adminMode = formData.get('admin_mode');
@@ -1927,7 +1927,7 @@ function getSetupPageHTML(): string {
         submitBtn.disabled = false;
         submitBtn.textContent = '保存设置并继续';
       }
-    });
+    }
     
     // 检测是否已设置过
     fetch('/api/v1/setup')
