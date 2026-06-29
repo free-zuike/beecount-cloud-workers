@@ -197,7 +197,7 @@ notificationsRouter.get('/subscribe', async (c) => {
       };
 
       // 清理函数
-      c.req.signal.addEventListener('abort', () => {
+      c.req.raw.signal.addEventListener('abort', () => {
         clearInterval(heartbeatInterval);
         try {
           controller.close();

@@ -156,13 +156,13 @@ async function verifyTotpCode(secret: string, code: string, window: number = 1):
       const hmacArray = new Uint8Array(hmacResult);
       
       // 动态截断（取最后 4 位作为偏移量）
-      const offset = hmacArray[hmacArray.length - 1] & 0x0F;
+      const truncOffset = hmacArray[hmacArray.length - 1] & 0x0F;
       
       // 从偏移量处取 4 字节，转换为无符号整数
-      const truncated = (hmacArray[offset] & 0x7F) << 24 |
-                       (hmacArray[offset + 1] & 0xFF) << 16 |
-                       (hmacArray[offset + 2] & 0xFF) << 8 |
-                       (hmacArray[offset + 3] & 0xFF);
+      const truncated = (hmacArray[truncOffset] & 0x7F) << 24 |
+                       (hmacArray[truncOffset + 1] & 0xFF) << 16 |
+                       (hmacArray[truncOffset + 2] & 0xFF) << 8 |
+                       (hmacArray[truncOffset + 3] & 0xFF);
       
       // 取模得到 6 位数字
       const totp = truncated % 1000000;
@@ -382,7 +382,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
       .bind(userId)
       .all<{ id: number; code_hash: string }>();
 
-    for (const rc of recoveryCodes) {
+    for (const rc of recoveryCodes.results) {
       if (rc.code_hash === codeHash) {
         isValid = true;
         await db.prepare('UPDATE recovery_codes SET used_at = ? WHERE id = ?').bind(serverNow, rc.id).run();

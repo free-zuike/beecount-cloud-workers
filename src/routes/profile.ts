@@ -60,7 +60,7 @@ class S3Service {
   private s3ConfigCacheTime: number = 0;
   private CACHE_TTL_MS = 60000;
 
-  constructor(db: D1Database, env: S3Bindings) {
+  constructor(db: D1Database, env: Bindings) {
     this.db = db;
     this.env = env;
   }

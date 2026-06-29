@@ -910,7 +910,7 @@ writeRouter.patch('/transactions/:id', zValidator('json', WriteTransactionUpdate
   if (req.amount !== undefined) newPayload.amount = req.amount;
   if (req.happened_at !== undefined)
     newPayload.happened_at =
-      typeof req.happened_at === 'string' ? req.happened_at : new Date(req.happened_at).toISOString();
+      typeof req.happened_at === 'string' ? req.happened_at : req.happened_at ? req.happened_at.toISOString() : null;
   if (req.note !== undefined) newPayload.note = req.note;
   if (req.category_name !== undefined) newPayload.category_name = req.category_name;
   if (req.category_kind !== undefined) newPayload.category_kind = req.category_kind;

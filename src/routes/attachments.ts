@@ -131,7 +131,7 @@ class S3Service {
     }
 
     // 从数据库或环境变量获取 S3 配置
-    private async getS3Config(): Promise<any> {
+    public async getS3Config(): Promise<any> {
         const now = Date.now();
         
         // 检查缓存是否有效
@@ -395,7 +395,7 @@ const handleUpload = async (c: any) => {
         const ledger = await db
             .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
             .bind(userId, ledgerExternalId)
-            .first<{ id: string; external_id: string }>();
+            .first() as { id: string; external_id: string } | null;
 
         if (!ledger) {
             return c.json({ error: 'Ledger not found' }, 404);
@@ -416,7 +416,7 @@ const handleUpload = async (c: any) => {
                  WHERE sha256 = ? AND ledger_id = ? AND attachment_kind = 'transaction'`
             )
             .bind(sha256Hash, ledger.id)
-            .first<{ id: string }>();
+            .first() as { id: string } | null;
 
         if (existing) {
             const response = {

@@ -295,6 +295,10 @@ patsRouter.patch('/:id', zValidator('json', PatUpdateSchema), async (c) => {
       created_at: string;
     }>();
 
+  if (!updatedPat) {
+    return c.json({ error: 'PAT not found after update' }, 500);
+  }
+
   return c.json({
     id: updatedPat.id,
     name: updatedPat.name,

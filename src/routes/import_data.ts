@@ -387,7 +387,7 @@ importRouter.get('/:token/preview', async (c) => {
   }
 
   const sourceFormat = detectSourceFormat(session.file_name, session.headers, session.rows[0] || []);
-  const suggestedMapping = generateSuggestedMapping(session.headers, sourceFormat);
+  const suggestedMapping = generateSuggestedMapping(session.headers);
 
   const defaultLedger = await db
     .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? LIMIT 1')
@@ -645,7 +645,7 @@ importRouter.post('/:token/preview', zValidator('json', ImportPreviewSchema), as
     expires_at: session.expires_at,
     source_format: sourceFormat,
     headers: session.headers,
-    suggested_mapping: generateSuggestedMapping(session.headers, sourceFormat),
+    suggested_mapping: generateSuggestedMapping(session.headers),
     current_mapping: fieldMapping,
     target_ledger_id: targetLedgerId || null,
     dedup_strategy: dedupStrategy,

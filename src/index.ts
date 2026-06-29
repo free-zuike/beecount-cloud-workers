@@ -935,10 +935,10 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
     const validationResult = await validateAccessToken(token, jwtSecret);
     
     if (!validationResult || !('userId' in validationResult)) {
+      if (validationResult && 'expired' in validationResult && validationResult.expired) {
+        return c.json({ error: 'Token expired' }, 401);
+      }
       return c.json({ error: 'Unauthorized', detail: 'Invalid or expired token' }, 401);
-    }
-    if (validationResult.expired) {
-      return c.json({ error: 'Token expired' }, 401);
     }
     const userId = validationResult.userId;
 
@@ -1141,6 +1141,9 @@ const authMiddleware = async (c: any, next: () => Promise<void>, skipPaths: stri
   if ('expired' in validationResult && validationResult.expired) {
     return c.json({ error: 'TokenExpired' }, 401);
   }
+  if (!('userId' in validationResult)) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
   const userId = validationResult.userId;
 
   const deviceId = c.req.header('X-Device-ID') || c.req.header('x-device-id');
@@ -1255,10 +1258,10 @@ app.get('/ws', async (c) => {
   try {
     const validationResult = await validateAccessToken(token, c.env.JWT_SECRET);
     if (!validationResult || !('userId' in validationResult)) {
+      if (validationResult && 'expired' in validationResult && validationResult.expired) {
+        return c.json({ error: 'Token expired' }, 401);
+      }
       return c.json({ error: 'Invalid token' }, 401);
-    }
-    if (validationResult.expired) {
-      return c.json({ error: 'Token expired' }, 401);
     }
     const userId = validationResult.userId;
 

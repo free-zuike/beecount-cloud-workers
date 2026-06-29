@@ -334,7 +334,7 @@ aiRouter.post('/ask', zValidator('json', AiAskSchema), async (c) => {
     .bind(userId)
     .first<{ ai_config_json: string | null }>();
 
-  const aiConfig = parseAiConfig(profile?.ai_config_json);
+  const aiConfig = parseAiConfig(profile?.ai_config_json ?? null);
   const provider = findProvider(aiConfig, 'text');
 
   if (!provider || !provider.textModel) {
@@ -459,7 +459,7 @@ aiRouter.post('/parse-tx-image', zValidator('json', AiParseTxImageSchema), async
     .bind(userId)
     .first<{ ai_config_json: string | null }>();
 
-  const aiConfig = parseAiConfig(profile?.ai_config_json);
+  const aiConfig = parseAiConfig(profile?.ai_config_json ?? null);
   const provider = findProvider(aiConfig, 'vision');
 
   if (!provider || !provider.visionModel) {
@@ -584,7 +584,7 @@ aiRouter.post('/parse-tx-text', zValidator('json', AiParseTxTextSchema), async (
     .bind(userId)
     .first<{ ai_config_json: string | null }>();
 
-  const aiConfig = parseAiConfig(profile?.ai_config_json);
+  const aiConfig = parseAiConfig(profile?.ai_config_json ?? null);
   const provider = findProvider(aiConfig, 'text');
 
   if (!provider || !provider.textModel) {
@@ -706,7 +706,7 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
       .bind(userId)
       .first<{ ai_config_json: string | null }>();
 
-    const aiConfig = parseAiConfig(profile?.ai_config_json);
+    const aiConfig = parseAiConfig(profile?.ai_config_json ?? null);
     
     if (!apiKey || !baseUrl) {
       const provider = aiConfig.providers?.find(p => p.id === providerId);

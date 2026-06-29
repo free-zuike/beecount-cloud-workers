@@ -106,7 +106,7 @@ type Bindings = {
   JWT_SECRET: string;
 };
 
-const authRouter = new Hono<{ Bindings: Bindings }>();
+const authRouter = new Hono<{ Bindings: Bindings; Variables: { userId: string } }>();
 
 // Register
 authRouter.post('/register', zValidator('json', z.object({
@@ -418,10 +418,10 @@ authRouter.get('/2fa/status', async (c) => {
   const validationResult = await validateAccessToken(token, jwtSecret);
   
   if (!validationResult || !('userId' in validationResult)) {
+    if (validationResult && 'expired' in validationResult && validationResult.expired) {
+      return c.json({ error: 'Token expired' }, 401);
+    }
     return c.json({ error: 'Unauthorized' }, 401);
-  }
-  if (validationResult.expired) {
-    return c.json({ error: 'Token expired' }, 401);
   }
   
   const userId = validationResult.userId;
@@ -456,10 +456,10 @@ authRouter.post('/2fa/setup', async (c) => {
   const validationResult = await validateAccessToken(token, jwtSecret);
   
   if (!validationResult || !('userId' in validationResult)) {
+    if (validationResult && 'expired' in validationResult && validationResult.expired) {
+      return c.json({ error: 'Token expired' }, 401);
+    }
     return c.json({ error: 'Unauthorized' }, 401);
-  }
-  if (validationResult.expired) {
-    return c.json({ error: 'Token expired' }, 401);
   }
   
   const userId = validationResult.userId;
