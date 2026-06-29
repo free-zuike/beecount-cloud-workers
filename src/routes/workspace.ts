@@ -1,18 +1,27 @@
 /**
- * Workspace 路由模块 - 实现跨账本聚合查询接口
+ * Workspace 路由模块 - 实现跨账本聚合查询接口 + 共享账本管理
  *
  * 参考原版 BeeCount-Cloud (Python/FastAPI) 的 /read/workspace 端点：
  * - GET /read/workspace/transactions       - 跨账本交易列表（支持复杂过滤）
- * - GET /read/workspace/transactions.csv  - CSV 导出
  * - GET /read/workspace/accounts          - 跨账本账户聚合
  * - GET /read/workspace/categories         - 跨账本分类聚合
  * - GET /read/workspace/tags             - 跨账本标签聚合
+ * - GET /read/workspace/budgets          - 跨账本预算聚合
  * - GET /read/workspace/ledger-counts    - 账本总览统计
  * - GET /read/workspace/analytics         - 收支分析（series + category ranks）
  *
- * 跟 ledgers.py 的区别：
- * - 这里的查询不锁定到单个账本，会扫用户所有可见账本做聚合
- * - 去重/跨账本 dedup / owner 信息回填逻辑在这里
+ * 共享账本端点：
+ * - POST   /workspace/ledgers/:id/invite           - 生成邀请码
+ * - GET    /workspace/ledgers/:id/invites          - 列出活跃邀请
+ * - DELETE /workspace/ledgers/:id/invites/:code     - 撤销邀请
+ * - POST   /workspace/ledgers/join                 - 通过邀请码加入账本
+ * - POST   /workspace/invites/:code/preview         - 预览邀请详情
+ * - GET    /workspace/ledgers/:id/members           - 列出成员
+ * - DELETE /workspace/ledgers/:id/members/:userId   - 移除成员
+ * - PATCH  /workspace/ledgers/:id                   - 修改账本元数据
+ * - GET    /workspace/ledgers/:id/member-stats      - 成员统计
+ * - GET    /workspace/ledgers/:id/shared-resources   - 共享资源
+ * - POST   /workspace/ledgers/:id/transfer          - 转让 Owner
  *
  * @module routes/workspace
  */
@@ -45,6 +54,16 @@ function parseTagsList(csv: string | null): string[] {
   return csv.split(',').filter((t) => t.trim().length > 0);
 }
 
+const INVITE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function generateInviteCode(): string {
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += INVITE_CHARS[Math.floor(Math.random() * INVITE_CHARS.length)];
+  }
+  return code;
+}
+
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
@@ -56,9 +75,58 @@ type Variables = {
 
 const workspaceRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
-// ---------------------------------------------------------------------------
+// ===========================
+// 辅助：查找账本（支持 owner + member）
+// ===========================
+
+async function findLedgerForUser(
+  db: D1Database,
+  ledgerExternalId: string,
+  userId: string,
+): Promise<{ id: string; user_id: string; external_id: string; name: string | null; currency: string; is_shared: number } | null> {
+  const ledger = await db
+    .prepare('SELECT id, user_id, external_id, name, currency, is_shared FROM ledgers WHERE external_id = ?')
+    .bind(ledgerExternalId)
+    .first<{ id: string; user_id: string; external_id: string; name: string | null; currency: string; is_shared: number }>();
+
+  if (!ledger) return null;
+
+  if (ledger.user_id === userId) return ledger;
+
+  const member = await db
+    .prepare('SELECT id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .bind(ledger.id, userId)
+    .first();
+
+  if (member) return ledger;
+
+  return null;
+}
+
+async function getUserRoleInLedger(
+  db: D1Database,
+  ledgerId: string,
+  userId: string,
+): Promise<'owner' | 'editor' | null> {
+  const ledger = await db
+    .prepare('SELECT user_id FROM ledgers WHERE id = ?')
+    .bind(ledgerId)
+    .first<{ user_id: string }>();
+
+  if (!ledger) return null;
+  if (ledger.user_id === userId) return 'owner';
+
+  const member = await db
+    .prepare('SELECT role FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .bind(ledgerId, userId)
+    .first<{ role: string }>();
+
+  return member ? (member.role as 'editor') : null;
+}
+
+// ===========================================================================
 // GET /read/workspace/transactions - 跨账本交易列表
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 workspaceRouter.get('/transactions', async (c) => {
   const userId = c.get('userId');
@@ -71,7 +139,6 @@ workspaceRouter.get('/transactions', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') ?? '20', 10), 2000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
 
-  // 构建账本查询条件
   let ledgerQuery = 'SELECT id, external_id, name FROM ledgers WHERE user_id = ?';
   const ledgerParams: string[] = [userId];
 
@@ -92,7 +159,6 @@ workspaceRouter.get('/transactions', async (c) => {
     ledgerMeta[l.id] = { external_id: l.external_id, name: l.name };
   });
 
-  // 构建交易查询
   let txQuery = `SELECT * FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`;
   const txParams: (string | number)[] = [...ledgerInternalIds];
 
@@ -113,7 +179,6 @@ workspaceRouter.get('/transactions', async (c) => {
     txParams.push(pattern, pattern, pattern, pattern);
   }
 
-  // 排序和分页
   txQuery += ' ORDER BY happened_at DESC, tx_index DESC LIMIT ? OFFSET ?';
   txParams.push(limit + 1, offset);
 
@@ -166,9 +231,9 @@ workspaceRouter.get('/transactions', async (c) => {
   });
 });
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // GET /read/workspace/accounts - 跨账本账户聚合
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 workspaceRouter.get('/accounts', async (c) => {
   const userId = c.get('userId');
@@ -211,9 +276,6 @@ workspaceRouter.get('/accounts', async (c) => {
 
   const acctRows = await db.prepare(acctQuery).bind(...acctParams).all<Record<string, unknown>>();
 
-  // 计算统计
-  const accountIds = [...new Set(acctRows.results.map((r) => r.sync_id as string))];
-
   const items = acctRows.results.map((row) => {
     const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
 
@@ -244,9 +306,9 @@ workspaceRouter.get('/accounts', async (c) => {
   return c.json(items);
 });
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // GET /read/workspace/categories - 跨账本分类聚合
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 workspaceRouter.get('/categories', async (c) => {
   const userId = c.get('userId');
@@ -316,9 +378,9 @@ workspaceRouter.get('/categories', async (c) => {
   return c.json(items);
 });
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // GET /read/workspace/tags - 跨账本标签聚合
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 workspaceRouter.get('/tags', async (c) => {
   const userId = c.get('userId');
@@ -382,9 +444,9 @@ workspaceRouter.get('/tags', async (c) => {
   return c.json(items);
 });
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // GET /read/workspace/budgets - 跨账本预算聚合
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 workspaceRouter.get('/budgets', async (c) => {
   const userId = c.get('userId');
@@ -446,9 +508,9 @@ workspaceRouter.get('/budgets', async (c) => {
   return c.json(items);
 });
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // GET /read/workspace/ledger-counts - 账本总览统计
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 workspaceRouter.get('/ledger-counts', async (c) => {
   const userId = c.get('userId');
@@ -494,9 +556,9 @@ workspaceRouter.get('/ledger-counts', async (c) => {
   });
 });
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // GET /read/workspace/analytics - 收支分析
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 workspaceRouter.get('/analytics', async (c) => {
   const userId = c.get('userId');
@@ -526,7 +588,6 @@ workspaceRouter.get('/analytics', async (c) => {
 
   const ledgerInternalIds = ledgers.results.map((l) => l.id);
 
-  // 查询所有交易
   const txRows = await db
     .prepare(`SELECT tx_type, amount, happened_at, category_name FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`)
     .bind(...ledgerInternalIds)
@@ -610,15 +671,16 @@ workspaceRouter.get('/analytics', async (c) => {
 });
 
 // ===========================
-// Shared Ledger Schema
+// Shared Ledger Schemas
 // ===========================
 
 const InviteSchema = z.object({
-  expires_in_hours: z.number().int().min(1).max(168).default(72),
+  expires_in_hours: z.number().int().min(1).max(168).default(24),
+  target_role: z.enum(['editor']).default('editor'),
 });
 
 const JoinSchema = z.object({
-  invite_code: z.string().min(6).max(64),
+  invite_code: z.string().min(6).max(12),
 });
 
 const UpdateLedgerSchema = z.object({
@@ -626,13 +688,19 @@ const UpdateLedgerSchema = z.object({
   currency: z.string().min(1).max(16).optional(),
 });
 
-// ===========================
-// Shared Ledger Endpoints
-// ============================
+const TransferSchema = z.object({
+  target_user_id: z.string().min(1),
+});
 
-// ---------------------------------------------------------------------------
+const MemberStatsQuerySchema = z.object({
+  scope: z.enum(['month', 'year', 'all']).default('month'),
+  period: z.string().optional(),
+  tz_offset_minutes: z.coerce.number().int().default(0),
+});
+
+// ===========================================================================
 // POST /workspace/ledgers/:id/invite - 生成邀请码（仅 Owner）
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 workspaceRouter.post('/ledgers/:id/invite', zValidator('json', InviteSchema), async (c) => {
   const userId = c.get('userId');
@@ -653,72 +721,317 @@ workspaceRouter.post('/ledgers/:id/invite', zValidator('json', InviteSchema), as
     return c.json({ error: 'Only the owner can generate invite codes' }, 403);
   }
 
-  const inviteCode = randomUUID().replace(/-/g, '').slice(0, 12);
+  const memberCount = await db
+    .prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?')
+    .bind(ledger.id)
+    .first<{ cnt: number }>();
+
+  if ((memberCount?.cnt ?? 0) >= 4) {
+    return c.json({ error: 'Ledger has reached the maximum of 5 members (owner + 4 editors)' }, 400);
+  }
+
+  const activeInviteCount = await db
+    .prepare(
+      `SELECT COUNT(*) as cnt FROM ledger_invites
+       WHERE ledger_id = ? AND used_at IS NULL AND expires_at > ?`
+    )
+    .bind(ledger.id, nowUtc())
+    .first<{ cnt: number }>();
+
+  if ((activeInviteCount?.cnt ?? 0) >= 10) {
+    return c.json({ error: 'Ledger has reached the maximum of 10 active invites' }, 400);
+  }
+
+  let inviteCode = generateInviteCode();
+  let attempts = 0;
+  while (attempts < 10) {
+    const existing = await db
+      .prepare('SELECT id FROM ledger_invites WHERE code = ?')
+      .bind(inviteCode)
+      .first();
+    if (!existing) break;
+    inviteCode = generateInviteCode();
+    attempts++;
+  }
+
   const expiresAt = new Date(Date.now() + req.expires_in_hours * 3600 * 1000).toISOString();
 
   await db
-    .prepare('UPDATE ledgers SET invite_code = ?, invite_expires_at = ?, is_shared = 1 WHERE id = ?')
-    .bind(inviteCode, expiresAt, ledger.id)
+    .prepare(
+      `INSERT INTO ledger_invites (id, ledger_id, code, target_role, invited_by, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(randomUUID(), ledger.id, inviteCode, req.target_role, userId, expiresAt)
+    .run();
+
+  await db
+    .prepare('UPDATE ledgers SET is_shared = 1 WHERE id = ?')
+    .bind(ledger.id)
     .run();
 
   await insertAuditLog({
-    db, userId, ledgerId: ledger.id, action: 'invite', entityType: 'ledger', entityId: ledgerExternalId,
-    details: { expires_at: expiresAt },
+    db, userId, ledgerId: ledger.id, action: 'invite', entityType: 'ledger_invites', entityId: inviteCode,
+    details: { expires_at: expiresAt, target_role: req.target_role },
   });
 
-  return c.json({ code: inviteCode, expires_at: expiresAt });
+  return c.json({
+    code: inviteCode,
+    expires_at: expiresAt,
+    target_role: req.target_role,
+    share_link: `/invite/${inviteCode}`,
+  });
 });
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// GET /workspace/ledgers/:id/invites - 列出未过期未使用的邀请
+// ===========================================================================
+
+workspaceRouter.get('/ledgers/:id/invites', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerExternalId = c.req.param('id');
+
+  const ledger = await db
+    .prepare('SELECT id, user_id FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerExternalId)
+    .first<{ id: string; user_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found or not owned by you' }, 404);
+  }
+
+  if (ledger.user_id !== userId) {
+    return c.json({ error: 'Only the owner can list invites' }, 403);
+  }
+
+  const invites = await db
+    .prepare(
+      `SELECT id, code, target_role, invited_by, expires_at, used_at, used_by, created_at
+       FROM ledger_invites
+       WHERE ledger_id = ? AND used_at IS NULL AND expires_at > ?
+       ORDER BY created_at DESC`
+    )
+    .bind(ledger.id, nowUtc())
+    .all<{
+      id: string;
+      code: string;
+      target_role: string;
+      invited_by: string;
+      expires_at: string;
+      used_at: string | null;
+      used_by: string | null;
+      created_at: string;
+    }>();
+
+  return c.json({
+    invites: invites.results.map((inv) => ({
+      id: inv.id,
+      code: inv.code,
+      target_role: inv.target_role,
+      invited_by: inv.invited_by,
+      expires_at: inv.expires_at,
+      created_at: inv.created_at,
+      share_link: `/invite/${inv.code}`,
+    })),
+  });
+});
+
+// ===========================================================================
+// DELETE /workspace/ledgers/:id/invites/:code - 撤销邀请
+// ===========================================================================
+
+workspaceRouter.delete('/ledgers/:id/invites/:code', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerExternalId = c.req.param('id');
+  const inviteCode = c.req.param('code');
+
+  const ledger = await db
+    .prepare('SELECT id, user_id FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerExternalId)
+    .first<{ id: string; user_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found or not owned by you' }, 404);
+  }
+
+  if (ledger.user_id !== userId) {
+    return c.json({ error: 'Only the owner can revoke invites' }, 403);
+  }
+
+  const result = await db
+    .prepare(
+      `UPDATE ledger_invites SET expires_at = '1970-01-01T00:00:00.000Z'
+       WHERE ledger_id = ? AND code = ? AND used_at IS NULL`
+    )
+    .bind(ledger.id, inviteCode)
+    .run();
+
+  if (result.meta.changes === 0) {
+    return c.json({ error: 'Invite not found or already used/expired' }, 404);
+  }
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'revoke_invite', entityType: 'ledger_invites', entityId: inviteCode,
+  });
+
+  return c.json({ success: true });
+});
+
+// ===========================================================================
+// POST /workspace/invites/:code/preview - 预览邀请详情（公开端点）
+// ===========================================================================
+
+workspaceRouter.post('/invites/:code/preview', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const inviteCode = c.req.param('code');
+
+  const invite = await db
+    .prepare(
+      `SELECT li.id, li.code, li.target_role, li.expires_at, li.used_at, li.invited_by,
+              l.external_id, l.name as ledger_name, l.currency,
+              u.email as owner_email
+       FROM ledger_invites li
+       JOIN ledgers l ON li.ledger_id = l.id
+       JOIN users u ON l.user_id = u.id
+       WHERE li.code = ?`
+    )
+    .bind(inviteCode)
+    .first<{
+      id: string;
+      code: string;
+      target_role: string;
+      expires_at: string;
+      used_at: string | null;
+      invited_by: string;
+      external_id: string;
+      ledger_name: string | null;
+      currency: string;
+      owner_email: string;
+    }>();
+
+  if (!invite) {
+    return c.json({ error: 'Invalid invite code' }, 404);
+  }
+
+  if (invite.used_at) {
+    return c.json({ error: 'Invite has already been used' }, 410);
+  }
+
+  if (new Date(invite.expires_at) < new Date()) {
+    return c.json({ error: 'Invite has expired' }, 410);
+  }
+
+  if (invite.invited_by === userId) {
+    return c.json({ error: 'Cannot accept your own invite' }, 400);
+  }
+
+  await insertAuditLog({
+    db, userId, action: 'preview_invite', entityType: 'ledger_invites', entityId: inviteCode,
+  });
+
+  return c.json({
+    code: invite.code,
+    target_role: invite.target_role,
+    ledger_id: invite.external_id,
+    ledger_name: invite.ledger_name,
+    currency: invite.currency,
+    owner_email: invite.owner_email,
+    expires_at: invite.expires_at,
+  });
+});
+
+// ===========================================================================
 // POST /workspace/ledgers/join - 通过邀请码加入账本
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
 
-  const ledger = await db
-    .prepare('SELECT id, user_id, external_id, name, invite_code, invite_expires_at FROM ledgers WHERE invite_code = ?')
+  const invite = await db
+    .prepare(
+      `SELECT li.id, li.ledger_id, li.code, li.target_role, li.expires_at, li.used_at, li.invited_by,
+              l.external_id, l.name as ledger_name, l.user_id as owner_user_id
+       FROM ledger_invites li
+       JOIN ledgers l ON li.ledger_id = l.id
+       WHERE li.code = ?`
+    )
     .bind(req.invite_code)
-    .first<{ id: string; user_id: string; external_id: string; name: string | null; invite_code: string | null; invite_expires_at: string | null }>();
+    .first<{
+      id: string;
+      ledger_id: string;
+      code: string;
+      target_role: string;
+      expires_at: string;
+      used_at: string | null;
+      invited_by: string;
+      external_id: string;
+      ledger_name: string | null;
+      owner_user_id: string;
+    }>();
 
-  if (!ledger || !ledger.invite_code) {
+  if (!invite) {
     return c.json({ error: 'Invalid invite code' }, 404);
   }
 
-  if (ledger.user_id === userId) {
-    return c.json({ error: 'Cannot join your own ledger' }, 400);
+  if (invite.used_at) {
+    return c.json({ error: 'Invite has already been used' }, 410);
   }
 
-  if (ledger.invite_expires_at && new Date(ledger.invite_expires_at) < new Date()) {
+  if (new Date(invite.expires_at) < new Date()) {
     return c.json({ error: 'Invite code has expired' }, 410);
+  }
+
+  if (invite.owner_user_id === userId) {
+    return c.json({ error: 'Cannot join your own ledger' }, 400);
   }
 
   const existingMember = await db
     .prepare('SELECT id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
-    .bind(ledger.id, userId)
+    .bind(invite.ledger_id, userId)
     .first();
 
   if (existingMember) {
-    return c.json({ message: 'Already a member', ledger_id: ledger.external_id, ledger_name: ledger.name });
+    return c.json({ message: 'Already a member', ledger_id: invite.external_id, ledger_name: invite.ledger_name });
+  }
+
+  const memberCount = await db
+    .prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?')
+    .bind(invite.ledger_id)
+    .first<{ cnt: number }>();
+
+  if ((memberCount?.cnt ?? 0) >= 4) {
+    return c.json({ error: 'Ledger has reached the maximum member limit' }, 400);
   }
 
   await db
     .prepare('INSERT INTO ledger_members (ledger_id, user_id, role) VALUES (?, ?, ?)')
-    .bind(ledger.id, userId, 'editor')
+    .bind(invite.ledger_id, userId, invite.target_role)
+    .run();
+
+  await db
+    .prepare('UPDATE ledger_invites SET used_at = ?, used_by = ? WHERE id = ?')
+    .bind(nowUtc(), userId, invite.id)
     .run();
 
   await insertAuditLog({
-    db, userId, ledgerId: ledger.id, action: 'join', entityType: 'ledger', entityId: ledger.external_id,
+    db, userId, ledgerId: invite.ledger_id, action: 'join', entityType: 'ledger', entityId: invite.external_id,
+    details: { invite_code: invite.code, target_role: invite.target_role },
   });
 
-  return c.json({ ledger_id: ledger.external_id, ledger_name: ledger.name, role: 'editor' });
+  return c.json({
+    ledger_id: invite.external_id,
+    ledger_name: invite.ledger_name,
+    role: invite.target_role,
+  });
 });
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // GET /workspace/ledgers/:id/members - 列出成员
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 workspaceRouter.get('/ledgers/:id/members', async (c) => {
   const userId = c.get('userId');
@@ -757,9 +1070,9 @@ workspaceRouter.get('/ledgers/:id/members', async (c) => {
   return c.json({ members: result });
 });
 
-// ---------------------------------------------------------------------------
-// DELETE /workspace/ledgers/:id/members/:userId - 移除成员（仅 Owner）
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// DELETE /workspace/ledgers/:id/members/:memberUserId - 移除成员（仅 Owner）
+// ===========================================================================
 
 workspaceRouter.delete('/ledgers/:id/members/:memberUserId', async (c) => {
   const userId = c.get('userId');
@@ -801,9 +1114,9 @@ workspaceRouter.delete('/ledgers/:id/members/:memberUserId', async (c) => {
   return c.json({ success: true });
 });
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // PATCH /workspace/ledgers/:id - 修改账本元数据（仅 Owner）
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 workspaceRouter.patch('/ledgers/:id', zValidator('json', UpdateLedgerSchema), async (c) => {
   const userId = c.get('userId');
@@ -838,6 +1151,243 @@ workspaceRouter.patch('/ledgers/:id', zValidator('json', UpdateLedgerSchema), as
   });
 
   return c.json({ ledger_id: ledgerExternalId, name: newName, currency: newCurrency });
+});
+
+// ===========================================================================
+// GET /workspace/ledgers/:id/member-stats - 成员统计
+// ===========================================================================
+
+workspaceRouter.get('/ledgers/:id/member-stats', zValidator('query', MemberStatsQuerySchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerExternalId = c.req.param('id');
+  const { scope, period, tz_offset_minutes } = c.req.valid('query');
+
+  const ledger = await findLedgerForUser(db, ledgerExternalId, userId);
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found or access denied' }, 404);
+  }
+
+  const owner = await db
+    .prepare('SELECT id FROM users WHERE id = ?')
+    .bind(ledger.user_id)
+    .first<{ id: string }>();
+
+  const members = await db
+    .prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ?')
+    .bind(ledger.id)
+    .all<{ user_id: string }>();
+
+  const allUserIds = [
+    ...(owner ? [owner.id] : []),
+    ...members.results.map((m) => m.user_id),
+  ];
+
+  let dateFilter = '';
+  const dateParams: string[] = [];
+
+  if (scope === 'month') {
+    const now = new Date();
+    const tzMs = tz_offset_minutes * 60 * 1000;
+    const localNow = new Date(now.getTime() + tzMs);
+    const year = localNow.getUTCFullYear();
+    const month = localNow.getUTCMonth() + 1;
+    const startOfMonth = `${year}-${String(month).padStart(2, '0')}-01T00:00:00.000Z`;
+    dateFilter = 'AND happened_at >= ?';
+    dateParams.push(startOfMonth);
+  } else if (scope === 'year') {
+    const now = new Date();
+    const tzMs = tz_offset_minutes * 60 * 1000;
+    const localNow = new Date(now.getTime() + tzMs);
+    const year = localNow.getUTCFullYear();
+    const startOfYear = `${year}-01-01T00:00:00.000Z`;
+    dateFilter = 'AND happened_at >= ?';
+    dateParams.push(startOfYear);
+  } else if (period) {
+    dateFilter = 'AND happened_at >= ?';
+    dateParams.push(period);
+  }
+
+  const stats: Record<string, { income: number; expense: number; tx_count: number }> = {};
+  for (const uid of allUserIds) {
+    stats[uid] = { income: 0, expense: 0, tx_count: 0 };
+  }
+
+  if (allUserIds.length > 0) {
+    const placeholders = allUserIds.map(() => '?').join(',');
+    const txRows = await db
+      .prepare(
+        `SELECT created_by_user_id, tx_type, amount
+         FROM read_tx_projection
+         WHERE ledger_id = ? AND created_by_user_id IN (${placeholders})
+           AND tx_type != 'transfer'
+           ${dateFilter}`
+      )
+      .bind(ledger.id, ...allUserIds, ...dateParams)
+      .all<{ created_by_user_id: string | null; tx_type: string; amount: number }>();
+
+    for (const tx of txRows.results) {
+      if (!tx.created_by_user_id) continue;
+      if (!stats[tx.created_by_user_id]) continue;
+      stats[tx.created_by_user_id].tx_count += 1;
+      if (tx.tx_type === 'income') {
+        stats[tx.created_by_user_id].income += tx.amount;
+      } else if (tx.tx_type === 'expense') {
+        stats[tx.created_by_user_id].expense += tx.amount;
+      }
+    }
+  }
+
+  const result = allUserIds.map((uid) => ({
+    user_id: uid,
+    income: stats[uid].income,
+    expense: stats[uid].expense,
+    tx_count: stats[uid].tx_count,
+  }));
+
+  return c.json({ member_stats: result });
+});
+
+// ===========================================================================
+// GET /workspace/ledgers/:id/shared-resources - 共享资源
+// ===========================================================================
+
+workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerExternalId = c.req.param('id');
+
+  const ledger = await db
+    .prepare('SELECT id, user_id FROM ledgers WHERE external_id = ?')
+    .bind(ledgerExternalId)
+    .first<{ id: string; user_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found' }, 404);
+  }
+
+  const role = await getUserRoleInLedger(db, ledger.id, userId);
+  if (!role) {
+    return c.json({ error: 'Access denied' }, 403);
+  }
+
+  const ownerId = ledger.user_id;
+
+  const ownerCategories = await db
+    .prepare(
+      `SELECT DISTINCT name, kind, level, sort_order, icon, icon_type
+       FROM read_category_projection
+       WHERE user_id = ?
+       ORDER BY kind, sort_order, LOWER(name) ASC`
+    )
+    .bind(ownerId)
+    .all<{ name: string | null; kind: string | null; level: number | null; sort_order: number | null; icon: string | null; icon_type: string | null }>();
+
+  const ownerAccounts = await db
+    .prepare(
+      `SELECT DISTINCT name, account_type, currency
+       FROM read_account_projection
+       WHERE user_id = ?
+       ORDER BY LOWER(name) ASC`
+    )
+    .bind(ownerId)
+    .all<{ name: string | null; account_type: string | null; currency: string | null }>();
+
+  const ownerTags = await db
+    .prepare(
+      `SELECT DISTINCT name, color
+       FROM read_tag_projection
+       WHERE user_id = ?
+       ORDER BY LOWER(name) ASC`
+    )
+    .bind(ownerId)
+    .all<{ name: string | null; color: string | null }>();
+
+  return c.json({
+    categories: ownerCategories.results.map((cat) => ({
+      name: cat.name,
+      kind: cat.kind,
+      level: cat.level,
+      sort_order: cat.sort_order,
+      icon: cat.icon,
+      icon_type: cat.icon_type,
+    })),
+    accounts: ownerAccounts.results.map((acct) => ({
+      name: acct.name,
+      account_type: acct.account_type,
+      currency: acct.currency,
+    })),
+    tags: ownerTags.results.map((tag) => ({
+      name: tag.name,
+      color: tag.color,
+    })),
+  });
+});
+
+// ===========================================================================
+// POST /workspace/ledgers/:id/transfer - 转让 Owner
+// ===========================================================================
+
+workspaceRouter.post('/ledgers/:id/transfer', zValidator('json', TransferSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerExternalId = c.req.param('id');
+  const req = c.req.valid('json');
+
+  const ledger = await db
+    .prepare('SELECT id, user_id FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerExternalId)
+    .first<{ id: string; user_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found or not owned by you' }, 404);
+  }
+
+  if (ledger.user_id !== userId) {
+    return c.json({ error: 'Only the owner can transfer ownership' }, 403);
+  }
+
+  if (req.target_user_id === userId) {
+    return c.json({ error: 'Cannot transfer ownership to yourself' }, 400);
+  }
+
+  const targetMember = await db
+    .prepare('SELECT id, user_id, role FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .bind(ledger.id, req.target_user_id)
+    .first<{ id: string; user_id: string; role: string }>();
+
+  if (!targetMember) {
+    return c.json({ error: 'Target user is not a member of this ledger' }, 400);
+  }
+
+  await db
+    .prepare('UPDATE ledgers SET user_id = ? WHERE id = ?')
+    .bind(req.target_user_id, ledger.id)
+    .run();
+
+  await db
+    .prepare('DELETE FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .bind(ledger.id, req.target_user_id)
+    .run();
+
+  const existingOwnerMember = await db
+    .prepare('SELECT id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .bind(ledger.id, userId)
+    .first();
+
+  if (!existingOwnerMember) {
+    await db
+      .prepare('INSERT INTO ledger_members (ledger_id, user_id, role) VALUES (?, ?, ?)')
+      .bind(ledger.id, userId, 'editor')
+      .run();
+  }
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'transfer_owner', entityType: 'ledger', entityId: ledgerExternalId,
+    details: { from_user_id: userId, to_user_id: req.target_user_id },
+  });
+
+  return c.json({ success: true, new_owner_id: req.target_user_id });
 });
 
 export default workspaceRouter;

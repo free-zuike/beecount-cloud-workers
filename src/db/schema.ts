@@ -485,6 +485,24 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_ledger ON audit_logs(ledger_id)').run();
 
+    // ledger_invites table for the invite system
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS ledger_invites (
+        id TEXT PRIMARY KEY,
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        code TEXT NOT NULL,
+        target_role TEXT DEFAULT 'editor' NOT NULL,
+        invited_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        expires_at TEXT NOT NULL,
+        used_at TEXT,
+        used_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_invites_ledger_id ON ledger_invites(ledger_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_invites_code ON ledger_invites(code)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_invites_expires_at ON ledger_invites(expires_at)').run();
+
     console.log('[INIT] Database tables created/verified successfully');
 
   } catch (error) {
