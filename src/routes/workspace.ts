@@ -125,6 +125,105 @@ async function getUserRoleInLedger(
 }
 
 // ===========================================================================
+// GET /read/workspace/transactions.csv - CSV 导出（前端调用路径别名）
+// ===========================================================================
+
+workspaceRouter.get('/transactions.csv', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+
+  const ledgerId = c.req.query('ledger_id');
+  if (!ledgerId) {
+    return c.json({ error: 'ledger_id is required' }, 400);
+  }
+
+  const ledger = await db
+    .prepare('SELECT id, name FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerId)
+    .first<{ id: string; name: string | null }>();
+
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found or access denied' }, 404);
+  }
+
+  let txQuery = 'SELECT * FROM read_tx_projection WHERE ledger_id = ?';
+  const params: (string | number)[] = [ledger.id];
+
+  const dateFrom = c.req.query('date_from');
+  const dateTo = c.req.query('date_to');
+  const categoryName = c.req.query('category_name');
+  const accountName = c.req.query('account_name');
+  const txType = c.req.query('tx_type');
+
+  if (txType) {
+    txQuery += ' AND tx_type = ?';
+    params.push(txType);
+  }
+
+  if (categoryName) {
+    txQuery += ' AND category_name LIKE ?';
+    params.push(`%${categoryName}%`);
+  }
+
+  if (accountName) {
+    txQuery += ' AND (account_name LIKE ? OR from_account_name LIKE ? OR to_account_name LIKE ?)';
+    const pattern = `%${accountName}%`;
+    params.push(pattern, pattern, pattern);
+  }
+
+  if (dateFrom) {
+    txQuery += ' AND happened_at >= ?';
+    params.push(dateFrom);
+  }
+
+  if (dateTo) {
+    txQuery += ' AND happened_at <= ?';
+    params.push(dateTo + 'T23:59:59.999Z');
+  }
+
+  txQuery += ' ORDER BY happened_at DESC, tx_index DESC';
+
+  const txRows = await db.prepare(txQuery).bind(...params).all<Record<string, unknown>>();
+
+  function escapeCsvField(field: string | number | null): string {
+    if (field === null || field === undefined) return '';
+    const str = String(field);
+    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+      return '"' + str.replace(/"/g, '""') + '"';
+    }
+    return str;
+  }
+
+  const header = ['日期', '类型', '金额', '账户', '分类', '标签', '备注'];
+  const rows = [header.join(',')];
+
+  for (const tx of txRows.results) {
+    const date = String(tx.happened_at ?? '').slice(0, 10);
+    const txTypeVal = String(tx.tx_type ?? '');
+    const amount = String(tx.amount ?? 0);
+    const account = String(tx.account_name ?? tx.from_account_name ?? '');
+    const category = String(tx.category_name ?? '');
+    const tags = String(tx.tags_csv ?? '');
+    const note = String(tx.note ?? '');
+
+    rows.push(
+      [date, txTypeVal, amount, account, category, tags, note].map(escapeCsvField).join(',')
+    );
+  }
+
+  const csvContent = '\uFEFF' + rows.join('\r\n');
+  const fileName = `${ledger.name || ledgerId}_transactions_${new Date().toISOString().slice(0, 10)}.csv`;
+
+  return new Response(csvContent, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${fileName}"`,
+    },
+  });
+});
+
+// ===========================================================================
 // GET /read/workspace/transactions - 跨账本交易列表
 // ===========================================================================
 

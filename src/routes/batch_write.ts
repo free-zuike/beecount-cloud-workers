@@ -318,36 +318,32 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /write/transactions/batch-delete - 批量删除交易
-// ---------------------------------------------------------------------------
-
-batchWriteRouter.post('/transactions/batch-delete', zValidator('json', BatchTransactionDeleteSchema), async (c) => {
+const batchDeleteHandler = async (c: any) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
-  // 查找账本
+  const ledgerIdParam = c.req.param('ledgerId') ?? req.ledger_id;
   let ledgerId: string | null = null;
 
-  if (req.ledger_id) {
+  if (ledgerIdParam) {
     const ledger = await db
       .prepare('SELECT id FROM ledgers WHERE user_id = ? AND external_id = ?')
-      .bind(userId, req.ledger_id)
-      .first<{ id: string }>();
+      .bind(userId, ledgerIdParam)
+      .first();
 
     if (ledger) {
-      ledgerId = ledger.id;
+      ledgerId = (ledger as { id: string }).id;
     }
   } else {
     const defaultLedger = await db
       .prepare('SELECT id FROM ledgers WHERE user_id = ? LIMIT 1')
       .bind(userId)
-      .first<{ id: string }>();
+      .first();
 
     if (defaultLedger) {
-      ledgerId = defaultLedger.id;
+      ledgerId = (defaultLedger as { id: string }).id;
     }
   }
 
@@ -359,10 +355,8 @@ batchWriteRouter.post('/transactions/batch-delete', zValidator('json', BatchTran
   let deletedCount = 0;
   const deletedIds: string[] = [];
 
-  // 批量删除
   for (const txSyncId of req.transaction_ids) {
-    // 写入 delete tombstone
-    const changeResult = await db
+    await db
       .prepare(
         `INSERT INTO sync_changes
          (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id)
@@ -371,7 +365,6 @@ batchWriteRouter.post('/transactions/batch-delete', zValidator('json', BatchTran
       .bind(userId, ledgerId, 'transaction', txSyncId, 'delete', '{}', serverNow, deviceId, userId)
       .run();
 
-    // 从 projection 删除
     const deleteResult = await db
       .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
       .bind(ledgerId, txSyncId)
@@ -386,7 +379,7 @@ batchWriteRouter.post('/transactions/batch-delete', zValidator('json', BatchTran
   const latestCursor = await db
     .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE user_id = ?')
     .bind(userId)
-    .first<{ max_id: number | null }>();
+    .first();
 
   await insertAuditLog({
     db, userId, ledgerId, action: 'batch_delete', entityType: 'transaction',
@@ -394,12 +387,24 @@ batchWriteRouter.post('/transactions/batch-delete', zValidator('json', BatchTran
   });
 
   return c.json({
-    ledger_id: req.ledger_id ?? 'default',
+    ledger_id: ledgerIdParam ?? 'default',
     deleted_count: deletedCount,
     deleted_ids: deletedIds,
-    server_cursor: latestCursor?.max_id ?? 0,
+    server_cursor: (latestCursor as { max_id: number | null } | null)?.max_id ?? 0,
     server_timestamp: serverNow,
   });
-});
+};
+
+// ---------------------------------------------------------------------------
+// POST /write/transactions/batch-delete - 批量删除交易
+// ---------------------------------------------------------------------------
+
+batchWriteRouter.post('/transactions/batch-delete', zValidator('json', BatchTransactionDeleteSchema), batchDeleteHandler);
+
+// ---------------------------------------------------------------------------
+// POST /write/ledgers/:ledgerId/transactions/batch-delete - 批量删除交易（前端路径别名）
+// ---------------------------------------------------------------------------
+
+batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch-delete', zValidator('json', BatchTransactionDeleteSchema), batchDeleteHandler);
 
 export default batchWriteRouter;

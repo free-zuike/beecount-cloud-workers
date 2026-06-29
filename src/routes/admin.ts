@@ -22,6 +22,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { hashPassword, verifyPassword } from '../auth';
+import { insertAuditLog } from '../lib/audit';
 
 // ===========================
 // 辅助函数
@@ -659,6 +660,272 @@ adminRouter.get('/logs', async (c) => {
     capacity: 1000,
     latest_seq: rows.results[0]?.id ?? 0,
   });
+});
+
+// ---------------------------------------------------------------------------
+// POST /admin/backups/create - 创建本地备份快照
+// ---------------------------------------------------------------------------
+
+const BackupCreateSchema = z.object({
+  ledger_ids: z.array(z.string()),
+});
+
+adminRouter.post('/backups/create', zValidator('json', BackupCreateSchema), async (c) => {
+  const db = c.env.DB;
+  const userId = c.get('userId');
+  const { ledger_ids } = c.req.valid('json');
+  const serverNow = nowUtc();
+
+  const createdSnapshots: Array<{ id: string; created_at: string; size: number }> = [];
+
+  for (const ledgerExternalId of ledger_ids) {
+    const ledger = await db
+      .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
+      .bind(userId, ledgerExternalId)
+      .first<{ id: string; external_id: string }>();
+
+    if (!ledger) continue;
+
+    const transactions = await db
+      .prepare('SELECT * FROM read_tx_projection WHERE ledger_id = ?')
+      .bind(ledger.id)
+      .all();
+    const accounts = await db
+      .prepare('SELECT * FROM read_account_projection WHERE ledger_id = ?')
+      .bind(ledger.id)
+      .all();
+    const categories = await db
+      .prepare('SELECT * FROM read_category_projection WHERE ledger_id = ?')
+      .bind(ledger.id)
+      .all();
+    const tags = await db
+      .prepare('SELECT * FROM read_tag_projection WHERE ledger_id = ?')
+      .bind(ledger.id)
+      .all();
+    const budgets = await db
+      .prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?')
+      .bind(ledger.id)
+      .all();
+
+    const snapshotData = {
+      ledger_external_id: ledger.external_id,
+      transactions: transactions.results,
+      accounts: accounts.results,
+      categories: categories.results,
+      tags: tags.results,
+      budgets: budgets.results,
+      exported_at: serverNow,
+    };
+
+    const snapshotJson = JSON.stringify(snapshotData);
+    const snapshotId = randomUUID();
+
+    await db
+      .prepare(
+        `INSERT INTO backup_snapshots (id, user_id, ledger_id, snapshot_json, note, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .bind(snapshotId, userId, ledger.id, snapshotJson, `Admin backup ${serverNow}`, serverNow)
+      .run();
+
+    createdSnapshots.push({
+      id: snapshotId,
+      created_at: serverNow,
+      size: snapshotJson.length,
+    });
+  }
+
+  return c.json({
+    snapshots: createdSnapshots,
+    count: createdSnapshots.length,
+  }, 201);
+});
+
+// ---------------------------------------------------------------------------
+// GET /admin/backups/artifacts - 列出备份文件
+// ---------------------------------------------------------------------------
+
+adminRouter.get('/backups/artifacts', async (c) => {
+  const db = c.env.DB;
+
+  const rows = await db
+    .prepare(
+      `SELECT bs.id, bs.created_at, LENGTH(bs.snapshot_json) as size, bs.note
+       FROM backup_snapshots bs
+       ORDER BY bs.created_at DESC`
+    )
+    .all<{ id: string; created_at: string; size: number; note: string | null }>();
+
+  const items = rows.results.map((row) => ({
+    id: row.id,
+    created_at: row.created_at,
+    size: row.size,
+    format: 'json',
+  }));
+
+  return c.json({ items });
+});
+
+// ---------------------------------------------------------------------------
+// POST /admin/backups/restore - 恢复备份
+// ---------------------------------------------------------------------------
+
+const BackupRestoreSchema = z.object({
+  artifact_id: z.string(),
+  ledger_ids: z.array(z.string()).optional(),
+});
+
+adminRouter.post('/backups/restore', zValidator('json', BackupRestoreSchema), async (c) => {
+  const db = c.env.DB;
+  const userId = c.get('userId');
+  const { artifact_id, ledger_ids } = c.req.valid('json');
+  const serverNow = nowUtc();
+
+  const snapshot = await db
+    .prepare('SELECT * FROM backup_snapshots WHERE id = ?')
+    .bind(artifact_id)
+    .first<{ id: string; user_id: string; ledger_id: string; snapshot_json: string }>();
+
+  if (!snapshot) {
+    return c.json({ error: 'Backup artifact not found' }, 404);
+  }
+
+  let snapshotData: Record<string, unknown>;
+  try {
+    snapshotData = JSON.parse(snapshot.snapshot_json);
+  } catch {
+    return c.json({ error: 'Invalid snapshot data' }, 400);
+  }
+
+  const ledgerExternalId = (snapshotData as { ledger_external_id?: string }).ledger_external_id;
+
+  let targetLedger = await db
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerExternalId)
+    .first<{ id: string; external_id: string }>();
+
+  if (!targetLedger) {
+    targetLedger = await db
+      .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? LIMIT 1')
+      .bind(userId)
+      .first<{ id: string; external_id: string }>();
+  }
+
+  if (!targetLedger) {
+    return c.json({ error: 'No ledger found to restore into' }, 404);
+  }
+
+  let restoredTransactions = 0;
+
+  const transactions = (snapshotData as { transactions?: unknown[] }).transactions;
+  if (Array.isArray(transactions)) {
+    for (const tx of transactions) {
+      const txRecord = tx as Record<string, unknown>;
+      const syncId = txRecord.sync_id as string;
+      if (!syncId) continue;
+
+      if (ledger_ids && ledger_ids.length > 0 && ledger_ids.indexOf(ledgerExternalId!) === -1) {
+        continue;
+      }
+
+      await db
+        .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+        .bind(targetLedger.id, syncId)
+        .run();
+
+      await db
+        .prepare(
+          `INSERT OR REPLACE INTO read_tx_projection
+           (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
+            category_sync_id, category_name, category_kind,
+            account_sync_id, account_name,
+            from_account_sync_id, from_account_name,
+            to_account_sync_id, to_account_name,
+            tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          targetLedger.id, syncId, userId,
+          txRecord.tx_type, txRecord.amount, txRecord.happened_at, txRecord.note ?? null,
+          txRecord.category_sync_id ?? null, txRecord.category_name ?? null, txRecord.category_kind ?? null,
+          txRecord.account_sync_id ?? null, txRecord.account_name ?? null,
+          txRecord.from_account_sync_id ?? null, txRecord.from_account_name ?? null,
+          txRecord.to_account_sync_id ?? null, txRecord.to_account_name ?? null,
+          txRecord.tags_csv ?? null, txRecord.tag_sync_ids_json ?? null, txRecord.attachments_json ?? null,
+          txRecord.tx_index ?? 0, txRecord.source_change_id ?? 0,
+        )
+        .run();
+
+      restoredTransactions++;
+    }
+  }
+
+  await insertAuditLog({
+    db, userId, ledgerId: targetLedger.id, action: 'restore', entityType: 'backup_snapshot',
+    details: { artifact_id, restored_transactions: restoredTransactions },
+  });
+
+  return c.json({
+    success: true,
+    restored_transactions: restoredTransactions,
+    ledger_id: ledgerExternalId,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /admin/sync/errors - 查看同步错误
+// ---------------------------------------------------------------------------
+
+adminRouter.get('/sync/errors', async (c) => {
+  const db = c.env.DB;
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
+
+  const rows = await db
+    .prepare(
+      `SELECT sc.change_id, sc.user_id, sc.ledger_id, sc.entity_type, sc.entity_sync_id,
+              sc.action, sc.payload_json, sc.updated_at, sc.updated_by_device_id, sc.updated_by_user_id,
+              l.external_id as ledger_external_id, l.name as ledger_name, u.email as user_email
+       FROM sync_changes sc
+       LEFT JOIN ledgers l ON l.id = sc.ledger_id
+       LEFT JOIN users u ON u.id = sc.user_id
+       WHERE sc.action = 'delete'
+          OR sc.payload_json = '{}'
+          OR sc.payload_json IS NULL
+       ORDER BY sc.change_id DESC
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<{
+      change_id: number;
+      user_id: string;
+      ledger_id: string;
+      entity_type: string;
+      entity_sync_id: string;
+      action: string;
+      payload_json: string;
+      updated_at: string;
+      updated_by_device_id: string | null;
+      updated_by_user_id: string | null;
+      ledger_external_id: string | null;
+      ledger_name: string | null;
+      user_email: string | null;
+    }>();
+
+  const errors = rows.results.map((row) => ({
+    change_id: row.change_id,
+    entity_type: row.entity_type,
+    entity_sync_id: row.entity_sync_id,
+    action: row.action,
+    error_type: row.action === 'delete' ? 'delete_tombstone' : 'empty_payload',
+    updated_at: row.updated_at,
+    device_id: row.updated_by_device_id,
+    user_id: row.user_id,
+    user_email: row.user_email,
+    ledger_id: row.ledger_external_id,
+    ledger_name: row.ledger_name,
+  }));
+
+  return c.json({ errors, count: errors.length });
 });
 
 // Integrity scan endpoint
