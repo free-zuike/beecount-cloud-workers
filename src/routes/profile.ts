@@ -19,6 +19,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { hashPassword, verifyPassword } from '../auth';
+import { signRequest } from '../lib/s3';
 
 // ===========================
 // 辅助函数
@@ -251,93 +252,6 @@ class S3Service {
       return null;
     }
   }
-}
-
-async function signRequest(
-    accessKey: string,
-    secretKey: string,
-    region: string,
-    endpoint: string,
-    bucket: string,
-    key: string,
-    method: string,
-    contentType: string,
-    bodyLength: number
-): Promise<{ url: string; headers: Record<string, string> }> {
-    const now = new Date();
-    const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
-    const dateStamp = amzDate.slice(0, 8);
-    const service = 's3';
-    
-    // 使用路径风格（path-style），兼容大多数 S3 兼容服务
-    const url = `${endpoint}/${bucket}/${key}`;
-    const host = new URL(endpoint).host;
-    console.log('[S3] Using path style - endpoint:', endpoint, 'bucket:', bucket, 'key:', key);
-    console.log('[S3] AccessKey:', accessKey, 'SecretKey length:', secretKey.length);
-    
-    const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:${amzDate}\n`;
-    const signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date';
-    const payloadHash = 'UNSIGNED-PAYLOAD';
-    
-    const canonicalRequest = `${method}\n/${bucket}/${key}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
-    
-    const algorithm = 'AWS4-HMAC-SHA256';
-    const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
-    const hashedCanonicalRequest = await sha256Hex(canonicalRequest);
-    const stringToSign = `${algorithm}\n${amzDate}\n${credentialScope}\n${hashedCanonicalRequest}`;
-    
-    console.log('[S3] Canonical request:', canonicalRequest);
-    console.log('[S3] String to sign:', stringToSign);
-    
-    const signingKey = await getSignatureKey(secretKey, dateStamp, region, service);
-    const signature = await hmacHex(signingKey, stringToSign);
-    
-    console.log('[S3] Signature:', signature);
-    
-    const authorizationHeader = `${algorithm} Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-    
-    return {
-        url,
-        headers: {
-            'Content-Type': contentType,
-            'X-Amz-Date': amzDate,
-            'X-Amz-Content-SHA256': payloadHash,
-            'Authorization': authorizationHeader
-        }
-    };
-}
-
-async function getSignatureKey(key: string, dateStamp: string, regionName: string, serviceName: string): Promise<Uint8Array> {
-    const kDate = await hmac(new TextEncoder().encode(`AWS4${key}`), dateStamp);
-    const kRegion = await hmac(kDate, regionName);
-    const kService = await hmac(kRegion, serviceName);
-    const kSigning = await hmac(kService, 'aws4_request');
-    return kSigning;
-}
-
-async function hmac(key: Uint8Array | ArrayBuffer, data: string): Promise<Uint8Array> {
-  const encoder = new TextEncoder();
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    (key as ArrayBuffer),
-    { name: 'HMAC', hash: { name: 'SHA-256' } },
-    false,
-    ['sign']
-  );
-  const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(data));
-  return new Uint8Array(signature);
-}
-
-async function sha256Hex(data: string): Promise<string> {
-    const encoder = new TextEncoder();
-    const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(data));
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-async function hmacHex(key: Uint8Array, data: string): Promise<string> {
-    const signature = await hmac(key, data);
-    return Array.from(signature).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 // ===========================

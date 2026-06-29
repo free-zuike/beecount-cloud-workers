@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import { DEFAULT_AI_CONFIG } from '../lib/defaults';
 
 interface DefaultCategory {
   name: string;
@@ -130,32 +131,10 @@ authRouter.post('/register', zValidator('json', z.object({
   `).bind(userId, email, passwordHash).run();
 
   // Create user profile with default AI config
-  const defaultAiConfig = JSON.stringify({
-    providers: [
-      {
-        id: 'zhipu_glm',
-        name: '智谱GLM',
-        isBuiltIn: true,
-        apiKey: '',
-        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-        textModel: 'glm-4-flash',
-        visionModel: 'glm-4v-flash',
-        audioModel: 'glm-4-voice'
-      }
-    ],
-    binding: {
-      textProviderId: 'zhipu_glm',
-      visionProviderId: 'zhipu_glm',
-      speechProviderId: 'zhipu_glm'
-    },
-    strategy: 'cloud_first',
-    custom_prompt: ''
-  });
-  
   await db.prepare(`
     INSERT INTO user_profiles (user_id, display_name, ai_config_json)
     VALUES (?, ?, ?)
-  `).bind(userId, email, defaultAiConfig).run();
+  `).bind(userId, email, DEFAULT_AI_CONFIG).run();
 
   // 自动创建默认账本（与原版保持一致）
   const ledgerId = randomUUID();

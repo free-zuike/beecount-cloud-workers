@@ -8,6 +8,8 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
 import { validateAccessToken, hashPassword, base64urlDecode } from './auth';
+import { performBackup, calculateNextRun } from './services/backup-executor';
+import { DEFAULT_AI_CONFIG } from './lib/defaults';
 
 // WebSocket 连接存储（简单实现）
 const wsConnections = new Map<string, Set<WebSocket>>();
@@ -604,32 +606,10 @@ app.post('/api/v1/setup', async (c) => {
       `).bind(userId, userEmail, passwordHash).run();
       
       // Create user profile with default AI config
-      const defaultAiConfig = JSON.stringify({
-        providers: [
-          {
-            id: 'zhipu_glm',
-            name: '智谱GLM',
-            isBuiltIn: true,
-            apiKey: '',
-            baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-            textModel: 'glm-4-flash',
-            visionModel: 'glm-4v-flash',
-            audioModel: 'glm-4-voice'
-          }
-        ],
-        binding: {
-          textProviderId: 'zhipu_glm',
-          visionProviderId: 'zhipu_glm',
-          speechProviderId: 'zhipu_glm'
-        },
-        strategy: 'cloud_first',
-        custom_prompt: ''
-      });
-      
       await db.prepare(`
         INSERT INTO user_profiles (user_id, display_name, ai_config_json)
         VALUES (?, ?, ?)
-      `).bind(userId, userEmail.split('@')[0], defaultAiConfig).run();
+      `).bind(userId, userEmail.split('@')[0], DEFAULT_AI_CONFIG).run();
       
       return c.json({
         success: true,
@@ -706,217 +686,7 @@ app.get('/api/v1/setup', async (c) => {
 
 
 
-async function signS3Request(
-  accessKey: string,
-  secretKey: string,
-  region: string,
-  endpoint: string,
-  bucket: string,
-  key: string,
-  method: string
-): Promise<{ url: string; headers: Record<string, string> }> {
-  const now = new Date();
-  const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
-  const dateStamp = amzDate.slice(0, 8);
-  const service = 's3';
-  
-  const url = `${endpoint}/${bucket}/${key}`;
-  const host = new URL(endpoint).host;
-  
-  const canonicalHeaders = `host:${host}\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:${amzDate}\n`;
-  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
-  const payloadHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
-  
-  const canonicalRequest = `${method}\n/${bucket}/${key}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
-  
-  const algorithm = 'AWS4-HMAC-SHA256';
-  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
-  
-  const hashedCanonicalRequest = await sha256Hex(canonicalRequest);
-  const stringToSign = `${algorithm}\n${amzDate}\n${credentialScope}\n${hashedCanonicalRequest}`;
-  
-  const signingKey = await getSignatureKey(secretKey, dateStamp, region, service);
-  const signature = await hmacHex(signingKey, stringToSign);
-  
-  const authorizationHeader = `${algorithm} Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-  
-  return {
-    url,
-    headers: {
-      'Host': host,
-      'x-amz-date': amzDate,
-      'x-amz-content-sha256': payloadHash,
-      'Authorization': authorizationHeader
-    }
-  };
-}
 
-async function getSignatureKey(key: string, dateStamp: string, regionName: string, serviceName: string): Promise<Uint8Array> {
-  const kDate = await hmac(new TextEncoder().encode(`AWS4${key}`), dateStamp);
-  const kRegion = await hmac(kDate, regionName);
-  const kService = await hmac(kRegion, serviceName);
-  const kSigning = await hmac(kService, 'aws4_request');
-  return kSigning;
-}
-
-async function hmac(key: Uint8Array | ArrayBuffer, data: string): Promise<Uint8Array> {
-  const encoder = new TextEncoder();
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    (key as ArrayBuffer),
-    { name: 'HMAC', hash: { name: 'SHA-256' } },
-    false,
-    ['sign']
-  );
-  const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(data));
-  return new Uint8Array(signature);
-}
-
-async function sha256Hex(data: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(data));
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-async function hmacHex(key: Uint8Array, data: string): Promise<string> {
-  const signature = await hmac(key, data);
-  return Array.from(signature).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-async function uploadToS3(
-  endpoint: string,
-  bucket: string,
-  accessKey: string,
-  secretKey: string,
-  region: string,
-  key: string,
-  content: string
-): Promise<{ ok: boolean; message: string; etag?: string }> {
-  try {
-    const { url, headers } = await signS3Request(
-      accessKey,
-      secretKey,
-      region,
-      endpoint,
-      bucket.replace(/^\/+/, ''),
-      key,
-      'PUT'
-    );
-
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        ...headers,
-        'Content-Type': 'application/json',
-        'Content-Length': String(content.length)
-      },
-      body: content
-    });
-
-    if (response.ok) {
-      const etag = response.headers.get('ETag') || undefined;
-      return { ok: true, message: 'Upload successful', etag };
-    } else {
-      const errorText = await response.text().catch(() => '');
-      return { ok: false, message: `Upload failed: HTTP ${response.status} ${response.statusText} ${errorText}`.slice(0, 200) };
-    }
-  } catch (error: unknown) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    return { ok: false, message: `Upload error: ${errorMsg}` };
-  }
-}
-
-async function performBackupIndex(db: D1Database, runId: string, ledgerId: string, remoteConfig: Record<string, string>): Promise<{ success: boolean; message: string; backupSize?: number; backupPath?: string }> {
-  try {
-    console.log(`[Backup] Starting backup for ledger: ${ledgerId}`);
-    
-    const changesResult = await db
-      .prepare('SELECT entity_type, entity_sync_id, payload_json FROM sync_changes WHERE ledger_id = ?')
-      .bind(ledgerId)
-      .all();
-    const changes = (changesResult.results || []) as { entity_type: string; entity_sync_id: string; payload_json: string }[];
-    
-    console.log(`[Backup] Found ${changes.length} changes to backup`);
-    
-    const backupData = {
-      ledger_id: ledgerId,
-      backup_time: new Date().toISOString(),
-      version: '1.0',
-      changes: changes.map(c => ({
-        entity_type: c.entity_type,
-        entity_sync_id: c.entity_sync_id,
-        payload: JSON.parse(c.payload_json)
-      }))
-    };
-    
-    const backupContent = JSON.stringify(backupData, null, 2);
-    const backupSize = backupContent.length;
-    
-    console.log(`[Backup] Backup content size: ${backupSize} bytes`);
-    
-    if (remoteConfig.backend_type === 's3') {
-      const s3Endpoint = remoteConfig.endpoint || 'https://s3.amazonaws.com';
-      const s3Bucket = remoteConfig.bucket;
-      const s3AccessKey = remoteConfig.access_key_id;
-      const s3SecretKey = remoteConfig.secret_access_key;
-      const s3Region = remoteConfig.region || 'auto';
-      
-      if (!s3Bucket || !s3AccessKey || !s3SecretKey) {
-        return { success: false, message: 'S3 configuration incomplete' };
-      }
-      
-      // 处理路径前缀（可能来自 root_path 或 savePath）
-      let basePrefix = '';
-      if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' && 
-          remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
-        basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
-        console.log(`[Backup] Using savePath: ${basePrefix}`);
-      } else if (remoteConfig.root_path && typeof remoteConfig.root_path === 'string' && remoteConfig.root_path.trim() !== '') {
-        basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
-        console.log(`[Backup] Using root_path: ${basePrefix}`);
-      }
-      
-      const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `${basePrefix}backups/${ledgerId}/${timestamp}_backup.json`;
-      
-      const uploadResult = await uploadToS3(
-        s3Endpoint,
-        s3Bucket,
-        s3AccessKey,
-        s3SecretKey,
-        s3Region,
-        backupKey,
-        backupContent
-      );
-      
-      if (!uploadResult.ok) {
-        return { success: false, message: uploadResult.message };
-      }
-      
-      return {
-        success: true,
-        message: 'Backup completed successfully',
-        backupSize,
-        backupPath: backupKey
-      };
-    } else if (remoteConfig.backend_type === 'local') {
-      console.log('[Backup] Local backend - skipping upload (simulated). No remote storage configured.');
-      return {
-        success: true,
-        message: 'Backup completed successfully (local storage only - no remote S3 configured)',
-        backupSize,
-        backupPath: `local://backup_${runId}.json`
-      };
-    } else {
-      return { success: false, message: `Unsupported backend type: ${remoteConfig.backend_type}` };
-    }
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    console.error('[Backup] Error:', errorMsg);
-    return { success: false, message: `Backup error: ${errorMsg}` };
-  }
-}
 
 app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
   try {
@@ -1019,7 +789,7 @@ app.post('/api/v1/admin/backup/schedules/:id/run-now', async (c) => {
     const result = await db.prepare('SELECT last_insert_rowid() as id').first<{ id: number }>();
     const runId = result?.id?.toString() || crypto.randomUUID();
 
-    const backupResult = await performBackupIndex(db, runId, ledger.id, remoteConfig);
+    const backupResult = await performBackup(db, runId, ledger.id, remoteConfig);
     
     const finishedAt = new Date().toISOString();
     
@@ -1501,7 +1271,7 @@ async function processBackupSchedule(db: D1Database, schedule: any) {
   
   // 执行备份
   try {
-    const backupResult = await performBackupIndex(db, runId, ledger.id, remoteConfig);
+    const backupResult = await performBackup(db, runId, ledger.id, remoteConfig);
     const finishedAt = new Date().toISOString();
     
     if (backupResult.success) {
@@ -1562,63 +1332,4 @@ async function processBackupSchedule(db: D1Database, schedule: any) {
 // Cron 表达式解析和计算
 // ===========================
 
-/**
- * 计算下次运行时间
- * Cron 表达式格式: 分钟 小时 日期 月份 星期
- * @param cronExpr cron表达式
- * @param timezoneOffset 用户时区偏移（分钟，东八区为-480）
- */
-function calculateNextRun(cronExpr: string, timezoneOffset: number = 0): string {
-  try {
-    const parts = cronExpr.trim().split(/\s+/);
-    
-    if (parts.length < 5) {
-      const nextDate = new Date();
-      nextDate.setMinutes(nextDate.getMinutes() + 5);
-      return nextDate.toISOString();
-    }
-    
-    const minuteStr = parts[0];
-    const hourStr = parts[1];
-    const dayStr = parts[2];
-    
-    const targetMinute = minuteStr === '*' ? 0 : parseInt(minuteStr, 10);
-    const targetHour = hourStr === '*' ? 0 : parseInt(hourStr, 10);
-    
-    const now = new Date();
-    
-    // 创建目标时刻（用户本地时间）
-    let targetLocal = new Date();
-    targetLocal.setHours(targetHour);
-    targetLocal.setMinutes(targetMinute);
-    targetLocal.setSeconds(0);
-    targetLocal.setMilliseconds(0);
-    
-    // 如果目标时间已经过了今天，设置为明天
-    if (targetLocal.getTime() <= now.getTime()) {
-      targetLocal.setDate(targetLocal.getDate() + 1);
-    }
-    
-    // 如果指定了具体日期，调整日期
-    if (dayStr !== '*') {
-      const targetDay = parseInt(dayStr, 10);
-      if (!isNaN(targetDay) && targetDay > 0 && targetDay <= 31) {
-        if (targetDay < targetLocal.getDate()) {
-          targetLocal.setMonth(targetLocal.getMonth() + 1);
-        }
-        targetLocal.setDate(targetDay);
-      }
-    }
-    
-    // 转换为UTC时间（timezoneOffset是本地时间与UTC的分钟差，东八区是-480）
-    // UTC = 本地时间 + timezoneOffset分钟
-    const targetUtc = new Date(targetLocal.getTime() + timezoneOffset * 60000);
-    
-    return targetUtc.toISOString();
-  } catch (e) {
-    console.error('[CRON] Error parsing cron expression:', cronExpr, e);
-    const nextDate = new Date();
-    nextDate.setMinutes(nextDate.getMinutes() + 5);
-    return nextDate.toISOString();
-  }
-}
+// calculateNextRun 已提取到 src/services/backup-executor.ts
