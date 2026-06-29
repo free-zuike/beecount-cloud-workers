@@ -193,8 +193,11 @@ CREATE TABLE IF NOT EXISTS backup_remotes (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     backend_type TEXT NOT NULL,
-    config_json TEXT NOT NULL,
-    is_default BOOLEAN DEFAULT 0 NOT NULL,
+    config_summary TEXT NOT NULL,
+    encrypted BOOLEAN DEFAULT 0 NOT NULL,
+    last_test_at TEXT,
+    last_test_ok BOOLEAN,
+    last_test_error TEXT,
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
     updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
 );
@@ -205,17 +208,21 @@ CREATE INDEX IF NOT EXISTS idx_backup_remotes_backend_type ON backup_remotes(bac
 CREATE TABLE IF NOT EXISTS backup_schedules (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
-    remote_id TEXT REFERENCES backup_remotes(id) ON DELETE SET NULL,
-    cron_expression TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    cron_expr TEXT NOT NULL,
+    remote_ids TEXT,
     retention_days INTEGER DEFAULT 30,
+    include_attachments BOOLEAN DEFAULT 1 NOT NULL,
     enabled BOOLEAN DEFAULT 1 NOT NULL,
+    timezone_offset INTEGER DEFAULT 0,
+    next_run_at TEXT,
+    last_run_at TEXT,
+    last_run_status TEXT,
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
     updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_backup_schedules_ledger_id ON backup_schedules(ledger_id);
-CREATE INDEX IF NOT EXISTS idx_backup_schedules_remote_id ON backup_schedules(remote_id);
+CREATE INDEX IF NOT EXISTS idx_backup_schedules_user_id ON backup_schedules(user_id);
 CREATE INDEX IF NOT EXISTS idx_backup_schedules_enabled ON backup_schedules(enabled);
 
 -- Backup Runs
@@ -226,16 +233,31 @@ CREATE TABLE IF NOT EXISTS backup_runs (
     remote_id TEXT REFERENCES backup_remotes(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'pending',
     error_message TEXT,
-    backup_size INTEGER,
+    bytes_total INTEGER,
+    backup_filename TEXT,
     backup_path TEXT,
     started_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
-    completed_at TEXT
+    finished_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_backup_runs_schedule_id ON backup_runs(schedule_id);
 CREATE INDEX IF NOT EXISTS idx_backup_runs_ledger_id ON backup_runs(ledger_id);
 CREATE INDEX IF NOT EXISTS idx_backup_runs_status ON backup_runs(status);
 CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at DESC);
+
+-- Audit Logs
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    ledger_id TEXT,
+    action TEXT NOT NULL,
+    metadata_json TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time ON audit_logs(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS attachment_files (
     id TEXT PRIMARY KEY,
@@ -349,3 +371,13 @@ CREATE TABLE IF NOT EXISTS read_budget_projection (
 );
 
 CREATE INDEX IF NOT EXISTS ix_read_budget_ledger_cat ON read_budget_projection(ledger_id, category_sync_id);
+
+-- System Settings
+CREATE TABLE IF NOT EXISTS system_settings (
+    id TEXT PRIMARY KEY,
+    timezone_offset INTEGER DEFAULT 0,
+    cloud_config_json TEXT,
+    setup_completed BOOLEAN DEFAULT 0 NOT NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+);

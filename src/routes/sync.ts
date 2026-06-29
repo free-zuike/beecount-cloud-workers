@@ -902,7 +902,8 @@ async function applyChangeToProjection(
       if (change.action === 'delete') {
         await db
           .prepare('DELETE FROM read_tag_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id);
+          .bind(ledgerId, change.entity_sync_id)
+          .run();
       } else {
         const existing = await db
           .prepare('SELECT sync_id FROM read_tag_projection WHERE ledger_id = ? AND sync_id = ?')

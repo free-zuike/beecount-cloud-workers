@@ -265,8 +265,11 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         backend_type TEXT NOT NULL,
-        config_json TEXT NOT NULL,
-        is_default BOOLEAN DEFAULT 0 NOT NULL,
+        config_summary TEXT NOT NULL,
+        encrypted BOOLEAN DEFAULT 0 NOT NULL,
+        last_test_at TEXT,
+        last_test_ok BOOLEAN,
+        last_test_error TEXT,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
         updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
@@ -279,18 +282,22 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       CREATE TABLE IF NOT EXISTS backup_schedules (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
-        remote_id TEXT REFERENCES backup_remotes(id) ON DELETE SET NULL,
-        cron_expression TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        cron_expr TEXT NOT NULL,
+        remote_ids TEXT,
         retention_days INTEGER DEFAULT 30,
+        include_attachments BOOLEAN DEFAULT 1 NOT NULL,
         enabled BOOLEAN DEFAULT 1 NOT NULL,
+        timezone_offset INTEGER DEFAULT 0,
+        next_run_at TEXT,
+        last_run_at TEXT,
+        last_run_status TEXT,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
         updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
     `).run();
 
-    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_schedules_ledger_id ON backup_schedules(ledger_id)').run();
-    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_schedules_remote_id ON backup_schedules(remote_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_schedules_user_id ON backup_schedules(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_schedules_enabled ON backup_schedules(enabled)').run();
 
     // Backup runs table
@@ -302,10 +309,11 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         remote_id TEXT REFERENCES backup_remotes(id) ON DELETE SET NULL,
         status TEXT NOT NULL DEFAULT 'pending',
         error_message TEXT,
-        backup_size INTEGER,
+        bytes_total INTEGER,
+        backup_filename TEXT,
         backup_path TEXT,
         started_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
-        completed_at TEXT
+        finished_at TEXT
       )
     `).run();
 
