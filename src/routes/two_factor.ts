@@ -54,7 +54,8 @@ function generateRecoveryCodes(): string[] {
     let code = '';
     for (let j = 0; j < 12; j++) {
       if (j > 0 && j % 4 === 0) code += '-';
-      code += Math.floor(Math.random() * 10);
+      const randDigit = crypto.getRandomValues(new Uint8Array(1))[0] % 10;
+      code += randDigit.toString();
     }
     codes.push(code);
   }

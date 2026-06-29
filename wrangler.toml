@@ -17,7 +17,8 @@ database_id = "7ade7fef-3c80-4a1d-a576-1b25eda102dd"
 
 [vars]
 API_PREFIX = "/api/v1"
-JWT_SECRET = "YBt6MxIcvuWIA3kE/MPHuWPCFEcaCBPB80YxZM5hBaw="
+# JWT_SECRET 已迁移到 Cloudflare Secrets，通过以下命令设置：
+# npx wrangler secret put JWT_SECRET
 
 [observability]
 enabled = true

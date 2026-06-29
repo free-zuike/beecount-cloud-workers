@@ -12,16 +12,6 @@ import { validateAccessToken, hashPassword, base64urlDecode } from './auth';
 // WebSocket 连接存储（简单实现）
 const wsConnections = new Map<string, Set<WebSocket>>();
 
-// 生成随机密码
-function generateRandomPassword(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-  let password = '';
-  for (let i = 0; i < 12; i++) {
-    password += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return password;
-}
-
 // 初始化数据库表（完整 schema）
 async function initializeDatabase(db: D1Database): Promise<void> {
   try {
@@ -467,98 +457,6 @@ async function initializeDatabase(db: D1Database): Promise<void> {
   }
 }
 
-// 初始化默认管理员账户
-async function initializeAdmin(db: D1Database): Promise<void> {
-  try {
-    console.log('🔍 [INIT] Checking for existing admin user...');
-    
-    // 检查是否已有管理员账户
-    const adminCount = await db
-      .prepare('SELECT COUNT(*) as count FROM users WHERE is_admin = 1')
-      .first<{ count: number }>();
-
-    if (adminCount && adminCount.count > 0) {
-      console.log('✅ [INIT] Admin user already exists, skipping initialization');
-    } else {
-      console.log('🆕 [INIT] Creating default admin user...');
-
-      // 生成随机密码
-      const adminPassword = generateRandomPassword();
-      const adminEmail = 'admin@localhost';
-      const userId = crypto.randomUUID();
-      const passwordHash = await hashPassword(adminPassword);
-
-      // 创建管理员用户
-      await db
-        .prepare(
-          `INSERT INTO users (id, email, password_hash, is_admin, is_enabled, created_at)
-           VALUES (?, ?, ?, 1, 1, ?)`
-        )
-        .bind(userId, adminEmail, passwordHash, new Date().toISOString())
-        .run();
-
-      // 创建用户 profile（包含默认 AI 配置）
-      const defaultAiConfig = JSON.stringify({
-        providers: [
-          {
-            id: 'zhipu_glm',
-            name: '智谱GLM',
-            isBuiltIn: true,
-            apiKey: '',
-            baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-            textModel: 'glm-4-flash',
-            visionModel: 'glm-4v-flash',
-            audioModel: 'glm-4-voice'
-          }
-        ],
-        binding: {
-          textProviderId: 'zhipu_glm',
-          visionProviderId: 'zhipu_glm',
-          speechProviderId: 'zhipu_glm'
-        },
-        strategy: 'cloud_first',
-        custom_prompt: ''
-      });
-      
-      await db
-        .prepare(
-          `INSERT INTO user_profiles (user_id, display_name, avatar_version, ai_config_json)
-           VALUES (?, ?, 0, ?)`
-        )
-        .bind(userId, 'Admin', defaultAiConfig)
-        .run();
-
-      console.log('');
-      console.log('╔════════════════════════════════════════════════════════════╗');
-      console.log('║                                                            ║');
-      console.log('║    🐝 BEECOUNT CLOUD - ADMIN ACCOUNT CREATED! 🐝          ║');
-      console.log('║                                                            ║');
-      console.log('╠════════════════════════════════════════════════════════════╣');
-      console.log('║  Email:    admin@localhost                                 ║');
-      console.log('║  Password: ' + adminPassword.padEnd(42) + '║');
-      console.log('╠════════════════════════════════════════════════════════════╣');
-      console.log('║  PLEASE LOGIN AND CHANGE THIS PASSWORD IMMEDIATELY!        ║');
-      console.log('╚════════════════════════════════════════════════════════════╝');
-      console.log('');
-      
-      // 同时也输出多行，确保能看到
-      console.log('📧 ADMIN EMAIL: admin@localhost');
-      console.log('🔑 ADMIN PASSWORD: ' + adminPassword);
-      console.log('📝 REMINDER: Change password after first login!');
-    }
-    
-    // 不再自动创建测试用户
-    // 用户可以自己注册账号使用
-    
-  } catch (error) {
-    console.error('❌ [INIT] Failed to initialize admin user:', error);
-    if (error instanceof Error) {
-      console.error('Error details:', error.message);
-      console.error('Stack:', error.stack);
-    }
-  }
-}
-
 import authRouter from './routes/auth';
 import twoFactorRouter from './routes/two_factor';
 import syncRouter from './routes/sync';
@@ -585,6 +483,7 @@ type Bindings = {
   ASSETS: { fetch: (request: Request) => Promise<Response> };
   API_PREFIX: string;
   JWT_SECRET: string;
+  CORS_ORIGINS?: string;
   S3_ENDPOINT?: string;
   S3_REGION?: string;
   S3_ACCESS_KEY_ID?: string;
@@ -602,7 +501,10 @@ type Variables = {
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // 全局中间件
-app.use('*', cors());
+app.use('*', async (c, next) => {
+  const corsOrigins = c.env.CORS_ORIGINS ? c.env.CORS_ORIGINS.split(',') : ['*'];
+  return cors({ origin: corsOrigins })(c, next);
+});
 
 // 初始化中间件 - 在第一次请求时创建数据库表
 let initialized = false;
@@ -619,398 +521,6 @@ app.use('*', async (c, next) => {
  * 健康检查端点
  */
 app.get('/healthz', (c) => c.json({ status: 'ok' }));
-
-/**
- * 测试端点 - 在所有中间件和其他路由之前！
- */
-app.get('/api/v1/test-route', (c) => c.json({ 
-  message: 'Test route is working!', 
-  time: new Date().toISOString() 
-}));
-
-// 我们要的关键路由 - 在所有认证之前！
-app.post('/api/v1/admin/backup/test-public', (c) => 
-  c.json({ message: 'Public test endpoint works!', time: new Date().toISOString() })
-);
-
-// 用户登录诊断端点
-app.get('/api/v1/diagnose-users', async (c) => {
-  const db = c.env.DB;
-  
-  try {
-    // 获取所有用户
-    const users = await db.prepare('SELECT id, email, is_admin, is_enabled, created_at FROM users').all();
-    
-    // 检查是否有管理员用户
-    const adminCount = await db.prepare('SELECT COUNT(*) as count FROM users WHERE is_admin = 1').first();
-    
-    return c.json({
-      status: 'ok',
-      users: users.results || [],
-      admin_count: adminCount,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    return c.json({
-      status: 'error',
-      error: String(error),
-      timestamp: new Date().toISOString()
-    }, 500);
-  }
-});
-
-// 重置管理员密码端点
-app.post('/api/v1/reset-admin-password', async (c) => {
-  const db = c.env.DB;
-  
-  try {
-    // 查找或创建管理员用户
-    const existingAdmin = await db
-      .prepare('SELECT id FROM users WHERE email = ?')
-      .bind('admin@localhost')
-      .first();
-    
-    // 生成新密码
-    const newPassword = generateRandomPassword();
-    const passwordHash = await hashPassword(newPassword);
-    
-    if (existingAdmin) {
-      // 更新现有管理员密码
-      await db
-        .prepare('UPDATE users SET password_hash = ?, is_enabled = 1 WHERE id = ?')
-        .bind(passwordHash, existingAdmin.id)
-        .run();
-      
-      console.log('========================================');
-      console.log('🔑 管理员密码已重置:');
-      console.log('邮箱: admin@localhost');
-      console.log('新密码:', newPassword);
-      console.log('========================================');
-      
-      return c.json({
-        status: 'ok',
-        message: '管理员密码已重置',
-        email: 'admin@localhost',
-        new_password: newPassword,
-        timestamp: new Date().toISOString()
-      });
-    } else {
-      // 创建新管理员用户
-      const userId = crypto.randomUUID();
-      
-      await db
-        .prepare(
-          `INSERT INTO users (id, email, password_hash, is_admin, is_enabled, created_at)
-           VALUES (?, ?, ?, 1, 1, ?)`
-        )
-        .bind(userId, 'admin@localhost', passwordHash, new Date().toISOString())
-        .run();
-      
-      // 创建用户 profile
-      const defaultAiConfig = JSON.stringify({
-        providers: [
-          {
-            id: 'zhipu_glm',
-            name: '智谱GLM',
-            isBuiltIn: true,
-            apiKey: '',
-            baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-            textModel: 'glm-4-flash',
-            visionModel: 'glm-4v-flash',
-            audioModel: 'glm-4-voice'
-          }
-        ],
-        binding: {
-          textProviderId: 'zhipu_glm',
-          visionProviderId: 'zhipu_glm',
-          speechProviderId: 'zhipu_glm'
-        },
-        strategy: 'cloud_first',
-        custom_prompt: ''
-      });
-      
-      await db
-        .prepare(
-          `INSERT INTO user_profiles (user_id, display_name, avatar_version, ai_config_json)
-           VALUES (?, ?, 0, ?)`
-        )
-        .bind(userId, 'Admin', defaultAiConfig)
-        .run();
-      
-      console.log('========================================');
-      console.log('🐝 管理员账户已创建:');
-      console.log('邮箱: admin@localhost');
-      console.log('密码:', newPassword);
-      console.log('========================================');
-      
-      return c.json({
-        status: 'ok',
-        message: '管理员账户已创建',
-        email: 'admin@localhost',
-        new_password: newPassword,
-        timestamp: new Date().toISOString()
-      });
-    }
-  } catch (error) {
-    console.error('重置管理员密码失败:', error);
-    return c.json({
-      status: 'error',
-      error: String(error),
-      timestamp: new Date().toISOString()
-    }, 500);
-  }
-});
-
-// 数据库诊断端点
-app.get('/api/v1/admin/backup/diagnose-db', async (c) => {
-  const db = c.env.DB;
-  
-  try {
-    // 获取 backup_runs 表结构
-    const runsTableInfo = await db
-      .prepare("PRAGMA table_info(backup_runs)")
-      .all();
-    
-    // 获取 backup_schedules 表结构
-    const schedulesTableInfo = await db
-      .prepare("PRAGMA table_info(backup_schedules)")
-      .all();
-    
-    // 获取表是否存在
-    const runsTableExists = await db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='backup_runs'")
-      .first();
-    
-    const schedulesTableExists = await db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='backup_schedules'")
-      .first();
-    
-    // 获取一条示例数据
-    let sampleRun = null;
-    try {
-      sampleRun = await db.prepare('SELECT * FROM backup_runs LIMIT 1').first();
-    } catch (e) {
-      sampleRun = { error: String(e) };
-    }
-    
-    // 获取所有备份计划
-    let schedules = null;
-    try {
-      schedules = await db.prepare('SELECT * FROM backup_schedules').all();
-    } catch (e) {
-      schedules = { error: String(e) };
-    }
-    
-    return c.json({
-      status: 'ok',
-      backup_runs_table_exists: !!runsTableExists,
-      backup_schedules_table_exists: !!schedulesTableExists,
-      backup_runs_columns: runsTableInfo.results || [],
-      backup_schedules_columns: schedulesTableInfo.results || [],
-      sample_run: sampleRun,
-      schedules: schedules?.results || schedules,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    return c.json({
-      status: 'error',
-      error: String(error),
-      timestamp: new Date().toISOString()
-    }, 500);
-  }
-});
-
-// 手动数据库迁移端点 - 添加缺失的列
-app.post('/api/v1/admin/backup/migrate-db', async (c) => {
-  const db = c.env.DB;
-  const results: string[] = [];
-  
-  try {
-    // 添加 remote_ids 列到 backup_schedules 表
-    try {
-      await db.prepare('ALTER TABLE backup_schedules ADD COLUMN remote_ids TEXT').run();
-      results.push('✓ Added remote_ids column to backup_schedules');
-    } catch (e) {
-      results.push('~ remote_ids column already exists in backup_schedules');
-    }
-    
-    // 添加 next_run_at 列到 backup_schedules 表
-    try {
-      await db.prepare('ALTER TABLE backup_schedules ADD COLUMN next_run_at TEXT').run();
-      results.push('✓ Added next_run_at column to backup_schedules');
-    } catch (e) {
-      results.push('~ next_run_at column already exists in backup_schedules');
-    }
-    
-    // 添加 last_run_at 列到 backup_schedules 表
-    try {
-      await db.prepare('ALTER TABLE backup_schedules ADD COLUMN last_run_at TEXT').run();
-      results.push('✓ Added last_run_at column to backup_schedules');
-    } catch (e) {
-      results.push('~ last_run_at column already exists in backup_schedules');
-    }
-    
-    // 添加 last_run_status 列到 backup_schedules 表
-    try {
-      await db.prepare('ALTER TABLE backup_schedules ADD COLUMN last_run_status TEXT').run();
-      results.push('✓ Added last_run_status column to backup_schedules');
-    } catch (e) {
-      results.push('~ last_run_status column already exists in backup_schedules');
-    }
-    
-    // 添加 timezone_offset 列到 backup_schedules 表
-    try {
-      await db.prepare('ALTER TABLE backup_schedules ADD COLUMN timezone_offset INTEGER DEFAULT 0').run();
-      results.push('✓ Added timezone_offset column to backup_schedules');
-    } catch (e) {
-      results.push('~ timezone_offset column already exists in backup_schedules');
-    }
-    
-    // 添加 cloud_config_json 列到 system_settings 表
-    try {
-      await db.prepare('ALTER TABLE system_settings ADD COLUMN cloud_config_json TEXT').run();
-      results.push('✓ Added cloud_config_json column to system_settings');
-    } catch (e) {
-      results.push('~ cloud_config_json column already exists in system_settings');
-    }
-    
-    // 添加 ledger_id 列
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN ledger_id TEXT').run();
-      results.push('✓ Added ledger_id column');
-      await db.prepare('UPDATE backup_runs SET ledger_id = "" WHERE ledger_id IS NULL').run();
-      results.push('✓ Updated existing rows with default ledger_id');
-    } catch (e) {
-      results.push('~ ledger_id column already exists');
-    }
-    
-    // 添加 remote_id 列
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN remote_id TEXT').run();
-      results.push('✓ Added remote_id column');
-    } catch (e) {
-      results.push('~ remote_id column already exists');
-    }
-    
-    // 迁移 backup_remotes 表：从 config 列迁移到 config_json 列
-    try {
-      // 检查 config_json 列是否存在
-      const pragmaResult = await db.prepare("PRAGMA table_info(backup_remotes)").all();
-      const columns = (pragmaResult.results || []) as { name: string }[];
-      const hasConfigJson = columns.some(col => col.name === 'config_json');
-      
-      if (!hasConfigJson) {
-        // 检查 config 列是否存在
-        const hasConfig = columns.some(col => col.name === 'config');
-        
-        if (hasConfig) {
-          // 添加 config_json 列并复制 config 的值
-          await db.prepare('ALTER TABLE backup_remotes ADD COLUMN config_json TEXT').run();
-          results.push('✓ Added config_json column to backup_remotes');
-          
-          await db.prepare('UPDATE backup_remotes SET config_json = config WHERE config_json IS NULL').run();
-          results.push('✓ Copied config values to config_json');
-        } else {
-          // 如果 config 列也不存在，直接添加 config_json
-          await db.prepare('ALTER TABLE backup_remotes ADD COLUMN config_json TEXT').run();
-          results.push('✓ Added config_json column to backup_remotes');
-        }
-      } else {
-        results.push('~ config_json column already exists in backup_remotes');
-      }
-    } catch (e) {
-      results.push('~ Error checking/migrating backup_remotes: ' + String(e));
-    }
-    
-    // 添加 backup_size 列
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN backup_size INTEGER').run();
-      results.push('✓ Added backup_size column');
-    } catch (e) {
-      results.push('~ backup_size column already exists');
-    }
-    
-    // 添加 backup_path 列
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN backup_path TEXT').run();
-      results.push('✓ Added backup_path column');
-    } catch (e) {
-      results.push('~ backup_path column already exists');
-    }
-    
-    // 添加 completed_at 列
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN completed_at TEXT').run();
-      results.push('✓ Added completed_at column');
-    } catch (e) {
-      results.push('~ completed_at column already exists');
-    }
-    
-    // 添加 finished_at 列
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN finished_at TEXT').run();
-      results.push('✓ Added finished_at column');
-    } catch (e) {
-      results.push('~ finished_at column already exists');
-    }
-    
-    // 添加 bytes_total 列
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN bytes_total INTEGER').run();
-      results.push('✓ Added bytes_total column');
-    } catch (e) {
-      results.push('~ bytes_total column already exists');
-    }
-    
-    // 添加 backup_filename 列
-    try {
-      await db.prepare('ALTER TABLE backup_runs ADD COLUMN backup_filename TEXT').run();
-      results.push('✓ Added backup_filename column');
-    } catch (e) {
-      results.push('~ backup_filename column already exists');
-    }
-    
-    // 添加 app_version 列到 devices 表
-    try {
-      await db.prepare('ALTER TABLE devices ADD COLUMN app_version TEXT').run();
-      results.push('✓ Added app_version column to devices');
-    } catch (e) {
-      results.push('~ app_version column already exists in devices');
-    }
-    
-    // 添加 os_version 列到 devices 表
-    try {
-      await db.prepare('ALTER TABLE devices ADD COLUMN os_version TEXT').run();
-      results.push('✓ Added os_version column to devices');
-    } catch (e) {
-      results.push('~ os_version column already exists in devices');
-    }
-    
-    // 添加 device_model 列到 devices 表
-    try {
-      await db.prepare('ALTER TABLE devices ADD COLUMN device_model TEXT').run();
-      results.push('✓ Added device_model column to devices');
-    } catch (e) {
-      results.push('~ device_model column already exists in devices');
-    }
-    
-    return c.json({
-      status: 'success',
-      message: 'Database migration completed',
-      results: results,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    return c.json({
-      status: 'error',
-      error: String(error),
-      results: results,
-      timestamp: new Date().toISOString()
-    }, 500);
-  }
-});
-
-
 
 // 处理初始化设置提交
 app.post('/api/v1/setup', async (c) => {
@@ -1069,7 +579,7 @@ app.post('/api/v1/setup', async (c) => {
     }
     
     // 创建管理员账户
-    if (admin_mode === 'auto' || (admin_mode === 'manual' && admin_email && admin_password)) {
+    if (admin_mode === 'manual' && admin_email && admin_password) {
       // 检查是否已有管理员账户
       const existingAdmin = await db
         .prepare('SELECT COUNT(*) as count FROM users WHERE is_admin = 1')
@@ -1083,121 +593,50 @@ app.post('/api/v1/setup', async (c) => {
         });
       }
       
-      let userId: string;
-      let passwordHash: string;
-      let userEmail: string;
+      const userId = crypto.randomUUID();
+      const passwordHash = await hashPassword(admin_password);
+      const userEmail = admin_email.toLowerCase();
       
-      if (admin_mode === 'auto') {
-        // 自动生成管理员账户
-        const generateRandomPassword = () => {
-          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
-          let password = '';
-          for (let i = 0; i < 12; i++) {
-            password += chars.charAt(Math.floor(Math.random() * chars.length));
+      // Create user
+      await db.prepare(`
+        INSERT INTO users (id, email, password_hash, is_admin, is_enabled)
+        VALUES (?, ?, ?, 1, 1)
+      `).bind(userId, userEmail, passwordHash).run();
+      
+      // Create user profile with default AI config
+      const defaultAiConfig = JSON.stringify({
+        providers: [
+          {
+            id: 'zhipu_glm',
+            name: '智谱GLM',
+            isBuiltIn: true,
+            apiKey: '',
+            baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+            textModel: 'glm-4-flash',
+            visionModel: 'glm-4v-flash',
+            audioModel: 'glm-4-voice'
           }
-          return password;
-        };
-        
-        userEmail = 'admin@localhost';
-        const adminPassword = generateRandomPassword();
-        userId = crypto.randomUUID();
-        passwordHash = await hashPassword(adminPassword);
-        
-        // 创建用户
-        await db.prepare(`
-          INSERT INTO users (id, email, password_hash, is_admin, is_enabled)
-          VALUES (?, ?, ?, 1, 1)
-        `).bind(userId, userEmail, passwordHash).run();
-        
-        // 创建用户 profile
-        const defaultAiConfig = JSON.stringify({
-          providers: [
-            {
-              id: 'zhipu_glm',
-              name: '智谱GLM',
-              isBuiltIn: true,
-              apiKey: '',
-              baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-              textModel: 'glm-4-flash',
-              visionModel: 'glm-4v-flash',
-              audioModel: 'glm-4-voice'
-            }
-          ],
-          binding: {
-            textProviderId: 'zhipu_glm',
-            visionProviderId: 'zhipu_glm',
-            speechProviderId: 'zhipu_glm'
-          },
-          strategy: 'cloud_first',
-          custom_prompt: ''
-        });
-        
-        await db.prepare(`
-          INSERT INTO user_profiles (user_id, display_name, ai_config_json)
-          VALUES (?, ?, ?)
-        `).bind(userId, 'admin', defaultAiConfig).run();
-        
-        // 打印到日志
-        console.log('========================================');
-        console.log('🐝 BeeCount 管理员账户已创建:');
-        console.log('邮箱:', userEmail);
-        console.log('密码:', adminPassword);
-        console.log('========================================');
-        
-        return c.json({
-          success: true,
-          message: '系统设置已保存，管理员账户已创建',
-          timezone_offset: timezone_offset || 0,
-          user_email: userEmail,
-          auto_generated_password: adminPassword
-        });
-      } else {
-        // 手动创建管理员账户
-        userId = crypto.randomUUID();
-        passwordHash = await hashPassword(admin_password);
-        userEmail = admin_email.toLowerCase();
-        
-        // Create user
-        await db.prepare(`
-          INSERT INTO users (id, email, password_hash, is_admin, is_enabled)
-          VALUES (?, ?, ?, 1, 1)
-        `).bind(userId, userEmail, passwordHash).run();
-        
-        // Create user profile with default AI config
-        const defaultAiConfig = JSON.stringify({
-          providers: [
-            {
-              id: 'zhipu_glm',
-              name: '智谱GLM',
-              isBuiltIn: true,
-              apiKey: '',
-              baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-              textModel: 'glm-4-flash',
-              visionModel: 'glm-4v-flash',
-              audioModel: 'glm-4-voice'
-            }
-          ],
-          binding: {
-            textProviderId: 'zhipu_glm',
-            visionProviderId: 'zhipu_glm',
-            speechProviderId: 'zhipu_glm'
-          },
-          strategy: 'cloud_first',
-          custom_prompt: ''
-        });
-        
-        await db.prepare(`
-          INSERT INTO user_profiles (user_id, display_name, ai_config_json)
-          VALUES (?, ?, ?)
-        `).bind(userId, userEmail.split('@')[0], defaultAiConfig).run();
-        
-        return c.json({
-          success: true,
-          message: '系统设置已保存，管理员账户已创建',
-          timezone_offset: timezone_offset || 0,
-          user_email: userEmail
-        });
-      }
+        ],
+        binding: {
+          textProviderId: 'zhipu_glm',
+          visionProviderId: 'zhipu_glm',
+          speechProviderId: 'zhipu_glm'
+        },
+        strategy: 'cloud_first',
+        custom_prompt: ''
+      });
+      
+      await db.prepare(`
+        INSERT INTO user_profiles (user_id, display_name, ai_config_json)
+        VALUES (?, ?, ?)
+      `).bind(userId, userEmail.split('@')[0], defaultAiConfig).run();
+      
+      return c.json({
+        success: true,
+        message: '系统设置已保存，管理员账户已创建',
+        timezone_offset: timezone_offset || 0,
+        user_email: userEmail
+      });
     }
     
     return c.json({
@@ -1650,96 +1089,6 @@ app.get('/api/v1/version', (c) =>
   })
 );
 
-// 测试服务器基本功能
-app.get('/api/v1/test-server', (c) => {
-  try {
-    const envKeys = c.env ? Object.keys(c.env).filter(k => !k.includes('SECRET') && !k.includes('KEY')) : [];
-    return c.json({ 
-      status: 'success', 
-      message: 'Server is running',
-      timestamp: new Date().toISOString(),
-      env_keys: envKeys,
-      has_env: !!c.env,
-      has_db: !!c.env?.DB,
-      jwt_secret_set: !!c.env?.JWT_SECRET
-    });
-  } catch (error) {
-    return c.json({ 
-      status: 'error', 
-      message: 'Failed to access environment',
-      error: error instanceof Error ? error.message : 'Unknown error'
-    }, 500);
-  }
-});
-
-// 测试认证变量是否正确传递（受保护端点）
-app.get('/api/v1/test-auth', async (c) => {
-  try {
-    const userId = c.get('userId');
-    const deviceId = c.get('deviceId');
-    
-    return c.json({ 
-      status: 'success', 
-      message: 'Auth variables check',
-      user_id: userId ?? 'NOT_SET',
-      device_id: deviceId ?? 'NOT_SET',
-      has_user_id: !!userId,
-      has_device_id: !!deviceId,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    return c.json({ 
-      status: 'error', 
-      message: 'Failed to check auth variables',
-      error: error instanceof Error ? error.message : 'Unknown error'
-    }, 500);
-  }
-});
-
-// 测试认证失败的端点 - 这个端点需要认证，用于测试 Token 过期处理
-app.get('/api/v1/test-auth-fail', async (c) => {
-  try {
-    const userId = c.get('userId');
-    return c.json({ 
-      status: 'success', 
-      message: 'Authentication successful',
-      user_id: userId,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    return c.json({ 
-      status: 'error', 
-      message: 'Failed',
-      error: error instanceof Error ? error.message : 'Unknown error'
-    }, 500);
-  }
-});
-
-// 测试数据库连接
-app.get('/api/v1/test-db', async (c) => {
-  try {
-    const db = c.env.DB;
-    if (!db) {
-      return c.json({ status: 'error', message: 'DB is undefined' }, 500);
-    }
-    
-    const result = await db.prepare('SELECT 1 as test').first();
-    return c.json({ 
-      status: 'success', 
-      message: 'Database connection is working',
-      result: result 
-    });
-  } catch (error) {
-    console.error('[TEST-DB] Error:', error);
-    return c.json({ 
-      status: 'error', 
-      message: 'Database connection failed',
-      error: error instanceof Error ? error.message : 'Unknown error',
-      error_stack: error instanceof Error ? error.stack : undefined
-    }, 500);
-  }
-});
-
 // ===========================
 // 认证中间件
 // ===========================
@@ -1817,10 +1166,6 @@ app.use('/api/v1/*', async (c, next) => {
   return authMiddleware(c, next, [
     '/api/v1/auth', 
     '/api/v1/profile/avatar',
-    '/api/v1/test-route',
-    '/api/v1/admin/backup/test-public',
-    '/api/v1/test-db',
-    '/api/v1/test-server',
     '/api/v1/version'
   ]);
 });
@@ -1841,6 +1186,7 @@ app.use('/import/*', async (c, next) => authMiddleware(c, next));
 app.use('/ai/*', async (c, next) => authMiddleware(c, next));
 app.use('/backup/*', async (c, next) => authMiddleware(c, next));
 app.use('/notifications/*', async (c, next) => authMiddleware(c, next));
+app.use('/sys-config/*', async (c, next) => authMiddleware(c, next));
 
 // ===========================
 // 路由注册
@@ -1893,7 +1239,6 @@ app.onError((err, c) => {
   
   return c.json({
     error: 'Internal Server Error',
-    detail: err.message,
     timestamp: new Date().toISOString(),
   }, 500);
 });

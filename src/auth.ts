@@ -181,7 +181,11 @@ export async function validateAccessToken(
     const [headerB64, payloadB64, signature] = parts;
     
     const expectedSignature = await hmacSHA256(secret, `${headerB64}.${payloadB64}`);
-    if (signature !== expectedSignature) return null;
+    
+    const encoder = new TextEncoder();
+    const sig1 = encoder.encode(signature);
+    const sig2 = encoder.encode(expectedSignature);
+    if (sig1.length !== sig2.length || !(await crypto.subtle.timingSafeEqual(sig1, sig2))) return null;
     
     const payloadStr = base64urlDecode(payloadB64);
     if (!payloadStr) return null;

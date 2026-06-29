@@ -249,7 +249,10 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
   let ledgerExternalId = req.ledger_id;
   if (!ledgerExternalId) {
     // 生成一个友好的唯一 ID
-    ledgerExternalId = 'ledger_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    const randBytes = new Uint8Array(6);
+    crypto.getRandomValues(randBytes);
+    const randStr = Array.from(randBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    ledgerExternalId = 'ledger_' + Date.now() + '_' + randStr;
     console.log('[WRITE] Generated new ledgerExternalId:', ledgerExternalId);
   }
 
