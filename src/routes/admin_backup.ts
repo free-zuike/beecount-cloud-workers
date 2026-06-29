@@ -34,6 +34,98 @@ import { getFirstEnabledS3Config } from './sys_config';
 import { signS3Request } from '../lib/s3';
 import { performBackup, calculateNextRun } from '../services/backup-executor';
 
+// ===========================
+// WebDAV 连通性测试
+// ===========================
+
+async function testWebDavConnection(
+    url: string,
+    username: string,
+    password: string
+): Promise<{ ok: boolean; message: string }> {
+    try {
+        if (!url) {
+            return { ok: false, message: 'WebDAV URL is required' };
+        }
+        if (!username || !password) {
+            return { ok: false, message: 'Username and password are required' };
+        }
+
+        const normalizedUrl = url.replace(/\/+$/, '');
+        const auth = 'Basic ' + btoa(`${username}:${password}`);
+
+        console.log('[Backup WebDAV Test] Testing connection to:', normalizedUrl);
+
+        // PROPFIND to check connectivity
+        const propfindResponse = await fetch(normalizedUrl, {
+            method: 'PROPFIND',
+            headers: {
+                'Authorization': auth,
+                'Depth': '0',
+                'Content-Type': 'application/xml',
+            },
+        });
+
+        console.log('[Backup WebDAV Test] PROPFIND Response status:', propfindResponse.status);
+
+        const propfindBody = await propfindResponse.text().catch(() => '');
+
+        if (propfindResponse.status === 401) {
+            return { ok: false, message: 'WebDAV authentication failed: invalid username or password' };
+        }
+        if (propfindResponse.status === 404) {
+            return { ok: false, message: `WebDAV path not found: ${normalizedUrl}` };
+        }
+        if (propfindResponse.status === 403) {
+            return { ok: false, message: `WebDAV access denied: ${normalizedUrl}` };
+        }
+        if (!propfindResponse.ok) {
+            return { ok: false, message: `WebDAV connection failed: HTTP ${propfindResponse.status} ${propfindResponse.statusText}` };
+        }
+
+        console.log('[Backup WebDAV Test] PROPFIND test passed');
+
+        // Try writing a test file
+        const testPath = `__beecount_connection_test__/${Date.now()}.txt`;
+        const testContent = 'Beecount WebDAV connection test file';
+        const putUrl = `${normalizedUrl}/${testPath}`;
+
+        const putResponse = await fetch(putUrl, {
+            method: 'PUT',
+            headers: {
+                'Authorization': auth,
+                'Content-Type': 'text/plain',
+                'Content-Length': String(testContent.length),
+            },
+            body: testContent,
+        });
+
+        console.log('[Backup WebDAV Test] PUT Response status:', putResponse.status);
+
+        if (!putResponse.ok && putResponse.status !== 405) {
+            return { ok: false, message: `WebDAV write test failed: HTTP ${putResponse.status} ${putResponse.statusText}` };
+        }
+
+        // Cleanup: DELETE test file
+        if (putResponse.ok) {
+            await fetch(putUrl, {
+                method: 'DELETE',
+                headers: { 'Authorization': auth },
+            });
+            console.log('[Backup WebDAV Test] Cleanup DELETE sent');
+        }
+
+        return { ok: true, message: `WebDAV connection successful: ${normalizedUrl}` };
+    } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        console.error('[Backup WebDAV Test] Error:', errorMsg);
+        if (errorMsg.includes('timeout') || errorMsg.includes('Timeout')) {
+            return { ok: false, message: `WebDAV connection timeout: Unable to reach ${url}` };
+        }
+        return { ok: false, message: `WebDAV connection error: ${errorMsg}` };
+    }
+}
+
 function nowUtc(): string {
   return new Date().toISOString();
 }
@@ -760,6 +852,24 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         testResult.message = 'Local backend configured (requires filesystem support)';
         break;
 
+      case 'webdav':
+        const webdavUrl = config.url;
+        const webdavUsername = config.username;
+        const webdavPassword = config.password;
+        
+        if (!webdavUrl) {
+          testResult.ok = false;
+          testResult.message = 'WebDAV URL is required';
+        } else if (!webdavUsername || !webdavPassword) {
+          testResult.ok = false;
+          testResult.message = 'WebDAV username and password are required';
+        } else {
+          const webdavResult = await testWebDavConnection(webdavUrl, webdavUsername, webdavPassword);
+          testResult.ok = webdavResult.ok;
+          testResult.message = webdavResult.message;
+        }
+        break;
+
       default:
         testResult.message = `Unknown backend type: ${remote.backend_type}`;
     }
@@ -838,6 +948,24 @@ backupRouter.post('/remotes/test', zValidator('json', RemoteTestSchema), async (
       case 'local':
         testResult.ok = true;
         testResult.message = 'Local backend configured (requires filesystem support)';
+        break;
+
+      case 'webdav':
+        const webdavUrl = config.url;
+        const webdavUsername = config.username;
+        const webdavPassword = config.password;
+        
+        if (!webdavUrl) {
+          testResult.ok = false;
+          testResult.message = 'WebDAV URL is required';
+        } else if (!webdavUsername || !webdavPassword) {
+          testResult.ok = false;
+          testResult.message = 'WebDAV username and password are required';
+        } else {
+          const webdavResult = await testWebDavConnection(webdavUrl, webdavUsername, webdavPassword);
+          testResult.ok = webdavResult.ok;
+          testResult.message = webdavResult.message;
+        }
         break;
 
       default:
@@ -1186,6 +1314,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
   let remoteId: string | null = null;
   let remoteConfig: Record<string, string> = { backend_type: 'local' };
+  let shouldEncrypt = false;
 
   if (schedule.remote_ids) {
     try {
@@ -1195,9 +1324,9 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
         remoteId = String(remoteIds[0]);
         console.log('[Backup] Querying backup_remotes with id:', remoteId);
         const remote = await db
-          .prepare('SELECT backend_type, config_summary FROM backup_remotes WHERE id = ?')
+          .prepare('SELECT backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?')
           .bind(remoteId)
-          .first<{ backend_type: string; config_summary: string }>();
+          .first<{ backend_type: string; config_summary: string; encrypted: number }>();
         console.log('[Backup] Query result:', remote);
         
         if (remote) {
@@ -1215,6 +1344,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
               savePath: parsedConfig.root_path ? parsedConfig.root_path.replace(/^\/+|\/+$/g, '') : 'custom'
             };
             console.log('[Backup] Full remoteConfig:', JSON.stringify(remoteConfig));
+            shouldEncrypt = remote.encrypted === 1;
           } else {
             console.log('[Backup] backup_remotes config is empty, trying sys_config');
           }
@@ -1257,7 +1387,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
     .bind(runId, scheduleId, ledger.id, remoteId, serverNow)
     .run();
 
-  const backupResult = await performBackup(db, runId, ledger.id, remoteConfig);
+  const backupResult = await performBackup(db, runId, ledger.id, remoteConfig, shouldEncrypt);
   
   const finishedAt = new Date().toISOString();
   

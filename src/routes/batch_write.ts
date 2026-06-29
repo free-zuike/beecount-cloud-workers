@@ -18,6 +18,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import { insertAuditLog } from '../lib/audit';
 
 // ===========================
 // 辅助函数
@@ -294,6 +295,11 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
       .bind(userId)
       .first<{ max_id: number | null }>();
 
+    await insertAuditLog({
+      db, userId, ledgerId: ledger.id, action: 'batch_create', entityType: 'transaction',
+      details: { count: createdIds.length, ledger_id: ledgerExternalId },
+    });
+
     return c.json({
       ledger_id: ledger.external_id,
       created_count: createdIds.length,
@@ -381,6 +387,11 @@ batchWriteRouter.post('/transactions/batch-delete', zValidator('json', BatchTran
     .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE user_id = ?')
     .bind(userId)
     .first<{ max_id: number | null }>();
+
+  await insertAuditLog({
+    db, userId, ledgerId, action: 'batch_delete', entityType: 'transaction',
+    details: { count: deletedCount, ids: deletedIds },
+  });
 
   return c.json({
     ledger_id: req.ledger_id ?? 'default',

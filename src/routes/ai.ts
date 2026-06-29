@@ -296,6 +296,13 @@ const AiTestProviderSchema = z.object({
   base_url: z.string().optional(),
 });
 
+const AiSpeechToTextSchema = z.object({
+  audio_data: z.string().optional(),
+  audio_url: z.string().optional(),
+  language: z.string().optional(),
+  model: z.string().optional(),
+});
+
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
@@ -764,6 +771,95 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
       latency_ms: Date.now() - startTime,
       preview: '',
     });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /ai/speech-to-text - 语音转文字（Whisper API）
+// ---------------------------------------------------------------------------
+
+/**
+ * 接收音频数据，调用兼容 OpenAI 的 Whisper API 进行转录
+ */
+aiRouter.post('/speech-to-text', zValidator('json', AiSpeechToTextSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const req = c.req.valid('json');
+
+  if (!req.audio_data && !req.audio_url) {
+    return c.json({ error: 'audio_data or audio_url is required' }, 400);
+  }
+
+  const profile = await db
+    .prepare('SELECT ai_config_json FROM user_profiles WHERE user_id = ?')
+    .bind(userId)
+    .first<{ ai_config_json: string | null }>();
+
+  const aiConfig = parseAiConfig(profile?.ai_config_json ?? null);
+  const provider = findProvider(aiConfig, 'text');
+
+  if (!provider || !provider.apiKey) {
+    return c.json({
+      error: 'AI provider not configured. Please configure AI provider in settings.',
+    }, 400);
+  }
+
+  const whisperBaseUrl = provider.baseUrl.replace(/\/chat\/completions$/, '').replace(/\/$/, '');
+  const whisperUrl = `${whisperBaseUrl}/audio/transcriptions`;
+
+  try {
+    let audioBlob: Blob;
+    let filename = 'audio.webm';
+
+    if (req.audio_data) {
+      const binaryStr = atob(req.audio_data);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      audioBlob = new Blob([bytes], { type: 'audio/webm' });
+    } else {
+      const audioResponse = await fetch(req.audio_url!);
+      if (!audioResponse.ok) {
+        return c.json({ error: `Failed to fetch audio: ${audioResponse.status}` }, 400);
+      }
+      const audioBuffer = await audioResponse.arrayBuffer();
+      audioBlob = new Blob([audioBuffer], { type: audioResponse.headers.get('content-type') || 'audio/webm' });
+      const urlParts = req.audio_url!.split('/');
+      filename = urlParts[urlParts.length - 1].split('?')[0] || 'audio.webm';
+    }
+
+    const formData = new FormData();
+    formData.append('file', audioBlob, filename);
+    formData.append('model', req.model || 'whisper-1');
+    if (req.language) {
+      formData.append('language', req.language);
+    }
+
+    const response = await fetch(whisperUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${provider.apiKey}`,
+      },
+      body: formData,
+      signal: AbortSignal.timeout(60000),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Whisper API error: ${response.status} - ${errorText.slice(0, 200)}`);
+    }
+
+    const data = await response.json() as { text?: string };
+
+    return c.json({
+      text: data.text ?? '',
+      provider: provider.id,
+      model: req.model || 'whisper-1',
+    });
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'Speech-to-text failed';
+    return c.json({ error: errorMsg }, 500);
   }
 });
 

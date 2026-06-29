@@ -36,6 +36,7 @@ export async function processBackupSchedule(db: D1Database, schedule: any) {
   
   let remoteId: string | null = null;
   let remoteConfig: Record<string, string> = { backend_type: 'local' };
+  let shouldEncrypt = false;
   
   if (schedule.remote_ids) {
     try {
@@ -43,9 +44,9 @@ export async function processBackupSchedule(db: D1Database, schedule: any) {
       if (remoteIds.length > 0) {
         remoteId = String(remoteIds[0]);
         const remote = await db
-          .prepare('SELECT backend_type, config_summary FROM backup_remotes WHERE id = ?')
+          .prepare('SELECT backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?')
           .bind(remoteId)
-          .first<{ backend_type: string; config_summary: string }>();
+          .first<{ backend_type: string; config_summary: string; encrypted: number }>();
         
         if (remote) {
           const parsedConfig = JSON.parse(remote.config_summary || '{}');
@@ -54,6 +55,7 @@ export async function processBackupSchedule(db: D1Database, schedule: any) {
             ...parsedConfig,
             savePath: parsedConfig.root_path ? parsedConfig.root_path.replace(/^\/+|\/+$/g, '') : 'custom'
           };
+          shouldEncrypt = remote.encrypted === 1;
         }
       }
     } catch (e) {
@@ -72,7 +74,7 @@ export async function processBackupSchedule(db: D1Database, schedule: any) {
     .run();
   
   try {
-    const backupResult = await performBackup(db, runId, ledger.id, remoteConfig);
+    const backupResult = await performBackup(db, runId, ledger.id, remoteConfig, shouldEncrypt);
     const finishedAt = new Date().toISOString();
     
     if (backupResult.success) {

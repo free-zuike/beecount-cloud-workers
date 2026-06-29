@@ -120,12 +120,29 @@ CREATE TABLE IF NOT EXISTS ledgers (
     external_id TEXT NOT NULL,
     name TEXT,
     currency TEXT DEFAULT 'CNY' NOT NULL,
+    role TEXT DEFAULT 'owner' NOT NULL,
+    is_shared BOOLEAN DEFAULT 0 NOT NULL,
+    invite_code TEXT,
+    invite_expires_at TEXT,
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
     UNIQUE(user_id, external_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_ledgers_user_id ON ledgers(user_id);
 CREATE INDEX IF NOT EXISTS idx_ledgers_external_id ON ledgers(external_id);
+CREATE INDEX IF NOT EXISTS idx_ledgers_invite_code ON ledgers(invite_code);
+
+CREATE TABLE IF NOT EXISTS ledger_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT DEFAULT 'editor' NOT NULL,
+    joined_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+    UNIQUE(ledger_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_members_ledger_id ON ledger_members(ledger_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_members_user_id ON ledger_members(user_id);
 
 CREATE TABLE IF NOT EXISTS sync_changes (
     change_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,6 +268,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
     ledger_id TEXT,
     action TEXT NOT NULL,
+    entity_type TEXT,
+    entity_id TEXT,
+    details_json TEXT,
     metadata_json TEXT,
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
 );
@@ -258,6 +278,8 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time ON audit_logs(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_ledger ON audit_logs(ledger_id);
 
 CREATE TABLE IF NOT EXISTS attachment_files (
     id TEXT PRIMARY KEY,

@@ -18,6 +18,10 @@
  */
 
 import { Hono } from 'hono';
+import { zValidator } from '@hono/zod-validator';
+import { z } from 'zod';
+import { randomUUID } from 'crypto';
+import { insertAuditLog } from '../lib/audit';
 
 // ===========================
 // 辅助函数
@@ -603,6 +607,237 @@ workspaceRouter.get('/analytics', async (c) => {
     category_ranks: categoryRanks,
     range: { scope, metric, period: null, start_at: null, end_at: null },
   });
+});
+
+// ===========================
+// Shared Ledger Schema
+// ===========================
+
+const InviteSchema = z.object({
+  expires_in_hours: z.number().int().min(1).max(168).default(72),
+});
+
+const JoinSchema = z.object({
+  invite_code: z.string().min(6).max(64),
+});
+
+const UpdateLedgerSchema = z.object({
+  name: z.string().min(1).max(255).optional(),
+  currency: z.string().min(1).max(16).optional(),
+});
+
+// ===========================
+// Shared Ledger Endpoints
+// ============================
+
+// ---------------------------------------------------------------------------
+// POST /workspace/ledgers/:id/invite - 生成邀请码（仅 Owner）
+// ---------------------------------------------------------------------------
+
+workspaceRouter.post('/ledgers/:id/invite', zValidator('json', InviteSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerExternalId = c.req.param('id');
+  const req = c.req.valid('json');
+
+  const ledger = await db
+    .prepare('SELECT id, user_id, is_shared FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerExternalId)
+    .first<{ id: string; user_id: string; is_shared: number }>();
+
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found or not owned by you' }, 404);
+  }
+
+  if (ledger.user_id !== userId) {
+    return c.json({ error: 'Only the owner can generate invite codes' }, 403);
+  }
+
+  const inviteCode = randomUUID().replace(/-/g, '').slice(0, 12);
+  const expiresAt = new Date(Date.now() + req.expires_in_hours * 3600 * 1000).toISOString();
+
+  await db
+    .prepare('UPDATE ledgers SET invite_code = ?, invite_expires_at = ?, is_shared = 1 WHERE id = ?')
+    .bind(inviteCode, expiresAt, ledger.id)
+    .run();
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'invite', entityType: 'ledger', entityId: ledgerExternalId,
+    details: { expires_at: expiresAt },
+  });
+
+  return c.json({ code: inviteCode, expires_at: expiresAt });
+});
+
+// ---------------------------------------------------------------------------
+// POST /workspace/ledgers/join - 通过邀请码加入账本
+// ---------------------------------------------------------------------------
+
+workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const req = c.req.valid('json');
+
+  const ledger = await db
+    .prepare('SELECT id, user_id, external_id, name, invite_code, invite_expires_at FROM ledgers WHERE invite_code = ?')
+    .bind(req.invite_code)
+    .first<{ id: string; user_id: string; external_id: string; name: string | null; invite_code: string | null; invite_expires_at: string | null }>();
+
+  if (!ledger || !ledger.invite_code) {
+    return c.json({ error: 'Invalid invite code' }, 404);
+  }
+
+  if (ledger.user_id === userId) {
+    return c.json({ error: 'Cannot join your own ledger' }, 400);
+  }
+
+  if (ledger.invite_expires_at && new Date(ledger.invite_expires_at) < new Date()) {
+    return c.json({ error: 'Invite code has expired' }, 410);
+  }
+
+  const existingMember = await db
+    .prepare('SELECT id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .bind(ledger.id, userId)
+    .first();
+
+  if (existingMember) {
+    return c.json({ message: 'Already a member', ledger_id: ledger.external_id, ledger_name: ledger.name });
+  }
+
+  await db
+    .prepare('INSERT INTO ledger_members (ledger_id, user_id, role) VALUES (?, ?, ?)')
+    .bind(ledger.id, userId, 'editor')
+    .run();
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'join', entityType: 'ledger', entityId: ledger.external_id,
+  });
+
+  return c.json({ ledger_id: ledger.external_id, ledger_name: ledger.name, role: 'editor' });
+});
+
+// ---------------------------------------------------------------------------
+// GET /workspace/ledgers/:id/members - 列出成员
+// ---------------------------------------------------------------------------
+
+workspaceRouter.get('/ledgers/:id/members', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerExternalId = c.req.param('id');
+
+  const ledger = await db
+    .prepare('SELECT id, user_id FROM ledgers WHERE external_id = ? AND (user_id = ? OR is_shared = 1)')
+    .bind(ledgerExternalId, userId)
+    .first<{ id: string; user_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found or access denied' }, 404);
+  }
+
+  const members = await db
+    .prepare(`
+      SELECT lm.user_id, lm.role, lm.joined_at, u.email
+      FROM ledger_members lm
+      JOIN users u ON lm.user_id = u.id
+      WHERE lm.ledger_id = ?
+    `)
+    .bind(ledger.id)
+    .all<{ user_id: string; role: string; joined_at: string; email: string }>();
+
+  const owner = await db
+    .prepare('SELECT id, email FROM users WHERE id = ?')
+    .bind(ledger.user_id)
+    .first<{ id: string; email: string }>();
+
+  const result = [
+    ...(owner ? [{ user_id: owner.id, role: 'owner', joined_at: '', email: owner.email }] : []),
+    ...members.results,
+  ];
+
+  return c.json({ members: result });
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /workspace/ledgers/:id/members/:userId - 移除成员（仅 Owner）
+// ---------------------------------------------------------------------------
+
+workspaceRouter.delete('/ledgers/:id/members/:memberUserId', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerExternalId = c.req.param('id');
+  const memberUserId = c.req.param('memberUserId');
+
+  const ledger = await db
+    .prepare('SELECT id, user_id FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerExternalId)
+    .first<{ id: string; user_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found or not owned by you' }, 404);
+  }
+
+  if (ledger.user_id !== userId) {
+    return c.json({ error: 'Only the owner can remove members' }, 403);
+  }
+
+  if (memberUserId === userId) {
+    return c.json({ error: 'Cannot remove the owner' }, 400);
+  }
+
+  const result = await db
+    .prepare('DELETE FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .bind(ledger.id, memberUserId)
+    .run();
+
+  if (result.meta.changes === 0) {
+    return c.json({ error: 'Member not found' }, 404);
+  }
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'remove_member', entityType: 'ledger', entityId: ledgerExternalId,
+    details: { removed_user_id: memberUserId },
+  });
+
+  return c.json({ success: true });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /workspace/ledgers/:id - 修改账本元数据（仅 Owner）
+// ---------------------------------------------------------------------------
+
+workspaceRouter.patch('/ledgers/:id', zValidator('json', UpdateLedgerSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerExternalId = c.req.param('id');
+  const req = c.req.valid('json');
+
+  const ledger = await db
+    .prepare('SELECT id, user_id, name, currency FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerExternalId)
+    .first<{ id: string; user_id: string; name: string | null; currency: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found or not owned by you' }, 404);
+  }
+
+  if (ledger.user_id !== userId) {
+    return c.json({ error: 'Only the owner can update ledger settings' }, 403);
+  }
+
+  const newName = req.name ?? ledger.name;
+  const newCurrency = req.currency ?? ledger.currency;
+
+  await db
+    .prepare('UPDATE ledgers SET name = ?, currency = ? WHERE id = ?')
+    .bind(newName, newCurrency, ledger.id)
+    .run();
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'update_meta', entityType: 'ledger', entityId: ledgerExternalId,
+    details: { name: newName, currency: newCurrency },
+  });
+
+  return c.json({ ledger_id: ledgerExternalId, name: newName, currency: newCurrency });
 });
 
 export default workspaceRouter;

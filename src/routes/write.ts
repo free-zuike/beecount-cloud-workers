@@ -30,6 +30,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import { insertAuditLog } from '../lib/audit';
 
 // ===========================
 // 辅助函数
@@ -400,6 +401,11 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
 
   console.log('[WRITE] Created', createdCount, 'default categories');
 
+  await insertAuditLog({
+    db, userId, ledgerId, action: 'create', entityType: 'ledger', entityId: ledgerExternalId,
+    details: { name: req.ledger_name, currency: req.currency },
+  });
+
   return c.json({
     ledger_id: ledgerExternalId,
     base_change_id: 0,
@@ -480,6 +486,11 @@ writeRouter.patch('/ledgers/:ledgerId', zValidator('json', WriteLedgerMetaUpdate
     ),
   ]);
 
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'update', entityType: 'ledger', entityId: ledgerId,
+    details: { name: req.ledger_name, currency: req.currency },
+  });
+
   return c.json({
     ledger_id: ledgerId,
     base_change_id: 0,
@@ -515,8 +526,12 @@ writeRouter.delete('/ledgers/:ledgerId', async (c) => {
     .prepare(
       `INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(userId, ledger.id, 'ledger_snapshot', ledger.external_id, 'delete', '{}', serverNow, userId)
+    )    .bind(userId, ledger.id, 'ledger_snapshot', ledger.external_id, 'delete', '{}', serverNow, userId)
     .run();
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'ledger', entityId: ledgerId,
+  });
 
   return c.json({ success: true, ledger_id: ledgerId });
 });
@@ -639,6 +654,11 @@ writeRouter.post('/transactions', zValidator('json', WriteTransactionCreateSchem
 
   console.log('[WRITE] Transaction created successfully, syncId:', syncId, 'ledger.id:', ledger.id);
 
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'create', entityType: 'transaction', entityId: syncId,
+    details: { tx_type: req.tx_type, amount: req.amount, happened_at: happenedAt },
+  });
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -711,6 +731,11 @@ writeRouter.patch('/accounts/:id', zValidator('json', WriteAccountCreateSchema),
     )
     .run();
 
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'update', entityType: 'account', entityId: accountSyncId,
+    details: { name: req.name },
+  });
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -756,6 +781,10 @@ writeRouter.delete('/accounts/:id', zValidator('json', WriteBaseSchema), async (
     .prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND ledger_id = ?')
     .bind(accountSyncId, ledger.id)
     .run();
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'account', entityId: accountSyncId,
+  });
 
   return c.json({
     ledger_id: ledger.external_id,
@@ -808,6 +837,11 @@ writeRouter.patch('/tags/:id', zValidator('json', WriteTagCreateSchema), async (
     .bind(ledger.id, tagSyncId, userId, req.name, req.color ?? null, newChangeId, req.name, req.color ?? null, newChangeId)
     .run();
 
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'update', entityType: 'tag', entityId: tagSyncId,
+    details: { name: req.name },
+  });
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -853,6 +887,10 @@ writeRouter.delete('/tags/:id', zValidator('json', WriteBaseSchema), async (c) =
     .prepare('DELETE FROM read_tag_projection WHERE sync_id = ? AND ledger_id = ?')
     .bind(tagSyncId, ledger.id)
     .run();
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'tag', entityId: tagSyncId,
+  });
 
   return c.json({
     ledger_id: ledger.external_id,
@@ -974,6 +1012,11 @@ writeRouter.patch('/transactions/:id', zValidator('json', WriteTransactionUpdate
     )
     .run();
 
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'update', entityType: 'transaction', entityId: txSyncId,
+    details: { fields_updated: Object.keys(newPayload).filter(k => newPayload[k] !== existingPayload[k]) },
+  });
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -1024,6 +1067,10 @@ writeRouter.delete('/transactions/:id', zValidator('json', WriteBaseSchema), asy
     .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
     .bind(ledger.id, txSyncId)
     .run();
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'transaction', entityId: txSyncId,
+  });
 
   return c.json({
     ledger_id: ledger.external_id,
@@ -1093,6 +1140,11 @@ writeRouter.post('/accounts', zValidator('json', WriteAccountCreateSchema), asyn
       req.bank_name ?? null, req.card_last_four ?? null, newChangeId,
     )
     .run();
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'create', entityType: 'account', entityId: syncId,
+    details: { name: req.name },
+  });
 
   return c.json({
     ledger_id: ledger.external_id,
@@ -1184,6 +1236,11 @@ writeRouter.post('/categories', zValidator('json', WriteCategoryCreateSchema), a
     )
     .run();
 
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'create', entityType: 'category', entityId: syncId,
+    details: { name: req.name, kind: req.kind },
+  });
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -1259,6 +1316,11 @@ writeRouter.patch('/categories/:id', zValidator('json', WriteCategoryUpdateSchem
     )
     .run();
 
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'update', entityType: 'category', entityId: categorySyncId,
+    details: { name: req.name },
+  });
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -1304,6 +1366,10 @@ writeRouter.delete('/categories/:id', zValidator('json', WriteBaseSchema), async
     .prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND ledger_id = ?')
     .bind(categorySyncId, ledger.id)
     .run();
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'category', entityId: categorySyncId,
+  });
 
   return c.json({
     ledger_id: ledger.external_id,
@@ -1359,6 +1425,11 @@ writeRouter.post('/tags', zValidator('json', WriteTagCreateSchema), async (c) =>
     )
     .bind(ledger.id, syncId, userId, req.name, req.color ?? null, newChangeId)
     .run();
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'create', entityType: 'tag', entityId: syncId,
+    details: { name: req.name },
+  });
 
   return c.json({
     ledger_id: ledger.external_id,
@@ -1422,6 +1493,11 @@ writeRouter.post('/budgets', zValidator('json', WriteBudgetCreateSchema), async 
       req.amount, req.period, req.start_day, req.enabled ? 1 : 0, newChangeId,
     )
     .run();
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'create', entityType: 'budget', entityId: syncId,
+    details: { amount: req.amount, period: req.period },
+  });
 
   return c.json({
     ledger_id: ledger.external_id,
@@ -1488,6 +1564,11 @@ writeRouter.patch('/budgets/:id', zValidator('json', WriteBudgetCreateSchema), a
     )
     .run();
 
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'update', entityType: 'budget', entityId: budgetSyncId,
+    details: { amount: req.amount },
+  });
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -1533,6 +1614,10 @@ writeRouter.delete('/budgets/:id', zValidator('json', WriteBaseSchema), async (c
     .prepare('DELETE FROM read_budget_projection WHERE sync_id = ? AND ledger_id = ?')
     .bind(budgetSyncId, ledger.id)
     .run();
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'budget', entityId: budgetSyncId,
+  });
 
   return c.json({
     ledger_id: ledger.external_id,
@@ -1753,6 +1838,11 @@ writeRouter.post('/categories/init-defaults', async (c) => {
       }
     }
   }
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'init_defaults', entityType: 'category',
+    details: { created_count: createdCount },
+  });
 
   return c.json({
     success: true,

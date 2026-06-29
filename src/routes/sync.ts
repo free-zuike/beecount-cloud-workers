@@ -20,6 +20,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import { insertAuditLog } from '../lib/audit';
 
 const CODE_VERSION = 'v1.3-projection-fix';
 
@@ -413,6 +414,12 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
     console.log('[SYNC] /sync/push returning with accepted:', accepted);
     console.log(`[SYNC] ===== ${CODE_VERSION} SUCCESS =====`);
+
+    await insertAuditLog({
+      db, userId, action: 'sync_push', entityType: 'sync',
+      details: { accepted, rejected, conflict_count: conflictCount, device_id: deviceId },
+    });
+
     return c.json(response);
   } catch (error) {
     console.error('[SYNC] /sync/push error - BEGIN ====================================');

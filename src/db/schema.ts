@@ -115,6 +115,9 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
         ledger_id TEXT,
         action TEXT NOT NULL,
+        entity_type TEXT,
+        entity_id TEXT,
+        details_json TEXT,
         metadata_json TEXT,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
@@ -123,6 +126,8 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time ON audit_logs(user_id, created_at DESC)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_ledger ON audit_logs(ledger_id)').run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS devices (
@@ -151,6 +156,10 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         external_id TEXT NOT NULL,
         name TEXT,
         currency TEXT DEFAULT 'CNY' NOT NULL,
+        role TEXT DEFAULT 'owner' NOT NULL,
+        is_shared BOOLEAN DEFAULT 0 NOT NULL,
+        invite_code TEXT,
+        invite_expires_at TEXT,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
         UNIQUE(user_id, external_id)
       )
@@ -158,6 +167,21 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledgers_user_id ON ledgers(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledgers_external_id ON ledgers(external_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledgers_invite_code ON ledgers(invite_code)').run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS ledger_members (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT DEFAULT 'editor' NOT NULL,
+        joined_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        UNIQUE(ledger_id, user_id)
+      )
+    `).run();
+
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_members_ledger_id ON ledger_members(ledger_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_members_user_id ON ledger_members(user_id)').run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS sync_changes (
@@ -423,8 +447,46 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       )
     `).run();
 
+    // ==================== Migrations for existing databases ====================
+    const migrateColumn = async (table: string, column: string, definition: string) => {
+      try {
+        await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+        console.log(`[INIT] Added column ${table}.${column}`);
+      } catch {
+        // Column already exists, ignore
+      }
+    };
+
+    // Audit logs: add entity_type, entity_id, details_json
+    await migrateColumn('audit_logs', 'entity_type', 'TEXT');
+    await migrateColumn('audit_logs', 'entity_id', 'TEXT');
+    await migrateColumn('audit_logs', 'details_json', 'TEXT');
+
+    // Ledgers: add role, is_shared, invite_code, invite_expires_at
+    await migrateColumn('ledgers', 'role', "TEXT DEFAULT 'owner' NOT NULL");
+    await migrateColumn('ledgers', 'is_shared', 'BOOLEAN DEFAULT 0 NOT NULL');
+    await migrateColumn('ledgers', 'invite_code', 'TEXT');
+    await migrateColumn('ledgers', 'invite_expires_at', 'TEXT');
+
+    // Create ledger_members table if not exists (migration-safe)
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS ledger_members (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT DEFAULT 'editor' NOT NULL,
+        joined_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        UNIQUE(ledger_id, user_id)
+      )
+    `).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_members_ledger_id ON ledger_members(ledger_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_members_user_id ON ledger_members(user_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledgers_invite_code ON ledgers(invite_code)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_ledger ON audit_logs(ledger_id)').run();
+
     console.log('[INIT] Database tables created/verified successfully');
-    
+
   } catch (error) {
     console.error('[INIT] Failed to initialize database:', error);
   }

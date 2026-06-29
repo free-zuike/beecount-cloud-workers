@@ -6,11 +6,192 @@
 
 import { uploadToS3 } from '../lib/s3';
 
+// ===========================
+// WebDAV 工具函数
+// ===========================
+
+function buildWebDavAuth(username: string, password: string): string {
+  return 'Basic ' + btoa(`${username}:${password}`);
+}
+
+function normalizeWebDavUrl(url: string): string {
+  return url.replace(/\/+$/, '');
+}
+
+async function webdavPropfind(url: string, auth: string, depth: number = 0): Promise<{ ok: boolean; status: number; body: string }> {
+  const response = await fetch(url, {
+    method: 'PROPFIND',
+    headers: {
+      'Authorization': auth,
+      'Depth': String(depth),
+      'Content-Type': 'application/xml',
+    },
+  });
+  const body = await response.text().catch(() => '');
+  return { ok: response.ok, status: response.status, body };
+}
+
+async function webdavMkcol(url: string, auth: string): Promise<{ ok: boolean; status: number }> {
+  const response = await fetch(url, {
+    method: 'MKCOL',
+    headers: {
+      'Authorization': auth,
+    },
+  });
+  return { ok: response.ok || response.status === 405, status: response.status };
+}
+
+async function webdavPut(url: string, auth: string, content: string): Promise<{ ok: boolean; status: number; message: string }> {
+  const encoder = new TextEncoder();
+  const body = encoder.encode(content);
+  const response = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      'Authorization': auth,
+      'Content-Type': 'application/json',
+      'Content-Length': String(body.length),
+    },
+    body,
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    return { ok: false, status: response.status, message: `PUT failed: HTTP ${response.status} ${response.statusText} ${errorText}`.slice(0, 200) };
+  }
+  return { ok: true, status: response.status, message: 'Upload successful' };
+}
+
+async function webdavGet(url: string, auth: string): Promise<{ ok: boolean; status: number; body: string; message: string }> {
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Authorization': auth,
+    },
+  });
+  const body = await response.text().catch(() => '');
+  if (!response.ok) {
+    return { ok: false, status: response.status, body: '', message: `GET failed: HTTP ${response.status} ${response.statusText}` };
+  }
+  return { ok: true, status: response.status, body, message: 'Download successful' };
+}
+
+async function ensureWebDavDirectory(url: string, auth: string): Promise<void> {
+  const parts = url.split('/').filter(Boolean);
+  let current = url.includes('://') ? `${new URL(url).protocol}//${new URL(url).host}` : '';
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!current.endsWith('/')) current += '/';
+    current += parts[i];
+    if (!current.endsWith('/')) current += '/';
+    await webdavMkcol(current, auth);
+  }
+}
+
+async function uploadToWebDav(
+  baseUrl: string,
+  username: string,
+  password: string,
+  filePath: string,
+  content: string
+): Promise<{ ok: boolean; message: string }> {
+  try {
+    const normalizedBase = normalizeWebDavUrl(baseUrl);
+    const auth = buildWebDavAuth(username, password);
+    const fileUrl = `${normalizedBase}/${filePath.replace(/^\/+/, '')}`;
+    const dirUrl = fileUrl.substring(0, fileUrl.lastIndexOf('/') + 1);
+
+    if (dirUrl && dirUrl !== `${normalizedBase}/`) {
+      await ensureWebDavDirectory(dirUrl, auth);
+    }
+
+    const result = await webdavPut(fileUrl, auth, content);
+    if (!result.ok) {
+      return { ok: false, message: result.message };
+    }
+    return { ok: true, message: `WebDAV upload successful: ${filePath}` };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    return { ok: false, message: `WebDAV upload error: ${errorMsg}` };
+  }
+}
+
 export interface BackupResult {
   success: boolean;
   message: string;
   backupSize?: number;
   backupPath?: string;
+}
+
+// ===========================
+// AES-256-GCM 加密工具
+// ===========================
+
+const SALT_LENGTH = 16;
+const IV_LENGTH = 12;
+const KEY_LENGTH = 256;
+const ITERATIONS = 100000;
+
+async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(password),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+
+  return crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations: ITERATIONS,
+      hash: 'SHA-256',
+    },
+    keyMaterial,
+    { name: 'AES-GCM', length: KEY_LENGTH },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptData(plaintext: string, password: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
+  const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+  const key = await deriveKey(password, salt);
+
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    encoder.encode(plaintext)
+  );
+
+  const combined = new Uint8Array(SALT_LENGTH + IV_LENGTH + ciphertext.byteLength);
+  combined.set(salt, 0);
+  combined.set(iv, SALT_LENGTH);
+  combined.set(new Uint8Array(ciphertext), SALT_LENGTH + IV_LENGTH);
+
+  return btoa(String.fromCharCode(...combined));
+}
+
+async function getEncryptionPassword(
+  remoteConfig: Record<string, string>,
+  db: D1Database
+): Promise<string | null> {
+  if (remoteConfig.encryption_password) {
+    return remoteConfig.encryption_password;
+  }
+
+  if (remoteConfig.encryption_key_id) {
+    const setting = await db
+      .prepare('SELECT value FROM settings WHERE key = ?')
+      .bind(`backup_encryption_key:${remoteConfig.encryption_key_id}`)
+      .first<{ value: string }>();
+    if (setting) {
+      return setting.value;
+    }
+  }
+
+  return null;
 }
 
 async function fetchLedgerChanges(
@@ -28,7 +209,8 @@ export async function performBackup(
   db: D1Database,
   runId: string,
   ledgerId: string,
-  remoteConfig: Record<string, string>
+  remoteConfig: Record<string, string>,
+  shouldEncrypt?: boolean
 ): Promise<BackupResult> {
   try {
     console.log(`[Backup] Starting backup for ledger: ${ledgerId}`);
@@ -47,7 +229,20 @@ export async function performBackup(
       }))
     };
 
-    const backupContent = JSON.stringify(backupData, null, 2);
+    let backupContent = JSON.stringify(backupData, null, 2);
+    let encrypted = false;
+
+    if (shouldEncrypt) {
+      const password = await getEncryptionPassword(remoteConfig, db);
+      if (password) {
+        backupContent = await encryptData(backupContent, password);
+        encrypted = true;
+        console.log('[Backup] Data encrypted with AES-256-GCM');
+      } else {
+        console.log('[Backup] Encryption enabled but no password found, proceeding without encryption');
+      }
+    }
+
     const backupSize = backupContent.length;
 
     console.log(`[Backup] Backup content size: ${backupSize} bytes`);
@@ -97,6 +292,42 @@ export async function performBackup(
       return {
         success: true,
         message: 'Backup completed successfully',
+        backupSize,
+        backupPath: backupKey
+      };
+    } else if (remoteConfig.backend_type === 'webdav') {
+      const webdavUrl = remoteConfig.url;
+      const webdavUsername = remoteConfig.username;
+      const webdavPassword = remoteConfig.password;
+
+      if (!webdavUrl || !webdavUsername || !webdavPassword) {
+        return { success: false, message: 'WebDAV configuration incomplete (url, username, password required)' };
+      }
+
+      const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+      let basePrefix = '';
+      if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' &&
+          remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
+        basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+      } else if (remoteConfig.root_path && typeof remoteConfig.root_path === 'string' && remoteConfig.root_path.trim() !== '') {
+        basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+      }
+
+      const backupKey = `${basePrefix}backups/${ledgerId}/${timestamp}_backup.json`;
+
+      console.log(`[Backup] Uploading to WebDAV: ${backupKey}`);
+
+      const uploadResult = await uploadToWebDav(webdavUrl, webdavUsername, webdavPassword, backupKey, backupContent);
+
+      if (!uploadResult.ok) {
+        return { success: false, message: uploadResult.message };
+      }
+
+      console.log(`[Backup] WebDAV upload successful: ${backupKey}`);
+
+      return {
+        success: true,
+        message: 'Backup completed successfully via WebDAV',
         backupSize,
         backupPath: backupKey
       };

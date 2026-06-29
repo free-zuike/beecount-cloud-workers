@@ -25,8 +25,10 @@ import backupRouter from './routes/backup';
 import adminBackupRouter from './routes/admin_backup';
 import notificationsRouter from './routes/notifications';
 import mcpCallsRouter from './routes/mcp_calls';
+import mcpRouter from './routes/mcp';
 import adminRouter from './routes/admin';
 import sysConfigRouter from './routes/sys_config';
+import csvRouter from './routes/csv';
 import wsRouter from './routes/websocket';
 
 type Bindings = {
@@ -99,6 +101,7 @@ app.use('/ai/*', async (c, next) => authMiddleware(c, next));
 app.use('/backup/*', async (c, next) => authMiddleware(c, next));
 app.use('/notifications/*', async (c, next) => authMiddleware(c, next));
 app.use('/sys-config/*', async (c, next) => authMiddleware(c, next));
+app.use('/export/*', async (c, next) => authMiddleware(c, next));
 
 app.route('/api/v1/auth', authRouter);
 app.route('/api/v1/2fa', twoFactorRouter);
@@ -122,6 +125,10 @@ app.route('/api/v1/admin/backup', adminBackupRouter);
 app.route('/api/v1/admin', adminRouter);
 app.route('/api/v1/sys-config', sysConfigRouter);
 app.route('/api/v1/profile/mcp-calls', mcpCallsRouter);
+app.route('/api/v1/export', csvRouter);
+
+app.route('/api/v1/mcp', mcpRouter);
+app.route('/mcp', mcpRouter);
 
 app.route('/sync', syncRouter);
 app.route('/read', readRouter);
@@ -134,6 +141,7 @@ app.route('/import', importRouter);
 app.route('/ai', aiRouter);
 app.route('/backup', backupRouter);
 app.route('/notifications', notificationsRouter);
+app.route('/export', csvRouter);
 
 app.onError((err, c) => {
   console.error('[ERROR]', err.message);
