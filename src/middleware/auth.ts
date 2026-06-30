@@ -4,7 +4,7 @@ import { validateAccessToken, base64urlDecode } from '../auth';
 export const authMiddleware = async (c: any, next: Next, skipPaths: string[] = []) => {
   const requestPath = c.req.path;
   for (const skipPath of skipPaths) {
-    if (requestPath === skipPath || requestPath === '/api/v1' + skipPath) {
+    if (requestPath === skipPath || requestPath.startsWith(skipPath + '/')) {
       return next();
     }
   }
