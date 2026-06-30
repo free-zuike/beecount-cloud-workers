@@ -17,6 +17,8 @@ const API_PATHS = [
   '/mcp-calls',
   '/admin',
   '/sys-config',
+  '/export',
+  '/mcp',
 ];
 
 const STATIC_PREFIXES = [
