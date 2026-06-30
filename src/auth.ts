@@ -85,7 +85,7 @@ export async function createAccessToken(
   userId: string,
   secret: string,
   clientType: string = 'app',
-  scopes: string[] = ['app_write', 'web_write']
+  scopes: string[] = ['app:write']
 ): Promise<string> {
   const header = JSON.stringify({ alg: JWT_ALG, typ: 'JWT' });
   const payload = JSON.stringify({

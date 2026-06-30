@@ -121,10 +121,12 @@ authRouter.post('/register', zValidator('json', z.object({
   os_version: z.string().optional(),
   device_model: z.string().optional(),
 })), async (c) => {
-  const { email, password, device_id: deviceId, device_name: deviceName, platform } = c.req.valid('json');
+  const { email, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType } = c.req.valid('json');
   const resolvedDeviceId = deviceId || randomUUID();
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
+  const isApp = clientType !== 'web';
+  const tokenScopes = isApp ? ['app:write'] : ['web:read', 'web:write', 'ops:write'];
 
   const existingUser = await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
   if (existingUser) {
@@ -152,7 +154,7 @@ authRouter.post('/register', zValidator('json', z.object({
     VALUES (?, ?, ?, ?, ?, ?)
   `).bind(resolvedDeviceId, userId, deviceName, platform, c.req.header('CF-Connecting-IP'), now).run();
 
-  const accessToken = await createAccessToken(userId, jwtSecret);
+  const accessToken = await createAccessToken(userId, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
   const refreshTokenObj = await createRefreshToken(userId, resolvedDeviceId, db);
 
   // 自动创建默认账本（与原版保持一致）
@@ -279,10 +281,12 @@ authRouter.post('/login', zValidator('json', z.object({
   os_version: z.string().optional(),
   device_model: z.string().optional()
 })), async (c) => {
-  const { email, password, device_id: deviceId, device_name: deviceName, platform } = c.req.valid('json');
+  const { email, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType } = c.req.valid('json');
   const resolvedDeviceId = deviceId || randomUUID();
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
+  const isApp = clientType !== 'web';
+  const tokenScopes = isApp ? ['app:write'] : ['web:read', 'web:write', 'ops:write'];
 
   const user = await db.prepare('SELECT id, email, password_hash, is_enabled, is_admin, totp_enabled FROM users WHERE email = ?').bind(email).first<{ id: string, email: string, password_hash: string, is_enabled: number, is_admin: number, totp_enabled: number }>();
   if (!user) {
@@ -329,7 +333,7 @@ authRouter.post('/login', zValidator('json', z.object({
     }
   }
 
-  const accessToken = await createAccessToken(user.id, jwtSecret);
+  const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
   const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db);
 
   // 返回符合蜜蜂记账 APP 期望的格式
@@ -344,7 +348,7 @@ authRouter.post('/login', zValidator('json', z.object({
     refresh_token: refreshToken.token,
     expires_in: 3600,
     device_id: resolvedDeviceId,
-    scopes: ['web:read', 'web:write', 'ops:write'],
+    scopes: tokenScopes,
   });
 });
 
@@ -364,7 +368,7 @@ authRouter.post('/refresh', zValidator('json', z.object({
 
     const { userId, deviceId } = decoded;
 
-    const accessToken = await createAccessToken(userId, jwtSecret);
+    const accessToken = await createAccessToken(userId, jwtSecret, 'app', ['app:write']);
     const newRefreshToken = await createRefreshToken(userId, deviceId, db);
 
     await revokeRefreshToken(refreshToken, db);
@@ -376,7 +380,7 @@ authRouter.post('/refresh', zValidator('json', z.object({
       refresh_token: newRefreshToken.token,
       expires_in: 3600,
       device_id: deviceId,
-      scopes: ['web:read', 'web:write', 'ops:write'],
+      scopes: ['app:write'],
     });
   } catch (error) {
     console.error('Refresh token error:', error);
