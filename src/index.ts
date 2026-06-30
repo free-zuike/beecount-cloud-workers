@@ -31,6 +31,8 @@ import sysConfigRouter from './routes/sys_config';
 import csvRouter from './routes/csv';
 import wsRouter from './routes/websocket';
 
+import { BeeCountDO } from './do';
+
 type Bindings = {
   DB: D1Database;
   ASSETS: { fetch: (request: Request) => Promise<Response> };
@@ -155,6 +157,8 @@ app.onError((err, c) => {
 app.route('/ws', wsRouter);
 
 app.get('*', spaMiddleware);
+
+export { BeeCountDO };
 
 export default {
   fetch: app.fetch,
