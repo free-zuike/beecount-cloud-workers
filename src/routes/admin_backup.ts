@@ -624,12 +624,15 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
 
   const configJson = JSON.stringify(req.config);
 
+  const remoteId = crypto.randomUUID();
+  
   const result = await db
     .prepare(
-      `INSERT INTO backup_remotes (name, backend_type, config_summary, encrypted, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO backup_remotes (id, name, backend_type, config_summary, encrypted, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
+      remoteId,
       req.name,
       req.backend_type,
       configJson,
@@ -638,8 +641,6 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
       serverNow
     )
     .run();
-
-  const remoteId = (result as any).lastRowId;
 
   if (req.is_default) {
     await db
