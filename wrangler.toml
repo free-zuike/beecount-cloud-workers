@@ -19,6 +19,10 @@ database_id = "70e33ef5-5754-4daa-88bd-868a75ca9715"
 name = "BEECOUNT_DO"
 class_name = "BeeCountDO"
 
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "beecount-avatars"
+
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["BeeCountDO"]

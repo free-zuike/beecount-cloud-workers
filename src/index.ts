@@ -37,6 +37,7 @@ type Bindings = {
   DB: D1Database;
   ASSETS: { fetch: (request: Request) => Promise<Response> };
   BEECOUNT_DO: DurableObjectNamespace;
+  R2: R2Bucket;
   API_PREFIX: string;
   JWT_SECRET: string;
   CORS_ORIGINS?: string;
@@ -72,43 +73,31 @@ app.use('*', async (c, next) => {
 
 app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
+// ---- 公共路由（无需鉴权）----
 app.route('/api/v1/setup', setupRouter);
-
-app.get('/api/v1/version', (c) =>
-  c.json({
-    name: 'BeeCount Cloud Workers',
-    version: '1.0.0',
-  })
-);
-
-app.use('/api/v1/*', async (c, next) => {
-  return authMiddleware(c, next, [
-    '/api/v1/auth',
-    '/api/v1/version',
-    '/api/v1/setup'
-  ]);
-});
-
-app.use('/2fa/*', async (c, next) => {
-  return authMiddleware(c, next, ['/2fa/verify']);
-});
-
-app.use('/sync/*', async (c, next) => authMiddleware(c, next));
-app.use('/read/*', async (c, next) => authMiddleware(c, next));
-app.use('/write/*', async (c, next) => authMiddleware(c, next));
-app.use('/devices/*', async (c, next) => authMiddleware(c, next));
-app.use('/profile/*', async (c, next) => authMiddleware(c, next, ['/profile/avatar']));
-app.use('/attachments/*', async (c, next) => authMiddleware(c, next));
-app.use('/import/*', async (c, next) => authMiddleware(c, next));
-app.use('/ai/*', async (c, next) => authMiddleware(c, next));
-app.use('/backup/*', async (c, next) => authMiddleware(c, next));
-app.use('/notifications/*', async (c, next) => authMiddleware(c, next));
-app.use('/sys-config/*', async (c, next) => authMiddleware(c, next));
-app.use('/export/*', async (c, next) => authMiddleware(c, next));
-
 app.route('/api/v1/auth', authRouter);
 app.route('/api/v1/2fa', twoFactorRouter);
 app.route('/2fa', twoFactorRouter);
+app.get('/api/v1/version', (c) =>
+  c.json({ name: 'BeeCount Cloud Workers', version: '1.0.0' })
+);
+
+// ---- 鉴权中间件 ----
+app.use('/api/v1/*', authMiddleware);
+app.use('/sync/*', authMiddleware);
+app.use('/read/*', authMiddleware);
+app.use('/write/*', authMiddleware);
+app.use('/devices/*', authMiddleware);
+app.use('/profile/*', authMiddleware);
+app.use('/attachments/*', authMiddleware);
+app.use('/import/*', authMiddleware);
+app.use('/ai/*', authMiddleware);
+app.use('/backup/*', authMiddleware);
+app.use('/notifications/*', authMiddleware);
+app.use('/sys-config/*', authMiddleware);
+app.use('/export/*', authMiddleware);
+
+// ---- 受保护路由 ----
 app.route('/api/v1/sync', syncRouter);
 app.route('/api/v1/read', readRouter);
 app.route('/api/v1/read/summary', summaryRouter);
@@ -129,10 +118,8 @@ app.route('/api/v1/admin', adminRouter);
 app.route('/api/v1/sys-config', sysConfigRouter);
 app.route('/api/v1/profile/mcp-calls', mcpCallsRouter);
 app.route('/api/v1/export', csvRouter);
-
 app.route('/api/v1/mcp', mcpRouter);
 app.route('/mcp', mcpRouter);
-
 app.route('/sync', syncRouter);
 app.route('/read', readRouter);
 app.route('/read/summary', summaryRouter);
