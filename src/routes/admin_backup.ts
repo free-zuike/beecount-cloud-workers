@@ -1365,9 +1365,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
     .bind(schedule.user_id)
     .first<{ id: string }>();
 
-  if (!ledger) {
-    return c.json({ error: 'Ledger not found' }, 404);
-  }
+  const ledgerId = ledger?.id || null;
 
   let remoteId: string | null = null;
   let remoteConfig: Record<string, string> = { backend_type: 'local' };
@@ -1441,12 +1439,12 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
       `INSERT INTO backup_runs (schedule_id, ledger_id, remote_id, status, started_at)
        VALUES (?, ?, ?, 'pending', ?)`
     )
-    .bind(scheduleId, ledger.id, remoteId, serverNow)
+    .bind(scheduleId, ledgerId, remoteId, serverNow)
     .run();
 
   const runId = (runInsertResult as any).lastRowId;
 
-  const backupResult = await performBackup(db, runId, ledger.id, remoteConfig, shouldEncrypt, c.env.R2);
+  const backupResult = await performBackup(db, runId, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2);
   
   const finishedAt = new Date().toISOString();
   
