@@ -21,7 +21,7 @@ class_name = "BeeCountDO"
 
 [[migrations]]
 tag = "v3"
-new_classes = ["BeeCountDO"]
+new_sqlite_classes = ["BeeCountDO"]
 
 [vars]
 API_PREFIX = "/api/v1"
