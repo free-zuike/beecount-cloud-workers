@@ -300,3 +300,63 @@ CREATE TABLE IF NOT EXISTS read_budget_projection (
 );
 
 CREATE INDEX IF NOT EXISTS ix_read_budget_ledger_cat ON read_budget_projection(ledger_id, category_sync_id);
+
+-- Backup tables (aligned with original BeeCount Cloud)
+CREATE TABLE IF NOT EXISTS backup_remotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    backend_type TEXT NOT NULL,
+    encrypted BOOLEAN DEFAULT 0 NOT NULL,
+    config_summary TEXT,
+    last_test_at TEXT,
+    last_test_ok BOOLEAN,
+    last_test_error TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+    UNIQUE(user_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_backup_remotes_user_id ON backup_remotes(user_id);
+
+CREATE TABLE IF NOT EXISTS backup_schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    enabled BOOLEAN DEFAULT 1 NOT NULL,
+    cron_expr TEXT NOT NULL,
+    remote_ids TEXT,
+    ledger_ids TEXT,
+    include_attachments BOOLEAN DEFAULT 1 NOT NULL,
+    timezone_offset INTEGER DEFAULT 0,
+    next_run_at TEXT,
+    last_run_at TEXT,
+    last_run_status TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_backup_schedules_user_id ON backup_schedules(user_id);
+
+CREATE TABLE IF NOT EXISTS backup_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    schedule_id TEXT REFERENCES backup_schedules(id) ON DELETE SET NULL,
+    ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+    remote_id TEXT REFERENCES backup_remotes(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error_message TEXT,
+    bytes_total INTEGER,
+    backup_path TEXT,
+    backup_filename TEXT,
+    started_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_backup_runs_schedule_id ON backup_runs(schedule_id);
+CREATE INDEX IF NOT EXISTS idx_backup_runs_status ON backup_runs(status);
+
+CREATE TABLE IF NOT EXISTS backup_restores (
+    id TEXT PRIMARY KEY,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    run_id TEXT REFERENCES backup_runs(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'preparing',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_backup_restores_user_id ON backup_restores(user_id);
