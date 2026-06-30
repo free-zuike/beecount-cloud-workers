@@ -25,6 +25,31 @@ jobs:
       - name: Install root dependencies
         run: npm install
 
+      - name: Create or get D1 database
+        id: d1
+        run: |
+          # Try to get existing database, create if not found
+          DB_ID=$(npx wrangler d1 list --json 2>/dev/null | grep -o '"name":"beecount-cloud","id":"[^"]*"' | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+          
+          if [ -z "$DB_ID" ]; then
+            echo "Creating new D1 database..."
+            RESULT=$(npx wrangler d1 create beecount-cloud 2>&1)
+            DB_ID=$(echo "$RESULT" | grep -oP 'database_id = "\K[^"]+')
+            echo "Created database: $DB_ID"
+          else
+            echo "Found existing database: $DB_ID"
+          fi
+          
+          echo "database_id=$DB_ID" >> $GITHUB_OUTPUT
+
+      - name: Patch wrangler.toml with database ID
+        run: |
+          sed -i "s/database_id = \"[^\"]*\"/database_id = \"${{ steps.d1.outputs.database_id }}\"/" wrangler.toml
+          echo "Patched database_id: ${{ steps.d1.outputs.database_id }}"
+
+      - name: Apply database schema
+        run: npx wrangler d1 migrations apply beecount-cloud --remote
+
       - name: Build frontend
         run: cd frontend && pnpm install --no-frozen-lockfile && pnpm build
 
