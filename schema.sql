@@ -207,7 +207,7 @@ CREATE INDEX IF NOT EXISTS idx_backup_snapshots_ledger_id ON backup_snapshots(le
 
 -- Backup Remotes
 CREATE TABLE IF NOT EXISTS backup_remotes (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     backend_type TEXT NOT NULL,
     config_summary TEXT NOT NULL,
@@ -223,7 +223,7 @@ CREATE INDEX IF NOT EXISTS idx_backup_remotes_backend_type ON backup_remotes(bac
 
 -- Backup Schedules
 CREATE TABLE IF NOT EXISTS backup_schedules (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     user_id TEXT NOT NULL,
     cron_expr TEXT NOT NULL,
@@ -244,10 +244,10 @@ CREATE INDEX IF NOT EXISTS idx_backup_schedules_enabled ON backup_schedules(enab
 
 -- Backup Runs
 CREATE TABLE IF NOT EXISTS backup_runs (
-    id TEXT PRIMARY KEY,
-    schedule_id TEXT REFERENCES backup_schedules(id) ON DELETE SET NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    schedule_id INTEGER,
     ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
-    remote_id TEXT REFERENCES backup_remotes(id) ON DELETE SET NULL,
+    remote_id INTEGER,
     status TEXT NOT NULL DEFAULT 'pending',
     error_message TEXT,
     bytes_total INTEGER,
@@ -264,9 +264,8 @@ CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at 
 
 -- Backup Restores
 CREATE TABLE IF NOT EXISTS backup_restores (
-    id TEXT PRIMARY KEY,
-    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-    run_id TEXT REFERENCES backup_runs(id) ON DELETE SET NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER,
     status TEXT NOT NULL DEFAULT 'preparing',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

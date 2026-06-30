@@ -76,10 +76,10 @@ export async function processBackupSchedule(
       }
     }
 
-    const runId = crypto.randomUUID();
     const startedAt = new Date().toISOString();
-    await db.prepare('INSERT INTO backup_runs (id, schedule_id, ledger_id, remote_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(runId, schedule.id, ledger.id, remoteId, 'pending', startedAt).run();
+    const runInsertResult = await db.prepare('INSERT INTO backup_runs (schedule_id, ledger_id, remote_id, status, started_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(schedule.id, ledger.id, remoteId, 'pending', startedAt).run();
+    const runId = (runInsertResult as any).lastRowId;
 
     try {
       const backupResult = await performBackup(db, runId, ledger.id, remoteConfig, shouldEncrypt, r2);
