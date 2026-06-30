@@ -13,12 +13,13 @@ export async function createTestEnv() {
 export async function registerTestUser(
   app: ReturnType<typeof createTestApp>,
   email: string = 'test@example.com',
-  password: string = 'password123'
+  password: string = 'password123',
+  deviceId: string = TEST_DEVICE_ID
 ) {
   return await app.request('/api/v1/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, device_id: deviceId, device_name: 'Test Device', platform: 'test' }),
   });
 }
 

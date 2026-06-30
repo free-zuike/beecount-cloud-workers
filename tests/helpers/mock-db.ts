@@ -133,6 +133,7 @@ class InMemoryDB {
 
     let changes = 0;
     for (const row of table) {
+      paramIdx.current = 0;
       if (whereClause && !this.matchesWhere(row, whereClause, params, paramIdx)) {
         continue;
       }
@@ -167,7 +168,10 @@ class InMemoryDB {
     }
 
     const before = table.length;
-    const remaining = table.filter(row => !this.matchesWhere(row, whereClause, params, paramIdx));
+    const remaining = table.filter(row => {
+      paramIdx.current = 0;
+      return !this.matchesWhere(row, whereClause, params, paramIdx);
+    });
     this.tables.set(tableName, remaining);
     return { success: true, meta: { last_row_id: 0, changes: before - remaining.length }, results: [] };
   }
@@ -186,7 +190,10 @@ class InMemoryDB {
     const whereClause = this.parseWhereClause(sql);
     const paramIdx = { current: 0 };
     if (whereClause) {
-      workingRows = workingRows.filter(row => this.matchesWhere(row, whereClause, params, paramIdx));
+      workingRows = workingRows.filter(row => {
+        paramIdx.current = 0;
+        return this.matchesWhere(row, whereClause, params, paramIdx);
+      });
     }
 
     const isDistinct = selectExpr.toUpperCase().startsWith('DISTINCT ');
