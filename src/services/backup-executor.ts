@@ -5,6 +5,7 @@
  */
 
 import { uploadToS3 } from '../lib/s3';
+import { createFtpClient } from '../lib/ftp';
 
 // ===========================
 // WebDAV 工具函数
@@ -338,6 +339,41 @@ export async function performBackup(
         message: 'Backup completed (local storage)',
         backupSize,
         backupPath: `local://backup_${runId}.json`
+      };
+    } else if (remoteConfig.backend_type === 'ftp') {
+      const ftpHost = remoteConfig.host || remoteConfig.hostname;
+      const ftpPort = parseInt(remoteConfig.port || '21', 10);
+      const ftpUser = remoteConfig.username;
+      const ftpPass = remoteConfig.password;
+
+      if (!ftpHost || !ftpUser || !ftpPass) {
+        return { success: false, message: 'FTP configuration incomplete (host, username, password required)' };
+      }
+
+      const ftpClient = createFtpClient({ host: ftpHost, port: ftpPort, username: ftpUser, password: ftpPass });
+
+      let basePrefix = '';
+      if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' && remoteConfig.savePath.trim() !== '') {
+        basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+      }
+
+      const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+      const backupKey = `${basePrefix}backups/${ledgerId}/${timestamp}_backup.json`;
+
+      console.log(`[Backup] Uploading to FTP: ${backupKey}`);
+
+      const encoder = new TextEncoder();
+      const uploadResult = await ftpClient.upload(backupKey, encoder.encode(backupContent));
+
+      if (!uploadResult) {
+        return { success: false, message: 'FTP upload failed' };
+      }
+
+      return {
+        success: true,
+        message: 'Backup completed successfully via FTP',
+        backupSize,
+        backupPath: backupKey
       };
     } else {
       return { success: false, message: `Unsupported backend type: ${remoteConfig.backend_type}` };

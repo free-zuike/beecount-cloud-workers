@@ -870,6 +870,27 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         }
         break;
 
+      case 'ftp':
+        const ftpHost = config.host || config.hostname;
+        const ftpPort = parseInt(config.port || '21', 10);
+        const ftpUsername = config.username;
+        const ftpPassword = config.password;
+
+        if (!ftpHost) {
+          testResult.ok = false;
+          testResult.message = 'FTP host is required';
+        } else if (!ftpUsername || !ftpPassword) {
+          testResult.ok = false;
+          testResult.message = 'FTP username and password are required';
+        } else {
+          const { createFtpClient } = await import('../lib/ftp');
+          const ftpClient = createFtpClient({ host: ftpHost, port: ftpPort, username: ftpUsername, password: ftpPassword });
+          const ftpResult = await ftpClient.test();
+          testResult.ok = ftpResult.success;
+          testResult.message = ftpResult.message;
+        }
+        break;
+
       default:
         testResult.message = `Unknown backend type: ${remote.backend_type}`;
     }
