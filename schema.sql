@@ -262,6 +262,16 @@ CREATE INDEX IF NOT EXISTS idx_backup_runs_ledger_id ON backup_runs(ledger_id);
 CREATE INDEX IF NOT EXISTS idx_backup_runs_status ON backup_runs(status);
 CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at DESC);
 
+-- Backup Restores
+CREATE TABLE IF NOT EXISTS backup_restores (
+    id TEXT PRIMARY KEY,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    run_id TEXT REFERENCES backup_runs(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'preparing',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_backup_restores_user_id ON backup_restores(user_id);
+
 -- Audit Logs
 CREATE TABLE IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

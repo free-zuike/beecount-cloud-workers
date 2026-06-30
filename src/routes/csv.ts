@@ -39,7 +39,7 @@ const ExportQuerySchema = z.object({
   tx_type: z.enum(['income', 'expense', 'transfer']).optional(),
 });
 
-csvRouter.get('/export/csv', zValidator('query', ExportQuerySchema), async (c) => {
+csvRouter.get('/workspace/transactions.csv', zValidator('query', ExportQuerySchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const { ledger_id, date_from, date_to, category_name, account_name, tx_type } = c.req.valid('query');

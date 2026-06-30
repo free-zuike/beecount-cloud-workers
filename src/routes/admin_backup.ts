@@ -1626,4 +1626,93 @@ backupRouter.post('/runs/cleanup', async (c) => {
   });
 });
 
+// ==================== Restore Endpoints ====================
+
+/**
+ * POST /runs/:runId/prepare-restore - Prepare restore from backup
+ */
+backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
+  const db = c.env.DB;
+  const userId = c.get('userId');
+  const runId = c.req.param('runId');
+
+  const run = await db
+    .prepare('SELECT * FROM backup_runs WHERE id = ? AND user_id = ?')
+    .bind(runId, userId)
+    .first();
+
+  if (!run) {
+    return c.json({ error: 'Backup run not found' }, 404);
+  }
+
+  const restore = await db
+    .prepare(
+      `INSERT INTO backup_restores (id, user_id, run_id, status, created_at)
+       VALUES (?, ?, ?, 'preparing', datetime('now'))`
+    )
+    .bind(crypto.randomUUID(), userId, runId)
+    .run();
+
+  const restoreId = (restore as any).meta?.last_row_id;
+
+  return c.json({
+    id: restoreId,
+    run_id: runId,
+    status: 'preparing',
+    created_at: new Date().toISOString(),
+  });
+});
+
+/**
+ * GET /restores - List restore records
+ */
+backupRouter.get('/restores', async (c) => {
+  const db = c.env.DB;
+  const userId = c.get('userId');
+  const limit = parseInt(c.req.query('limit') ?? '20');
+
+  const result = await db
+    .prepare('SELECT * FROM backup_restores WHERE user_id = ? ORDER BY created_at DESC LIMIT ?')
+    .bind(userId, limit)
+    .all();
+
+  return c.json({ items: result.results || [] });
+});
+
+/**
+ * GET /restores/:id - Get restore details
+ */
+backupRouter.get('/restores/:id', async (c) => {
+  const db = c.env.DB;
+  const userId = c.get('userId');
+  const id = c.req.param('id');
+
+  const restore = await db
+    .prepare('SELECT * FROM backup_restores WHERE id = ? AND user_id = ?')
+    .bind(id, userId)
+    .first();
+
+  if (!restore) {
+    return c.json({ error: 'Restore not found' }, 404);
+  }
+
+  return c.json(restore);
+});
+
+/**
+ * DELETE /restores/:id - Delete restore record
+ */
+backupRouter.delete('/restores/:id', async (c) => {
+  const db = c.env.DB;
+  const userId = c.get('userId');
+  const id = c.req.param('id');
+
+  await db
+    .prepare('DELETE FROM backup_restores WHERE id = ? AND user_id = ?')
+    .bind(id, userId)
+    .run();
+
+  return c.json({ success: true });
+});
+
 export default backupRouter;

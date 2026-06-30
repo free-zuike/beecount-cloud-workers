@@ -313,6 +313,17 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at DESC)').run();
 
     await db.prepare(`
+      CREATE TABLE IF NOT EXISTS backup_restores (
+        id TEXT PRIMARY KEY,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        run_id TEXT REFERENCES backup_runs(id) ON DELETE SET NULL,
+        status TEXT NOT NULL DEFAULT 'preparing',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_restores_user_id ON backup_restores(user_id)').run();
+
+    await db.prepare(`
       CREATE TABLE IF NOT EXISTS attachment_files (
         id TEXT PRIMARY KEY,
         ledger_id TEXT REFERENCES ledgers(id) ON DELETE CASCADE,
