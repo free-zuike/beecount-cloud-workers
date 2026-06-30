@@ -31,14 +31,19 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          DB_LIST=$(npx wrangler d1 list 2>/dev/null)
-          DB_ID=$(echo "$DB_LIST" | grep 'beecount-cloud' | awk '{print $1}')
+          # Create database and capture output
+          OUTPUT=$(npx wrangler d1 create beecount-cloud 2>&1 || true)
+          echo "$OUTPUT"
           
+          # Extract database_id from wrangler output (format: database_id = "xxx")
+          DB_ID=$(echo "$OUTPUT" | grep -oP 'database_id = "\K[^"]+' || echo "")
+          
+          # If creation failed (already exists), list and find it
           if [ -z "$DB_ID" ]; then
-            npx wrangler d1 create beecount-cloud
-            DB_ID=$(npx wrangler d1 list 2>/dev/null | grep 'beecount-cloud' | awk '{print $1}')
+            DB_ID=$(npx wrangler d1 list 2>&1 | grep 'beecount-cloud' | head -1 | awk '{print $1}')
           fi
           
+          echo "Final database_id: $DB_ID"
           echo "database_id=$DB_ID" >> $GITHUB_OUTPUT
 
       - name: Patch wrangler.toml
