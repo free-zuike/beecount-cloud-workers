@@ -68,7 +68,6 @@ type FieldSpec = {
 // 内部能识别(参考 rclone source: backend/s3/s3.go 的 providers map)。
 const S3_PROVIDERS: Array<{ value: string; label: string }> = [
   { value: 'AWS', label: 'AWS' },
-  { value: 'Cloudflare', label: 'Cloudflare R2' },
   { value: 'Alibaba', label: '阿里云 OSS' },
   { value: 'Tencent', label: '腾讯云 COS' },
   { value: 'Backblaze', label: 'Backblaze B2 (S3 API)' },
