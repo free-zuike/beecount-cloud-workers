@@ -13,10 +13,11 @@ interface AuditLogParams {
   entityType?: string | null;
   entityId?: string | null;
   details?: Record<string, unknown>;
+  logBuffer?: DurableObjectNamespace;
 }
 
 export async function insertAuditLog(params: AuditLogParams): Promise<void> {
-  const { db, userId, ledgerId, action, entityType, entityId, details } = params;
+  const { db, userId, ledgerId, action, entityType, entityId, details, logBuffer } = params;
   try {
     await db
       .prepare(
@@ -32,7 +33,46 @@ export async function insertAuditLog(params: AuditLogParams): Promise<void> {
         details ? JSON.stringify(details) : null,
       )
       .run();
+
+    // Also buffer in LogBuffer DO for real-time log viewing
+    if (logBuffer) {
+      try {
+        const doId = logBuffer.idFromName(`log-${userId}`);
+        const stub = logBuffer.get(doId);
+        await stub.fetch(new URL('/add', 'http://do'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            level: 'info',
+            source: 'audit',
+            message: `${action} ${entityType || ''} ${entityId || ''}`,
+          }),
+        });
+      } catch {
+        // LogBuffer DO failure should not block audit log
+      }
+    }
   } catch (err) {
     console.error('[AUDIT] Failed to insert audit log:', err);
+  }
+}
+
+export async function logToBuffer(
+  logBuffer: DurableObjectNamespace,
+  userId: string,
+  level: string,
+  source: string,
+  message: string
+): Promise<void> {
+  try {
+    const doId = logBuffer.idFromName(`log-${userId}`);
+    const stub = logBuffer.get(doId);
+    await stub.fetch(new URL('/add', 'http://do'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level, source, message }),
+    });
+  } catch {
+    // Buffer failure should not block operations
   }
 }

@@ -176,7 +176,7 @@ export default {
       
       for (const schedule of schedules) {
         try {
-          await processBackupSchedule(db, schedule);
+          await processBackupSchedule(db, schedule, env.TASK_LOCK);
         } catch (scheduleError) {
           console.error(`[CRON] Error processing schedule ${schedule.id}:`, scheduleError);
         }
