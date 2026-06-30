@@ -6,6 +6,7 @@
 
 import { uploadToS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
+import { createSftpClient } from '../lib/sftp';
 
 // ===========================
 // WebDAV 工具函数
@@ -372,6 +373,41 @@ export async function performBackup(
       return {
         success: true,
         message: 'Backup completed successfully via FTP',
+        backupSize,
+        backupPath: backupKey
+      };
+    } else if (remoteConfig.backend_type === 'sftp') {
+      const sftpHost = remoteConfig.host || remoteConfig.hostname;
+      const sftpPort = parseInt(remoteConfig.port || '22', 10);
+      const sftpUsername = remoteConfig.username;
+      const sftpPassword = remoteConfig.password;
+      const sftpKey = remoteConfig.private_key || remoteConfig.privateKey;
+
+      if (!sftpHost || !sftpUsername) {
+        return { success: false, message: 'SFTP configuration incomplete (host, username required)' };
+      }
+
+      let basePrefix = '';
+      if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' && remoteConfig.savePath.trim() !== '') {
+        basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+      }
+
+      const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+      const backupKey = `${basePrefix}backups/${ledgerId}/${timestamp}_backup.json`;
+
+      console.log(`[Backup] Uploading to SFTP: ${backupKey}`);
+
+      const sftpClient = createSftpClient({ host: sftpHost, port: sftpPort, username: sftpUsername, password: sftpPassword, privateKey: sftpKey });
+      const encoder = new TextEncoder();
+      const uploadResult = await sftpClient.upload(backupKey, encoder.encode(backupContent));
+
+      if (!uploadResult) {
+        return { success: false, message: 'SFTP upload failed' };
+      }
+
+      return {
+        success: true,
+        message: 'Backup completed successfully via SFTP',
         backupSize,
         backupPath: backupKey
       };

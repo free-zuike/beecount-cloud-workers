@@ -891,6 +891,27 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         }
         break;
 
+      case 'sftp':
+        const sftpHost = config.host || config.hostname;
+        const sftpPort = parseInt(config.port || '22', 10);
+        const sftpUsername = config.username;
+        const sftpPassword = config.password;
+
+        if (!sftpHost) {
+          testResult.ok = false;
+          testResult.message = 'SFTP host is required';
+        } else if (!sftpUsername) {
+          testResult.ok = false;
+          testResult.message = 'SFTP username is required';
+        } else {
+          const { createSftpClient } = await import('../lib/sftp');
+          const sftpClient = createSftpClient({ host: sftpHost, port: sftpPort, username: sftpUsername, password: sftpPassword });
+          const sftpResult = await sftpClient.test();
+          testResult.ok = sftpResult.success;
+          testResult.message = sftpResult.message;
+        }
+        break;
+
       default:
         testResult.message = `Unknown backend type: ${remote.backend_type}`;
     }
