@@ -31,37 +31,8 @@ jobs:
       - name: Setup D1 database
         id: d1
         run: |
-          # List databases and find beecount-cloud
-          DB_ID=$(npx wrangler d1 list --json 2>/dev/null | python3 -c "
-          import sys, json
-          try:
-              data = json.load(sys.stdin)
-              for db in data:
-                  if db.get('name') == 'beecount-cloud':
-                      print(db['uuid'])
-                      break
-          except: pass
-          ")
-
-          if [ -z "$DB_ID" ]; then
-            echo "Creating new D1 database..."
-            npx wrangler d1 create beecount-cloud > create_out.txt 2>&1 || true
-            DB_ID=$(python3 -c "
-          import re
-          try:
-              with open('create_out.txt') as f:
-                  content = f.read()
-              m = re.search(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', content)
-              if m: print(m.group())
-          except: pass
-          ")
-          fi
-
-          if [ -z "$DB_ID" ]; then
-            echo "FATAL: Could not resolve database_id"
-            exit 1
-          fi
-
+          DB_ID="2ee426d6-4813-4f6a-8ead-8feabc0236fe"
+          echo "Using existing D1 database: $DB_ID"
           echo "database_id=$DB_ID" >> $GITHUB_OUTPUT
 
       - name: Patch wrangler.toml
@@ -70,9 +41,6 @@ jobs:
           echo "Patching database_id to: $DB_ID"
           sed -i "s|database_id = \"[^\"]*\"|database_id = \"$DB_ID\"|" wrangler.toml
           grep "database_id" wrangler.toml
-
-      - name: Apply migrations
-        run: npx wrangler d1 migrations apply beecount-cloud --remote
 
       - name: Build frontend
         run: cd frontend && pnpm install --no-frozen-lockfile && pnpm build
