@@ -452,27 +452,33 @@ syncRouter.get('/pull', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   
-  const cursor = parseInt(c.req.query('cursor') ?? '0');
+  const since = parseInt(c.req.query('since') ?? '0');
   const limit = parseInt(c.req.query('limit') ?? '100');
   const ledgerId = c.req.query('ledger_id');
+  const deviceId = c.req.query('device_id');
 
   try {
     let query = `
-      SELECT c.change_id, c.entity_type, c.entity_sync_id, c.action, c.payload_json, c.updated_at, l.external_id as ledger_id
+      SELECT c.change_id, c.entity_type, c.entity_sync_id, c.action, c.payload_json, c.updated_at, c.updated_by_device_id, l.external_id as ledger_id
       FROM sync_changes c
-      JOIN ledgers l ON c.ledger_id = l.id
+      LEFT JOIN ledgers l ON c.ledger_id = l.id
       WHERE c.user_id = ? AND c.change_id > ?
     `;
     
-    const params: (string | number)[] = [userId, cursor];
+    const params: (string | number)[] = [userId, since];
     
     if (ledgerId) {
       query += ' AND l.external_id = ?';
       params.push(ledgerId);
     }
+
+    if (deviceId) {
+      query += ' AND c.updated_by_device_id != ?';
+      params.push(deviceId);
+    }
     
     query += ' ORDER BY c.change_id ASC LIMIT ?';
-    params.push(limit);
+    params.push(limit + 1);
 
     const changes = await db
       .prepare(query)
@@ -484,7 +490,8 @@ syncRouter.get('/pull', async (c) => {
         action: string;
         payload_json: string;
         updated_at: string;
-        ledger_id: string;
+        ledger_id: string | null;
+        updated_by_device_id: string | null;
       }>();
 
     const maxRow = await db
@@ -492,17 +499,23 @@ syncRouter.get('/pull', async (c) => {
       .bind(userId)
       .first<{ max_id: number | null }>();
 
+    const allResults = changes.results;
+    const hasMore = allResults.length > limit;
+    const limitedResults = hasMore ? allResults.slice(0, limit) : allResults;
+
     return c.json({
-      changes: changes.results.map(c => ({
-        ledger_id: c.ledger_id,
+      changes: limitedResults.map(c => ({
+        change_id: c.change_id,
+        ledger_id: c.ledger_id ?? '',
         entity_type: c.entity_type,
         entity_sync_id: c.entity_sync_id,
         action: c.action,
         payload: c.payload_json ? JSON.parse(c.payload_json) : {},
         updated_at: c.updated_at,
+        updated_by_device_id: c.updated_by_device_id ?? null,
       })),
       server_cursor: maxRow?.max_id ?? 0,
-      server_timestamp: nowUtc(),
+      has_more: hasMore,
     });
   } catch (error) {
     console.error('[SYNC] /sync/pull error:', error);
