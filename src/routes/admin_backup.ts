@@ -931,23 +931,6 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         }
         break;
 
-      case 'r2':
-        if (!c.env.R2) {
-          testResult.ok = false;
-          testResult.message = 'R2 bucket not configured';
-        } else {
-          try {
-            await c.env.R2.put('__test__', 'ok');
-            await c.env.R2.delete('__test__');
-            testResult.ok = true;
-            testResult.message = 'R2 bucket accessible';
-          } catch (e) {
-            testResult.ok = false;
-            testResult.message = `R2 test failed: ${(e as Error).message}`;
-          }
-        }
-        break;
-
       default:
         testResult.message = `Unknown backend type: ${remote.backend_type}`;
     }
@@ -1212,8 +1195,6 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
       )
       .run();
   }
-
-  const scheduleId = Number((insertResult as any).lastRowId);
 
   return c.json({
     id: scheduleId,
