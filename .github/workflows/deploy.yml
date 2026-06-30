@@ -31,9 +31,27 @@ jobs:
       - name: Setup D1 database
         id: d1
         run: |
-          DB_ID="2ee426d6-4813-4f6a-8ead-8feabc0236fe"
-          echo "Using existing D1 database: $DB_ID"
+          DB_ID=""
+
+          # Try to find existing database using grep instead of fragile python
+          EXISTING=$(npx wrangler d1 list 2>/dev/null | grep "beecount-cloud" || true)
+          if echo "$EXISTING" | grep -q "beecount-cloud"; then
+            DB_ID=$(echo "$EXISTING" | grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' || true)
+          fi
+
+          if [ -z "$DB_ID" ]; then
+            echo "No existing database found, creating new one..."
+            npx wrangler d1 create beecount-cloud 2>&1 | tee create_out.txt || true
+            DB_ID=$(grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' create_out.txt 2>/dev/null || true)
+          fi
+
+          if [ -z "$DB_ID" ]; then
+            echo "FATAL: Could not resolve database_id"
+            exit 1
+          fi
+
           echo "database_id=$DB_ID" >> $GITHUB_OUTPUT
+          echo "Resolved D1 database_id: $DB_ID"
 
       - name: Patch wrangler.toml
         run: |
