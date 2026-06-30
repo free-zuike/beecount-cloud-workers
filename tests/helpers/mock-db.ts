@@ -432,6 +432,18 @@ class InMemoryDB {
       } else {
         rightVal = parseFloat(gtMatch[3]);
       }
+      const isDateLeft = typeof leftVal === 'string' && leftVal.includes('T');
+      const isDateRight = typeof rightVal === 'string' && (rightVal as string).includes('T');
+      if (isDateLeft || isDateRight) {
+        const l = String(leftVal ?? '');
+        const r = String(rightVal ?? '');
+        switch (op) {
+          case '>': return l > r;
+          case '>=': return l >= r;
+          case '<': return l < r;
+          case '<=': return l <= r;
+        }
+      }
       const numLeft = Number(leftVal) || 0;
       const numRight = Number(rightVal) || 0;
       switch (op) {

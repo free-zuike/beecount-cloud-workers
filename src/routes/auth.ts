@@ -100,7 +100,7 @@ const DEFAULT_CATEGORIES: DefaultCategory[] = [
     { name: '其他', icon: '❓' },
   ]},
 ];
-import { hashPassword, verifyPassword, createAccessToken, createRefreshToken, validateAccessToken, sha256 } from '../auth';
+import { hashPassword, verifyPassword, createAccessToken, createRefreshToken, validateAccessToken, decodeRefreshToken, revokeRefreshToken } from '../auth';
 
 type Bindings = {
   DB: D1Database;
@@ -112,10 +112,19 @@ const authRouter = new Hono<{ Bindings: Bindings; Variables: { userId: string } 
 // Register
 authRouter.post('/register', zValidator('json', z.object({
   email: z.string().email(),
-  password: z.string().min(8)
+  password: z.string().min(8),
+  device_id: z.string().optional(),
+  device_name: z.string().optional().default('Unknown Device'),
+  platform: z.string().optional().default('unknown'),
+  client_type: z.string().optional(),
+  app_version: z.string().optional(),
+  os_version: z.string().optional(),
+  device_model: z.string().optional(),
 })), async (c) => {
-  const { email, password } = c.req.valid('json');
+  const { email, password, device_id: deviceId, device_name: deviceName, platform } = c.req.valid('json');
+  const resolvedDeviceId = deviceId || randomUUID();
   const db = c.env.DB;
+  const jwtSecret = c.env.JWT_SECRET;
 
   const existingUser = await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
   if (existingUser) {
@@ -136,34 +145,44 @@ authRouter.post('/register', zValidator('json', z.object({
     VALUES (?, ?, ?)
   `).bind(userId, email, DEFAULT_AI_CONFIG).run();
 
+  // Create device
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO devices (id, user_id, name, platform, last_ip, last_seen_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).bind(resolvedDeviceId, userId, deviceName, platform, c.req.header('CF-Connecting-IP'), now).run();
+
+  const accessToken = await createAccessToken(userId, jwtSecret);
+  const refreshTokenObj = await createRefreshToken(userId, resolvedDeviceId, db);
+
   // 自动创建默认账本（与原版保持一致）
   const ledgerId = randomUUID();
   const ledgerExternalId = randomUUID();
-  
+
   await db.prepare(`
     INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
     VALUES (?, ?, ?, ?, 'CNY', ?)
-  `).bind(ledgerId, userId, ledgerExternalId, '默认账本', new Date().toISOString()).run();
+  `).bind(ledgerId, userId, ledgerExternalId, '默认账本', now).run();
 
   // 自动创建默认分类（防重复）
-  const serverNow = new Date().toISOString();
+  const serverNow = now;
   const existingCategories = await db
     .prepare('SELECT name, kind FROM read_category_projection WHERE ledger_id = ? AND level = 1')
     .bind(ledgerId)
     .all<{ name: string; kind: string }>();
-  
+
   const existingNames = new Set(existingCategories.results.map(c => `${c.kind}:${c.name}`));
   const parentSyncIds: Record<string, string> = {};
-  
+
   for (const cat of DEFAULT_CATEGORIES) {
     const key = `${cat.kind}:${cat.name}`;
     if (existingNames.has(key)) {
       continue;
     }
-    
+
     const parentSyncId = randomUUID();
     parentSyncIds[cat.name] = parentSyncId;
-    
+
     const payload: Record<string, unknown> = {
       name: cat.name,
       kind: cat.kind,
@@ -173,7 +192,7 @@ authRouter.post('/register', zValidator('json', z.object({
       icon_type: 'emoji',
       parent_name: null,
     };
-    
+
     await db
       .prepare(
         `INSERT INTO sync_changes
@@ -182,7 +201,7 @@ authRouter.post('/register', zValidator('json', z.object({
       )
       .bind(userId, ledgerId, 'category', parentSyncId, 'upsert', JSON.stringify(payload), serverNow, userId)
       .run();
-    
+
     await db
       .prepare(
         `INSERT INTO read_category_projection
@@ -196,7 +215,7 @@ authRouter.post('/register', zValidator('json', z.object({
         cat.sort_order, cat.icon, 'emoji', null, null, null, null, 0,
       )
       .run();
-    
+
     if (cat.children) {
       for (const child of cat.children) {
         const childSyncId = randomUUID();
@@ -209,7 +228,7 @@ authRouter.post('/register', zValidator('json', z.object({
           icon_type: 'emoji',
           parent_name: cat.name,
         };
-        
+
         await db
           .prepare(
             `INSERT INTO sync_changes
@@ -218,7 +237,7 @@ authRouter.post('/register', zValidator('json', z.object({
           )
           .bind(userId, ledgerId, 'category', childSyncId, 'upsert', JSON.stringify(childPayload), serverNow, userId)
           .run();
-        
+
         await db
           .prepare(
             `INSERT INTO read_category_projection
@@ -237,7 +256,15 @@ authRouter.post('/register', zValidator('json', z.object({
     }
   }
 
-  return c.json({ success: true });
+  return c.json({
+    requires_2fa: false,
+    user: { id: userId, email, is_admin: false },
+    access_token: accessToken,
+    refresh_token: refreshTokenObj.token,
+    expires_in: 3600,
+    device_id: resolvedDeviceId,
+    scopes: ['web:read', 'web:write', 'ops:write'],
+  });
 });
 
 // Login
@@ -257,7 +284,7 @@ authRouter.post('/login', zValidator('json', z.object({
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
 
-  const user = await db.prepare('SELECT id, email, password_hash, is_enabled, totp_enabled FROM users WHERE email = ?').bind(email).first<{ id: string, email: string, password_hash: string, is_enabled: number, totp_enabled: number }>();
+  const user = await db.prepare('SELECT id, email, password_hash, is_enabled, is_admin, totp_enabled FROM users WHERE email = ?').bind(email).first<{ id: string, email: string, password_hash: string, is_enabled: number, is_admin: number, totp_enabled: number }>();
   if (!user) {
     return c.json({ error: 'Invalid credentials' }, 401);
   }
@@ -272,7 +299,10 @@ authRouter.post('/login', zValidator('json', z.object({
   }
 
   if (user.totp_enabled) {
-    return c.json({ requires_totp: true }, 401);
+    return c.json({
+      requires_2fa: true,
+      available_methods: ['totp', 'recovery_code'],
+    });
   }
 
   // Create or update device
@@ -304,14 +334,17 @@ authRouter.post('/login', zValidator('json', z.object({
 
   // 返回符合蜜蜂记账 APP 期望的格式
   return c.json({
+    requires_2fa: false,
     user: {
       id: user.id,
-      email: user.email || null
+      email: user.email || null,
+      is_admin: Boolean((user as any).is_admin),
     },
     access_token: accessToken,
     refresh_token: refreshToken.token,
     expires_in: 3600,
-    device_id: resolvedDeviceId
+    device_id: resolvedDeviceId,
+    scopes: ['web:read', 'web:write', 'ops:write'],
   });
 });
 
@@ -324,40 +357,26 @@ authRouter.post('/refresh', zValidator('json', z.object({
   const jwtSecret = c.env.JWT_SECRET;
 
   try {
-    // 计算 token 的哈希值（与存储时相同）
-    const tokenHash = Buffer.from(await sha256(new TextEncoder().encode(refreshToken))).toString('hex');
-
-    // 查找 refresh token
-    const tokenRecord = await db
-      .prepare('SELECT id, user_id, device_id, expires_at FROM refresh_tokens WHERE token_hash = ?')
-      .bind(tokenHash)
-      .first<{ id: string; user_id: string; device_id: string; expires_at: string }>();
-
-    if (!tokenRecord) {
-      return c.json({ error: 'Invalid refresh token' }, 401);
+    const decoded = await decodeRefreshToken(refreshToken, db);
+    if (!decoded.valid) {
+      return c.json({ error: decoded.reason }, 401);
     }
 
-    // 检查 token 是否过期
-    const expiresAt = new Date(tokenRecord.expires_at);
-    if (expiresAt < new Date()) {
-      // 删除过期的 token
-      await db.prepare('DELETE FROM refresh_tokens WHERE id = ?').bind(tokenRecord.id).run();
-      return c.json({ error: 'Refresh token expired' }, 401);
-    }
+    const { userId, deviceId } = decoded;
 
-    // 创建新的 access token
-    const accessToken = await createAccessToken(tokenRecord.user_id, jwtSecret);
+    const accessToken = await createAccessToken(userId, jwtSecret);
+    const newRefreshToken = await createRefreshToken(userId, deviceId, db);
 
-    // 创建新的 refresh token（刷新 token）
-    const newRefreshToken = await createRefreshToken(tokenRecord.user_id, tokenRecord.device_id, db);
-
-    // 删除旧的 refresh token
-    await db.prepare('DELETE FROM refresh_tokens WHERE id = ?').bind(tokenRecord.id).run();
+    await revokeRefreshToken(refreshToken, db);
 
     return c.json({
+      requires_2fa: false,
+      user: { id: userId },
       access_token: accessToken,
       refresh_token: newRefreshToken.token,
-      expires_at: Math.floor(Date.now() / 1000) + 60 * 60
+      expires_in: 3600,
+      device_id: deviceId,
+      scopes: ['web:read', 'web:write', 'ops:write'],
     });
   } catch (error) {
     console.error('Refresh token error:', error);

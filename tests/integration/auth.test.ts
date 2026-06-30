@@ -13,7 +13,9 @@ describe('Auth - Register', () => {
     const res = await registerTestUser(env.app);
     expect(res.status).toBe(200);
     const body = await res.json() as any;
-    expect(body.success).toBe(true);
+    expect(body.access_token).toBeDefined();
+    expect(body.refresh_token).toBeDefined();
+    expect(body.user).toBeDefined();
   });
 
   it('should reject duplicate email', async () => {
