@@ -34,9 +34,9 @@ import wsRouter from './routes/websocket';
 type Bindings = {
   DB: D1Database;
   ASSETS: { fetch: (request: Request) => Promise<Response> };
-  WS_SESSION: DurableObjectNamespace;
-  LOG_BUFFER: DurableObjectNamespace;
-  TASK_LOCK: DurableObjectNamespace;
+  BEECOUNT_WS: DurableObjectNamespace;
+  BEECOUNT_LOG_BUFFER: DurableObjectNamespace;
+  BEECOUNT_LOCK: DurableObjectNamespace;
   API_PREFIX: string;
   JWT_SECRET: string;
   CORS_ORIGINS?: string;
@@ -176,7 +176,7 @@ export default {
       
       for (const schedule of schedules) {
         try {
-          await processBackupSchedule(db, schedule, env.TASK_LOCK);
+          await processBackupSchedule(db, schedule, env.BEECOUNT_LOCK);
         } catch (scheduleError) {
           console.error(`[CRON] Error processing schedule ${schedule.id}:`, scheduleError);
         }
