@@ -84,7 +84,6 @@ app.get('/api/v1/version', (c) =>
 app.use('/api/v1/*', async (c, next) => {
   return authMiddleware(c, next, [
     '/api/v1/auth',
-    '/api/v1/profile/avatar',
     '/api/v1/version',
     '/api/v1/setup'
   ]);
