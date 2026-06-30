@@ -6,6 +6,7 @@ import { useT } from '@beecount/ui'
 
 import { AppShell } from './app/AppShell'
 import { RequireAuth } from './app/router'
+import { SetupForm } from './app/SetupForm'
 import { LoginPage } from './pages/LoginPage'
 import { clearCursor } from './state/sync-client'
 
