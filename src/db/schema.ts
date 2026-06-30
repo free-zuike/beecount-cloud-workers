@@ -123,6 +123,15 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       )
     `).run();
 
+    // For existing databases, add missing columns before creating indexes
+    const safeAddColumn = async (table: string, column: string, def: string) => {
+      try { await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`).run(); } catch { /* exists */ }
+    };
+    await safeAddColumn('audit_logs', 'entity_type', 'TEXT');
+    await safeAddColumn('audit_logs', 'entity_id', 'TEXT');
+    await safeAddColumn('audit_logs', 'details_json', 'TEXT');
+    await safeAddColumn('audit_logs', 'metadata_json', 'TEXT');
+
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time ON audit_logs(user_id, created_at DESC)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC)').run();
@@ -164,6 +173,12 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         UNIQUE(user_id, external_id)
       )
     `).run();
+
+    // Migrate ledgers columns before indexes
+    await safeAddColumn('ledgers', 'role', "TEXT DEFAULT 'owner' NOT NULL");
+    await safeAddColumn('ledgers', 'is_shared', 'BOOLEAN DEFAULT 0 NOT NULL');
+    await safeAddColumn('ledgers', 'invite_code', 'TEXT');
+    await safeAddColumn('ledgers', 'invite_expires_at', 'TEXT');
 
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledgers_user_id ON ledgers(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledgers_external_id ON ledgers(external_id)').run();
