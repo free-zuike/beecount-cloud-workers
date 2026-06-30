@@ -82,6 +82,27 @@ app.get('/api/v1/version', (c) =>
   c.json({ name: 'BeeCount Cloud Workers', version: '1.0.0' })
 );
 
+// 头像下载公开访问（与原版一致）
+app.get('/api/v1/profile/avatar/:userId', async (c) => {
+  const userId = c.req.param('userId');
+  const db = c.env.DB;
+  const r2 = c.env.R2;
+  if (!r2) return c.json({ error: 'Storage not configured' }, 500);
+
+  const profile = await db.prepare('SELECT avatar_file_id, avatar_version FROM user_profiles WHERE user_id = ?').bind(userId).first<{ avatar_file_id: string; avatar_version: number }>();
+  if (!profile?.avatar_file_id) return c.json({ error: 'Avatar not found' }, 404);
+
+  const obj = await r2.get(`avatars/${userId}/${profile.avatar_file_id}`);
+  if (!obj) return c.json({ error: 'Avatar not found' }, 404);
+
+  return new Response(obj.body, {
+    headers: {
+      'Content-Type': obj.httpMetadata?.contentType || 'image/png',
+      'Cache-Control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
+    },
+  });
+});
+
 // ---- 鉴权中间件 ----
 app.use('/api/v1/*', authMiddleware);
 app.use('/sync/*', authMiddleware);
