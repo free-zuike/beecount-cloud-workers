@@ -31,24 +31,18 @@ jobs:
       - name: Setup D1 database
         id: d1
         run: |
-          # List existing databases
-          LIST=$(npx wrangler d1 list 2>&1)
-          echo "$LIST"
-          DB_ID=$(echo "$LIST" | grep 'beecount-cloud' | head -1 | awk '{print $1}')
+          # Try to find existing database
+          DB_ID=$(npx wrangler d1 list 2>&1 | grep 'beecount-cloud' | head -1 | awk '{print $1}' | tr -d '[:space:]')
 
           if [ -z "$DB_ID" ]; then
-            echo "Database not found, creating..."
-            CREATE_OUTPUT=$(npx wrangler d1 create beecount-cloud 2>&1)
-            echo "$CREATE_OUTPUT"
-            DB_ID=$(echo "$CREATE_OUTPUT" | sed -n 's/.*database_id.*"\([^"]*\)".*/\1/p')
+            # Create new database
+            npx wrangler d1 create beecount-cloud 2>&1 | tee create_output.txt
+            # Extract UUID from output using grep
+            DB_ID=$(grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' create_output.txt | head -1)
           fi
 
-          echo "Resolved database_id: [$DB_ID]"
-          if [ -z "$DB_ID" ]; then
-            echo "ERROR: Could not resolve database_id"
-            exit 1
-          fi
           echo "database_id=$DB_ID" >> $GITHUB_OUTPUT
+          echo "DB_ID=$DB_ID"
 
       - name: Update wrangler.toml
         run: |
