@@ -76,8 +76,6 @@ app.get('/healthz', (c) => c.json({ status: 'ok' }));
 // ---- 公共路由（无需鉴权）----
 app.route('/api/v1/setup', setupRouter);
 app.route('/api/v1/auth', authRouter);
-app.route('/api/v1/2fa', twoFactorRouter);
-app.route('/2fa', twoFactorRouter);
 app.get('/api/v1/version', (c) =>
   c.json({ name: 'BeeCount Cloud Workers', version: '1.0.0' })
 );
@@ -119,6 +117,8 @@ app.use('/sys-config/*', authMiddleware);
 app.use('/export/*', authMiddleware);
 
 // ---- 受保护路由 ----
+app.route('/api/v1/2fa', twoFactorRouter);
+app.route('/2fa', twoFactorRouter);
 app.route('/api/v1/sync', syncRouter);
 app.route('/api/v1/read', readRouter);
 app.route('/api/v1/read/summary', summaryRouter);
