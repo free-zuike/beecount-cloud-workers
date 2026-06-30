@@ -1163,16 +1163,18 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
 
   const remoteIdsJson = req.remote_ids && req.remote_ids.length > 0 ? JSON.stringify(req.remote_ids) : null;
 
+  const scheduleId = crypto.randomUUID();
   // 先尝试插入带 timezone_offset 的版本
   let insertResult;
   try {
     insertResult = await db
       .prepare(
         `INSERT INTO backup_schedules
-         (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, timezone_offset, next_run_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, timezone_offset, next_run_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
+        scheduleId,
         req.name,
         userId,
         req.cron_expr,
@@ -1192,10 +1194,11 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
     insertResult = await db
       .prepare(
         `INSERT INTO backup_schedules
-         (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, next_run_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, next_run_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
+        scheduleId,
         req.name,
         userId,
         req.cron_expr,
