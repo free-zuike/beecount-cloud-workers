@@ -80,6 +80,14 @@ const S3_PROVIDERS: Array<{ value: string; label: string }> = [
 ]
 
 const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
+  r2: [
+    {
+      key: 'root_path',
+      label: 'Root Path (主路径)',
+      placeholder: 'backups / 留空',
+      hint: 'R2 存储桶中的路径前缀，留空使用默认值 backups/',
+    },
+  ],
   s3: [
     {
       key: 'provider',
@@ -169,7 +177,8 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
 }
 
 const BACKEND_LABELS: Record<string, string> = {
-  s3: 'S3 兼容(AWS / Cloudflare R2 / Aliyun OSS / MinIO ...)',
+  r2: 'Cloudflare R2 (Workers 绑定)',
+  s3: 'S3 兼容(AWS / Aliyun OSS / MinIO ...)',
   b2: 'Backblaze B2',
   drive: 'Google Drive',
   onedrive: 'OneDrive',
