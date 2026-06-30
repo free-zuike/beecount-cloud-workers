@@ -3,15 +3,15 @@ import { performBackup, calculateNextRun } from './backup-executor';
 export async function processBackupSchedule(
   db: D1Database,
   schedule: any,
-  taskLock?: DurableObjectNamespace
+  beeCountDO?: DurableObjectNamespace
 ) {
   console.log(`[CRON] Processing schedule ${schedule.id}: ${schedule.name}`);
 
-  // Use TaskLock DO to prevent concurrent execution
-  if (taskLock) {
+  // Use BeeCount DO for distributed locking
+  if (beeCountDO) {
     try {
-      const lockId = taskLock.idFromName(`backup-${schedule.id}`);
-      const stub = taskLock.get(lockId);
+      const lockId = beeCountDO.idFromName(`lock-${schedule.id}`);
+      const stub = beeCountDO.get(lockId);
       const lockResult = await stub.fetch(new URL('/lock', 'http://do'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -108,10 +108,10 @@ export async function processBackupSchedule(
       console.error(`[CRON] Exception during backup for schedule ${schedule.id}:`, error);
     }
   } finally {
-    if (taskLock) {
+    if (beeCountDO) {
       try {
-        const lockId = taskLock.idFromName(`backup-${schedule.id}`);
-        const stub = taskLock.get(lockId);
+        const lockId = beeCountDO.idFromName(`lock-${schedule.id}`);
+        const stub = beeCountDO.get(lockId);
         await stub.fetch(new URL('/unlock', 'http://do'), { method: 'POST' });
       } catch { /* non-critical */ }
     }

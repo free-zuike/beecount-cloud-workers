@@ -16,20 +16,12 @@ database_name = "beecount-cloud"
 database_id = "7ade7fef-3c80-4a1d-a576-1b25eda102dd"
 
 [[durable_objects.bindings]]
-name = "BEECOUNT_WS"
-class_name = "WsSession"
-
-[[durable_objects.bindings]]
-name = "BEECOUNT_LOG_BUFFER"
-class_name = "LogBuffer"
-
-[[durable_objects.bindings]]
-name = "BEECOUNT_LOCK"
-class_name = "TaskLock"
+name = "BEECOUNT_DO"
+class_name = "BeeCountDO"
 
 [[migrations]]
-tag = "v2"
-new_classes = ["WsSession", "LogBuffer", "TaskLock"]
+tag = "v3"
+new_classes = ["BeeCountDO"]
 
 [vars]
 API_PREFIX = "/api/v1"

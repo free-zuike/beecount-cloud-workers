@@ -3,7 +3,7 @@ import { validateAccessToken } from '../auth';
 
 type Bindings = {
   JWT_SECRET: string;
-  BEECOUNT_WS: DurableObjectNamespace;
+  BEECOUNT_DO: DurableObjectNamespace;
 };
 
 const wsRouter = new Hono<{ Bindings: Bindings }>();
@@ -30,8 +30,8 @@ wsRouter.get('/', async (c) => {
     }
 
     // Use Durable Object for persistent WebSocket management
-    const doId = c.env.BEECOUNT_WS.idFromName(userId);
-    const doStub = c.env.BEECOUNT_WS.get(doId);
+    const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
+    const doStub = c.env.BEECOUNT_DO.get(doId);
 
     // Forward the WebSocket upgrade request to the DO
     const doRequest = new Request(
