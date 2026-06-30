@@ -31,14 +31,26 @@ jobs:
       - name: Setup D1 database
         id: d1
         run: |
-          # Try to find existing database
-          DB_ID=$(npx wrangler d1 list 2>&1 | grep 'beecount-cloud' | head -1 | awk '{print $1}' | tr -d '[:space:]')
+          # List databases as JSON and parse
+          DB_ID=$(npx wrangler d1 list --json 2>/dev/null | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          for db in data:
+              if db.get('name') == 'beecount-cloud':
+                  print(db['uuid'])
+                  break
+          " 2>/dev/null)
 
           if [ -z "$DB_ID" ]; then
-            # Create new database
-            npx wrangler d1 create beecount-cloud 2>&1 | tee create_output.txt
-            # Extract UUID from output using grep
-            DB_ID=$(grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' create_output.txt | head -1)
+            echo "Database not found, creating..."
+            npx wrangler d1 create beecount-cloud 2>&1 | tee create_out.txt
+            DB_ID=$(python3 -c "
+          import re
+          with open('create_out.txt') as f:
+              content = f.read()
+          m = re.search(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', content)
+              if m: print(m.group())
+          ")
           fi
 
           echo "database_id=$DB_ID" >> $GITHUB_OUTPUT
@@ -46,7 +58,20 @@ jobs:
 
       - name: Update wrangler.toml
         run: |
-          sed -i 's/database_id = ".*"/database_id = "'"${{ steps.d1.outputs.database_id }}"'"/' wrangler.toml
+          DB_ID="${{ steps.d1.outputs.database_id }}"
+          if [ -z "$DB_ID" ]; then
+            echo "ERROR: database_id is empty!"
+            exit 1
+          fi
+          # Use python for reliable string replacement
+          python3 -c "
+          import re
+          with open('wrangler.toml', 'r') as f:
+              content = f.read()
+          content = re.sub(r'database_id = \"[^\"]*\"', f'database_id = \"{DB_ID}\"', content, count=1)
+          with open('wrangler.toml', 'w') as f:
+              f.write(content)
+          "
           echo "Updated wrangler.toml:"
           grep database_id wrangler.toml
 
