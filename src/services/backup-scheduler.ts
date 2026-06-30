@@ -3,7 +3,8 @@ import { performBackup, calculateNextRun } from './backup-executor';
 export async function processBackupSchedule(
   db: D1Database,
   schedule: any,
-  beeCountDO?: DurableObjectNamespace
+  beeCountDO?: DurableObjectNamespace,
+  r2?: R2Bucket
 ) {
   console.log(`[CRON] Processing schedule ${schedule.id}: ${schedule.name}`);
 
@@ -81,7 +82,7 @@ export async function processBackupSchedule(
       .bind(runId, schedule.id, ledger.id, remoteId, 'pending', startedAt).run();
 
     try {
-      const backupResult = await performBackup(db, runId, ledger.id, remoteConfig, shouldEncrypt);
+      const backupResult = await performBackup(db, runId, ledger.id, remoteConfig, shouldEncrypt, r2);
       const finishedAt = new Date().toISOString();
 
       if (backupResult.success) {

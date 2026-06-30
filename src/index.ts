@@ -186,7 +186,7 @@ export default {
       
       for (const schedule of schedules) {
         try {
-          await processBackupSchedule(db, schedule, env.BEECOUNT_DO);
+          await processBackupSchedule(db, schedule, env.BEECOUNT_DO, env.R2);
         } catch (scheduleError) {
           console.error(`[CRON] Error processing schedule ${schedule.id}:`, scheduleError);
         }

@@ -363,6 +363,7 @@ const RunNowSchema = z.object({
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
+  R2: R2Bucket;
   S3_ENDPOINT?: string;
   S3_REGION?: string;
   S3_ACCESS_KEY_ID?: string;
@@ -891,6 +892,23 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         }
         break;
 
+      case 'r2':
+        if (!c.env.R2) {
+          testResult.ok = false;
+          testResult.message = 'R2 bucket not configured in Worker bindings';
+        } else {
+          try {
+            await c.env.R2.put('__test__', 'ok');
+            await c.env.R2.delete('__test__');
+            testResult.ok = true;
+            testResult.message = 'R2 bucket accessible and writable';
+          } catch (e) {
+            testResult.ok = false;
+            testResult.message = `R2 test failed: ${(e as Error).message}`;
+          }
+        }
+        break;
+
       case 'sftp':
         const sftpHost = config.host || config.hostname;
         const sftpPort = parseInt(config.port || '22', 10);
@@ -909,6 +927,23 @@ backupRouter.post('/remotes/:id/test', async (c) => {
           const sftpResult = await sftpClient.test();
           testResult.ok = sftpResult.success;
           testResult.message = sftpResult.message;
+        }
+        break;
+
+      case 'r2':
+        if (!c.env.R2) {
+          testResult.ok = false;
+          testResult.message = 'R2 bucket not configured';
+        } else {
+          try {
+            await c.env.R2.put('__test__', 'ok');
+            await c.env.R2.delete('__test__');
+            testResult.ok = true;
+            testResult.message = 'R2 bucket accessible';
+          } catch (e) {
+            testResult.ok = false;
+            testResult.message = `R2 test failed: ${(e as Error).message}`;
+          }
         }
         break;
 
@@ -1429,7 +1464,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
     .bind(runId, scheduleId, ledger.id, remoteId, serverNow)
     .run();
 
-  const backupResult = await performBackup(db, runId, ledger.id, remoteConfig, shouldEncrypt);
+  const backupResult = await performBackup(db, runId, ledger.id, remoteConfig, shouldEncrypt, c.env.R2);
   
   const finishedAt = new Date().toISOString();
   

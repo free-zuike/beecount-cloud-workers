@@ -212,7 +212,8 @@ export async function performBackup(
   runId: string,
   ledgerId: string,
   remoteConfig: Record<string, string>,
-  shouldEncrypt?: boolean
+  shouldEncrypt?: boolean,
+  r2?: R2Bucket
 ): Promise<BackupResult> {
   try {
     console.log(`[Backup] Starting backup for ledger: ${ledgerId}`);
@@ -340,6 +341,19 @@ export async function performBackup(
         message: 'Backup completed (local storage)',
         backupSize,
         backupPath: `local://backup_${runId}.json`
+      };
+    } else if (remoteConfig.backend_type === 'r2') {
+      if (!r2) {
+        return { success: false, message: 'R2 bucket not configured' };
+      }
+      const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+      const backupKey = `backups/${ledgerId}/${timestamp}_backup.json`;
+      await r2.put(backupKey, backupContent, { httpMetadata: { contentType: 'application/json' } });
+      return {
+        success: true,
+        message: 'Backup uploaded to R2',
+        backupSize,
+        backupPath: backupKey
       };
     } else if (remoteConfig.backend_type === 'ftp') {
       const ftpHost = remoteConfig.host || remoteConfig.hostname;
