@@ -1439,7 +1439,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
       `INSERT INTO backup_runs (schedule_id, ledger_id, remote_id, status, started_at)
        VALUES (?, ?, ?, 'pending', ?)`
     )
-    .bind(scheduleId, ledgerId, remoteId, serverNow)
+    .bind(scheduleId, ledgerId || '', remoteId, serverNow)
     .run();
 
   const runId = (runInsertResult as any).lastRowId;
