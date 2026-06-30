@@ -15,6 +15,22 @@ binding = "DB"
 database_name = "beecount-cloud"
 database_id = "7ade7fef-3c80-4a1d-a576-1b25eda102dd"
 
+[[durable_objects.bindings]]
+name = "WS_SESSION"
+class_name = "WsSession"
+
+[[durable_objects.bindings]]
+name = "LOG_BUFFER"
+class_name = "LogBuffer"
+
+[[durable_objects.bindings]]
+name = "TASK_LOCK"
+class_name = "TaskLock"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["WsSession", "LogBuffer", "TaskLock"]
+
 [vars]
 API_PREFIX = "/api/v1"
 # JWT_SECRET 已迁移到 Cloudflare Secrets，通过以下命令设置：

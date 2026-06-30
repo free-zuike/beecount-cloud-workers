@@ -34,6 +34,9 @@ import wsRouter from './routes/websocket';
 type Bindings = {
   DB: D1Database;
   ASSETS: { fetch: (request: Request) => Promise<Response> };
+  WS_SESSION: DurableObjectNamespace;
+  LOG_BUFFER: DurableObjectNamespace;
+  TASK_LOCK: DurableObjectNamespace;
   API_PREFIX: string;
   JWT_SECRET: string;
   CORS_ORIGINS?: string;

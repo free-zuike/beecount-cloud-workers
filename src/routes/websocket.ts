@@ -3,11 +3,10 @@ import { validateAccessToken } from '../auth';
 
 type Bindings = {
   JWT_SECRET: string;
+  WS_SESSION: DurableObjectNamespace;
 };
 
 const wsRouter = new Hono<{ Bindings: Bindings }>();
-
-const wsConnections = new Map<string, Set<WebSocket>>();
 
 wsRouter.get('/', async (c) => {
   const token = c.req.query('token');
@@ -30,52 +29,26 @@ wsRouter.get('/', async (c) => {
       return c.json({ error: 'Expected WebSocket upgrade' }, 426);
     }
 
-    const webSocketPair = new WebSocketPair();
-    const [client, server] = Object.values(webSocketPair);
+    // Use Durable Object for persistent WebSocket management
+    const doId = c.env.WS_SESSION.idFromName(userId);
+    const doStub = c.env.WS_SESSION.get(doId);
 
-    server.accept();
+    // Forward the WebSocket upgrade request to the DO
+    const doRequest = new Request(
+      new URL('/ws', c.req.url),
+      c.req.raw
+    );
+    const response = await doStub.fetch(doRequest);
 
-    if (!wsConnections.has(userId)) {
-      wsConnections.set(userId, new Set());
+    // If the DO returns a WebSocket upgrade response, forward it
+    if (response.status === 101) {
+      const ws = (response as any).webSocket;
+      if (ws) {
+        return new Response(null, { status: 101, webSocket: ws });
+      }
     }
-    wsConnections.get(userId)!.add(server);
 
-    server.addEventListener('message', async (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        console.log('[WS] Received message:', message);
-        
-        const connections = wsConnections.get(userId);
-        if (connections) {
-          connections.forEach((conn) => {
-            if (conn !== server && conn.readyState === WebSocket.OPEN) {
-              conn.send(event.data);
-            }
-          });
-        }
-      } catch (error) {
-        console.error('[WS] Error processing message:', error);
-      }
-    });
-
-    server.addEventListener('close', () => {
-      const connections = wsConnections.get(userId);
-      if (connections) {
-        connections.delete(server);
-        if (connections.size === 0) {
-          wsConnections.delete(userId);
-        }
-      }
-    });
-
-    server.addEventListener('error', (error) => {
-      console.error('[WS] Error:', error);
-    });
-
-    return new Response(null, {
-      status: 101,
-      webSocket: client,
-    });
+    return response;
   } catch (error) {
     console.error('[WS] Connection error:', error);
     return c.json({ error: 'WebSocket connection failed' }, 500);
