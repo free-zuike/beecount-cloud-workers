@@ -92,11 +92,10 @@ export function AppHeader({ onOpenLogs, onOpenAbout }: Props) {
     () => visibleNavGroups.filter((g) => g.key !== 'bookkeeping' && g.key !== 'settings'),
     [visibleNavGroups]
   )
-  const avatarMenuItems = useMemo(() => {
-    const adminOnlySections = new Set(['settings-health', 'settings-devices', 'settings-developer'])
-    const items = visibleNavGroups.find((g) => g.key === 'settings')?.items || []
-    return isAdmin ? items : items.filter((item) => !adminOnlySections.has(item.key))
-  }, [visibleNavGroups, isAdmin])
+  const avatarMenuItems = useMemo(
+    () => visibleNavGroups.find((g) => g.key === 'settings')?.items || [],
+    [visibleNavGroups]
+  )
   const moreMenuActive = useMemo(
     () => headerMoreGroups.some((g) => g.items.some((i) => i.key === currentSection)),
     [headerMoreGroups, currentSection]
