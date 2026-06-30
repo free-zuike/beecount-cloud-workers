@@ -31,49 +31,45 @@ jobs:
       - name: Setup D1 database
         id: d1
         run: |
-          # List databases as JSON and parse
+          # List databases and find beecount-cloud
           DB_ID=$(npx wrangler d1 list --json 2>/dev/null | python3 -c "
           import sys, json
-          data = json.load(sys.stdin)
-          for db in data:
-              if db.get('name') == 'beecount-cloud':
-                  print(db['uuid'])
-                  break
-          " 2>/dev/null)
+          try:
+              data = json.load(sys.stdin)
+              for db in data:
+                  if db.get('name') == 'beecount-cloud':
+                      print(db['uuid'])
+                      break
+          except: pass
+          ")
 
           if [ -z "$DB_ID" ]; then
-            echo "Database not found, creating..."
-            npx wrangler d1 create beecount-cloud 2>&1 | tee create_out.txt
+            echo "Creating new D1 database..."
+            npx wrangler d1 create beecount-cloud > create_out.txt 2>&1 || true
             DB_ID=$(python3 -c "
           import re
-          with open('create_out.txt') as f:
-              content = f.read()
-          m = re.search(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', content)
+          try:
+              with open('create_out.txt') as f:
+                  content = f.read()
+              m = re.search(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', content)
               if m: print(m.group())
+          except: pass
           ")
           fi
 
-          echo "database_id=$DB_ID" >> $GITHUB_OUTPUT
-          echo "DB_ID=$DB_ID"
-
-      - name: Update wrangler.toml
-        run: |
-          DB_ID="${{ steps.d1.outputs.database_id }}"
           if [ -z "$DB_ID" ]; then
-            echo "ERROR: database_id is empty!"
+            echo "FATAL: Could not resolve database_id"
             exit 1
           fi
-          # Use python for reliable string replacement
-          python3 -c "
-          import re
-          with open('wrangler.toml', 'r') as f:
-              content = f.read()
-          content = re.sub(r'database_id = \"[^\"]*\"', f'database_id = \"{DB_ID}\"', content, count=1)
-          with open('wrangler.toml', 'w') as f:
-              f.write(content)
-          "
-          echo "Updated wrangler.toml:"
-          grep database_id wrangler.toml
+
+          echo "database_id=$DB_ID" >> $GITHUB_OUTPUT
+
+      - name: Patch wrangler.toml
+        run: |
+          DB_ID="${{ steps.d1.outputs.database_id }}"
+          echo "Patching database_id to: $DB_ID"
+          sed -i "s|database_id = \"[^\"]*\"|database_id = \"$DB_ID\"|" wrangler.toml
+          grep "database_id" wrangler.toml
 
       - name: Apply migrations
         run: npx wrangler d1 migrations apply beecount-cloud --remote
