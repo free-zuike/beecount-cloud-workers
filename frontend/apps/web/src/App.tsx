@@ -204,12 +204,12 @@ function AppRoutes() {
   }
 
   if (!setupCompleted) {
-    // 重定向逻辑已在 useEffect 中处理，这里显示加载状态
     return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="text-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted border-t-primary mx-auto mb-4" />
-          <p className="text-muted-foreground">正在跳转到设置页面...</p>
+      <div className="flex h-screen items-center justify-center bg-gray-50">
+        <div className="w-full max-w-md p-8 bg-white rounded-lg shadow">
+          <h1 className="text-2xl font-bold mb-6 text-center">BeeCount Cloud</h1>
+          <p className="text-muted-foreground text-center mb-6">首次启动，请创建管理员账户</p>
+          <SetupForm onComplete={() => window.location.reload()} />
         </div>
       </div>
     )
