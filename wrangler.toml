@@ -25,8 +25,7 @@ new_sqlite_classes = ["BeeCountDO"]
 
 [vars]
 API_PREFIX = "/api/v1"
-# JWT_SECRET 已迁移到 Cloudflare Secrets，通过以下命令设置：
-# npx wrangler secret put JWT_SECRET
+JWT_SECRET = "IdL72kyZ353mRBBz0vvsuaZpsiOsEsAwd7xbnaW8+Lg="
 
 [observability]
 enabled = true
