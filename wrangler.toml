@@ -25,7 +25,8 @@ new_sqlite_classes = ["BeeCountDO"]
 
 [vars]
 API_PREFIX = "/api/v1"
-JWT_SECRET = "IdL72kyZ353mRBBz0vvsuaZpsiOsEsAwd7xbnaW8+Lg="
+# JWT_SECRET 通过 Cloudflare Dashboard → Workers → Settings → Variables and Secrets 设置
+# 或 CLI: npx wrangler secret put JWT_SECRET
 
 [observability]
 enabled = true
