@@ -304,8 +304,10 @@ authRouter.post('/login', zValidator('json', z.object({
   }
 
   if (user.totp_enabled) {
+    const challengeToken = await createAccessToken(user.id, jwtSecret, 'app', ['challenge:2fa'], 300);
     return c.json({
       requires_2fa: true,
+      challenge_token: challengeToken,
       available_methods: ['totp', 'recovery_code'],
     });
   }

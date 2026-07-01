@@ -85,7 +85,8 @@ export async function createAccessToken(
   userId: string,
   secret: string,
   clientType: string = 'app',
-  scopes: string[] = ['app:write']
+  scopes: string[] = ['app:write'],
+  expiresIn: number = 3600
 ): Promise<string> {
   const header = JSON.stringify({ alg: JWT_ALG, typ: 'JWT' });
   const payload = JSON.stringify({
@@ -94,7 +95,7 @@ export async function createAccessToken(
     client_type: clientType,
     scopes: scopes,
     iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + 60 * 60
+    exp: Math.floor(Date.now() / 1000) + expiresIn
   });
   
   const headerB64 = base64urlEncode(header);
