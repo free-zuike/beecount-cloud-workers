@@ -2,10 +2,37 @@ import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 
 const JWT_ALG = 'HS256';
+const PBKDF2_ITERATIONS = 26000;
+
+async function pbkdf2Sha256(password: string, salt: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']
+  );
+  const derivedBits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(salt), iterations: PBKDF2_ITERATIONS },
+    keyMaterial, 256
+  );
+  const hash = Array.from(new Uint8Array(derivedBits)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return `$pbkdf2-sha256$${PBKDF2_ITERATIONS}$${salt}$${hash}`;
+}
+
+async function verifyPbkdf2Sha256(hash: string, password: string): Promise<boolean> {
+  const parts = hash.split('$');
+  if (parts.length < 5) return false;
+  const iterations = parseInt(parts[2]);
+  const salt = parts[3];
+  const storedHash = parts[4];
+  if (!storedHash) return false;
+  const computed = await pbkdf2Sha256(password, salt);
+  const a = new TextEncoder().encode(storedHash);
+  const b = new TextEncoder().encode(computed.split('$')[4]);
+  return a.length === b.length && await crypto.subtle.timingSafeEqual(a, b);
+}
 
 export async function hashPassword(password: string): Promise<string> {
-  const salt = await bcrypt.genSalt(10);
-  return await bcrypt.hash(password, salt);
+  const salt = randomUUID().replace(/-/g, '').substring(0, 16);
+  return await pbkdf2Sha256(password, salt);
 }
 
 export async function verifyPassword(
@@ -13,10 +40,18 @@ export async function verifyPassword(
   password: string
 ): Promise<boolean> {
   try {
+    if (hash.startsWith('$pbkdf2-sha256$')) {
+      return await verifyPbkdf2Sha256(hash, password);
+    }
     return await bcrypt.compare(password, hash);
   } catch {
     return false;
   }
+}
+
+/** 检查密码哈希是否是旧格式（bcrypt），需要迁移 */
+export function isLegacyPasswordHash(hash: string): boolean {
+  return hash.startsWith('$2b$') || hash.startsWith('$2a$');
 }
 
 function base64urlEncode(str: string): string {

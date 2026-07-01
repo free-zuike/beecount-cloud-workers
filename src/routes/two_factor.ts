@@ -31,6 +31,49 @@ function nowUtc(): string {
   return new Date().toISOString();
 }
 
+// ===========================
+// TOTP Secret 加密/解密（与原版兼容）
+// ===========================
+
+async function deriveKey(secret: string): Promise<CryptoKey> {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(secret), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: encoder.encode('totp-encryption-salt'), iterations: 100000, hash: 'SHA-256' },
+    keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
+}
+
+export async function encryptTotpSecret(plaintext: string, jwtSecret: string): Promise<string> {
+  const key = await deriveKey(jwtSecret);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(plaintext);
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+  const combined = new Uint8Array(iv.length + encrypted.byteLength);
+  combined.set(iv);
+  combined.set(new Uint8Array(encrypted), iv.length);
+  return btoa(String.fromCharCode(...combined));
+}
+
+export async function decryptTotpSecret(ciphertext: string, jwtSecret: string): Promise<string> {
+  const key = await deriveKey(jwtSecret);
+  const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0));
+  const iv = combined.slice(0, 12);
+  const encrypted = combined.slice(12);
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, encrypted);
+  return new TextDecoder().decode(decrypted);
+}
+
+/** 获取解密后的 TOTP secret — 兼容旧明文和新加密格式 */
+async function getDecryptedTotpSecret(encrypted: string, jwtSecret: string): Promise<string> {
+  // 尝试解密；如果失败说明是旧明文格式，直接返回
+  try {
+    return await decryptTotpSecret(encrypted, jwtSecret);
+  } catch {
+    return encrypted;
+  }
+}
+
 /**
  * 生成随机 TOTP secret (Base32 编码)
  */
@@ -275,6 +318,7 @@ twoFactorRouter.get('/status', async (c) => {
 twoFactorRouter.post('/setup', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
+  const jwtSecret = c.env.JWT_SECRET;
 
   const user = await db
     .prepare('SELECT totp_enabled, email FROM users WHERE id = ?')
@@ -290,10 +334,11 @@ twoFactorRouter.post('/setup', async (c) => {
   }
 
   const secret = generateTotpSecret();
+  const encryptedSecret = await encryptTotpSecret(secret, jwtSecret);
 
   await db
     .prepare('UPDATE users SET totp_secret_encrypted = ?, totp_enabled = 0, totp_enabled_at = NULL WHERE id = ?')
-    .bind(secret, userId)
+    .bind(encryptedSecret, userId)
     .run();
 
   const qrUri = buildOtpauthUri(secret, user.email);
@@ -308,6 +353,7 @@ twoFactorRouter.post('/setup', async (c) => {
 twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
+  const jwtSecret = c.env.JWT_SECRET;
   const { code } = c.req.valid('json');
   const serverNow = nowUtc();
 
@@ -328,7 +374,7 @@ twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (
     return c.json({ error: 'No pending 2FA setup. Call /2fa/setup first.' }, 400);
   }
 
-  const isValid = await verifyTotpCode(user.totp_secret_encrypted, code);
+  const isValid = await verifyTotpCode(await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret), code);
   if (!isValid) {
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }
@@ -399,7 +445,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   let isValid = false;
 
   if (method === 'totp') {
-    isValid = await verifyTotpCode(user.totp_secret_encrypted, code);
+    isValid = await verifyTotpCode(await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret), code);
   } else if (method === 'recovery_code') {
     const codeHash = await sha256Hash(code);
     const recoveryCodes = await db
@@ -461,6 +507,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
 twoFactorRouter.post('/disable', zValidator('json', TwoFADisableSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
+  const jwtSecret = c.env.JWT_SECRET;
   const { password, code } = c.req.valid('json');
   const serverNow = nowUtc();
 
@@ -486,7 +533,7 @@ twoFactorRouter.post('/disable', zValidator('json', TwoFADisableSchema), async (
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }
 
-  const isValid = await verifyTotpCode(user.totp_secret_encrypted, code);
+  const isValid = await verifyTotpCode(await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret), code);
   if (!isValid) {
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }
@@ -504,6 +551,7 @@ twoFactorRouter.post('/disable', zValidator('json', TwoFADisableSchema), async (
 twoFactorRouter.post('/recovery-codes/regenerate', zValidator('json', TwoFARegenerateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
+  const jwtSecret = c.env.JWT_SECRET;
   const { code } = c.req.valid('json');
   const serverNow = nowUtc();
 
@@ -520,7 +568,7 @@ twoFactorRouter.post('/recovery-codes/regenerate', zValidator('json', TwoFARegen
     return c.json({ error: '2FA not enabled.' }, 400);
   }
 
-  const isValid = await verifyTotpCode(user.totp_secret_encrypted, code);
+  const isValid = await verifyTotpCode(await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret), code);
   if (!isValid) {
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }
