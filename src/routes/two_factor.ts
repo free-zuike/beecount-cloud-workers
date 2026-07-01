@@ -367,6 +367,16 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   if (!challengeResult || !('userId' in challengeResult)) {
     return c.json({ error: 'Invalid or expired challenge token.' }, 401);
   }
+  // 验证 token type 必须是 totp_challenge（防止用 access token 绕过 2FA）
+  const challengeParts = challenge_token.split('.');
+  if (challengeParts.length === 3) {
+    try {
+      const payload = JSON.parse(atob(challengeParts[1]));
+      if (payload.type !== 'totp_challenge') {
+        return c.json({ error: 'Invalid or expired challenge token.' }, 401);
+      }
+    } catch { return c.json({ error: 'Invalid or expired challenge token.' }, 401); }
+  }
   const userId = challengeResult.userId;
 
   const user = await db
@@ -398,7 +408,9 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
       .all<{ id: number; code_hash: string }>();
 
     for (const rc of recoveryCodes.results) {
-      if (rc.code_hash === codeHash) {
+      const rcBuf = new TextEncoder().encode(rc.code_hash);
+      const chBuf = new TextEncoder().encode(codeHash);
+      if (rcBuf.length === chBuf.length && await crypto.subtle.timingSafeEqual(rcBuf, chBuf)) {
         isValid = true;
         await db.prepare('UPDATE recovery_codes SET used_at = ? WHERE id = ?').bind(serverNow, rc.id).run();
         break;

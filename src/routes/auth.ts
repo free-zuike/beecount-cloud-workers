@@ -284,7 +284,7 @@ authRouter.post('/login', zValidator('json', z.object({
   os_version: z.string().optional(),
   device_model: z.string().optional()
 })), async (c) => {
-  const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType } = c.req.valid('json');
+  const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType, app_version: appVersion, os_version: osVersion, device_model: deviceModel } = c.req.valid('json');
   const email = rawEmail.trim().toLowerCase();
   const resolvedDeviceId = deviceId || randomUUID();
   const db = c.env.DB;
@@ -327,15 +327,15 @@ authRouter.post('/login', zValidator('json', z.object({
       // 如果设备被撤销了，重新激活它
       await db.prepare(`
         UPDATE devices
-        SET last_seen_at = ?, last_ip = ?, name = ?, revoked_at = NULL
+        SET last_seen_at = ?, last_ip = ?, name = ?, platform = ?, app_version = ?, os_version = ?, device_model = ?, revoked_at = NULL
         WHERE id = ?
-      `).bind(new Date().toISOString(), c.req.header('CF-Connecting-IP'), deviceName, resolvedDeviceId).run();
+      `).bind(new Date().toISOString(), c.req.header('CF-Connecting-IP'), deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, resolvedDeviceId).run();
     } else {
       await db.prepare(`
         UPDATE devices
-        SET last_seen_at = ?, last_ip = ?, name = ?
+        SET last_seen_at = ?, last_ip = ?, name = ?, platform = ?, app_version = ?, os_version = ?, device_model = ?
         WHERE id = ?
-      `).bind(new Date().toISOString(), c.req.header('CF-Connecting-IP'), deviceName, resolvedDeviceId).run();
+      `).bind(new Date().toISOString(), c.req.header('CF-Connecting-IP'), deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, resolvedDeviceId).run();
     }
   }
 
