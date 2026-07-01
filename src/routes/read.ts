@@ -124,6 +124,7 @@ interface ReadAccountOut {
   account_type: string | null;
   currency: string | null;
   initial_balance: number | null;
+  balance: number;
   last_change_id: number;
   ledger_id: string | null;
   ledger_name: string | null;
@@ -948,7 +949,7 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
     .bind(ledger.id)
     .first<{ max_id: number | null }>();
 
-  // 查询账户（user-global，去重）
+  // 查询账户（user-global，去重）并计算余额
   const rows = await db
     .prepare(
       `SELECT DISTINCT r.sync_id, r.name, r.account_type, r.currency, r.initial_balance,
@@ -960,24 +961,51 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
     .bind(userId)
     .all<Record<string, unknown>>();
 
-  const result: ReadAccountOut[] = rows.results.map((row) => ({
-    id: row.sync_id as string,
-    name: (row.name as string) ?? '',
-    account_type: row.account_type as string | null,
-    currency: row.currency as string | null,
-    initial_balance: row.initial_balance as number | null,
-    last_change_id: latestChangeId?.max_id ?? 0,
-    ledger_id: ledger.external_id,
-    ledger_name: ledger.name,
-    created_by_user_id: null,
-    created_by_email: null,
-    note: row.note as string | null,
-    credit_limit: row.credit_limit as number | null,
-    billing_day: row.billing_day as number | null,
-    payment_due_day: row.payment_due_day as number | null,
-    bank_name: row.bank_name as string | null,
-    card_last_four: row.card_last_four as string | null,
-  }));
+  const result: ReadAccountOut[] = [];
+  for (const row of rows.results) {
+    const accountSyncId = row.sync_id as string;
+    const initialBalance = (row.initial_balance as number) ?? 0;
+
+    // 计算该账户关联的交易总额
+    const txTotals = await db
+      .prepare(
+        `SELECT
+           COALESCE(SUM(CASE WHEN tx_type = 'income' AND account_sync_id = ? THEN amount ELSE 0 END), 0) as income_in,
+           COALESCE(SUM(CASE WHEN tx_type = 'expense' AND account_sync_id = ? THEN amount ELSE 0 END), 0) as expense_in,
+           COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND to_account_sync_id = ? THEN amount ELSE 0 END), 0) as income_transfer,
+           COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND from_account_sync_id = ? THEN amount ELSE 0 END), 0) as expense_transfer
+         FROM read_tx_projection
+         WHERE ledger_id = ?`
+      )
+      .bind(accountSyncId, accountSyncId, accountSyncId, accountSyncId, ledger.id)
+      .first<{ income_in: number; expense_in: number; income_transfer: number; expense_transfer: number }>();
+
+    const balance = initialBalance
+      + (txTotals?.income_in ?? 0)
+      - (txTotals?.expense_in ?? 0)
+      + (txTotals?.income_transfer ?? 0)
+      - (txTotals?.expense_transfer ?? 0);
+
+    result.push({
+      id: accountSyncId,
+      name: (row.name as string) ?? '',
+      account_type: row.account_type as string | null,
+      currency: row.currency as string | null,
+      initial_balance: initialBalance,
+      balance,
+      last_change_id: latestChangeId?.max_id ?? 0,
+      ledger_id: ledger.external_id,
+      ledger_name: ledger.name,
+      created_by_user_id: null,
+      created_by_email: null,
+      note: row.note as string | null,
+      credit_limit: row.credit_limit as number | null,
+      billing_day: row.billing_day as number | null,
+      payment_due_day: row.payment_due_day as number | null,
+      bank_name: row.bank_name as string | null,
+      card_last_four: row.card_last_four as string | null,
+    });
+  }
 
   return c.json(result);
 });
