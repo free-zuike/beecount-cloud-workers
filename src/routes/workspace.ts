@@ -717,6 +717,7 @@ workspaceRouter.get('/analytics', async (c) => {
   const scope = c.req.query('scope') ?? 'month';
   const metric = c.req.query('metric') ?? 'expense';
   const period = c.req.query('period') ?? null;
+  const tzOffsetMinutes = parseInt(c.req.query('tz_offset_minutes') ?? '0', 10);
 
   let ledgerQuery = 'SELECT id FROM ledgers WHERE user_id = ?';
   const ledgerParams: string[] = [userId];
@@ -748,6 +749,9 @@ workspaceRouter.get('/analytics', async (c) => {
   let expenseTotal = 0;
   const seriesMap: Record<string, { expense: number; income: number }> = {};
   const categoryMap: Record<string, { expense: number; income: number; count: number }> = {};
+  const distinctDays = new Set<string>();
+  let firstTxAt: string | null = null;
+  let lastTxAt: string | null = null;
 
   for (const tx of txRows.results) {
     if (tx.tx_type === 'income') {
@@ -757,17 +761,26 @@ workspaceRouter.get('/analytics', async (c) => {
     }
 
     const date = new Date(tx.happened_at);
+    // 应用时区偏移后再切桶（与原版 _bucket_key 对齐）
+    const localDate = new Date(date.getTime() + tzOffsetMinutes * 60000);
     let bucket: string;
 
     if (scope === 'month') {
-      bucket = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}`;
     } else if (scope === 'year') {
-      bucket = String(date.getFullYear());
+      bucket = String(localDate.getUTCFullYear());
     } else {
-      const weekStart = new Date(date);
-      weekStart.setDate(date.getDate() - date.getDay());
+      const weekStart = new Date(localDate);
+      weekStart.setUTCDate(localDate.getUTCDate() - localDate.getUTCDay());
       bucket = weekStart.toISOString().slice(0, 10);
     }
+
+    // distinct_days 用时区调整后的日期
+    distinctDays.add(localDate.toISOString().slice(0, 10));
+
+    // 记录首尾交易时间
+    if (!firstTxAt || tx.happened_at < firstTxAt) firstTxAt = tx.happened_at;
+    if (!lastTxAt || tx.happened_at > lastTxAt) lastTxAt = tx.happened_at;
 
     if (!seriesMap[bucket]) {
       seriesMap[bucket] = { expense: 0, income: 0 };
@@ -811,13 +824,14 @@ workspaceRouter.get('/analytics', async (c) => {
       income_total: incomeTotal,
       expense_total: expenseTotal,
       balance: incomeTotal - expenseTotal,
-      distinct_days: Object.keys(seriesMap).length,
-      first_tx_at: txRows.results[0]?.happened_at ?? null,
-      last_tx_at: txRows.results[txRows.results.length - 1]?.happened_at ?? null,
+      distinct_days: distinctDays.size,
+      first_tx_at: firstTxAt,
+      last_tx_at: lastTxAt,
     },
     series,
     category_ranks: categoryRanks,
-    range: { scope, metric, period: null, start_at: null, end_at: null },
+    anomaly_months: [],
+    range: { scope, metric, period, start_at: null, end_at: null },
   });
 });
 
