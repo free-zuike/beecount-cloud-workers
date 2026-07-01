@@ -555,7 +555,7 @@ writeRouter.delete('/ledgers/:ledgerId', async (c) => {
  * - 支持标签（tags_csv / tag_sync_ids_json）
  * - 支持附件（attachments_json）
  */
-writeRouter.post('/transactions', zValidator('json', WriteTransactionCreateSchema), async (c) => {
+writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTransactionCreateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -679,7 +679,7 @@ writeRouter.post('/transactions', zValidator('json', WriteTransactionCreateSchem
 // PATCH /write/accounts/:id - 更新账户
 // ---------------------------------------------------------------------------
 
-writeRouter.patch('/accounts/:id', zValidator('json', WriteAccountUpdateSchema), async (c) => {
+writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAccountUpdateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -756,7 +756,7 @@ writeRouter.patch('/accounts/:id', zValidator('json', WriteAccountUpdateSchema),
 // DELETE /write/accounts/:id - 删除账户
 // ---------------------------------------------------------------------------
 
-writeRouter.delete('/accounts/:id', zValidator('json', WriteBaseSchema), async (c) => {
+writeRouter.delete('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteBaseSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -806,7 +806,7 @@ writeRouter.delete('/accounts/:id', zValidator('json', WriteBaseSchema), async (
 // PATCH /write/tags/:id - 更新标签
 // ---------------------------------------------------------------------------
 
-writeRouter.patch('/tags/:id', zValidator('json', WriteTagUpdateSchema), async (c) => {
+writeRouter.patch('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteTagUpdateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -862,7 +862,7 @@ writeRouter.patch('/tags/:id', zValidator('json', WriteTagUpdateSchema), async (
 // DELETE /write/tags/:id - 删除标签
 // ---------------------------------------------------------------------------
 
-writeRouter.delete('/tags/:id', zValidator('json', WriteBaseSchema), async (c) => {
+writeRouter.delete('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteBaseSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -915,7 +915,7 @@ writeRouter.delete('/tags/:id', zValidator('json', WriteBaseSchema), async (c) =
 /**
  * 更新现有交易
  */
-writeRouter.patch('/transactions/:id', zValidator('json', WriteTransactionUpdateSchema), async (c) => {
+writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', WriteTransactionUpdateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const txSyncId = c.req.param('id');
@@ -1040,7 +1040,7 @@ writeRouter.patch('/transactions/:id', zValidator('json', WriteTransactionUpdate
 /**
  * 删除交易
  */
-writeRouter.delete('/transactions/:id', zValidator('json', WriteBaseSchema), async (c) => {
+writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', WriteBaseSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const txSyncId = c.req.param('id');
@@ -1092,7 +1092,7 @@ writeRouter.delete('/transactions/:id', zValidator('json', WriteBaseSchema), asy
 // POST /write/accounts - 创建账户
 // ---------------------------------------------------------------------------
 
-writeRouter.post('/accounts', zValidator('json', WriteAccountCreateSchema), async (c) => {
+writeRouter.post('/ledgers/:ledgerId/accounts', zValidator('json', WriteAccountCreateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -1166,7 +1166,7 @@ writeRouter.post('/accounts', zValidator('json', WriteAccountCreateSchema), asyn
 // POST /write/categories - 创建分类
 // ---------------------------------------------------------------------------
 
-writeRouter.post('/categories', zValidator('json', WriteCategoryCreateSchema), async (c) => {
+writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCategoryCreateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -1261,7 +1261,7 @@ writeRouter.post('/categories', zValidator('json', WriteCategoryCreateSchema), a
 // PATCH /write/categories/:id - 更新分类
 // ---------------------------------------------------------------------------
 
-writeRouter.patch('/categories/:id', zValidator('json', WriteCategoryUpdateSchema), async (c) => {
+writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteCategoryUpdateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -1341,7 +1341,7 @@ writeRouter.patch('/categories/:id', zValidator('json', WriteCategoryUpdateSchem
 // DELETE /write/categories/:id - 删除分类
 // ---------------------------------------------------------------------------
 
-writeRouter.delete('/categories/:id', zValidator('json', WriteBaseSchema), async (c) => {
+writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteBaseSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -1391,7 +1391,7 @@ writeRouter.delete('/categories/:id', zValidator('json', WriteBaseSchema), async
 // POST /write/tags - 创建标签
 // ---------------------------------------------------------------------------
 
-writeRouter.post('/tags', zValidator('json', WriteTagCreateSchema), async (c) => {
+writeRouter.post('/ledgers/:ledgerId/tags', zValidator('json', WriteTagCreateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -1451,7 +1451,7 @@ writeRouter.post('/tags', zValidator('json', WriteTagCreateSchema), async (c) =>
 // POST /write/budgets - 创建预算
 // ---------------------------------------------------------------------------
 
-writeRouter.post('/budgets', zValidator('json', WriteBudgetCreateSchema), async (c) => {
+writeRouter.post('/ledgers/:ledgerId/budgets', zValidator('json', WriteBudgetCreateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -1519,7 +1519,7 @@ writeRouter.post('/budgets', zValidator('json', WriteBudgetCreateSchema), async 
 // PATCH /write/budgets/:id - 更新预算
 // ---------------------------------------------------------------------------
 
-writeRouter.patch('/budgets/:id', zValidator('json', WriteBudgetUpdateSchema), async (c) => {
+writeRouter.patch('/ledgers/:ledgerId/budgets/:id', zValidator('json', WriteBudgetUpdateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -1602,7 +1602,7 @@ writeRouter.patch('/budgets/:id', zValidator('json', WriteBudgetUpdateSchema), a
 // DELETE /write/budgets/:id - 删除预算
 // ---------------------------------------------------------------------------
 
-writeRouter.delete('/budgets/:id', zValidator('json', WriteBaseSchema), async (c) => {
+writeRouter.delete('/ledgers/:ledgerId/budgets/:id', zValidator('json', WriteBaseSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -1917,70 +1917,6 @@ writeRouter.delete('/exchange-rate-overrides', async (c) => {
     .bind(userId, syncId, JSON.stringify({ base_currency: baseCurrency, quote_currency: quoteCurrency }), serverNow, userId).run();
 
   return c.json({ sync_id: syncId, base_currency: baseCurrency, quote_currency: quoteCurrency, rate: null });
-});
-
-// POST 别名 - 前端创建操作带 /ledgers/:ledgerId/ 前缀
-
-writeRouter.post('/ledgers/:ledgerId/transactions', async (c) => {
-  const userId = c.get('userId'); const db = c.env.DB;
-  const req = await c.req.json(); const serverNow = new Date().toISOString();
-  const ledgerIdFromPath = c.req.param('ledgerId');
-  const ledgerExternalId = req.ledger_id || ledgerIdFromPath;
-  if (!ledgerExternalId) return c.json({ error: 'ledger_id required' }, 400);
-
-  const ledger = await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?').bind(userId, ledgerExternalId).first<{ id: string; external_id: string }>();
-  if (!ledger) return c.json({ error: 'Ledger not found' }, 404);
-
-  const txSyncId = randomUUID();
-  const payload: Record<string, unknown> = { tx_type: req.tx_type || 'expense', amount: req.amount, happened_at: req.happened_at, note: req.note || null, category_name: req.category_name || null, account_name: req.account_name || null, from_account_name: req.from_account_name || null, to_account_name: req.to_account_name || null, category_id: req.category_id || null, account_id: req.account_id || null, from_account_id: req.from_account_id || null, to_account_id: req.to_account_id || null, tags: req.tags || null, tag_ids: req.tag_ids || null, attachments: req.attachments || null, updated_by_user_id: userId, created_by_user_id: userId };
-  const changeResult = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id) VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, ?, ?)`).bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, req.device_id || 'web').run();
-  const newChangeId = (changeResult as any).lastRowId;
-  await db.prepare(`INSERT OR REPLACE INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, source_change_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(ledger.id, txSyncId, userId, payload.tx_type, payload.amount, payload.happened_at, payload.note, newChangeId).run();
-  return c.json({ ledger_id: ledger.external_id, base_change_id: req.base_change_id || 0, new_change_id: newChangeId, server_timestamp: serverNow, idempotency_replayed: false, entity_id: txSyncId } as WriteCommitMeta);
-});
-
-writeRouter.post('/ledgers/:ledgerId/accounts', zValidator('json', WriteAccountCreateSchema), async (c) => {
-  const userId = c.get('userId'); const db = c.env.DB; const req = c.req.valid('json');
-  const serverNow = nowUtc(); const ledgerIdFromPath = c.req.param('ledgerId');
-  const ledger = await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?').bind(userId, ledgerIdFromPath).first<{ id: string; external_id: string }>();
-  if (!ledger) return c.json({ error: 'Ledger not found' }, 404);
-  const syncId = randomUUID();
-  const payload: Record<string, unknown> = { name: req.name, account_type: req.account_type || null, currency: req.currency || null, initial_balance: req.initial_balance ?? null, note: req.note || null, credit_limit: req.credit_limit ?? null, billing_day: req.billing_day ?? null, payment_due_day: req.payment_due_day ?? null, bank_name: req.bank_name || null, card_last_four: req.card_last_four || null };
-  const changeResult = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id) VALUES (?, ?, 'account', ?, 'upsert', ?, ?, ?)`).bind(userId, ledger.id, syncId, JSON.stringify(payload), serverNow, userId).run();
-  return c.json({ ledger_id: ledger.external_id, base_change_id: req.base_change_id, new_change_id: (changeResult as any).lastRowId, server_timestamp: serverNow, idempotency_replayed: false, entity_id: syncId } as WriteCommitMeta);
-});
-
-writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCategoryCreateSchema), async (c) => {
-  const userId = c.get('userId'); const db = c.env.DB; const req = c.req.valid('json');
-  const serverNow = nowUtc(); const ledgerIdFromPath = c.req.param('ledgerId');
-  const ledger = await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?').bind(userId, ledgerIdFromPath).first<{ id: string; external_id: string }>();
-  if (!ledger) return c.json({ error: 'Ledger not found' }, 404);
-  const syncId = randomUUID();
-  const payload: Record<string, unknown> = { name: req.name, kind: req.kind, level: req.level ?? 1, sort_order: req.sort_order ?? 0, icon: req.icon || null, icon_type: req.icon_type || null, parent_name: req.parent_name || null };
-  const changeResult = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id) VALUES (?, ?, 'category', ?, 'upsert', ?, ?, ?)`).bind(userId, ledger.id, syncId, JSON.stringify(payload), serverNow, userId).run();
-  return c.json({ ledger_id: ledger.external_id, base_change_id: req.base_change_id, new_change_id: (changeResult as any).lastRowId, server_timestamp: serverNow, idempotency_replayed: false, entity_id: syncId } as WriteCommitMeta);
-});
-
-writeRouter.post('/ledgers/:ledgerId/tags', zValidator('json', WriteTagCreateSchema), async (c) => {
-  const userId = c.get('userId'); const db = c.env.DB; const req = c.req.valid('json');
-  const serverNow = nowUtc(); const ledgerIdFromPath = c.req.param('ledgerId');
-  const ledger = await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?').bind(userId, ledgerIdFromPath).first<{ id: string; external_id: string }>();
-  if (!ledger) return c.json({ error: 'Ledger not found' }, 404);
-  const syncId = randomUUID();
-  const payload: Record<string, unknown> = { name: req.name, color: req.color || null };
-  const changeResult = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id) VALUES (?, ?, 'tag', ?, 'upsert', ?, ?, ?)`).bind(userId, ledger.id, syncId, JSON.stringify(payload), serverNow, userId).run();
-  return c.json({ ledger_id: ledger.external_id, base_change_id: req.base_change_id, new_change_id: (changeResult as any).lastRowId, server_timestamp: serverNow, idempotency_replayed: false, entity_id: syncId } as WriteCommitMeta);
-});
-
-writeRouter.post('/ledgers/:ledgerId/budgets', zValidator('json', WriteBudgetCreateSchema), async (c) => {
-  const userId = c.get('userId'); const db = c.env.DB; const req = c.req.valid('json');
-  const serverNow = nowUtc(); const ledgerIdFromPath = c.req.param('ledgerId');
-  const ledger = await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?').bind(userId, ledgerIdFromPath).first<{ id: string; external_id: string }>();
-  if (!ledger) return c.json({ error: 'Ledger not found' }, 404);
-  const syncId = randomUUID();
-  const payload: Record<string, unknown> = { budget_type: req.type || 'total', category_sync_id: req.category_id || null, amount: req.amount, period: req.period || 'monthly', start_day: req.start_day ?? 1, enabled: req.enabled ?? true };
-  const changeResult = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id) VALUES (?, ?, 'budget', ?, 'upsert', ?, ?, ?)`).bind(userId, ledger.id, syncId, JSON.stringify(payload), serverNow, userId).run();
-  return c.json({ ledger_id: ledger.external_id, base_change_id: req.base_change_id, new_change_id: (changeResult as any).lastRowId, server_timestamp: serverNow, idempotency_replayed: false, entity_id: syncId } as WriteCommitMeta);
 });
 
 export default writeRouter;
