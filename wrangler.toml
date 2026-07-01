@@ -13,7 +13,7 @@ tslib = "tslib"
 [[d1_databases]]
 binding = "DB"
 database_name = "beecount-cloud"
-database_id = "2ee426d6-4813-4f6a-8ead-8feabc0236fe"
+database_id = "9b5677c5-d8bc-4a56-8260-83aa533d1417"
 
 [[durable_objects.bindings]]
 name = "BEECOUNT_DO"
