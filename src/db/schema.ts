@@ -57,6 +57,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         token_hash TEXT UNIQUE NOT NULL,
         expires_at TEXT NOT NULL,
         revoked_at TEXT,
+        client_type TEXT DEFAULT 'app',
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
     `).run();
@@ -202,14 +203,15 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       CREATE TABLE IF NOT EXISTS sync_changes (
         change_id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        ledger_id TEXT,
         entity_type TEXT NOT NULL,
         entity_sync_id TEXT NOT NULL,
         action TEXT NOT NULL,
         payload_json TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         updated_by_device_id TEXT,
-        updated_by_user_id TEXT
+        updated_by_user_id TEXT,
+        scope TEXT DEFAULT 'ledger'
       )
     `).run();
 
