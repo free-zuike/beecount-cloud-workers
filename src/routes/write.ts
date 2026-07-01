@@ -429,7 +429,7 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
 /**
  * 更新账本元信息（名称、货币）
  */
-writeRouter.patch('/ledgers/:ledgerId', zValidator('json', WriteLedgerMetaUpdateSchema), async (c) => {
+writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaUpdateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const ledgerId = c.req.param('ledgerId');

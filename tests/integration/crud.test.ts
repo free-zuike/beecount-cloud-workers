@@ -448,7 +448,7 @@ describe('CRUD - Ledger', () => {
   });
 
   it('should update ledger metadata', async () => {
-    const res = await env.app.request(`/api/v1/write/ledgers/${ledgerId}`, {
+    const res = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/meta`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',

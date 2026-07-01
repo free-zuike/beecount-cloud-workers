@@ -253,10 +253,11 @@ const batchDeleteHandler = async (c: any) => {
 
   return c.json({
     ledger_id: ledgerIdParam ?? 'default',
-    deleted_count: deletedCount,
-    deleted_ids: deletedIds,
-    server_cursor: (latestCursor as { max_id: number | null } | null)?.max_id ?? 0,
+    base_change_id: 0,
+    new_change_id: (latestCursor as { max_id: number | null } | null)?.max_id ?? 0,
     server_timestamp: serverNow,
+    deleted_tx_ids: deletedIds,
+    failed: [],
   });
 };
 
@@ -264,13 +265,12 @@ const batchDeleteHandler = async (c: any) => {
 // POST /write/transactions/batch-delete - 批量删除交易
 // ---------------------------------------------------------------------------
 
-batchWriteRouter.post('/transactions/batch-delete', zValidator('json', BatchTransactionDeleteSchema), batchDeleteHandler);
+batchWriteRouter.post('/transactions/batch/delete', zValidator('json', BatchTransactionDeleteSchema), batchDeleteHandler);
 
-// ---------------------------------------------------------------------------
-// POST /write/ledgers/:ledgerId/transactions/batch-delete - 批量删除交易（前端路径别名）
+// POST /write/ledgers/:ledgerId/transactions/batch/delete - 批量删除交易（前端路径别名）
 // ---------------------------------------------------------------------------
 
-batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch-delete', zValidator('json', BatchTransactionDeleteSchema), batchDeleteHandler);
+batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch/delete', zValidator('json', BatchTransactionDeleteSchema), batchDeleteHandler);
 
 // POST /write/ledgers/:ledgerId/transactions/batch - 批量创建交易（前端路径别名）
 // ---------------------------------------------------------------------------

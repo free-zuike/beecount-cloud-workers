@@ -283,12 +283,30 @@ workspaceRouter.get('/transactions', async (c) => {
 
   const txRows = await db.prepare(txQuery).bind(...txParams).all<Record<string, unknown>>();
 
+  // 收集所有 created_by_user_id 做批量查询
+  const creatorIds = new Set<string>();
+  for (const row of txRows.results) {
+    const uid = row.created_by_user_id as string;
+    if (uid) creatorIds.add(uid);
+  }
+  const creatorMap: Record<string, { email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number }> = {};
+  if (creatorIds.size > 0) {
+    const ids = [...creatorIds];
+    const placeholders = ids.map(() => '?').join(',');
+    const users = await db.prepare(`SELECT u.id, u.email, p.display_name, p.avatar_file_id, p.avatar_version FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.id IN (${placeholders})`).bind(...ids).all<{ id: string; email: string; display_name: string | null; avatar_file_id: string | null; avatar_version: number }>();
+    for (const u of users.results) {
+      creatorMap[u.id] = { email: u.email, display_name: u.display_name, avatar_file_id: u.avatar_file_id, avatar_version: u.avatar_version || 0 };
+    }
+  }
+
   const hasMore = txRows.results.length > limit;
   const items = txRows.results.slice(0, limit).map((row) => {
     const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
     const ledName = ledgerMeta[row.ledger_id as string]?.name ?? null;
     const tagIds = safeJsonParse<string[]>(row.tag_sync_ids_json as string | null) ?? [];
     const attachments = safeJsonParse<Array<Record<string, unknown>>>(row.attachments_json as string | null);
+    const creatorUid = row.created_by_user_id as string | null;
+    const creator = creatorUid ? creatorMap[creatorUid] : null;
 
     return {
       id: row.sync_id,
@@ -313,11 +331,11 @@ workspaceRouter.get('/transactions', async (c) => {
       last_change_id: row.source_change_id,
       ledger_id: ledExtId,
       ledger_name: ledName,
-      created_by_user_id: null,
-      created_by_email: null,
-      created_by_display_name: null,
-      created_by_avatar_url: null,
-      created_by_avatar_version: null,
+      created_by_user_id: creatorUid,
+      created_by_email: creator?.email ?? null,
+      created_by_display_name: creator?.display_name ?? null,
+      created_by_avatar_url: creator?.avatar_file_id ? `/api/v1/profile/avatar/${creatorUid}?v=${creator?.avatar_version}` : null,
+      created_by_avatar_version: creator?.avatar_version ?? null,
     };
   });
 
