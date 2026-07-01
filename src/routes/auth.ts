@@ -106,6 +106,49 @@ import twoFactorRouter from './two_factor';
 
 function nowUtc(): string { return new Date().toISOString(); }
 
+/** 设备 upsert — 处理跨用户 device_id 冲突（与原版 _upsert_device 对齐） */
+async function upsertDevice(
+  db: D1Database,
+  userId: string,
+  deviceId: string,
+  deviceName: string,
+  platform: string,
+  appVersion?: string,
+  osVersion?: string,
+  deviceModel?: string,
+  clientIp?: string | null
+): Promise<string> {
+  let targetId = deviceId;
+  const now = new Date().toISOString();
+
+  // 检查 device_id 是否被其他用户占用
+  const existingAny = await db.prepare('SELECT id, user_id FROM devices WHERE id = ?').bind(targetId).first<{ id: string; user_id: string }>();
+  if (existingAny && existingAny.user_id !== userId) {
+    console.log(`[AUTH] device_id cross-user collision id=${targetId} prev_user=${existingAny.user_id} new_user=${userId} -> minting new device_id`);
+    targetId = randomUUID();
+  }
+
+  const existingDevice = await db.prepare('SELECT id, revoked_at FROM devices WHERE id = ? AND user_id = ?').bind(targetId, userId).first<{ id: string; revoked_at: string | null }>();
+
+  if (!existingDevice) {
+    await db.prepare(
+      `INSERT INTO devices (id, user_id, name, platform, app_version, os_version, device_model, last_ip, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(targetId, userId, deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, clientIp, now).run();
+  } else {
+    if (existingDevice.revoked_at) {
+      await db.prepare(
+        `UPDATE devices SET last_seen_at = ?, last_ip = ?, name = ?, platform = ?, app_version = ?, os_version = ?, device_model = ?, revoked_at = NULL WHERE id = ?`
+      ).bind(now, clientIp, deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, targetId).run();
+    } else {
+      await db.prepare(
+        `UPDATE devices SET last_seen_at = ?, last_ip = ?, name = ?, platform = ?, app_version = ?, os_version = ?, device_model = ? WHERE id = ?`
+      ).bind(now, clientIp, deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, targetId).run();
+    }
+  }
+
+  return targetId;
+}
+
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
@@ -156,15 +199,13 @@ authRouter.post('/register', zValidator('json', z.object({
     VALUES (?, ?, ?)
   `).bind(userId, email, DEFAULT_AI_CONFIG).run();
 
-  // Create device
-  const now = new Date().toISOString();
-  await db.prepare(`
-    INSERT INTO devices (id, user_id, name, platform, last_ip, last_seen_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).bind(resolvedDeviceId, userId, deviceName, platform, c.req.header('CF-Connecting-IP'), now).run();
+  // Create device（使用 upsert 处理跨用户冲突）
+  const finalDeviceId = await upsertDevice(
+    db, userId, resolvedDeviceId, deviceName, platform, undefined, undefined, undefined, c.req.header('CF-Connecting-IP')
+  );
 
   const accessToken = await createAccessToken(userId, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
-  const refreshTokenObj = await createRefreshToken(userId, resolvedDeviceId, db, isApp ? 'app' : 'web');
+  const refreshTokenObj = await createRefreshToken(userId, finalDeviceId, db, isApp ? 'app' : 'web');
 
   // 自动创建默认账本（与原版保持一致）
   const ledgerId = randomUUID();
@@ -173,10 +214,10 @@ authRouter.post('/register', zValidator('json', z.object({
   await db.prepare(`
     INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
     VALUES (?, ?, ?, ?, 'CNY', ?)
-  `).bind(ledgerId, userId, ledgerExternalId, '默认账本', now).run();
+  `).bind(ledgerId, userId, ledgerExternalId, '默认账本', nowUtc()).run();
 
   // 自动创建默认分类（防重复）
-  const serverNow = now;
+  const serverNow = nowUtc();
   const existingCategories = await db
     .prepare('SELECT name, kind FROM read_category_projection WHERE ledger_id = ? AND level = 1')
     .bind(ledgerId)
@@ -272,7 +313,7 @@ authRouter.post('/register', zValidator('json', z.object({
     access_token: accessToken,
     refresh_token: refreshTokenObj.token,
     expires_in: 3600,
-    device_id: resolvedDeviceId,
+    device_id: finalDeviceId,
     scopes: tokenScopes,
   });
 });
@@ -295,7 +336,6 @@ authRouter.post('/login', zValidator('json', z.object({
   }
   const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType, app_version: appVersion, os_version: osVersion, device_model: deviceModel } = c.req.valid('json');
   const email = rawEmail.trim().toLowerCase();
-  const resolvedDeviceId = deviceId || randomUUID();
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
   const isApp = clientType !== 'web';
@@ -330,29 +370,10 @@ authRouter.post('/login', zValidator('json', z.object({
     });
   }
 
-  // Create or update device
-  const existingDevice = await db.prepare('SELECT id, revoked_at FROM devices WHERE id = ? AND user_id = ?').bind(resolvedDeviceId, user.id).first<{ id: string, revoked_at: string | null }>();
-  if (!existingDevice) {
-    await db.prepare(`
-      INSERT INTO devices (id, user_id, name, platform, last_ip, last_seen_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(resolvedDeviceId, user.id, deviceName, platform, c.req.header('CF-Connecting-IP'), new Date().toISOString()).run();
-  } else {
-    if (existingDevice.revoked_at) {
-      // 如果设备被撤销了，重新激活它
-      await db.prepare(`
-        UPDATE devices
-        SET last_seen_at = ?, last_ip = ?, name = ?, platform = ?, app_version = ?, os_version = ?, device_model = ?, revoked_at = NULL
-        WHERE id = ?
-      `).bind(new Date().toISOString(), c.req.header('CF-Connecting-IP'), deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, resolvedDeviceId).run();
-    } else {
-      await db.prepare(`
-        UPDATE devices
-        SET last_seen_at = ?, last_ip = ?, name = ?, platform = ?, app_version = ?, os_version = ?, device_model = ?
-        WHERE id = ?
-      `).bind(new Date().toISOString(), c.req.header('CF-Connecting-IP'), deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, resolvedDeviceId).run();
-    }
-  }
+  // Create or update device（使用 upsert 处理跨用户冲突）
+  const resolvedDeviceId = await upsertDevice(
+    db, user.id, deviceId || randomUUID(), deviceName, platform, appVersion, osVersion, deviceModel, c.req.header('CF-Connecting-IP')
+  );
 
   const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
   const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web');
