@@ -14,7 +14,7 @@ beforeEach(async () => {
     headers: { Authorization: `Bearer ${token}` },
   });
   const ledgerBody = await ledgerRes.json() as any;
-  ledgerId = ledgerBody.ledgers[0].ledger_id;
+  ledgerId = ledgerBody[0].ledger_id;
 });
 
 describe('CRUD - Transactions', () => {

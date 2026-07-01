@@ -11,7 +11,7 @@ describe('SQL Debug', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     const ledgerBody = await ledgerRes.json() as any;
-    const ledgerId = ledgerBody.ledgers[0].ledger_id;
+    const ledgerId = ledgerBody[0].ledger_id;
 
     // Push a change
     await env.app.request('/api/v1/sync/push', {
@@ -58,7 +58,7 @@ describe('SQL Debug', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     const ledgerBody = await ledgerRes.json() as any;
-    const ledgerId = ledgerBody.ledgers[0].ledger_id;
+    const ledgerId = ledgerBody[0].ledger_id;
 
     // Check projection table
     const { getTable } = await import('../helpers/mock-db');
@@ -84,7 +84,7 @@ describe('SQL Debug', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     const ledgerBody = await ledgerRes.json() as any;
-    const ledgerId = ledgerBody.ledgers[0].ledger_id;
+    const ledgerId = ledgerBody[0].ledger_id;
 
     // Create account via write endpoint
     const createRes = await env.app.request('/api/v1/write/accounts', {

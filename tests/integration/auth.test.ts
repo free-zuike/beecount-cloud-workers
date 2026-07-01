@@ -51,8 +51,8 @@ describe('Auth - Register', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     const body = await res.json() as any;
-    expect(body.ledgers).toBeDefined();
-    expect(body.ledgers.length).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.length).toBeGreaterThanOrEqual(1);
   });
 
   it.skip('should create default categories after creating a ledger', async () => {
