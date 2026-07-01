@@ -435,7 +435,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
 
   return c.json({
     requires_2fa: false,
-    user: { id: user.id, email: user.email },
+    user: { id: user.id, email: user.email, is_admin: Boolean((user as any).is_admin) },
     access_token: accessToken,
     refresh_token: refreshToken.token,
     expires_in: 3600,
