@@ -335,6 +335,20 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           continue;
         }
 
+        // 注入 createdByUserId / updatedByUserId（与原版 §7 对齐）
+        let payloadForStorage = change.payload;
+        if (change.entity_type === 'transaction' && typeof payloadForStorage === 'object' && payloadForStorage !== null) {
+          const p = { ...payloadForStorage } as Record<string, unknown>;
+          if (!p.updatedByUserId) p.updatedByUserId = userId;
+          if (!p.createdByUserId) {
+            // first-write-wins: 已有 projection 行保留原 creator，否则用当前 actor
+            const existing = await db.prepare('SELECT created_by_user_id FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+              .bind(ledgerRow.id, change.entity_sync_id).first<{ created_by_user_id: string | null }>();
+            p.createdByUserId = existing?.created_by_user_id || userId;
+          }
+          payloadForStorage = p;
+        }
+
         // 添加到批量插入
         insertPromises.push({
           result: db.prepare(
@@ -347,7 +361,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
             change.entity_type,
             change.entity_sync_id,
             change.action,
-            safeJsonStringify(change.payload),
+            safeJsonStringify(payloadForStorage),
             clampedUpdatedAt.toISOString(),
             deviceId,
             userId,
