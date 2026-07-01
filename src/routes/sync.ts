@@ -537,14 +537,16 @@ syncRouter.get('/ledgers', async (c) => {
       .bind(userId)
       .all<{ external_id: string; name: string; currency: string; created_at: string }>();
 
-    return c.json({
-      ledgers: ledgers.results.map(l => ({
-        ledger_id: l.external_id,
-        name: l.name,
-        currency: l.currency,
-        created_at: l.created_at,
-      })),
-    });
+    return c.json(ledgers.results.map(l => ({
+      ledger_id: l.external_id,
+      path: l.external_id,
+      name: l.name,
+      currency: l.currency,
+      created_at: l.created_at,
+      size: 0,
+      metadata: {},
+      role: 'owner',
+    })));
   } catch (error) {
     console.error('[SYNC] /sync/ledgers error:', error);
     return c.json({ error: 'Internal server error' }, 500);

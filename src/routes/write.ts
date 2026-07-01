@@ -55,6 +55,7 @@ const WriteLedgerCreateSchema = z.object({
   ledger_id: z.string().min(3).max(128).optional(),
   ledger_name: z.string().min(1).max(255),
   currency: z.string().min(1).max(16).default('CNY'),
+  month_start_day: z.number().int().min(1).max(28).optional(),
 });
 
 /** 更新账本元信息请求 */
@@ -62,6 +63,7 @@ const WriteLedgerMetaUpdateSchema = z.object({
   base_change_id: z.number().int().min(0).default(0),
   ledger_name: z.string().min(1).max(255).optional(),
   currency: z.string().min(1).max(16).optional(),
+  month_start_day: z.number().int().min(1).max(28).optional(),
 });
 
 /** 基础写请求（包含 base_change_id） */
@@ -89,6 +91,8 @@ const WriteTransactionCreateSchema = WriteBaseSchema.extend({
   tags: z.union([z.string(), z.array(z.string())]).nullable().optional(),
   tag_ids: z.array(z.string()).nullable().optional(),
   attachments: z.array(z.record(z.any())).nullable().optional(),
+  exclude_from_stats: z.boolean().optional(),
+  exclude_from_budget: z.boolean().optional(),
 });
 
 /** 更新交易请求 */
@@ -109,6 +113,8 @@ const WriteTransactionUpdateSchema = WriteBaseSchema.extend({
   tags: z.union([z.string(), z.array(z.string())]).nullable().optional(),
   tag_ids: z.array(z.string()).nullable().optional(),
   attachments: z.array(z.record(z.any())).nullable().optional(),
+  exclude_from_stats: z.boolean().optional(),
+  exclude_from_budget: z.boolean().optional(),
 });
 
 /** 创建账户请求 */
@@ -673,7 +679,7 @@ writeRouter.post('/transactions', zValidator('json', WriteTransactionCreateSchem
 // PATCH /write/accounts/:id - 更新账户
 // ---------------------------------------------------------------------------
 
-writeRouter.patch('/accounts/:id', zValidator('json', WriteAccountCreateSchema), async (c) => {
+writeRouter.patch('/accounts/:id', zValidator('json', WriteAccountUpdateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -800,7 +806,7 @@ writeRouter.delete('/accounts/:id', zValidator('json', WriteBaseSchema), async (
 // PATCH /write/tags/:id - 更新标签
 // ---------------------------------------------------------------------------
 
-writeRouter.patch('/tags/:id', zValidator('json', WriteTagCreateSchema), async (c) => {
+writeRouter.patch('/tags/:id', zValidator('json', WriteTagUpdateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -1513,7 +1519,7 @@ writeRouter.post('/budgets', zValidator('json', WriteBudgetCreateSchema), async 
 // PATCH /write/budgets/:id - 更新预算
 // ---------------------------------------------------------------------------
 
-writeRouter.patch('/budgets/:id', zValidator('json', WriteBudgetCreateSchema), async (c) => {
+writeRouter.patch('/budgets/:id', zValidator('json', WriteBudgetUpdateSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
@@ -1529,6 +1535,20 @@ writeRouter.patch('/budgets/:id', zValidator('json', WriteBudgetCreateSchema), a
     return c.json({ error: 'No ledger found' }, 400);
   }
 
+  const existingBudget = await db
+    .prepare('SELECT budget_type, category_sync_id FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
+    .bind(ledger.id, budgetSyncId)
+    .first<{ budget_type: string; category_sync_id: string | null }>();
+
+  if (!existingBudget) return c.json({ error: 'Budget not found' }, 404);
+
+  const budgetType = existingBudget.budget_type;
+  const categoryId = existingBudget.category_sync_id;
+  const amount = req.amount ?? 0;
+  const period = req.period ?? 'monthly';
+  const startDay = req.start_day ?? 1;
+  const enabled = req.enabled ?? true;
+
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
@@ -1536,12 +1556,12 @@ writeRouter.patch('/budgets/:id', zValidator('json', WriteBudgetCreateSchema), a
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(userId, ledger.id, 'budget', budgetSyncId, 'upsert', safeJsonStringify({
-      budget_type: req.type,
-      category_sync_id: req.category_id ?? null,
-      amount: req.amount,
-      period: req.period,
-      start_day: req.start_day,
-      enabled: req.enabled,
+      budget_type: budgetType,
+      category_sync_id: categoryId,
+      amount,
+      period,
+      start_day: startDay,
+      enabled,
     }), serverNow, userId)
     .run();
 
@@ -1557,10 +1577,9 @@ writeRouter.patch('/budgets/:id', zValidator('json', WriteBudgetCreateSchema), a
         period = ?, start_day = ?, enabled = ?, source_change_id = ?`
     )
     .bind(
-      ledger.id, budgetSyncId, userId, req.type, req.category_id ?? null,
-      req.amount, req.period, req.start_day, req.enabled ? 1 : 0, newChangeId,
-      req.type, req.category_id ?? null, req.amount, req.period,
-      req.start_day, req.enabled ? 1 : 0, newChangeId,
+      ledger.id, budgetSyncId, userId, budgetType, categoryId,
+      amount, period, startDay, enabled ? 1 : 0, newChangeId,
+      budgetType, categoryId, amount, period, startDay, enabled ? 1 : 0, newChangeId
     )
     .run();
 

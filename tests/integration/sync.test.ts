@@ -14,7 +14,7 @@ beforeEach(async () => {
     headers: { Authorization: `Bearer ${token}` },
   });
   const ledgerBody = await ledgerRes.json() as any;
-  ledgerId = ledgerBody.ledgers[0].ledger_id;
+  ledgerId = ledgerBody[0].ledger_id;
 });
 
 function pushHeaders() {
@@ -32,10 +32,10 @@ describe('Sync - Ledgers', () => {
     });
     const body = await res.json() as any;
     expect(res.status).toBe(200);
-    expect(body.ledgers).toBeDefined();
-    expect(body.ledgers.length).toBeGreaterThanOrEqual(1);
-    expect(body.ledgers[0].ledger_id).toBe(ledgerId);
-    expect(body.ledgers[0].currency).toBe('CNY');
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.length).toBeGreaterThanOrEqual(1);
+    expect(body[0].ledger_id).toBe(ledgerId);
+    expect(body[0].currency).toBe('CNY');
   });
 });
 
