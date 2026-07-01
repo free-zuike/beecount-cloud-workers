@@ -376,15 +376,33 @@ workspaceRouter.get('/accounts', async (c) => {
 
   const acctRows = await db.prepare(acctQuery).bind(...acctParams).all<Record<string, unknown>>();
 
-  const items = acctRows.results.map((row) => {
+  const items = [];
+  for (const row of acctRows.results) {
     const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
+    const accountSyncId = row.sync_id as string;
+    const initialBalance = (row.initial_balance as number) ?? 0;
 
-    return {
-      id: row.sync_id,
+    // 计算该账户关联的交易统计
+    const txStats = await db.prepare(`
+      SELECT 
+        COALESCE(SUM(CASE WHEN tx_type = 'expense' AND account_sync_id = ? THEN amount ELSE 0 END), 0) as expense_in,
+        COALESCE(SUM(CASE WHEN tx_type = 'income' AND account_sync_id = ? THEN amount ELSE 0 END), 0) as income_in,
+        COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND from_account_sync_id = ? THEN amount ELSE 0 END), 0) as expense_transfer,
+        COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND to_account_sync_id = ? THEN amount ELSE 0 END), 0) as income_transfer,
+        COUNT(*) as tx_count
+      FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})
+    `).bind(accountSyncId, accountSyncId, accountSyncId, accountSyncId, ...ledgerInternalIds).first<{ expense_in: number; income_in: number; expense_transfer: number; income_transfer: number; tx_count: number }>();
+
+    const incomeTotal = (txStats?.income_in ?? 0) + (txStats?.income_transfer ?? 0);
+    const expenseTotal = (txStats?.expense_in ?? 0) + (txStats?.expense_transfer ?? 0);
+    const balance = initialBalance + incomeTotal - expenseTotal;
+
+    items.push({
+      id: accountSyncId,
       name: row.name,
       account_type: row.account_type,
       currency: row.currency,
-      initial_balance: row.initial_balance,
+      initial_balance: initialBalance,
       last_change_id: row.source_change_id,
       ledger_id: ledExtId,
       ledger_name: ledgerMeta[row.ledger_id as string]?.name ?? null,
@@ -396,12 +414,12 @@ workspaceRouter.get('/accounts', async (c) => {
       payment_due_day: row.payment_due_day,
       bank_name: row.bank_name,
       card_last_four: row.card_last_four,
-      tx_count: 0,
-      income_total: 0,
-      expense_total: 0,
-      balance: (row.initial_balance as number) ?? 0,
-    };
-  });
+      tx_count: txStats?.tx_count ?? 0,
+      income_total: incomeTotal,
+      expense_total: expenseTotal,
+      balance,
+    });
+  }
 
   return c.json(items);
 });
