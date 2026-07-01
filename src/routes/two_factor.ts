@@ -121,7 +121,7 @@ function base32Decode(encoded: string): Uint8Array {
  * @param window - 允许的时间窗口（前后各 window 个步长）
  * @returns 是否验证通过
  */
-async function verifyTotpCode(secret: string, code: string, window: number = 1): Promise<boolean> {
+async function verifyTotpCode(secret: string, code: string, window: number = 2): Promise<boolean> {
   // 验证格式
   if (!/^\d{6}$/.test(code)) return false;
 
