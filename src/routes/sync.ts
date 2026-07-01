@@ -472,6 +472,12 @@ syncRouter.get('/pull', async (c) => {
   const deviceId = c.req.query('device_id');
 
   try {
+    // device heartbeat
+    if (deviceId) {
+      await db.prepare('UPDATE devices SET last_seen_at = ? WHERE id = ? AND user_id = ?')
+        .bind(new Date().toISOString(), deviceId, userId).run();
+    }
+
     let query = `
       SELECT c.change_id, c.entity_type, c.entity_sync_id, c.action, c.payload_json, c.updated_at, c.updated_by_device_id, l.external_id as ledger_id
       FROM sync_changes c
@@ -517,6 +523,20 @@ syncRouter.get('/pull', async (c) => {
     const hasMore = allResults.length > limit;
     const limitedResults = hasMore ? allResults.slice(0, limit) : allResults;
 
+    // 写回 SyncCursor（per-device per-ledger 游标持久化）
+    if (deviceId && limitedResults.length > 0) {
+      const perLedgerCursor: Record<string, number> = {};
+      for (const r of limitedResults) {
+        const lid = r.ledger_id ?? '__global__';
+        perLedgerCursor[lid] = Math.max(perLedgerCursor[lid] ?? 0, r.change_id);
+      }
+      const now = new Date().toISOString();
+      for (const [ledgerExtId, lastCursor] of Object.entries(perLedgerCursor)) {
+        await db.prepare(`INSERT INTO sync_cursors (user_id, device_id, ledger_external_id, last_cursor, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id, device_id, ledger_external_id) DO UPDATE SET last_cursor = ?, updated_at = ?`)
+          .bind(userId, deviceId, ledgerExtId, lastCursor, now, lastCursor, now).run();
+      }
+    }
+
     return c.json({
       changes: limitedResults.map(c => ({
         change_id: c.change_id,
@@ -527,6 +547,7 @@ syncRouter.get('/pull', async (c) => {
         payload: c.payload_json ? JSON.parse(c.payload_json) : {},
         updated_at: c.updated_at,
         updated_by_device_id: c.updated_by_device_id ?? null,
+        scope: 'ledger',
       })),
       server_cursor: maxRow?.max_id ?? 0,
       has_more: hasMore,
