@@ -470,6 +470,14 @@ workspaceRouter.get('/categories', async (c) => {
 
   const catRows = await db.prepare(catQuery).bind(...catParams).all<Record<string, unknown>>();
 
+  // 预聚合每个 category 的 tx_count
+  const txCountMap: Record<string, number> = {};
+  const txCountQuery = `SELECT category_sync_id, COUNT(*) as cnt FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND category_sync_id IS NOT NULL GROUP BY category_sync_id`;
+  const txCountRows = await db.prepare(txCountQuery).bind(...ledgerInternalIds).all<{ category_sync_id: string; cnt: number }>();
+  for (const r of txCountRows.results) {
+    txCountMap[r.category_sync_id] = r.cnt;
+  }
+
   const items = catRows.results.map((row) => {
     const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
 
@@ -490,7 +498,7 @@ workspaceRouter.get('/categories', async (c) => {
       ledger_name: ledgerMeta[row.ledger_id as string]?.name ?? null,
       created_by_user_id: null,
       created_by_email: null,
-      tx_count: 0,
+      tx_count: txCountMap[row.sync_id as string] ?? 0,
     };
   });
 
@@ -543,8 +551,28 @@ workspaceRouter.get('/tags', async (c) => {
 
   const tagRows = await db.prepare(tagQuery).bind(...tagParams).all<Record<string, unknown>>();
 
+  // 预聚合每个 tag 的 tx 统计
+  const tagStats: Record<string, { tx_count: number; expense_total: number; income_total: number }> = {};
+  const tagRowsForStats = await db.prepare(`SELECT sync_id FROM read_tag_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`).bind(...ledgerInternalIds).all<{ sync_id: string }>();
+  const tagSyncIds = tagRowsForStats.results.map(r => r.sync_id);
+
+  if (tagSyncIds.length > 0) {
+    // 按 tag_sync_ids_json 匹配
+    for (const tagId of tagSyncIds) {
+      const txRows = await db.prepare(`SELECT tx_type, amount FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND tag_sync_ids_json LIKE ?`).bind(...ledgerInternalIds, `%"${tagId}"%`).all<{ tx_type: string; amount: number }>();
+      let txCount = 0, expenseTotal = 0, incomeTotal = 0;
+      for (const r of txRows.results) {
+        txCount++;
+        if (r.tx_type === 'expense') expenseTotal += r.amount;
+        else if (r.tx_type === 'income') incomeTotal += r.amount;
+      }
+      tagStats[tagId] = { tx_count: txCount, expense_total: expenseTotal, income_total: incomeTotal };
+    }
+  }
+
   const items = tagRows.results.map((row) => {
     const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
+    const stats = tagStats[row.sync_id as string] ?? { tx_count: 0, expense_total: 0, income_total: 0 };
 
     return {
       id: row.sync_id,
@@ -555,9 +583,9 @@ workspaceRouter.get('/tags', async (c) => {
       ledger_name: ledgerMeta[row.ledger_id as string]?.name ?? null,
       created_by_user_id: null,
       created_by_email: null,
-      tx_count: 0,
-      expense_total: 0,
-      income_total: 0,
+      tx_count: stats.tx_count,
+      expense_total: stats.expense_total,
+      income_total: stats.income_total,
     };
   });
 
