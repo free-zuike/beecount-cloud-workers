@@ -22,6 +22,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { validateAccessToken, createAccessToken, createRefreshToken, verifyPassword } from '../auth';
+import { isRateLimited } from '../lib/rate-limit';
 
 // ===========================
 // 辅助函数
@@ -403,6 +404,10 @@ twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (
 });
 
 twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c) => {
+  const clientIp = c.req.header('CF-Connecting-IP') || 'unknown';
+  if (isRateLimited('2fa-verify', clientIp, 60, 5)) {
+    return c.json({ error: 'Too many requests. Try again later.' }, 429);
+  }
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
   const { challenge_token, code, method, device_id, device_name, platform, client_type: clientType } = c.req.valid('json');

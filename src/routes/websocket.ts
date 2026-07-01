@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { validateAccessToken } from '../auth';
+import { getWsManager } from '../lib/ws-manager';
 
 type Bindings = {
   JWT_SECRET: string;
@@ -29,26 +30,17 @@ wsRouter.get('/', async (c) => {
       return c.json({ error: 'Expected WebSocket upgrade' }, 426);
     }
 
-    // Use Durable Object for persistent WebSocket management
-    const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
-    const doStub = c.env.BEECOUNT_DO.get(doId);
+    // 直接创建 WebSocket pair（绕过 DO，简化实现）
+    const pair = new WebSocketPair();
+    const [client, server] = [pair[0], pair[1]];
 
-    // Forward the WebSocket upgrade request to the DO
-    const doRequest = new Request(
-      new URL('/ws', c.req.url),
-      c.req.raw
-    );
-    const response = await doStub.fetch(doRequest);
+    const wsManager = getWsManager();
+    wsManager.addConnection(server, userId, c.req.query('device_id') || undefined);
 
-    // If the DO returns a WebSocket upgrade response, forward it
-    if (response.status === 101) {
-      const ws = (response as any).webSocket;
-      if (ws) {
-        return new Response(null, { status: 101, webSocket: ws });
-      }
-    }
+    server.accept();
+    server.send(JSON.stringify({ type: 'connected', userId }));
 
-    return response;
+    return new Response(null, { status: 101, webSocket: client });
   } catch (error) {
     console.error('[WS] Connection error:', error);
     return c.json({ error: 'WebSocket connection failed' }, 500);

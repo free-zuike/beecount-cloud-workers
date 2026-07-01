@@ -101,6 +101,7 @@ const DEFAULT_CATEGORIES: DefaultCategory[] = [
   ]},
 ];
 import { hashPassword, verifyPassword, createAccessToken, createRefreshToken, validateAccessToken, decodeRefreshToken, revokeRefreshToken, sha256, isLegacyPasswordHash } from '../auth';
+import { isRateLimited } from '../lib/rate-limit';
 import twoFactorRouter from './two_factor';
 
 function nowUtc(): string { return new Date().toISOString(); }
@@ -124,6 +125,10 @@ authRouter.post('/register', zValidator('json', z.object({
   os_version: z.string().optional(),
   device_model: z.string().optional(),
 })), async (c) => {
+  const clientIp = c.req.header('CF-Connecting-IP') || 'unknown';
+  if (isRateLimited('register', clientIp)) {
+    return c.json({ error: 'Too many requests' }, 429);
+  }
   const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType } = c.req.valid('json');
   const email = rawEmail.trim().toLowerCase();
   const resolvedDeviceId = deviceId || randomUUID();
@@ -284,6 +289,10 @@ authRouter.post('/login', zValidator('json', z.object({
   os_version: z.string().optional(),
   device_model: z.string().optional()
 })), async (c) => {
+  const clientIp = c.req.header('CF-Connecting-IP') || 'unknown';
+  if (isRateLimited('login', clientIp)) {
+    return c.json({ error: 'Too many requests' }, 429);
+  }
   const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType, app_version: appVersion, os_version: osVersion, device_model: deviceModel } = c.req.valid('json');
   const email = rawEmail.trim().toLowerCase();
   const resolvedDeviceId = deviceId || randomUUID();

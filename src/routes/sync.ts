@@ -479,6 +479,16 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       details: { accepted, rejected, conflict_count: conflictCount, device_id: deviceId },
     });
 
+    // WS 广播 sync_change 给同一用户的所有设备
+    try {
+      const { getWsManager } = await import('../lib/ws-manager');
+      await getWsManager().broadcastToUser(userId, {
+        type: 'sync_change',
+        serverCursor: maxCursor,
+        serverTimestamp: serverNow,
+      });
+    } catch {}
+
     return c.json(response);
   } catch (error) {
     console.error('[SYNC] /sync/push error - BEGIN ====================================');
