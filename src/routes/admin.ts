@@ -683,77 +683,75 @@ adminRouter.get('/logs', async (c) => {
 // ---------------------------------------------------------------------------
 
 const BackupCreateSchema = z.object({
-  ledger_ids: z.array(z.string()),
+  ledger_id: z.string().optional(),
+  note: z.string().optional(),
 });
 
 adminRouter.post('/backups/create', zValidator('json', BackupCreateSchema), async (c) => {
   const db = c.env.DB;
   const userId = c.get('userId');
-  const { ledger_ids } = c.req.valid('json');
+  const { ledger_id: ledgerId, note } = c.req.valid('json');
   const serverNow = nowUtc();
 
-  const createdSnapshots: Array<{ id: string; created_at: string; size: number }> = [];
-
-  for (const ledgerExternalId of ledger_ids) {
-    const ledger = await db
-      .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
-      .bind(userId, ledgerExternalId)
-      .first<{ id: string; external_id: string }>();
-
-    if (!ledger) continue;
-
-    const transactions = await db
-      .prepare('SELECT * FROM read_tx_projection WHERE ledger_id = ?')
-      .bind(ledger.id)
-      .all();
-    const accounts = await db
-      .prepare('SELECT * FROM read_account_projection WHERE ledger_id = ?')
-      .bind(ledger.id)
-      .all();
-    const categories = await db
-      .prepare('SELECT * FROM read_category_projection WHERE ledger_id = ?')
-      .bind(ledger.id)
-      .all();
-    const tags = await db
-      .prepare('SELECT * FROM read_tag_projection WHERE ledger_id = ?')
-      .bind(ledger.id)
-      .all();
-    const budgets = await db
-      .prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?')
-      .bind(ledger.id)
-      .all();
-
-    const snapshotData = {
-      ledger_external_id: ledger.external_id,
-      transactions: transactions.results,
-      accounts: accounts.results,
-      categories: categories.results,
-      tags: tags.results,
-      budgets: budgets.results,
-      exported_at: serverNow,
-    };
-
-    const snapshotJson = JSON.stringify(snapshotData);
-    const snapshotId = randomUUID();
-
-    await db
-      .prepare(
-        `INSERT INTO backup_snapshots (id, user_id, ledger_id, snapshot_json, note, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      )
-      .bind(snapshotId, userId, ledger.id, snapshotJson, `Admin backup ${serverNow}`, serverNow)
-      .run();
-
-    createdSnapshots.push({
-      id: snapshotId,
-      created_at: serverNow,
-      size: snapshotJson.length,
-    });
+  if (!ledgerId) {
+    return c.json({ error: 'ledger_id is required' }, 400);
   }
 
+  const ledger = await db
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerId)
+    .first<{ id: string; external_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found' }, 404);
+  }
+
+  const transactions = await db
+    .prepare('SELECT * FROM read_tx_projection WHERE ledger_id = ?')
+    .bind(ledger.id)
+    .all();
+  const accounts = await db
+    .prepare('SELECT * FROM read_account_projection WHERE ledger_id = ?')
+    .bind(ledger.id)
+    .all();
+  const categories = await db
+    .prepare('SELECT * FROM read_category_projection WHERE ledger_id = ?')
+    .bind(ledger.id)
+    .all();
+  const tags = await db
+    .prepare('SELECT * FROM read_tag_projection WHERE ledger_id = ?')
+    .bind(ledger.id)
+    .all();
+  const budgets = await db
+    .prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?')
+    .bind(ledger.id)
+    .all();
+
+  const snapshotData = {
+    ledger_external_id: ledger.external_id,
+    transactions: transactions.results,
+    accounts: accounts.results,
+    categories: categories.results,
+    tags: tags.results,
+    budgets: budgets.results,
+    exported_at: serverNow,
+  };
+
+  const snapshotJson = JSON.stringify(snapshotData);
+  const snapshotId = randomUUID();
+
+  await db
+    .prepare(
+      `INSERT INTO backup_snapshots (id, user_id, ledger_id, snapshot_json, note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(snapshotId, userId, ledger.id, snapshotJson, note || `Admin backup ${serverNow}`, serverNow)
+    .run();
+
   return c.json({
-    snapshots: createdSnapshots,
-    count: createdSnapshots.length,
+    snapshot_id: snapshotId,
+    ledger_id: ledger.external_id,
+    created_at: serverNow,
   }, 201);
 });
 
@@ -766,20 +764,27 @@ adminRouter.get('/backups/artifacts', async (c) => {
 
   const rows = await db
     .prepare(
-      `SELECT bs.id, bs.created_at, LENGTH(bs.snapshot_json) as size, bs.note
+      `SELECT bs.id, bs.ledger_id, bs.created_at, bs.user_id, LENGTH(bs.snapshot_json) as size, bs.note
        FROM backup_snapshots bs
        ORDER BY bs.created_at DESC`
     )
-    .all<{ id: string; created_at: string; size: number; note: string | null }>();
+    .all<{ id: string; ledger_id: string; created_at: string; user_id: string; size: number; note: string | null }>();
 
   const items = rows.results.map((row) => ({
     id: row.id,
-    created_at: row.created_at,
+    ledger_id: row.ledger_id,
+    kind: 'snapshot',
+    file_name: `${row.id}.json`,
+    content_type: 'application/json',
+    checksum: '',
     size: row.size,
-    format: 'json',
+    created_at: row.created_at,
+    created_by: row.user_id,
+    note: row.note,
+    metadata: {},
   }));
 
-  return c.json({ items });
+  return c.json(items);
 });
 
 // ---------------------------------------------------------------------------
@@ -787,14 +792,14 @@ adminRouter.get('/backups/artifacts', async (c) => {
 // ---------------------------------------------------------------------------
 
 const BackupRestoreSchema = z.object({
-  artifact_id: z.string(),
-  ledger_ids: z.array(z.string()).optional(),
+  snapshot_id: z.string(),
+  device_id: z.string().optional(),
 });
 
 adminRouter.post('/backups/restore', zValidator('json', BackupRestoreSchema), async (c) => {
   const db = c.env.DB;
   const userId = c.get('userId');
-  const { artifact_id, ledger_ids } = c.req.valid('json');
+  const { snapshot_id: artifact_id, device_id } = c.req.valid('json');
   const serverNow = nowUtc();
 
   const snapshot = await db
@@ -840,9 +845,7 @@ adminRouter.post('/backups/restore', zValidator('json', BackupRestoreSchema), as
       const syncId = txRecord.sync_id as string;
       if (!syncId) continue;
 
-      if (ledger_ids && ledger_ids.length > 0 && ledger_ids.indexOf(ledgerExternalId!) === -1) {
-        continue;
-      }
+      // restore all transactions from snapshot
 
       await db
         .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
@@ -882,9 +885,9 @@ adminRouter.post('/backups/restore', zValidator('json', BackupRestoreSchema), as
   });
 
   return c.json({
-    success: true,
-    restored_transactions: restoredTransactions,
+    restored: true,
     ledger_id: ledgerExternalId,
+    change_id: 0,
   });
 });
 
