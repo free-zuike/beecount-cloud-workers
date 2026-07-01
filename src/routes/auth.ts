@@ -101,6 +101,7 @@ const DEFAULT_CATEGORIES: DefaultCategory[] = [
   ]},
 ];
 import { hashPassword, verifyPassword, createAccessToken, createRefreshToken, validateAccessToken, decodeRefreshToken, revokeRefreshToken } from '../auth';
+import twoFactorRouter from './two_factor';
 
 type Bindings = {
   DB: D1Database;
@@ -405,105 +406,7 @@ authRouter.get('/me', async (c) => {
   });
 });
 
-// Get 2FA status
-authRouter.get('/2fa/status', async (c) => {
-  const db = c.env.DB;
-  const jwtSecret = c.env.JWT_SECRET;
-  
-  // 手动验证 token
-  const authHeader = c.req.header('Authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return c.json({ error: 'Unauthorized' }, 401);
-  }
-  
-  const token = authHeader.slice(7);
-  const validationResult = await validateAccessToken(token, jwtSecret);
-  
-  if (!validationResult || !('userId' in validationResult)) {
-    if (validationResult && 'expired' in validationResult && validationResult.expired) {
-      return c.json({ error: 'Token expired' }, 401);
-    }
-    return c.json({ error: 'Unauthorized' }, 401);
-  }
-  
-  const userId = validationResult.userId;
-  
-  const user = await db
-    .prepare('SELECT totp_enabled, totp_enabled_at FROM users WHERE id = ?')
-    .bind(userId)
-    .first<{ totp_enabled: number; totp_enabled_at: string | null }>();
-  
-  if (!user) {
-    return c.json({ error: 'User not found' }, 404);
-  }
-  
-  return c.json({
-    enabled: Boolean(user.totp_enabled),
-    enabled_at: user.totp_enabled_at,
-  });
-});
-
-// Setup 2FA - generate TOTP secret
-authRouter.post('/2fa/setup', async (c) => {
-  const db = c.env.DB;
-  const jwtSecret = c.env.JWT_SECRET;
-  
-  // 手动验证 token
-  const authHeader = c.req.header('Authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return c.json({ error: 'Unauthorized' }, 401);
-  }
-  
-  const token = authHeader.slice(7);
-  const validationResult = await validateAccessToken(token, jwtSecret);
-  
-  if (!validationResult || !('userId' in validationResult)) {
-    if (validationResult && 'expired' in validationResult && validationResult.expired) {
-      return c.json({ error: 'Token expired' }, 401);
-    }
-    return c.json({ error: 'Unauthorized' }, 401);
-  }
-  
-  const userId = validationResult.userId;
-  
-  const user = await db
-    .prepare('SELECT totp_enabled, email FROM users WHERE id = ?')
-    .bind(userId)
-    .first<{ totp_enabled: number; email: string }>();
-  
-  if (!user) {
-    return c.json({ error: 'User not found' }, 404);
-  }
-  
-  if (user.totp_enabled) {
-    return c.json({ error: '2FA already enabled' }, 409);
-  }
-  
-  // 生成 TOTP secret
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  let secret = '';
-  const bytes = new Uint8Array(20);
-  crypto.getRandomValues(bytes);
-  for (const b of bytes) {
-    secret += chars[b % chars.length];
-  }
-  
-  await db
-    .prepare('UPDATE users SET totp_secret_encrypted = ?, totp_enabled = 0 WHERE id = ?')
-    .bind(secret, userId)
-    .run();
-  
-  // 生成 otpauth URI
-  const issuer = 'BeeCount';
-  const label = encodeURIComponent(`${issuer}:${user.email}`);
-  const encodedIssuer = encodeURIComponent(issuer);
-  const qrUri = `otpauth://totp/${label}?secret=${secret}&issuer=${encodedIssuer}&algorithm=SHA1&digits=6&period=30`;
-  
-  return c.json({
-    secret,
-    qr_code_uri: qrUri,
-    expires_in: 300,
-  });
-});
+// 2FA 路由 — 挂在 /2fa 下，前端调用 /auth/2fa/*
+authRouter.route('/2fa', twoFactorRouter);
 
 export default authRouter;

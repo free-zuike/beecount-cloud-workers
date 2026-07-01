@@ -21,6 +21,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import { validateAccessToken } from '../auth';
 
 // ===========================
 // 辅助函数
@@ -223,6 +224,22 @@ type Variables = {
 };
 
 const twoFactorRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
+
+// 2FA 路由挂载在 authRouter 下，auth 中间件不会运行，需要手动验证 JWT
+twoFactorRouter.use('*', async (c, next) => {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  const token = authHeader.slice(7);
+  const jwtSecret = c.env.JWT_SECRET;
+  const validationResult = await validateAccessToken(token, jwtSecret);
+  if (!validationResult || !('userId' in validationResult)) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  c.set('userId', validationResult.userId);
+  return next();
+});
 
 twoFactorRouter.get('/status', async (c) => {
   const userId = c.get('userId');
