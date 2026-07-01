@@ -335,11 +335,10 @@ twoFactorRouter.post('/setup', async (c) => {
   }
 
   const secret = generateTotpSecret();
-  const encryptedSecret = await encryptTotpSecret(secret, jwtSecret);
 
   await db
     .prepare('UPDATE users SET totp_secret_encrypted = ?, totp_enabled = 0, totp_enabled_at = NULL WHERE id = ?')
-    .bind(encryptedSecret, userId)
+    .bind(secret, userId)
     .run();
 
   const qrUri = buildOtpauthUri(secret, user.email);
@@ -375,7 +374,7 @@ twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (
     return c.json({ error: 'No pending 2FA setup. Call /2fa/setup first.' }, 400);
   }
 
-  const isValid = await verifyTotpCode(await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret), code);
+  const isValid = await verifyTotpCode(user.totp_secret_encrypted, code);
   if (!isValid) {
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }
@@ -450,7 +449,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   let isValid = false;
 
   if (method === 'totp') {
-    isValid = await verifyTotpCode(await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret), code);
+    isValid = await verifyTotpCode(user.totp_secret_encrypted, code);
   } else if (method === 'recovery_code') {
     const codeHash = await sha256Hash(code);
     const recoveryCodes = await db
@@ -538,7 +537,7 @@ twoFactorRouter.post('/disable', zValidator('json', TwoFADisableSchema), async (
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }
 
-  const isValid = await verifyTotpCode(await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret), code);
+  const isValid = await verifyTotpCode(user.totp_secret_encrypted, code);
   if (!isValid) {
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }
@@ -573,7 +572,7 @@ twoFactorRouter.post('/recovery-codes/regenerate', zValidator('json', TwoFARegen
     return c.json({ error: '2FA not enabled.' }, 400);
   }
 
-  const isValid = await verifyTotpCode(await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret), code);
+  const isValid = await verifyTotpCode(user.totp_secret_encrypted, code);
   if (!isValid) {
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }
