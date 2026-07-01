@@ -272,12 +272,37 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     }
     console.log('[SYNC] existingChangeMap size:', existingChangeMap.size);
 
+    // 补充查询 user-global 变更（category/account/tag 不依附 ledger）
+    const USER_GLOBAL_TYPES = ['category', 'account', 'tag'];
+    const userGlobalEntries = changes
+      .filter(c => USER_GLOBAL_TYPES.includes(c.entity_type) && !c.ledger_id)
+      .map(c => ({ entity_type: c.entity_type, entity_sync_id: c.entity_sync_id }));
+
+    for (let i = 0; i < userGlobalEntries.length; i += 30) {
+      const batch = userGlobalEntries.slice(i, i + 30);
+      if (batch.length === 0) continue;
+      let q = `SELECT entity_type, entity_sync_id, change_id, updated_at, updated_by_device_id FROM sync_changes WHERE scope = 'user' AND user_id = ? AND (`;
+      const p: (string | number)[] = [userId];
+      for (let j = 0; j < batch.length; j++) {
+        if (j > 0) q += ' OR ';
+        q += `(entity_type = ? AND entity_sync_id = ?)`;
+        p.push(batch[j].entity_type, batch[j].entity_sync_id);
+      }
+      q += ')';
+      const rows = await db.prepare(q).bind(...p).all<{ entity_type: string; entity_sync_id: string; change_id: number; updated_at: string; updated_by_device_id: string | null }>();
+      for (const r of rows.results) {
+        const key = `user:${userId}:${r.entity_type}:${r.entity_sync_id}`;
+        existingChangeMap.set(key, r);
+      }
+    }
+    console.log('[SYNC] existingChangeMap size after user-global:', existingChangeMap.size);
+
     // ====================== 优化3：批量写入变更（分小批次避免 CPU 超时） ======================
     const conflictList: typeof conflictSamples = [];
     const BATCH_INSERT_SIZE = 15; // 每批处理 15 个插入
     const processedChanges: Array<{
       change: typeof changes[0];
-      ledgerRow: typeof ledgerMap[string];
+      ledgerRow: typeof ledgerMap[string] | null;
       newChangeId: number;
     }> = [];
 
@@ -288,18 +313,33 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       const insertPromises: Array<{
         result: Promise<{ meta: { last_row_id: number } }>;
         change: typeof changes[0];
-        ledgerRow: typeof ledgerMap[string];
+        ledgerRow: typeof ledgerMap[string] | null;
       }> = [];
 
       for (const change of batchChanges) {
-        const ledgerRow = ledgerMap[change.ledger_id];
-        if (!ledgerRow) continue;
+        // user-global 实体：category/account/tag 可以不依附 ledger
+        const USER_GLOBAL_TYPES = ['category', 'account', 'tag'];
+        const isUserGlobal = USER_GLOBAL_TYPES.includes(change.entity_type) && !change.ledger_id;
 
         const changeUpdatedAt = toUtcDate(change.updated_at);
         const maxAllowed = new Date(new Date(serverNow).getTime() + 5000);
         const clampedUpdatedAt = changeUpdatedAt > maxAllowed ? maxAllowed : changeUpdatedAt;
 
-        const key = `${ledgerRow.id}:${change.entity_type}:${change.entity_sync_id}`;
+        let key: string;
+        let scope = 'ledger';
+        let ledgerRowId: string | null = null;
+
+        if (isUserGlobal) {
+          // user-global LWW key: (user_id, scope='user', entity_type, entity_sync_id)
+          key = `user:${userId}:${change.entity_type}:${change.entity_sync_id}`;
+          scope = 'user';
+        } else {
+          const ledgerRow = ledgerMap[change.ledger_id];
+          if (!ledgerRow) continue;
+          ledgerRowId = ledgerRow.id;
+          key = `${ledgerRow.id}:${change.entity_type}:${change.entity_sync_id}`;
+        }
+
         const latestChange = existingChangeMap.get(key);
 
         const incomingTuple = { ts: clampedUpdatedAt.getTime(), deviceId };
@@ -341,23 +381,24 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           const p = { ...payloadForStorage } as Record<string, unknown>;
           if (!p.updatedByUserId) p.updatedByUserId = userId;
           if (!p.createdByUserId) {
-            // first-write-wins: 已有 projection 行保留原 creator，否则用当前 actor
             const existing = await db.prepare('SELECT created_by_user_id FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
-              .bind(ledgerRow.id, change.entity_sync_id).first<{ created_by_user_id: string | null }>();
+              .bind(ledgerRowId || '', change.entity_sync_id).first<{ created_by_user_id: string | null }>();
             p.createdByUserId = existing?.created_by_user_id || userId;
           }
           payloadForStorage = p;
         }
 
+        const ledgerRowRef = isUserGlobal ? null : { id: ledgerRowId as string, external_id: '' };
+
         // 添加到批量插入
         insertPromises.push({
           result: db.prepare(
             `INSERT INTO sync_changes
-             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id, scope)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           ).bind(
             userId,
-            ledgerRow.id,
+            isUserGlobal ? null : ledgerRowId,
             change.entity_type,
             change.entity_sync_id,
             change.action,
@@ -365,12 +406,15 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
             clampedUpdatedAt.toISOString(),
             deviceId,
             userId,
+            scope,
           ).run(),
           change,
-          ledgerRow,
+          ledgerRow: null,
         });
 
-        touchedLedgers[ledgerRow.external_id] = ledgerRow.id;
+        if (!isUserGlobal && ledgerRowId) {
+          touchedLedgers[ledgerMap[change.ledger_id]?.external_id ?? change.ledger_id] = ledgerRowId;
+        }
       }
 
       // 执行这一批次的插入
@@ -388,6 +432,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
         // 立即应用这一批次的投影更新（避免一次性处理太多）
         for (const { change, ledgerRow, newChangeId } of processedChanges) {
+          if (!ledgerRow) continue; // user-global entities don't update ledger projections
           try {
             await applyChangeToProjection(db, ledgerRow.id, userId, {
               change_id: newChangeId,
@@ -479,7 +524,7 @@ syncRouter.get('/pull', async (c) => {
     }
 
     let query = `
-      SELECT c.change_id, c.entity_type, c.entity_sync_id, c.action, c.payload_json, c.updated_at, c.updated_by_device_id, l.external_id as ledger_id
+      SELECT c.change_id, c.entity_type, c.entity_sync_id, c.action, c.payload_json, c.updated_at, c.updated_by_device_id, c.scope, l.external_id as ledger_id
       FROM sync_changes c
       LEFT JOIN ledgers l ON c.ledger_id = l.id
       WHERE c.user_id = ? AND c.change_id > ?
@@ -512,6 +557,7 @@ syncRouter.get('/pull', async (c) => {
         updated_at: string;
         ledger_id: string | null;
         updated_by_device_id: string | null;
+        scope: string | null;
       }>();
 
     const maxRow = await db
@@ -540,14 +586,14 @@ syncRouter.get('/pull', async (c) => {
     return c.json({
       changes: limitedResults.map(c => ({
         change_id: c.change_id,
-        ledger_id: c.ledger_id ?? '',
+        ledger_id: c.scope === 'user' ? '__user_global__' : (c.ledger_id ?? ''),
         entity_type: c.entity_type,
         entity_sync_id: c.entity_sync_id,
         action: c.action,
         payload: c.payload_json ? JSON.parse(c.payload_json) : {},
         updated_at: c.updated_at,
         updated_by_device_id: c.updated_by_device_id ?? null,
-        scope: 'ledger',
+        scope: c.scope || 'ledger',
       })),
       server_cursor: maxRow?.max_id ?? 0,
       has_more: hasMore,
