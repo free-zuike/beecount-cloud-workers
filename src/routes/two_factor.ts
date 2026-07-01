@@ -185,14 +185,14 @@ async function verifyTotpCode(secret: string, code: string, window: number = 2):
 // ===========================
 
 const TwoFAConfirmSchema = z.object({
-  code: z.string().regex(/^\d{6}$/, '必须是6位数字'),
+  code: z.string().regex(/^\d{6,8}$/, '必须是6-8位数字'),
 });
 
 const TwoFAVerifySchema = z.object({
   challenge_token: z.string(),
   code: z.string(),
   method: z.enum(['totp', 'recovery_code']).default('totp'),
-  device_id: z.string(),
+  device_id: z.string().optional(),
   device_name: z.string().optional().default('Unknown Device'),
   platform: z.string().optional().default('unknown'),
   app_version: z.string().optional(),
@@ -359,7 +359,7 @@ twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (
 twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c) => {
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
-  const { challenge_token, code, method, device_id, device_name, platform } = c.req.valid('json');
+  const { challenge_token, code, method, device_id, device_name, platform, client_type: clientType } = c.req.valid('json');
   const serverNow = nowUtc();
 
   // 验证 challenge_token 签名（防止伪造）
@@ -428,7 +428,9 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   }
 
   // 生成真正的签名 JWT access token
-  const accessToken = await createAccessToken(user.id, jwtSecret, 'app', ['app:write']);
+  const isApp = clientType !== 'web';
+  const tokenScopes = isApp ? ['app:write'] : ['web:read', 'web:write', 'ops:write'];
+  const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
 
   // 创建 DB-backed refresh token
   const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db);
@@ -440,7 +442,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
     refresh_token: refreshToken.token,
     expires_in: 3600,
     device_id: resolvedDeviceId,
-    scopes: ['app:write'],
+    scopes: tokenScopes,
   });
 });
 

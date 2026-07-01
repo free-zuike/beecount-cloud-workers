@@ -124,7 +124,8 @@ authRouter.post('/register', zValidator('json', z.object({
   os_version: z.string().optional(),
   device_model: z.string().optional(),
 })), async (c) => {
-  const { email, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType } = c.req.valid('json');
+  const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType } = c.req.valid('json');
+  const email = rawEmail.trim().toLowerCase();
   const resolvedDeviceId = deviceId || randomUUID();
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
@@ -283,7 +284,8 @@ authRouter.post('/login', zValidator('json', z.object({
   os_version: z.string().optional(),
   device_model: z.string().optional()
 })), async (c) => {
-  const { email, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType } = c.req.valid('json');
+  const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType } = c.req.valid('json');
+  const email = rawEmail.trim().toLowerCase();
   const resolvedDeviceId = deviceId || randomUUID();
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
@@ -295,17 +297,17 @@ authRouter.post('/login', zValidator('json', z.object({
     return c.json({ error: 'Invalid credentials' }, 401);
   }
 
-  if (!user.is_enabled) {
-    return c.json({ error: 'Account disabled' }, 403);
-  }
-
   const passwordValid = await verifyPassword(user.password_hash, password);
   if (!passwordValid) {
     return c.json({ error: 'Invalid credentials' }, 401);
   }
 
+  if (!user.is_enabled) {
+    return c.json({ error: 'Account disabled' }, 403);
+  }
+
   if (user.totp_enabled) {
-    const challengeToken = await createAccessToken(user.id, jwtSecret, 'app', ['challenge:2fa'], 300);
+    const challengeToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', ['challenge:2fa'], 300, 'totp_challenge');
     return c.json({
       requires_2fa: true,
       challenge_token: challengeToken,
@@ -389,7 +391,7 @@ authRouter.post('/refresh', zValidator('json', z.object({
     });
   } catch (error) {
     console.error('Refresh token error:', error);
-    return c.json({ error: 'Internal server error' }, 500);
+    return c.json({ error: 'Invalid refresh token' }, 401);
   }
 });
 

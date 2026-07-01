@@ -86,12 +86,13 @@ export async function createAccessToken(
   secret: string,
   clientType: string = 'app',
   scopes: string[] = ['app:write'],
-  expiresIn: number = 3600
+  expiresIn: number = 3600,
+  tokenType: string = 'access'
 ): Promise<string> {
   const header = JSON.stringify({ alg: JWT_ALG, typ: 'JWT' });
   const payload = JSON.stringify({
     sub: userId,
-    type: 'access',
+    type: tokenType,
     client_type: clientType,
     scopes: scopes,
     iat: Math.floor(Date.now() / 1000),

@@ -87,7 +87,7 @@ describe('SQL Debug', () => {
     const ledgerId = ledgerBody[0].ledger_id;
 
     // Create account via write endpoint
-    const createRes = await env.app.request('/api/v1/write/accounts', {
+    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/accounts', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
