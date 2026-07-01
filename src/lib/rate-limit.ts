@@ -45,16 +45,3 @@ export function isRateLimited(
   bucket.timestamps.push(now);
   return false;
 }
-
-/**
- * 定期清理过期桶（防止内存泄漏）
- */
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, bucket] of buckets) {
-    bucket.timestamps = bucket.timestamps.filter(ts => now - ts < 60000);
-    if (bucket.timestamps.length === 0) {
-      buckets.delete(key);
-    }
-  }
-}, 60000);
