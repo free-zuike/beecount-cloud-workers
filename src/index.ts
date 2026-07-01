@@ -75,6 +75,8 @@ app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
 // ---- 公共路由（无需鉴权）----
 app.route('/api/v1/setup', setupRouter);
+// 2FA 必须在 authRouter 前面注册（Hono 按注册顺序匹配）
+app.route('/api/v1/auth/2fa', twoFactorRouter);
 app.route('/api/v1/auth', authRouter);
 app.get('/api/v1/version', (c) =>
   c.json({ name: 'BeeCount Cloud', version: '1.5.2' })
