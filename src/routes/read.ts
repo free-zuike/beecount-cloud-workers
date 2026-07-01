@@ -1153,277 +1153,71 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets', async (c) => {
   return c.json(result);
 });
 
-// ---------------------------------------------------------------------------
-// Workspace 聚合端点 - 跨账本查询
-// ---------------------------------------------------------------------------
-
-/** 获取所有可见账本的 internal_id 列表 */
-async function getAccessibleLedgerIds(db: D1Database, userId: string): Promise<string[]> {
-  const result = await db
-    .prepare('SELECT id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .all<{ id: string }>();
-  return result.results.map(r => r.id);
-}
-
-/** GET /read/workspace/accounts - 跨账本账户列表 */
-readRouter.get('/workspace/accounts', async (c) => {
+// GET /read/ledgers/:ledgerExternalId/budgets/usage - 预算使用情况
+readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
-  const ledgerIds = await getAccessibleLedgerIds(db, userId);
-  if (ledgerIds.length === 0) return c.json([]);
-
-  const placeholders = ledgerIds.map(() => '?').join(',');
-  const rows = await db
-    .prepare(`SELECT a.*, l.external_id as ledger_id, l.name as ledger_name
-              FROM read_account_projection a
-              JOIN ledgers l ON a.ledger_id = l.id
-              WHERE a.ledger_id IN (${placeholders})`)
-    .bind(...ledgerIds)
-    .all();
-
-  const result = rows.results.map((r: any) => ({
-    id: r.sync_id,
-    name: r.name,
-    account_type: r.account_type,
-    currency: r.currency,
-    initial_balance: r.initial_balance,
-    note: r.note,
-    credit_limit: r.credit_limit,
-    billing_day: r.billing_day,
-    payment_due_day: r.payment_due_day,
-    bank_name: r.bank_name,
-    card_last_four: r.card_last_four,
-    last_change_id: r.source_change_id,
-    ledger_id: r.ledger_id,
-    ledger_name: r.ledger_name,
-    created_by_user_id: r.user_id,
-    created_by_email: null,
-  }));
-
-  return c.json(result);
-});
-
-/** GET /read/workspace/categories - 跨账本分类列表 */
-readRouter.get('/workspace/categories', async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-  const ledgerIds = await getAccessibleLedgerIds(db, userId);
-  if (ledgerIds.length === 0) return c.json([]);
-
-  const placeholders = ledgerIds.map(() => '?').join(',');
-  const rows = await db
-    .prepare(`SELECT c.*, l.external_id as ledger_id, l.name as ledger_name
-              FROM read_category_projection c
-              JOIN ledgers l ON c.ledger_id = l.id
-              WHERE c.ledger_id IN (${placeholders})`)
-    .bind(...ledgerIds)
-    .all();
-
-  const result = rows.results.map((r: any) => ({
-    id: r.sync_id,
-    name: r.name,
-    kind: r.kind,
-    level: r.level,
-    sort_order: r.sort_order,
-    icon: r.icon,
-    icon_type: r.icon_type,
-    custom_icon_path: r.custom_icon_path,
-    icon_cloud_file_id: r.icon_cloud_file_id,
-    icon_cloud_sha256: r.icon_cloud_sha256,
-    parent_name: r.parent_name,
-    last_change_id: r.source_change_id,
-    ledger_id: r.ledger_id,
-    ledger_name: r.ledger_name,
-    created_by_user_id: r.user_id,
-    created_by_email: null,
-  }));
-
-  return c.json(result);
-});
-
-/** GET /read/workspace/tags - 跨账本标签列表 */
-readRouter.get('/workspace/tags', async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-  const ledgerIds = await getAccessibleLedgerIds(db, userId);
-  if (ledgerIds.length === 0) return c.json([]);
-
-  const placeholders = ledgerIds.map(() => '?').join(',');
-  const rows = await db
-    .prepare(`SELECT t.*, l.external_id as ledger_id, l.name as ledger_name
-              FROM read_tag_projection t
-              JOIN ledgers l ON t.ledger_id = l.id
-              WHERE t.ledger_id IN (${placeholders})`)
-    .bind(...ledgerIds)
-    .all();
-
-  const result = rows.results.map((r: any) => ({
-    id: r.sync_id,
-    name: r.name,
-    color: r.color,
-    last_change_id: r.source_change_id,
-    ledger_id: r.ledger_id,
-    ledger_name: r.ledger_name,
-    created_by_user_id: r.user_id,
-    created_by_email: null,
-  }));
-
-  return c.json(result);
-});
-
-/** GET /read/summary - 单账本摘要统计 */
-readRouter.get('/summary', async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-  const ledgerExtId = c.req.query('ledger_id');
-  if (!ledgerExtId) return c.json({ error: 'ledger_id required' }, 400);
+  const ledgerExtId = c.req.param('ledgerExternalId');
 
   const ledger = await db
-    .prepare('SELECT id, name FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
     .bind(userId, ledgerExtId)
-    .first<{ id: string; name: string }>();
+    .first<{ id: string; external_id: string }>();
   if (!ledger) return c.json({ error: 'Ledger not found' }, 404);
 
-  const row = await db
-    .prepare(`SELECT
-      COUNT(*) as tx_count,
-      COALESCE(SUM(CASE WHEN tx_type = 'income' THEN amount ELSE 0 END), 0) as income,
-      COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN amount ELSE 0 END), 0) as expense,
-      COALESCE(SUM(CASE WHEN tx_type = 'income' THEN amount ELSE 0 END) - SUM(CASE WHEN tx_type = 'expense' THEN amount ELSE 0 END), 0) as balance
-      FROM read_tx_projection WHERE ledger_id = ?`)
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const nextMonth = now.getMonth() === 11
+    ? `${now.getFullYear() + 1}-01`
+    : `${now.getFullYear()}-${String(now.getMonth() + 2).padStart(2, '0')}`;
+
+  const budgets = await db
+    .prepare('SELECT sync_id, category_sync_id, amount, period FROM read_budget_projection WHERE ledger_id = ? AND enabled = 1')
     .bind(ledger.id)
-    .first<{ tx_count: number; income: number; expense: number; balance: number }>();
+    .all<{ sync_id: string; category_sync_id: string | null; amount: number; period: string }>();
 
-  return c.json({
-    ledger_id: ledgerExtId,
-    transaction_count: row?.tx_count ?? 0,
-    income_total: row?.income ?? 0,
-    expense_total: row?.expense ?? 0,
-    balance: row?.balance ?? 0,
-  });
-});
+  const usage: Array<{
+    budget_id: string;
+    category_id: string | null;
+    budget_amount: number;
+    spent_amount: number;
+    period: string;
+  }> = [];
 
-/** GET /read/summary/workspace/ledger-counts - 首页统计 */
-readRouter.get('/summary/workspace/ledger-counts', async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-  const ledgerIds = await getAccessibleLedgerIds(db, userId);
-  if (ledgerIds.length === 0) return c.json({ tx_count: 0, days_since_first_tx: 0, distinct_days: 0, first_tx_at: null });
+  for (const b of budgets.results) {
+    let spent = 0;
+    if (b.category_sync_id) {
+      const row = await db
+        .prepare(`SELECT COALESCE(SUM(amount), 0) as total FROM read_tx_projection
+                   WHERE ledger_id = ? AND category_sync_id = ? AND tx_type = 'expense'
+                   AND happened_at >= ? AND happened_at < ?`)
+        .bind(ledger.id, b.category_sync_id, `${currentMonth}-01`, `${nextMonth}-01`)
+        .first<{ total: number }>();
+      spent = row?.total ?? 0;
+    } else {
+      const row = await db
+        .prepare(`SELECT COALESCE(SUM(amount), 0) as total FROM read_tx_projection
+                   WHERE ledger_id = ? AND tx_type = 'expense'
+                   AND happened_at >= ? AND happened_at < ?`)
+        .bind(ledger.id, `${currentMonth}-01`, `${nextMonth}-01`)
+        .first<{ total: number }>();
+      spent = row?.total ?? 0;
+    }
 
-  const placeholders = ledgerIds.map(() => '?').join(',');
-  const countRow = await db
-    .prepare(`SELECT COUNT(*) as tx_count FROM read_tx_projection WHERE ledger_id IN (${placeholders})`)
-    .bind(...ledgerIds)
-    .first<{ tx_count: number }>();
-
-  const firstTx = await db
-    .prepare(`SELECT MIN(happened_at) as first_tx_at FROM read_tx_projection WHERE ledger_id IN (${placeholders})`)
-    .bind(...ledgerIds)
-    .first<{ first_tx_at: string | null }>();
-
-  const daysRow = await db
-    .prepare(`SELECT COUNT(DISTINCT DATE(happened_at)) as distinct_days FROM read_tx_projection WHERE ledger_id IN (${placeholders})`)
-    .bind(...ledgerIds)
-    .first<{ distinct_days: number }>();
-
-  const txCount = countRow?.tx_count ?? 0;
-  const firstTxAt = firstTx?.first_tx_at ?? null;
-  const distinctDays = daysRow?.distinct_days ?? 0;
-
-  let daysSinceFirst = 0;
-  if (firstTxAt) {
-    const first = new Date(firstTxAt);
-    const now = new Date();
-    daysSinceFirst = Math.floor((now.getTime() - first.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-  }
-
-  return c.json({ tx_count: txCount, days_since_first_tx: daysSinceFirst, distinct_days: distinctDays, first_tx_at: firstTxAt });
-});
-
-/** GET /read/workspace/analytics - 跨账本分析数据 */
-readRouter.get('/workspace/analytics', async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-  const scope = c.req.query('scope') || 'month';
-  const period = c.req.query('period') || null;
-
-  const ledgerIds = await getAccessibleLedgerIds(db, userId);
-  if (ledgerIds.length === 0) {
-    return c.json({
-      summary: { transaction_count: 0, income_total: 0, expense_total: 0, balance: 0 },
-      series: [],
-      category_ranks: [],
-      anomaly_months: [],
-      range: { scope, metric: 'expense', period: null, start_at: null, end_at: null },
+    usage.push({
+      budget_id: b.sync_id,
+      category_id: b.category_sync_id,
+      budget_amount: b.amount,
+      spent_amount: spent,
+      period: b.period,
     });
   }
 
-  const placeholders = ledgerIds.map(() => '?').join(',');
-  let dateFilter = '';
-  const params: (string | number)[] = [...ledgerIds];
-
-  if (scope === 'month' && period) {
-    dateFilter = `AND happened_at >= ? AND happened_at < ?`;
-    const [y, m] = period.split('-').map(Number);
-    params.push(`${y}-${String(m).padStart(2, '0')}-01`);
-    const nextM = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
-    params.push(`${nextM}-01`);
-  } else if (scope === 'year' && period) {
-    dateFilter = `AND happened_at >= ? AND happened_at < ?`;
-    params.push(`${period}-01-01`);
-    params.push(`${Number(period) + 1}-01-01`);
-  }
-
-  const summaryRow = await db
-    .prepare(`SELECT
-      COUNT(*) as transaction_count,
-      COALESCE(SUM(CASE WHEN tx_type = 'income' THEN amount ELSE 0 END), 0) as income_total,
-      COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN amount ELSE 0 END), 0) as expense_total
-      FROM read_tx_projection WHERE ledger_id IN (${placeholders}) ${dateFilter}`)
-    .bind(...params)
-    .first<{ transaction_count: number; income_total: number; expense_total: number }>();
-
-  const txCount = summaryRow?.transaction_count ?? 0;
-  const income = summaryRow?.income_total ?? 0;
-  const expense = summaryRow?.expense_total ?? 0;
-
-  const seriesParams = [...params];
-  const seriesRow = await db
-    .prepare(`SELECT
-      SUBSTR(happened_at, 1, 7) as bucket,
-      COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN amount ELSE 0 END), 0) as expense,
-      COALESCE(SUM(CASE WHEN tx_type = 'income' THEN amount ELSE 0 END), 0) as income
-      FROM read_tx_projection WHERE ledger_id IN (${placeholders}) ${dateFilter}
-      GROUP BY bucket ORDER BY bucket`)
-    .bind(...seriesParams)
-    .all<{ bucket: string; expense: number; income: number }>();
-
-  const series = seriesRow.results.map(r => ({
-    bucket: r.bucket,
-    expense: r.expense,
-    income: r.income,
-    balance: r.income - r.expense,
-  }));
-
-  const catRow = await db
-    .prepare(`SELECT c.name as category_name, SUM(t.amount) as total, COUNT(*) as tx_count
-              FROM read_tx_projection t
-              JOIN read_category_projection c ON t.category_sync_id = c.sync_id AND t.ledger_id = c.ledger_id
-              WHERE t.ledger_id IN (${placeholders}) ${dateFilter}
-              GROUP BY t.category_sync_id, c.name ORDER BY total DESC LIMIT 10`)
-    .bind(...params)
-    .all<{ category_name: string; total: number; tx_count: number }>();
-
-  return c.json({
-    summary: { transaction_count: txCount, income_total: income, expense_total: expense, balance: income - expense },
-    series,
-    category_ranks: catRow.results,
-    anomaly_months: [],
-    range: { scope, metric: 'expense', period, start_at: null, end_at: null },
-  });
+  return c.json(usage);
 });
 
+// ---------------------------------------------------------------------------
+// Workspace 聚合端点 - 跨账本查询
 // ---------------------------------------------------------------------------
 // 调试端点 - 查看数据库原始数据
 // ---------------------------------------------------------------------------

@@ -1772,4 +1772,73 @@ backupRouter.delete('/restores/:id', async (c) => {
   return c.json({ success: true });
 });
 
+// ---------------------------------------------------------------------------
+// POST /admin/backups/upload-db - 上传数据库备份文件
+// ---------------------------------------------------------------------------
+
+backupRouter.post('/upload-db', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const r2 = c.env.R2;
+
+  const formData = await c.req.formData();
+  const ledgerId = formData.get('ledger_id') as string | null;
+  const file = formData.get('file') as File | null;
+  const note = formData.get('note') as string | null;
+
+  if (!file) return c.json({ error: 'No file provided' }, 400);
+
+  const buffer = await file.arrayBuffer();
+  const checksum = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', buffer)))
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+  const fileName = file.name || `backup-${Date.now()}.db`;
+  const r2Key = `backups/${userId}/${fileName}`;
+
+  if (r2) {
+    await r2.put(r2Key, buffer, { httpMetadata: { contentType: file.type || 'application/octet-stream' } });
+  }
+
+  const serverNow = new Date().toISOString();
+  await db.prepare(`INSERT INTO backup_snapshots (user_id, ledger_id, kind, file_name, content_type, checksum, size, created_at, note)
+    VALUES (?, ?, 'db', ?, ?, ?, ?, ?, ?)`)
+    .bind(userId, ledgerId || null, fileName, file.type || null, checksum, buffer.byteLength, serverNow, note).run();
+
+  return c.json({ success: true, file_name: fileName, size: buffer.byteLength, checksum });
+});
+
+// ---------------------------------------------------------------------------
+// POST /admin/backups/upload-snapshot - 上传 JSON 快照
+// ---------------------------------------------------------------------------
+
+const UploadSnapshotSchema = z.object({
+  ledger_id: z.string(),
+  payload: z.record(z.any()),
+  note: z.string().optional(),
+  metadata: z.record(z.any()).optional(),
+});
+
+backupRouter.post('/upload-snapshot', zValidator('json', UploadSnapshotSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const r2 = c.env.R2;
+  const req = c.req.valid('json');
+
+  const jsonStr = JSON.stringify(req.payload);
+  const checksum = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(jsonStr))))
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+  const fileName = `snapshot-${Date.now()}.json`;
+  const r2Key = `backups/${userId}/${fileName}`;
+
+  if (r2) {
+    await r2.put(r2Key, new TextEncoder().encode(jsonStr), { httpMetadata: { contentType: 'application/json' } });
+  }
+
+  const serverNow = new Date().toISOString();
+  await db.prepare(`INSERT INTO backup_snapshots (user_id, ledger_id, kind, file_name, content_type, checksum, size, created_at, note)
+    VALUES (?, ?, 'snapshot', ?, 'application/json', ?, ?, ?, ?)`)
+    .bind(userId, req.ledger_id, fileName, checksum, jsonStr.length, serverNow, req.note || null).run();
+
+  return c.json({ success: true, file_name: fileName, size: jsonStr.length, checksum });
+});
+
 export default backupRouter;

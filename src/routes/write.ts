@@ -1857,4 +1857,47 @@ writeRouter.get('/categories/defaults', async (c) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// PUT /write/exchange-rate-overrides - 设置汇率覆盖
+// ---------------------------------------------------------------------------
+
+const ExchangeRateSchema = z.object({
+  base_currency: z.string().min(1),
+  quote_currency: z.string().min(1),
+  rate: z.string().or(z.number()),
+});
+
+writeRouter.put('/exchange-rate-overrides', zValidator('json', ExchangeRateSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const { base_currency, quote_currency, rate } = c.req.valid('json');
+  const serverNow = nowUtc();
+
+  const syncId = randomUUID();
+  await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+    VALUES (?, NULL, 'exchange_rate_override', ?, 'upsert', ?, ?, ?)`)
+    .bind(userId, syncId, JSON.stringify({ base_currency, quote_currency, rate: String(rate) }), serverNow, userId).run();
+
+  return c.json({ sync_id: syncId, base_currency, quote_currency, rate: String(rate) });
+});
+
+writeRouter.delete('/exchange-rate-overrides', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const baseCurrency = c.req.query('base_currency');
+  const quoteCurrency = c.req.query('quote_currency');
+  const serverNow = nowUtc();
+
+  if (!baseCurrency || !quoteCurrency) {
+    return c.json({ error: 'base_currency and quote_currency are required' }, 400);
+  }
+
+  const syncId = randomUUID();
+  await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+    VALUES (?, NULL, 'exchange_rate_override', ?, 'delete', ?, ?, ?)`)
+    .bind(userId, syncId, JSON.stringify({ base_currency: baseCurrency, quote_currency: quoteCurrency }), serverNow, userId).run();
+
+  return c.json({ sync_id: syncId, base_currency: baseCurrency, quote_currency: quoteCurrency, rate: null });
+});
+
 export default writeRouter;
