@@ -245,8 +245,23 @@ adminRouter.get('/overview', async (c) => {
  */
 adminRouter.get('/users', async (c) => {
   const db = c.env.DB;
+  const q = c.req.query('q') ?? null;
+  const status = c.req.query('status') ?? null;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
+
+  let whereClause = 'WHERE 1=1';
+  const params: (string | number)[] = [];
+
+  if (q) {
+    whereClause += ' AND (u.email LIKE ? OR p.display_name LIKE ?)';
+    params.push(`%${q}%`, `%${q}%`);
+  }
+  if (status === 'enabled') {
+    whereClause += ' AND u.is_enabled = 1';
+  } else if (status === 'disabled') {
+    whereClause += ' AND u.is_enabled = 0';
+  }
 
   const rows = await db
     .prepare(
@@ -254,10 +269,11 @@ adminRouter.get('/users', async (c) => {
               p.display_name, p.avatar_file_id, p.avatar_version
        FROM users u
        LEFT JOIN user_profiles p ON p.user_id = u.id
+       ${whereClause}
        ORDER BY u.created_at DESC
        LIMIT ? OFFSET ?`
     )
-    .bind(limit, offset)
+    .bind(...params, limit, offset)
     .all<{
       id: string;
       email: string;
@@ -458,7 +474,7 @@ adminRouter.delete('/users/:id', async (c) => {
   // 物理删除（CASCADE 会删除关联数据）
   await db.prepare('DELETE FROM users WHERE id = ?').bind(userId).run();
 
-  return c.json({ success: true });
+  return c.json({ id: userId, email: null, is_admin: false, is_enabled: false, created_at: null });
 });
 
 // ---------------------------------------------------------------------------

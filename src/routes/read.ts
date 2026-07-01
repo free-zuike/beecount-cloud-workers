@@ -419,6 +419,16 @@ readRouter.get('/workspace/transactions', async (c) => {
   const db = c.env.DB;
 
   const ledgerId = c.req.query('ledger_id') ?? null;
+  const filterUserId = c.req.query('user_id') ?? null;
+  const txType = c.req.query('tx_type') ?? null;
+  const accountName = c.req.query('account_name') ?? null;
+  const q = c.req.query('q') ?? null;
+  const txSyncId = c.req.query('tx_sync_id') ?? null;
+  const tagSyncId = c.req.query('tag_sync_id') ?? null;
+  const categorySyncId = c.req.query('category_sync_id') ?? null;
+  const accountSyncId = c.req.query('account_sync_id') ?? null;
+  const amountMin = c.req.query('amount_min') ? Number(c.req.query('amount_min')) : null;
+  const amountMax = c.req.query('amount_max') ? Number(c.req.query('amount_max')) : null;
   const dateFrom = c.req.query('date_from') ?? null;
   const dateTo = c.req.query('date_to') ?? null;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '200', 10), 5000);
@@ -451,6 +461,40 @@ readRouter.get('/workspace/transactions', async (c) => {
   if (dateTo) {
     query += ' AND happened_at < ?';
     bindings.push(dateTo);
+  }
+
+  if (filterUserId) {
+    query += ' AND user_id = ?';
+    bindings.push(filterUserId);
+  }
+  if (txType) {
+    query += ' AND tx_type = ?';
+    bindings.push(txType);
+  }
+  if (categorySyncId) {
+    query += ' AND category_sync_id = ?';
+    bindings.push(categorySyncId);
+  }
+  if (accountSyncId) {
+    query += ' AND account_sync_id = ?';
+    bindings.push(accountSyncId);
+  }
+  if (amountMin !== null) {
+    query += ' AND amount >= ?';
+    bindings.push(amountMin);
+  }
+  if (amountMax !== null) {
+    query += ' AND amount <= ?';
+    bindings.push(amountMax);
+  }
+  if (q) {
+    query += ' AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ?)';
+    const like = `%${q}%`;
+    bindings.push(like, like, like);
+  }
+  if (txSyncId) {
+    query += ' AND sync_id = ?';
+    bindings.push(txSyncId);
   }
 
   query += ' ORDER BY happened_at DESC LIMIT ? OFFSET ?';

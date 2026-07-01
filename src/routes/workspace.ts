@@ -338,6 +338,7 @@ workspaceRouter.get('/accounts', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const ledgerId = c.req.query('ledger_id') ?? null;
+  const filterUserId = c.req.query('user_id') ?? null;
   const q = c.req.query('q') ?? null;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '500', 10), 5000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
@@ -413,6 +414,7 @@ workspaceRouter.get('/categories', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const ledgerId = c.req.query('ledger_id') ?? null;
+  const filterUserId = c.req.query('user_id') ?? null;
   const q = c.req.query('q') ?? null;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '500', 10), 5000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
@@ -485,6 +487,7 @@ workspaceRouter.get('/tags', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const ledgerId = c.req.query('ledger_id') ?? null;
+  const filterUserId = c.req.query('user_id') ?? null;
   const q = c.req.query('q') ?? null;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '500', 10), 5000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
@@ -615,6 +618,7 @@ workspaceRouter.get('/ledger-counts', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const ledgerId = c.req.query('ledger_id') ?? null;
+  const filterUserId = c.req.query('user_id') ?? null;
 
   let ledgerQuery = 'SELECT id FROM ledgers WHERE user_id = ?';
   const ledgerParams: string[] = [userId];
@@ -663,8 +667,10 @@ workspaceRouter.get('/analytics', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const ledgerId = c.req.query('ledger_id') ?? null;
+  const filterUserId = c.req.query('user_id') ?? null;
   const scope = c.req.query('scope') ?? 'month';
   const metric = c.req.query('metric') ?? 'expense';
+  const period = c.req.query('period') ?? null;
 
   let ledgerQuery = 'SELECT id FROM ledgers WHERE user_id = ?';
   const ledgerParams: string[] = [userId];
