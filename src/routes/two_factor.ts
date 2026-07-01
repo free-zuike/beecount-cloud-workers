@@ -21,7 +21,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
-import { validateAccessToken } from '../auth';
+import { validateAccessToken, createAccessToken, createRefreshToken, verifyPassword } from '../auth';
 
 // ===========================
 // 辅助函数
@@ -358,26 +358,21 @@ twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (
 
 twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c) => {
   const db = c.env.DB;
+  const jwtSecret = c.env.JWT_SECRET;
   const { challenge_token, code, method, device_id, device_name, platform } = c.req.valid('json');
   const serverNow = nowUtc();
 
-  let userId: string;
-  try {
-    const parts = challenge_token.split('.');
-    if (parts.length === 3) {
-      const payload = JSON.parse(atob(parts[1]));
-      userId = payload.sub;
-    } else {
-      throw new Error('Invalid challenge token format');
-    }
-  } catch {
+  // 验证 challenge_token 签名（防止伪造）
+  const challengeResult = await validateAccessToken(challenge_token, jwtSecret);
+  if (!challengeResult || !('userId' in challengeResult)) {
     return c.json({ error: 'Invalid or expired challenge token.' }, 401);
   }
+  const userId = challengeResult.userId;
 
   const user = await db
-    .prepare('SELECT id, is_enabled, totp_enabled, totp_secret_encrypted FROM users WHERE id = ?')
+    .prepare('SELECT id, is_enabled, totp_enabled, totp_secret_encrypted, email FROM users WHERE id = ?')
     .bind(userId)
-    .first<{ id: string; is_enabled: number; totp_enabled: number; totp_secret_encrypted: string | null }>();
+    .first<{ id: string; is_enabled: number; totp_enabled: number; totp_secret_encrypted: string | null; email: string }>();
 
   if (!user) {
     return c.json({ error: 'User not found' }, 401);
@@ -415,36 +410,37 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
     return c.json({ error: 'Invalid 2FA code.' }, 401);
   }
 
-  const accessTokenPayload = {
-    sub: user.id,
-    iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + 3600,
-    type: 'access',
-  };
-
-  const accessToken = btoa(JSON.stringify(accessTokenPayload));
-
+  // 创建/更新设备
+  const resolvedDeviceId = device_id || randomUUID();
   const existingDevice = await db
     .prepare('SELECT id FROM devices WHERE id = ? AND user_id = ?')
-    .bind(device_id, user.id)
+    .bind(resolvedDeviceId, user.id)
     .first();
 
   if (!existingDevice) {
     await db
       .prepare('INSERT INTO devices (id, user_id, name, platform, last_ip, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(device_id, user.id, device_name, platform, c.req.header('CF-Connecting-IP'), serverNow)
+      .bind(resolvedDeviceId, user.id, device_name || 'Unknown Device', platform || 'unknown', c.req.header('CF-Connecting-IP'), serverNow)
       .run();
   } else {
-    await db.prepare('UPDATE devices SET last_seen_at = ? WHERE id = ?').bind(serverNow, device_id).run();
+    await db.prepare('UPDATE devices SET last_seen_at = ?, name = COALESCE(?, name), platform = COALESCE(?, platform) WHERE id = ?')
+      .bind(serverNow, device_name, platform, resolvedDeviceId).run();
   }
+
+  // 生成真正的签名 JWT access token
+  const accessToken = await createAccessToken(user.id, jwtSecret, 'app', ['app:write']);
+
+  // 创建 DB-backed refresh token
+  const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db);
 
   return c.json({
     requires_2fa: false,
-    user_id: user.id,
+    user: { id: user.id, email: user.email },
     access_token: accessToken,
-    refresh_token: randomUUID(),
+    refresh_token: refreshToken.token,
     expires_in: 3600,
-    device_id: device_id,
+    device_id: resolvedDeviceId,
+    scopes: ['app:write'],
   });
 });
 
@@ -467,7 +463,8 @@ twoFactorRouter.post('/disable', zValidator('json', TwoFADisableSchema), async (
     return c.json({ error: '2FA not enabled.' }, 400);
   }
 
-  if (user.password_hash !== password) {
+  const passwordValid = await verifyPassword(user.password_hash, password);
+  if (!passwordValid) {
     return c.json({ error: 'Invalid password.' }, 401);
   }
 

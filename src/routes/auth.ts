@@ -100,8 +100,10 @@ const DEFAULT_CATEGORIES: DefaultCategory[] = [
     { name: '其他', icon: '❓' },
   ]},
 ];
-import { hashPassword, verifyPassword, createAccessToken, createRefreshToken, validateAccessToken, decodeRefreshToken, revokeRefreshToken } from '../auth';
+import { hashPassword, verifyPassword, createAccessToken, createRefreshToken, validateAccessToken, decodeRefreshToken, revokeRefreshToken, sha256 } from '../auth';
 import twoFactorRouter from './two_factor';
+
+function nowUtc(): string { return new Date().toISOString(); }
 
 type Bindings = {
   DB: D1Database;
@@ -260,13 +262,12 @@ authRouter.post('/register', zValidator('json', z.object({
   }
 
   return c.json({
-    requires_2fa: false,
     user: { id: userId, email, is_admin: false },
     access_token: accessToken,
     refresh_token: refreshTokenObj.token,
     expires_in: 3600,
     device_id: resolvedDeviceId,
-    scopes: ['web:read', 'web:write', 'ops:write'],
+    scopes: tokenScopes,
   });
 });
 
@@ -376,9 +377,10 @@ authRouter.post('/refresh', zValidator('json', z.object({
 
     await revokeRefreshToken(refreshToken, db);
 
+    const user = await db.prepare('SELECT id, email, is_admin FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string; is_admin: number }>();
+
     return c.json({
-      requires_2fa: false,
-      user: { id: userId },
+      user: { id: userId, email: user?.email || null, is_admin: Boolean(user?.is_admin) },
       access_token: accessToken,
       refresh_token: newRefreshToken.token,
       expires_in: 3600,
@@ -406,6 +408,29 @@ authRouter.get('/me', async (c) => {
     id: user.id,
     email: user.email
   });
+});
+
+// POST /auth/logout — 吊销 refresh token
+authRouter.post('/logout', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const body = await c.req.json().catch(() => ({}));
+  const refreshToken = body.refresh_token as string | undefined;
+  let revoked = false;
+
+  if (refreshToken && userId) {
+    const tokenHash = Buffer.from(await sha256(new TextEncoder().encode(refreshToken))).toString('hex');
+    const tokenRecord = await db
+      .prepare('SELECT id FROM refresh_tokens WHERE user_id = ? AND token_hash = ? AND revoked_at IS NULL')
+      .bind(userId, tokenHash)
+      .first<{ id: string }>();
+    if (tokenRecord) {
+      await db.prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?').bind(nowUtc(), tokenRecord.id).run();
+      revoked = true;
+    }
+  }
+
+  return c.json({ ok: true });
 });
 
 // 2FA 路由 — 挂在 /2fa 下，前端调用 /auth/2fa/*
