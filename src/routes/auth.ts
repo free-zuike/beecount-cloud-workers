@@ -159,7 +159,7 @@ authRouter.post('/register', zValidator('json', z.object({
   `).bind(resolvedDeviceId, userId, deviceName, platform, c.req.header('CF-Connecting-IP'), now).run();
 
   const accessToken = await createAccessToken(userId, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
-  const refreshTokenObj = await createRefreshToken(userId, resolvedDeviceId, db);
+  const refreshTokenObj = await createRefreshToken(userId, resolvedDeviceId, db, isApp ? 'app' : 'web');
 
   // 自动创建默认账本（与原版保持一致）
   const ledgerId = randomUUID();
@@ -340,7 +340,7 @@ authRouter.post('/login', zValidator('json', z.object({
   }
 
   const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
-  const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db);
+  const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web');
 
   // 返回符合蜜蜂记账 APP 期望的格式
   return c.json({
@@ -372,10 +372,12 @@ authRouter.post('/refresh', zValidator('json', z.object({
       return c.json({ error: decoded.reason }, 401);
     }
 
-    const { userId, deviceId } = decoded;
+    const { userId, deviceId, clientType } = decoded;
+    const isApp = clientType !== 'web';
+    const tokenScopes = isApp ? ['app:write'] : ['web:read', 'web:write', 'ops:write'];
 
-    const accessToken = await createAccessToken(userId, jwtSecret, 'app', ['app:write']);
-    const newRefreshToken = await createRefreshToken(userId, deviceId, db);
+    const accessToken = await createAccessToken(userId, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
+    const newRefreshToken = await createRefreshToken(userId, deviceId, db, clientType);
 
     await revokeRefreshToken(refreshToken, db);
 
@@ -387,7 +389,7 @@ authRouter.post('/refresh', zValidator('json', z.object({
       refresh_token: newRefreshToken.token,
       expires_in: 3600,
       device_id: deviceId,
-      scopes: ['app:write'],
+      scopes: tokenScopes,
     });
   } catch (error) {
     console.error('Refresh token error:', error);

@@ -445,7 +445,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
 
   // 创建 DB-backed refresh token
-  const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db);
+  const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web');
 
   return c.json({
     requires_2fa: false,

@@ -95,6 +95,7 @@ export async function createAccessToken(
     type: tokenType,
     client_type: clientType,
     scopes: scopes,
+    jti: randomUUID().replace(/-/g, ''),
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + expiresIn
   });
@@ -109,7 +110,8 @@ export async function createAccessToken(
 export async function createRefreshToken(
   userId: string,
   deviceId: string,
-  db: D1Database
+  db: D1Database,
+  clientType: string = 'app'
 ): Promise<{ id: string; token: string; expiresAt: Date }> {
   const token = randomUUID();
   const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
@@ -117,9 +119,9 @@ export async function createRefreshToken(
   const id = randomUUID();
 
   await db.prepare(`
-    INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).bind(id, userId, deviceId, tokenHash, expiresAt.toISOString()).run();
+    INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at, client_type)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).bind(id, userId, deviceId, tokenHash, expiresAt.toISOString(), clientType).run();
 
   return { id, token, expiresAt };
 }
@@ -127,16 +129,16 @@ export async function createRefreshToken(
 export async function decodeRefreshToken(
   token: string,
   db: D1Database
-): Promise<{ valid: true; userId: string; deviceId: string } | { valid: false; reason: string }> {
+): Promise<{ valid: true; userId: string; deviceId: string; clientType: string } | { valid: false; reason: string }> {
   try {
     const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
     const now = new Date().toISOString();
     
     const result = await db.prepare(`
-      SELECT user_id, device_id, expires_at 
+      SELECT user_id, device_id, expires_at, client_type
       FROM refresh_tokens 
       WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?
-    `).bind(tokenHash, now).first<{ user_id: string; device_id: string; expires_at: string }>();
+    `).bind(tokenHash, now).first<{ user_id: string; device_id: string; expires_at: string; client_type: string | null }>();
     
     if (!result) {
       return { valid: false, reason: 'Refresh token expired or not found' };
@@ -145,7 +147,8 @@ export async function decodeRefreshToken(
     return { 
       valid: true, 
       userId: result.user_id, 
-      deviceId: result.device_id 
+      deviceId: result.device_id,
+      clientType: result.client_type || 'app'
     };
   } catch (error) {
     return { valid: false, reason: 'Invalid refresh token' };
