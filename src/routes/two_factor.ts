@@ -226,7 +226,10 @@ type Variables = {
 const twoFactorRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // 2FA 路由挂载在 authRouter 下，auth 中间件不会运行，需要手动验证 JWT
+// /verify 使用 body 中的 challenge_token 认证，不需要 Bearer token
 twoFactorRouter.use('*', async (c, next) => {
+  if (c.req.path === '/verify') return next();
+
   const authHeader = c.req.header('Authorization');
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return c.json({ error: 'Unauthorized' }, 401);
