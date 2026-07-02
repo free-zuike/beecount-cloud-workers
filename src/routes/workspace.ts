@@ -1573,4 +1573,81 @@ workspaceRouter.post('/ledgers/:id/transfer', zValidator('json', TransferSchema)
   return c.json({ success: true, new_owner_id: req.target_user_id });
 });
 
+// ===========================================================================
+// GET /read/workspace/net-worth-history - 净资产历史
+// ===========================================================================
+
+workspaceRouter.get('/net-worth-history', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+
+  const ledgers = await db
+    .prepare('SELECT id, external_id, currency FROM ledgers WHERE user_id = ?')
+    .bind(userId)
+    .all<{ id: string; external_id: string; currency: string }>();
+
+  if (ledgers.results.length === 0) {
+    return c.json({ series: [], multi_currency: false });
+  }
+
+  const ledgerInternalIds = ledgers.results.map(l => l.id);
+  const placeholders = ledgerInternalIds.map(() => '?').join(',');
+
+  // 获取所有账户
+  const accounts = await db
+    .prepare(`SELECT sync_id, initial_balance, currency FROM read_account_projection WHERE user_id = ?`)
+    .bind(userId)
+    .all<{ sync_id: string; initial_balance: number; currency: string | null }>();
+
+  // 获取所有交易
+  const txs = await db
+    .prepare(`SELECT happened_at, tx_type, amount, account_sync_id, from_account_sync_id, to_account_sync_id FROM read_tx_projection WHERE ledger_id IN (${placeholders})`)
+    .bind(...ledgerInternalIds)
+    .all<{ happened_at: string; tx_type: string; amount: number; account_sync_id: string | null; from_account_sync_id: string | null; to_account_sync_id: string | null }>();
+
+  // 检查是否多币种
+  const currencies = new Set(accounts.results.map(a => a.currency).filter(Boolean));
+  const multiCurrency = currencies.size > 1;
+
+  // 按月聚合
+  const monthlyMap: Record<string, { net_worth: number; assets: number; liabilities: number }> = {};
+
+  // 计算初始余额总和
+  let totalAssets = 0;
+  let totalLiabilities = 0;
+  for (const acc of accounts.results) {
+    const bal = acc.initial_balance ?? 0;
+    if (bal >= 0) totalAssets += bal;
+    else totalLiabilities += Math.abs(bal);
+  }
+
+  // 按月累加交易
+  for (const tx of txs.results) {
+    const month = tx.happened_at.slice(0, 7); // YYYY-MM
+    if (!monthlyMap[month]) {
+      monthlyMap[month] = { net_worth: 0, assets: 0, liabilities: 0 };
+    }
+
+    if (tx.tx_type === 'income') {
+      monthlyMap[month].assets += tx.amount;
+    } else if (tx.tx_type === 'expense') {
+      monthlyMap[month].liabilities += tx.amount;
+    } else if (tx.tx_type === 'transfer') {
+      // 转账不影响净值
+    }
+  }
+
+  // 构建 series
+  const series = Object.entries(monthlyMap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([bucket, data]) => ({
+      bucket,
+      net_worth: totalAssets + data.assets - totalLiabilities - data.liabilities,
+      assets: totalAssets + data.assets,
+      liabilities: totalLiabilities + data.liabilities,
+    }));
+
+  return c.json({ series, multi_currency: multiCurrency });
+});
+
 export default workspaceRouter;
