@@ -295,6 +295,12 @@ const handleUpload = async (c: any) => {
             return c.json({ error: 'No file provided' }, 400);
         }
 
+        // 文件大小限制（与原版对齐，默认 50MB）
+        const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+        if (file.size > MAX_UPLOAD_BYTES) {
+            return c.json({ error: `File too large (max ${MAX_UPLOAD_BYTES / 1024 / 1024}MB)` }, 413);
+        }
+
         if (!ledgerExternalId) {
             return c.json({ error: 'ledger_id is required' }, 400);
         }
@@ -314,7 +320,13 @@ const handleUpload = async (c: any) => {
         const sha256Hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 
         const mimeType = file.type || 'application/octet-stream';
-        const actualFileName = fileName || file.name || 'unnamed';
+        // 文件名安全处理：截断255字符，去除路径分隔符，清理非法字符
+        const rawFileName = fileName || file.name || 'unnamed';
+        const safeFileName = rawFileName
+            .replace(/^.*[/\\]/, '')  // 去除路径前缀
+            .substring(0, 255)       // 截断到255字符
+            .replace(/[^\w\s.\-()]/g, '_');  // 替换非法字符
+        const actualFileName = safeFileName || 'unnamed';
         const size = file.size;
 
         const existing = await db
@@ -434,7 +446,9 @@ attachmentsRouter.post('/batch-exists', async (c) => {
         }
 
         const results: any[] = [];
-        for (const sha256 of sha256List) {
+        for (const rawSha256 of sha256List) {
+            // SHA256 归一化：去除空白、转小写（与原版对齐）
+            const sha256 = rawSha256.trim().toLowerCase();
             const existing = await db
                 .prepare(
                     `SELECT id, file_name, mime_type, size_bytes, created_at 

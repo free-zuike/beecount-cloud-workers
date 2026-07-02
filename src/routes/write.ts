@@ -303,7 +303,7 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
       'ledger_snapshot',
       syncId,
       'upsert',
-      safeJsonStringify({ id: ledgerExternalId, name: req.ledger_name, currency: req.currency }),
+      safeJsonStringify({ id: ledgerExternalId, ledgerName: req.ledger_name, currency: req.currency, monthStartDay: req.month_start_day ?? 1 }),
       serverNow,
       userId,
     )
@@ -457,8 +457,9 @@ writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaU
 
   const newPayload = {
     ...existingPayload,
-    ...(req.ledger_name !== undefined && { name: req.ledger_name }),
+    ...(req.ledger_name !== undefined && { ledgerName: req.ledger_name }),
     ...(req.currency !== undefined && { currency: req.currency }),
+    ...(req.month_start_day !== undefined && { monthStartDay: req.month_start_day }),
   };
 
   await db.batch([
