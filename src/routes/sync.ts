@@ -733,10 +733,9 @@ syncRouter.get('/pull', async (c) => {
       FROM sync_changes c
       LEFT JOIN ledgers l ON c.ledger_id = l.id
       WHERE c.user_id = ?
-        AND c.change_id > ?
         AND (
           c.scope = 'user'
-          OR c.scope = 'ledger'
+          OR (c.scope = 'ledger' AND c.change_id > ?)
         )
     `;
     
