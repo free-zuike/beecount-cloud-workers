@@ -120,6 +120,8 @@ app.route('/api/v1/sync', syncRouter);
 app.route('/api/v1/read', readRouter);
 app.route('/api/v1/read/summary', summaryRouter);
 app.route('/api/v1/read/workspace', workspaceRouter);
+// 共享账本成员管理端点（与原版 /api/v1/ledgers/{ext}/members 对齐）
+app.route('/api/v1', workspaceRouter);
 app.route('/api/v1/write', writeRouter);
 app.route('/api/v1/write', batchWriteRouter);
 app.route('/api/v1/devices', devicesRouter);
