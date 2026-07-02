@@ -129,11 +129,11 @@ const SyncPushRequestSchema = z.object({
   device_id: z.string().optional(),
   changes: z.array(
     z.object({
-      ledger_id: z.string().optional(),
+      ledger_id: z.string().optional().nullable(),
       entity_type: z.string(),
       entity_sync_id: z.string(),
       action: z.enum(['upsert', 'delete']),
-      payload: z.record(z.any()),
+      payload: z.any().nullable().optional().default({}),
       updated_at: z.string().or(z.date()),
     })
   ),
@@ -184,6 +184,14 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       entityCounts[ch.entity_type] = (entityCounts[ch.entity_type] || 0) + 1;
     }
     console.log('[SYNC] changes count:', req.changes?.length, 'by_type:', JSON.stringify(entityCounts));
+    
+    // 调试：打印第一条变更的字段名
+    if (req.changes && req.changes.length > 0) {
+      const first = req.changes[0];
+      console.log('[SYNC] first change keys:', Object.keys(first));
+      console.log('[SYNC] first change payload type:', typeof first.payload, 'is_null:', first.payload === null);
+    }
+    
     const serverNow = nowUtc();
 
     // 处理 device_id - 如果未提供，尝试从 header 获取或使用默认值
@@ -596,7 +604,12 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     } catch {}
 
     return c.json(response);
-  } catch (error) {
+  } catch (error: any) {
+    // Zod 验证错误返回详细信息
+    if (error?.name === 'ZodError' || error?.issues) {
+      console.error('[SYNC] /sync/push validation error:', JSON.stringify(error.issues || error));
+      return c.json({ error: 'Validation failed', details: error.issues || error.message }, 400);
+    }
     console.error('[SYNC] /sync/push error - BEGIN ====================================');
     console.error('[SYNC] error:', error);
     console.error('[SYNC] typeof error:', typeof error);
