@@ -74,7 +74,7 @@ const SyncPushRequestSchema = z.object({
   device_id: z.string().optional(),
   changes: z.array(
     z.object({
-      ledger_id: z.string(),
+      ledger_id: z.string().optional(),
       entity_type: z.string(),
       entity_sync_id: z.string(),
       action: z.enum(['upsert', 'delete']),
@@ -183,7 +183,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     }
 
     // ====================== 优化1：批量预加载账本 ======================
-    const ledgerExternalIds = [...new Set(changes.map(c => c.ledger_id))];
+    const ledgerExternalIds = [...new Set(changes.filter(c => c.ledger_id).map(c => c.ledger_id as string))];
     console.log('[SYNC] ledgerExternalIds:', ledgerExternalIds);
     const ledgerMap: Record<string, { id: string; user_id: string; external_id: string }> = {};
     
@@ -228,7 +228,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       // 准备有效的变更查询参数
       const validChangeEntries = changes
         .map(c => ({
-          ledgerId: ledgerMap[c.ledger_id]?.id,
+          ledgerId: c.ledger_id ? ledgerMap[c.ledger_id]?.id : undefined,
           entity_type: c.entity_type,
           entity_sync_id: c.entity_sync_id,
         }))
@@ -334,7 +334,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           key = `user:${userId}:${change.entity_type}:${change.entity_sync_id}`;
           scope = 'user';
         } else {
-          const ledgerRow = ledgerMap[change.ledger_id];
+          const ledgerRow = ledgerMap[change.ledger_id as string];
           if (!ledgerRow) continue;
           ledgerRowId = ledgerRow.id;
           key = `${ledgerRow.id}:${change.entity_type}:${change.entity_sync_id}`;
@@ -413,7 +413,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         });
 
         if (!isUserGlobal && ledgerRowId) {
-          touchedLedgers[ledgerMap[change.ledger_id]?.external_id ?? change.ledger_id] = ledgerRowId;
+          touchedLedgers[ledgerMap[change.ledger_id as string]?.external_id ?? (change.ledger_id as string)] = ledgerRowId;
         }
       }
 
