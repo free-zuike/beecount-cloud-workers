@@ -274,15 +274,8 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
   console.log('[WRITE] Existing ledger check:', existing);
 
   if (existing) {
-    console.log('[WRITE] Ledger already exists, returning existing');
-    return c.json({
-      ledger_id: existing.external_id,
-      base_change_id: 0,
-      new_change_id: 0,
-      server_timestamp: serverNow,
-      idempotency_replayed: true,
-      entity_id: existing.id,
-    });
+    console.log('[WRITE] Ledger already exists, returning 409');
+    return c.json({ error: 'Ledger already exists', detail: `ledger_id "${ledgerExternalId}" already exists` }, 409);
   }
 
   // 创建账本
@@ -418,7 +411,7 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
     new_change_id: newChangeId,
     server_timestamp: serverNow,
     idempotency_replayed: false,
-    entity_id: ledgerId,
+    entity_id: ledgerExternalId,
   } as WriteCommitMeta);
 });
 

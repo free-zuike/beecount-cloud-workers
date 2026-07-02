@@ -159,7 +159,7 @@ const authRouter = new Hono<{ Bindings: Bindings; Variables: { userId: string } 
 // Register
 authRouter.post('/register', zValidator('json', z.object({
   email: z.string().email(),
-  password: z.string().min(8),
+  password: z.string().min(6),
   device_id: z.string().optional(),
   device_name: z.string().optional().default('Unknown Device'),
   platform: z.string().optional().default('unknown'),
@@ -368,6 +368,17 @@ authRouter.post('/login', zValidator('json', z.object({
       challenge_token: challengeToken,
       available_methods: ['totp', 'recovery_code'],
     });
+  }
+
+  // 检查设备是否已被撤销（与原版对齐）
+  if (deviceId) {
+    const revokedDevice = await db
+      .prepare('SELECT id FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NOT NULL')
+      .bind(deviceId, user.id)
+      .first();
+    if (revokedDevice) {
+      return c.json({ error: 'Device revoked' }, 401);
+    }
   }
 
   // Create or update device（使用 upsert 处理跨用户冲突）

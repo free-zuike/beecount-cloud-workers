@@ -171,7 +171,7 @@ adminRouter.get('/health', async (c) => {
     } catch {}
     
     return c.json({
-      status: 'healthy',
+      status: 'ok',
       db: 'connected',
       online_ws_users: onlineCount,
       time: localTime.toISOString(),
@@ -179,7 +179,7 @@ adminRouter.get('/health', async (c) => {
     });
   } catch (error) {
     return c.json({
-      status: 'unhealthy',
+      status: 'error',
       db: 'disconnected',
       online_ws_users: 0,
       time: new Date().toISOString(),
