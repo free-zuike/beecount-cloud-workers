@@ -845,8 +845,6 @@ syncRouter.get('/ledgers', async (c) => {
       result.push({
         ledger_id: l.external_id,
         path: l.external_id,
-        name: l.name,
-        currency: l.currency,
         updated_at: latestUpdated?.updated_at ?? l.created_at,
         size: 512 + (txCount?.cnt ?? 0) * 300,
         metadata: { source: 'lazy_rebuild' },
