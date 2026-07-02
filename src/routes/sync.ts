@@ -124,7 +124,11 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     console.log('[SYNC] userId:', userId);
     const db = c.env.DB;
     const req = c.req.valid('json');
-    console.log('[SYNC] changes count:', req.changes?.length);
+    const entityCounts: Record<string, number> = {};
+    for (const ch of (req.changes || [])) {
+      entityCounts[ch.entity_type] = (entityCounts[ch.entity_type] || 0) + 1;
+    }
+    console.log('[SYNC] changes count:', req.changes?.length, 'by_type:', JSON.stringify(entityCounts));
     const serverNow = nowUtc();
 
     // 处理 device_id - 如果未提供，尝试从 header 获取或使用默认值
@@ -471,7 +475,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       server_timestamp: serverNow,
     };
 
-    console.log('[SYNC] /sync/push returning with accepted:', accepted);
+    console.log('[SYNC] /sync/push result - accepted:', accepted, 'rejected:', rejected, 'conflicts:', conflictCount, 'server_cursor:', maxCursor);
     console.log(`[SYNC] ===== ${CODE_VERSION} SUCCESS =====`);
 
     await insertAuditLog({
@@ -526,6 +530,8 @@ syncRouter.get('/pull', async (c) => {
   const ledgerId = c.req.query('ledger_id');
   const deviceId = c.req.query('device_id');
 
+  console.log('[SYNC] /sync/pull since:', since, 'limit:', limit, 'ledger_id:', ledgerId, 'device_id:', deviceId);
+
   try {
     // device heartbeat
     if (deviceId) {
@@ -578,6 +584,12 @@ syncRouter.get('/pull', async (c) => {
     const allResults = changes.results;
     const hasMore = allResults.length > limit;
     const limitedResults = hasMore ? allResults.slice(0, limit) : allResults;
+
+    const resultTypeCounts: Record<string, number> = {};
+    for (const r of limitedResults) {
+      resultTypeCounts[r.entity_type] = (resultTypeCounts[r.entity_type] || 0) + 1;
+    }
+    console.log('[SYNC] /sync/pull returning:', limitedResults.length, 'changes, has_more:', hasMore, 'by_type:', JSON.stringify(resultTypeCounts));
 
     // 写回 SyncCursor（per-device per-ledger 游标持久化）
     if (deviceId && limitedResults.length > 0) {
