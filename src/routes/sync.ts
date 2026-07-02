@@ -310,7 +310,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           entity_type: c.entity_type,
           entity_sync_id: c.entity_sync_id,
         }))
-        .filter(Boolean) as Array<{
+        .filter(c => c.ledgerId !== undefined && c.entity_sync_id) as Array<{
           ledgerId: string;
           entity_type: string;
           entity_sync_id: string;
