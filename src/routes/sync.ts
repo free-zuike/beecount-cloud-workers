@@ -735,20 +735,52 @@ syncRouter.get('/ledgers', async (c) => {
 
   try {
     const ledgers = await db
-      .prepare(`SELECT external_id, name, currency, created_at FROM ledgers WHERE user_id = ?`)
+      .prepare(`SELECT id, external_id, name, currency, created_at FROM ledgers WHERE user_id = ?`)
       .bind(userId)
-      .all<{ external_id: string; name: string; currency: string; created_at: string }>();
+      .all<{ id: string; external_id: string; name: string; currency: string; created_at: string }>();
 
-    return c.json(ledgers.results.map(l => ({
-      ledger_id: l.external_id,
-      path: l.external_id,
-      name: l.name,
-      currency: l.currency,
-      created_at: l.created_at,
-      size: 0,
-      metadata: {},
-      role: 'owner',
-    })));
+    const result: Array<Record<string, unknown>> = [];
+
+    for (const l of ledgers.results) {
+      // 软删除检查：最后一个 ledger_snapshot delete tombstone
+      const tombstone = await db
+        .prepare(`SELECT action FROM sync_changes WHERE ledger_id = ? AND entity_type = 'ledger_snapshot' AND action = 'delete' ORDER BY change_id DESC LIMIT 1`)
+        .bind(l.id)
+        .first<{ action: string }>();
+      if (tombstone?.action === 'delete') continue;
+
+      // 检查是否有任何变更
+      const latestChangeId = await db
+        .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id = ?')
+        .bind(l.id)
+        .first<{ max_id: number | null }>();
+      if (!latestChangeId?.max_id) continue;
+
+      // 获取最新变更时间
+      const latestUpdated = await db
+        .prepare('SELECT updated_at FROM sync_changes WHERE ledger_id = ? ORDER BY change_id DESC LIMIT 1')
+        .bind(l.id)
+        .first<{ updated_at: string }>();
+
+      // 估算大小
+      const txCount = await db
+        .prepare('SELECT COUNT(*) as cnt FROM read_tx_projection WHERE ledger_id = ?')
+        .bind(l.id)
+        .first<{ cnt: number }>();
+
+      result.push({
+        ledger_id: l.external_id,
+        path: l.external_id,
+        name: l.name,
+        currency: l.currency,
+        updated_at: latestUpdated?.updated_at ?? l.created_at,
+        size: 512 + (txCount?.cnt ?? 0) * 300,
+        metadata: { source: 'lazy_rebuild' },
+        role: 'owner',
+      });
+    }
+
+    return c.json(result);
   } catch (error) {
     console.error('[SYNC] /sync/ledgers error:', error);
     return c.json({ error: 'Internal server error' }, 500);
@@ -789,6 +821,15 @@ syncRouter.get('/full', async (c) => {
       .bind(ledger.id)
       .first<{ action: string }>();
     if (tombstone?.action === 'delete') {
+      return c.json({ ledger_id: ledgerId, snapshot: null, latest_cursor: latestCursor });
+    }
+
+    // 检查账本是否有任何变更
+    const ledgerChangeId = await db
+      .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id = ?')
+      .bind(ledger.id)
+      .first<{ max_id: number | null }>();
+    if (!ledgerChangeId?.max_id) {
       return c.json({ ledger_id: ledgerId, snapshot: null, latest_cursor: latestCursor });
     }
 
