@@ -541,6 +541,32 @@ adminRouter.get('/devices', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /admin/devices/online - 在线设备统计
+// ---------------------------------------------------------------------------
+
+adminRouter.get('/devices/online', async (c) => {
+  const db = c.env.DB;
+
+  const onlineThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
+  const result = await db
+    .prepare(
+      `SELECT COUNT(*) as total_online,
+              COUNT(DISTINCT user_id) as unique_users
+       FROM devices
+       WHERE revoked_at IS NULL AND last_seen_at > ?`
+    )
+    .bind(onlineThreshold)
+    .first<{ total_online: number; unique_users: number }>();
+
+  return c.json({
+    total_online: result?.total_online ?? 0,
+    unique_users: result?.unique_users ?? 0,
+    online_threshold_seconds: 300,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /admin/logs - 获取最近日志（简化版）
 // ---------------------------------------------------------------------------
 

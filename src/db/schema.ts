@@ -222,6 +222,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_ledger_id ON sync_changes(ledger_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_entity_type ON sync_changes(entity_type)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_action ON sync_changes(action)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_scope ON sync_changes(scope)').run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS sync_cursors (
@@ -262,6 +263,11 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
         snapshot_json TEXT NOT NULL,
         note TEXT,
+        kind TEXT DEFAULT 'snapshot',
+        file_name TEXT,
+        content_type TEXT,
+        checksum TEXT,
+        size INTEGER,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
     `).run();
@@ -312,6 +318,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       CREATE TABLE IF NOT EXISTS backup_runs (
         id TEXT PRIMARY KEY,
         schedule_id TEXT REFERENCES backup_schedules(id) ON DELETE SET NULL,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
         ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
         remote_id TEXT REFERENCES backup_remotes(id) ON DELETE SET NULL,
         status TEXT NOT NULL DEFAULT 'pending',

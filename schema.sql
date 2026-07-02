@@ -147,14 +147,15 @@ CREATE INDEX IF NOT EXISTS idx_ledger_members_user_id ON ledger_members(user_id)
 CREATE TABLE IF NOT EXISTS sync_changes (
     change_id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+    ledger_id TEXT,
     entity_type TEXT NOT NULL,
     entity_sync_id TEXT NOT NULL,
     action TEXT NOT NULL,
     payload_json TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     updated_by_device_id TEXT,
-    updated_by_user_id TEXT
+    updated_by_user_id TEXT,
+    scope TEXT DEFAULT 'ledger'
 );
 
 CREATE INDEX IF NOT EXISTS idx_sync_changes_user_cursor ON sync_changes(user_id, change_id);
@@ -164,6 +165,7 @@ CREATE INDEX IF NOT EXISTS idx_sync_changes_user_id ON sync_changes(user_id);
 CREATE INDEX IF NOT EXISTS idx_sync_changes_ledger_id ON sync_changes(ledger_id);
 CREATE INDEX IF NOT EXISTS idx_sync_changes_entity_type ON sync_changes(entity_type);
 CREATE INDEX IF NOT EXISTS idx_sync_changes_action ON sync_changes(action);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_scope ON sync_changes(scope);
 
 CREATE TABLE IF NOT EXISTS sync_cursors (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -199,6 +201,11 @@ CREATE TABLE IF NOT EXISTS backup_snapshots (
     ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
     snapshot_json TEXT NOT NULL,
     note TEXT,
+    kind TEXT DEFAULT 'snapshot',
+    file_name TEXT,
+    content_type TEXT,
+    checksum TEXT,
+    size INTEGER,
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
 );
 
@@ -246,6 +253,7 @@ CREATE INDEX IF NOT EXISTS idx_backup_schedules_enabled ON backup_schedules(enab
 CREATE TABLE IF NOT EXISTS backup_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     schedule_id INTEGER,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
     ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
     remote_id INTEGER,
     status TEXT NOT NULL DEFAULT 'pending',
@@ -258,6 +266,7 @@ CREATE TABLE IF NOT EXISTS backup_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_backup_runs_schedule_id ON backup_runs(schedule_id);
+CREATE INDEX IF NOT EXISTS idx_backup_runs_user_id ON backup_runs(user_id);
 CREATE INDEX IF NOT EXISTS idx_backup_runs_ledger_id ON backup_runs(ledger_id);
 CREATE INDEX IF NOT EXISTS idx_backup_runs_status ON backup_runs(status);
 CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at DESC);
@@ -265,6 +274,7 @@ CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at 
 -- Backup Restores
 CREATE TABLE IF NOT EXISTS backup_restores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
     run_id INTEGER,
     status TEXT NOT NULL DEFAULT 'preparing',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
