@@ -72,6 +72,55 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
   return chunks;
 }
 
+/**
+ * 补全 transaction payload 中缺失的 createdByUserId/updatedByUserId
+ * 从 read_tx_projection 表查询，与原版 _enrich_tx_payloads_with_user_ids 对齐
+ */
+async function enrichTxPayloadsWithUserIds(
+  db: D1Database,
+  rows: Array<{ entity_type: string; ledger_id: string | null; entity_sync_id: string; payload_json: string }>
+): Promise<void> {
+  // 收集需要补全的 (ledger_id, sync_id) 对
+  const pending: Array<{ ledgerId: string; syncId: string; idx: number }> = [];
+  for (let idx = 0; idx < rows.length; idx++) {
+    const row = rows[idx];
+    if (row.entity_type !== 'transaction' || !row.ledger_id) continue;
+    let payload: Record<string, unknown>;
+    try { payload = JSON.parse(row.payload_json); } catch { continue; }
+    if (payload.createdByUserId && payload.updatedByUserId) continue;
+    pending.push({ ledgerId: row.ledger_id, syncId: row.entity_sync_id, idx });
+  }
+  if (pending.length === 0) return;
+
+  // 批量查询 projection
+  const syncIds = [...new Set(pending.map(p => p.syncId))];
+  const ledgerIds = [...new Set(pending.map(p => p.ledgerId))];
+  const placeholdersSid = syncIds.map(() => '?').join(',');
+  const placeholdersLid = ledgerIds.map(() => '?').join(',');
+  const projRows = await db.prepare(
+    `SELECT ledger_id, sync_id, created_by_user_id FROM read_tx_projection
+     WHERE sync_id IN (${placeholdersSid}) AND ledger_id IN (${placeholdersLid})`
+  ).bind(...syncIds, ...ledgerIds)
+    .all<{ ledger_id: string; sync_id: string; created_by_user_id: string | null }>();
+
+  const projMap = new Map<string, string | null>();
+  for (const r of projRows.results) {
+    projMap.set(`${r.ledger_id}:${r.sync_id}`, r.created_by_user_id);
+  }
+
+  // 补全 payload
+  for (const { ledgerId, syncId, idx } of pending) {
+    const creatorId = projMap.get(`${ledgerId}:${syncId}`);
+    if (!creatorId) continue;
+    try {
+      const payload = JSON.parse(rows[idx].payload_json);
+      if (!payload.createdByUserId) payload.createdByUserId = creatorId;
+      if (!payload.updatedByUserId) payload.updatedByUserId = creatorId;
+      rows[idx] = { ...rows[idx], payload_json: JSON.stringify(payload) };
+    } catch { /* skip */ }
+  }
+}
+
 // ===========================
 // Schema 定义
 // ===========================
@@ -368,6 +417,13 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           const ledgerRow = ledgerMap[change.ledger_id as string];
           if (!ledgerRow) {
             console.log('[SYNC] SKIPPED - ledger not found for', change.entity_type, 'ledger_id:', change.ledger_id);
+            continue;
+          }
+          // Editor 只能推 transaction/budget；ledger/ledger_snapshot 只有 owner 能推（与原版对齐）
+          const memberRole = await db.prepare('SELECT role FROM ledger_members WHERE ledger_id = ? AND user_id = ?').bind(ledgerRow.id, userId).first<{ role: string }>();
+          const callerRole = memberRole?.role ?? (ledgerRow.user_id === userId ? 'owner' : null);
+          if (callerRole !== 'owner' && (change.entity_type === 'ledger' || change.entity_type === 'ledger_snapshot')) {
+            rejected++;
             continue;
           }
           ledgerRowId = ledgerRow.id;
@@ -698,6 +754,9 @@ syncRouter.get('/pull', async (c) => {
     const allResults = changes.results;
     const hasMore = allResults.length > limit;
     const limitedResults = hasMore ? allResults.slice(0, limit) : allResults;
+
+    // 补全 transaction payload 中缺失的 createdByUserId/updatedByUserId（与原版对齐）
+    await enrichTxPayloadsWithUserIds(db, limitedResults);
 
     const resultTypeCounts: Record<string, number> = {};
     for (const r of limitedResults) {
