@@ -1,5 +1,6 @@
--- BeeCount Cloud D1 Schema
--- Based on https://github.com/TNT-Likely/BeeCount-Cloud
+-- BeeCount Cloud D1 Schema (auto-generated from src/db/schema.ts)
+-- 唯一来源：src/db/schema.ts — 运行时自动建表 + 迁移
+-- 本文件仅供参考，不要手动执行
 
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     token_hash TEXT UNIQUE NOT NULL,
     expires_at TEXT NOT NULL,
     revoked_at TEXT,
+    client_type TEXT DEFAULT 'app',
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
 );
 
@@ -95,6 +97,24 @@ CREATE INDEX IF NOT EXISTS idx_mcp_call_logs_user_id ON mcp_call_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_mcp_call_logs_pat_id ON mcp_call_logs(pat_id);
 CREATE INDEX IF NOT EXISTS idx_mcp_call_logs_tool_name ON mcp_call_logs(tool_name);
 CREATE INDEX IF NOT EXISTS idx_mcp_call_logs_status ON mcp_call_logs(status);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    ledger_id TEXT,
+    action TEXT NOT NULL,
+    entity_type TEXT,
+    entity_id TEXT,
+    details_json TEXT,
+    metadata_json TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time ON audit_logs(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_ledger ON audit_logs(ledger_id);
 
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,
@@ -143,6 +163,22 @@ CREATE TABLE IF NOT EXISTS ledger_members (
 
 CREATE INDEX IF NOT EXISTS idx_ledger_members_ledger_id ON ledger_members(ledger_id);
 CREATE INDEX IF NOT EXISTS idx_ledger_members_user_id ON ledger_members(user_id);
+
+CREATE TABLE IF NOT EXISTS ledger_invites (
+    id TEXT PRIMARY KEY,
+    ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+    code TEXT NOT NULL,
+    target_role TEXT DEFAULT 'editor' NOT NULL,
+    invited_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    used_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_invites_ledger_id ON ledger_invites(ledger_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_invites_code ON ledger_invites(code);
+CREATE INDEX IF NOT EXISTS idx_ledger_invites_expires_at ON ledger_invites(expires_at);
 
 CREATE TABLE IF NOT EXISTS sync_changes (
     change_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -212,9 +248,8 @@ CREATE TABLE IF NOT EXISTS backup_snapshots (
 CREATE INDEX IF NOT EXISTS idx_backup_snapshots_user_id ON backup_snapshots(user_id);
 CREATE INDEX IF NOT EXISTS idx_backup_snapshots_ledger_id ON backup_snapshots(ledger_id);
 
--- Backup Remotes
 CREATE TABLE IF NOT EXISTS backup_remotes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     backend_type TEXT NOT NULL,
     config_summary TEXT NOT NULL,
@@ -228,9 +263,8 @@ CREATE TABLE IF NOT EXISTS backup_remotes (
 
 CREATE INDEX IF NOT EXISTS idx_backup_remotes_backend_type ON backup_remotes(backend_type);
 
--- Backup Schedules
 CREATE TABLE IF NOT EXISTS backup_schedules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     user_id TEXT NOT NULL,
     cron_expr TEXT NOT NULL,
@@ -249,13 +283,12 @@ CREATE TABLE IF NOT EXISTS backup_schedules (
 CREATE INDEX IF NOT EXISTS idx_backup_schedules_user_id ON backup_schedules(user_id);
 CREATE INDEX IF NOT EXISTS idx_backup_schedules_enabled ON backup_schedules(enabled);
 
--- Backup Runs
 CREATE TABLE IF NOT EXISTS backup_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    schedule_id INTEGER,
+    id TEXT PRIMARY KEY,
+    schedule_id TEXT REFERENCES backup_schedules(id) ON DELETE SET NULL,
     user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
     ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
-    remote_id INTEGER,
+    remote_id TEXT REFERENCES backup_remotes(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'pending',
     error_message TEXT,
     bytes_total INTEGER,
@@ -271,34 +304,15 @@ CREATE INDEX IF NOT EXISTS idx_backup_runs_ledger_id ON backup_runs(ledger_id);
 CREATE INDEX IF NOT EXISTS idx_backup_runs_status ON backup_runs(status);
 CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at DESC);
 
--- Backup Restores
 CREATE TABLE IF NOT EXISTS backup_restores (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-    run_id INTEGER,
+    run_id TEXT REFERENCES backup_runs(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'preparing',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
 CREATE INDEX IF NOT EXISTS idx_backup_restores_user_id ON backup_restores(user_id);
-
--- Audit Logs
-CREATE TABLE IF NOT EXISTS audit_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-    ledger_id TEXT,
-    action TEXT NOT NULL,
-    entity_type TEXT,
-    entity_id TEXT,
-    details_json TEXT,
-    metadata_json TEXT,
-    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time ON audit_logs(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_ledger ON audit_logs(ledger_id);
 
 CREATE TABLE IF NOT EXISTS attachment_files (
     id TEXT PRIMARY KEY,
@@ -317,7 +331,6 @@ CREATE INDEX IF NOT EXISTS idx_attachment_files_sha256 ON attachment_files(sha25
 CREATE INDEX IF NOT EXISTS idx_attachment_files_ledger_created ON attachment_files(ledger_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_attachment_files_user_id ON attachment_files(user_id);
 
--- CQRS Read Projections
 CREATE TABLE IF NOT EXISTS read_tx_projection (
     ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
     sync_id TEXT NOT NULL,
@@ -413,7 +426,6 @@ CREATE TABLE IF NOT EXISTS read_budget_projection (
 
 CREATE INDEX IF NOT EXISTS ix_read_budget_ledger_cat ON read_budget_projection(ledger_id, category_sync_id);
 
--- System Settings
 CREATE TABLE IF NOT EXISTS system_settings (
     id TEXT PRIMARY KEY,
     timezone_offset INTEGER DEFAULT 0,
