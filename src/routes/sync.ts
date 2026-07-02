@@ -55,6 +55,12 @@ function safeJsonStringify(obj: unknown): string {
   return JSON.stringify(obj);
 }
 
+const USER_GLOBAL_TYPES = ['category', 'account', 'tag'];
+
+function isUserGlobalType(entityType: string): boolean {
+  return USER_GLOBAL_TYPES.includes(entityType);
+}
+
 /**
  * 将数组拆分成更小的批次
  */
@@ -431,7 +437,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
             scope,
           ).run(),
           change,
-          ledgerRow: null,
+          ledgerRow: isUserGlobal ? null : { id: ledgerRowId as string, user_id: userId, external_id: '' },
         });
 
         if (!isUserGlobal && ledgerRowId) {
@@ -454,16 +460,25 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
         // 立即应用这一批次的投影更新（避免一次性处理太多）
         for (const { change, ledgerRow, newChangeId } of processedChanges) {
-          if (!ledgerRow) continue; // user-global entities don't update ledger projections
           try {
-            await applyChangeToProjection(db, ledgerRow.id, userId, {
-              change_id: newChangeId,
-              entity_type: change.entity_type,
-              entity_sync_id: change.entity_sync_id,
-              action: change.action,
-              payload: change.payload,
-              ledger_id: ledgerRow.id,
-            });
+            if (isUserGlobalType(change.entity_type)) {
+              await applyUserChangeToProjection(db, userId, {
+                change_id: newChangeId,
+                entity_type: change.entity_type,
+                entity_sync_id: change.entity_sync_id,
+                action: change.action,
+                payload: change.payload,
+              });
+            } else if (ledgerRow) {
+              await applyChangeToProjection(db, ledgerRow.id, userId, {
+                change_id: newChangeId,
+                entity_type: change.entity_type,
+                entity_sync_id: change.entity_sync_id,
+                action: change.action,
+                payload: change.payload,
+                ledger_id: ledgerRow.id,
+              });
+            }
           } catch (err) {
             console.error('[SYNC] Error applying change to projection:', err);
           }
@@ -814,6 +829,115 @@ syncRouter.get('/full', async (c) => {
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
+
+// ---------------------------------------------------------------------------
+// applyUserChangeToProjection - 应用 user-global 变更到投影表
+// ---------------------------------------------------------------------------
+
+async function applyUserChangeToProjection(
+  db: D1Database,
+  userId: string,
+  change: {
+    change_id: number;
+    entity_type: string;
+    entity_sync_id: string;
+    action: string;
+    payload: Record<string, unknown>;
+  },
+): Promise<void> {
+  const { entity_type, entity_sync_id, action, payload } = change;
+
+  if (action === 'delete') {
+    if (entity_type === 'category') {
+      await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+        .bind(entity_sync_id, userId).run();
+    } else if (entity_type === 'account') {
+      await db.prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
+        .bind(entity_sync_id, userId).run();
+    } else if (entity_type === 'tag') {
+      await db.prepare('DELETE FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
+        .bind(entity_sync_id, userId).run();
+    }
+    return;
+  }
+
+  if (entity_type === 'category') {
+    const existing = await db.prepare('SELECT sync_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+      .bind(entity_sync_id, userId).first();
+    if (existing) {
+      await db.prepare(
+        `UPDATE read_category_projection SET name=?, kind=?, level=?, sort_order=?,
+         icon=?, icon_type=?, custom_icon_path=?, icon_cloud_file_id=?, icon_cloud_sha256=?,
+         parent_name=?, source_change_id=?
+         WHERE sync_id=? AND user_id=?`
+      ).bind(
+        payload.name ?? null, payload.kind ?? null, payload.level ?? null,
+        payload.sort_order ?? null, payload.icon ?? null, payload.icon_type ?? null,
+        payload.custom_icon_path ?? null, payload.icon_cloud_file_id ?? null,
+        payload.icon_cloud_sha256 ?? null, payload.parent_name ?? null,
+        change.change_id, entity_sync_id, userId
+      ).run();
+    } else {
+      await db.prepare(
+        `INSERT INTO read_category_projection
+         (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+          icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+          parent_name, source_change_id)
+         VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        entity_sync_id, userId, payload.name ?? null, payload.kind ?? null,
+        payload.level ?? null, payload.sort_order ?? null, payload.icon ?? null,
+        payload.icon_type ?? null, payload.custom_icon_path ?? null,
+        payload.icon_cloud_file_id ?? null, payload.icon_cloud_sha256 ?? null,
+        payload.parent_name ?? null, change.change_id
+      ).run();
+    }
+  } else if (entity_type === 'account') {
+    const existing = await db.prepare('SELECT sync_id FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
+      .bind(entity_sync_id, userId).first();
+    if (existing) {
+      await db.prepare(
+        `UPDATE read_account_projection SET name=?, account_type=?, currency=?, initial_balance=?,
+         note=?, credit_limit=?, billing_day=?, payment_due_day=?, bank_name=?, card_last_four=?,
+         source_change_id=?
+         WHERE sync_id=? AND user_id=?`
+      ).bind(
+        payload.name ?? null, payload.account_type ?? null, payload.currency ?? null,
+        payload.initial_balance ?? 0, payload.note ?? null, payload.credit_limit ?? null,
+        payload.billing_day ?? null, payload.payment_due_day ?? null,
+        payload.bank_name ?? null, payload.card_last_four ?? null,
+        change.change_id, entity_sync_id, userId
+      ).run();
+    } else {
+      await db.prepare(
+        `INSERT INTO read_account_projection
+         (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+          note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
+         VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        entity_sync_id, userId, payload.name ?? null, payload.account_type ?? null,
+        payload.currency ?? null, payload.initial_balance ?? 0, payload.note ?? null,
+        payload.credit_limit ?? null, payload.billing_day ?? null,
+        payload.payment_due_day ?? null, payload.bank_name ?? null,
+        payload.card_last_four ?? null, change.change_id
+      ).run();
+    }
+  } else if (entity_type === 'tag') {
+    const existing = await db.prepare('SELECT sync_id FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
+      .bind(entity_sync_id, userId).first();
+    if (existing) {
+      await db.prepare(
+        `UPDATE read_tag_projection SET name=?, color=?, source_change_id=?
+         WHERE sync_id=? AND user_id=?`
+      ).bind(payload.name ?? null, payload.color ?? null, change.change_id, entity_sync_id, userId).run();
+    } else {
+      await db.prepare(
+        `INSERT INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
+         VALUES (NULL, ?, ?, ?, ?, ?)`
+      ).bind(entity_sync_id, userId, payload.name ?? null, payload.color ?? null, change.change_id).run();
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // applyChangeToProjection - 应用单个变更到投影表
