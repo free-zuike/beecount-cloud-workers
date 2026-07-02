@@ -250,7 +250,7 @@ readRouter.get('/ledgers', async (c) => {
   // 查询用户账本
   const ledgers = await db
     .prepare(
-      `SELECT l.id, l.external_id, l.name, l.currency, l.created_at
+      `SELECT l.id, l.external_id, l.name, l.currency, l.created_at, l.month_start_day
        FROM ledgers l
        WHERE l.user_id = ?
        ORDER BY l.created_at DESC`
@@ -262,6 +262,7 @@ readRouter.get('/ledgers', async (c) => {
       name: string | null;
       currency: string;
       created_at: string;
+      month_start_day: number | null;
     }>();
 
   console.log('[READ] Found ledgers:', ledgers.results.length);
@@ -303,6 +304,13 @@ readRouter.get('/ledgers', async (c) => {
         expense_total: number;
       }>();
 
+    // 计算成员数
+    const memberCount = await db
+      .prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?')
+      .bind(ledger.id)
+      .first<{ cnt: number }>();
+    const totalMembers = (memberCount?.cnt ?? 0) + 1; // +1 for owner
+
     result.push({
       ledger_id: ledger.external_id,
       ledger_name: ledger.name ?? ledger.external_id,
@@ -314,8 +322,8 @@ readRouter.get('/ledgers', async (c) => {
       exported_at: now,
       updated_at: now,
       role: 'owner',
-      is_shared: false,
-      member_count: 1,
+      is_shared: totalMembers > 1,
+      member_count: totalMembers,
     });
   }
 
@@ -617,6 +625,13 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
       expense_total: number;
     }>();
 
+  // 计算成员数
+  const memberCount = await db
+    .prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?')
+    .bind(ledger.id)
+    .first<{ cnt: number }>();
+  const totalMembers = (memberCount?.cnt ?? 0) + 1;
+
   const response: ReadLedgerDetailOut = {
     ledger_id: ledger.external_id,
     ledger_name: ledger.name ?? ledger.external_id,
@@ -628,8 +643,8 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
     exported_at: now,
     updated_at: now,
     role: 'owner',
-    is_shared: false,
-    member_count: 1,
+    is_shared: totalMembers > 1,
+    member_count: totalMembers,
     source_change_id: latestChangeId?.max_id ?? 0,
   };
 
@@ -898,6 +913,8 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
       tags_list: parseTagsCsv(row.tags_csv as string | null),
       tag_ids: tagIds,
       attachments,
+      exclude_from_stats: Boolean(row.exclude_from_stats),
+      exclude_from_budget: Boolean(row.exclude_from_budget),
       last_change_id: (row.source_change_id as number) ?? 0,
       ledger_id: ledger.external_id,
       ledger_name: ledger.name,

@@ -133,6 +133,10 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await safeAddColumn('audit_logs', 'details_json', 'TEXT');
     await safeAddColumn('audit_logs', 'metadata_json', 'TEXT');
 
+    // read_tx_projection: add exclude columns
+    await safeAddColumn('read_tx_projection', 'exclude_from_stats', 'BOOLEAN DEFAULT 0');
+    await safeAddColumn('read_tx_projection', 'exclude_from_budget', 'BOOLEAN DEFAULT 0');
+
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time ON audit_logs(user_id, created_at DESC)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC)').run();
@@ -168,6 +172,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         currency TEXT DEFAULT 'CNY' NOT NULL,
         role TEXT DEFAULT 'owner' NOT NULL,
         is_shared BOOLEAN DEFAULT 0 NOT NULL,
+        month_start_day INTEGER DEFAULT 1,
         invite_code TEXT,
         invite_expires_at TEXT,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
@@ -180,6 +185,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await safeAddColumn('ledgers', 'is_shared', 'BOOLEAN DEFAULT 0 NOT NULL');
     await safeAddColumn('ledgers', 'invite_code', 'TEXT');
     await safeAddColumn('ledgers', 'invite_expires_at', 'TEXT');
+    await safeAddColumn('ledgers', 'month_start_day', 'INTEGER DEFAULT 1');
 
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledgers_user_id ON ledgers(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledgers_external_id ON ledgers(external_id)').run();
@@ -390,6 +396,8 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         tx_index INTEGER DEFAULT 0,
         created_by_user_id TEXT,
         source_change_id INTEGER DEFAULT 0,
+        exclude_from_stats BOOLEAN DEFAULT 0,
+        exclude_from_budget BOOLEAN DEFAULT 0,
         PRIMARY KEY (ledger_id, sync_id)
       )
     `).run();

@@ -477,10 +477,11 @@ writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaU
       userId,
     ),
     db.prepare(
-      `UPDATE ledgers SET name = ?, currency = ? WHERE id = ?`
+      `UPDATE ledgers SET name = ?, currency = ?, month_start_day = ? WHERE id = ?`
     ).bind(
       req.ledger_name ?? ledger.external_id,
       req.currency ?? 'CNY',
+      req.month_start_day ?? 1,
       ledger.id,
     ),
   ]);
