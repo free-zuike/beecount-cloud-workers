@@ -749,67 +749,66 @@ syncRouter.get('/full', async (c) => {
   const db = c.env.DB;
   
   const ledgerId = c.req.query('ledger_id');
+  if (!ledgerId) {
+    return c.json({ error: 'ledger_id is required' }, 400);
+  }
 
   try {
-    // 查找账本
-    let query = `SELECT id, external_id FROM ledgers WHERE user_id = ?`;
-    const params: (string | number)[] = [userId];
-    
-    if (ledgerId) {
-      query += ' AND external_id = ?';
-      params.push(ledgerId);
-    }
-    
-    const ledgers = await db
-      .prepare(query)
-      .bind(...params)
-      .all<{ id: string; external_id: string }>();
+    const ledger = await db
+      .prepare(`SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?`)
+      .bind(userId, ledgerId)
+      .first<{ id: string; external_id: string }>();
 
-    const result: Record<string, any> = {
-      server_timestamp: nowUtc(),
+    if (!ledger) {
+      return c.json({ ledger_id: ledgerId, snapshot: null, latest_cursor: 0 });
+    }
+
+    const latestCursorRow = await db
+      .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE user_id = ?')
+      .bind(userId)
+      .first<{ max_id: number | null }>();
+    const latestCursor = latestCursorRow?.max_id ?? 0;
+
+    const tombstone = await db
+      .prepare(`SELECT action FROM sync_changes WHERE ledger_id = ? AND entity_type = 'ledger_snapshot' AND action = 'delete' ORDER BY change_id DESC LIMIT 1`)
+      .bind(ledger.id)
+      .first<{ action: string }>();
+    if (tombstone?.action === 'delete') {
+      return c.json({ ledger_id: ledgerId, snapshot: null, latest_cursor: latestCursor });
+    }
+
+    const [txs, accounts, categories, tags, budgets] = await Promise.all([
+      db.prepare('SELECT * FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id).all(),
+      db.prepare('SELECT * FROM read_account_projection WHERE user_id = ?').bind(userId).all(),
+      db.prepare('SELECT * FROM read_category_projection WHERE user_id = ?').bind(userId).all(),
+      db.prepare('SELECT * FROM read_tag_projection WHERE user_id = ?').bind(userId).all(),
+      db.prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?').bind(ledger.id).all(),
+    ]);
+
+    const snapshot = {
+      accounts: accounts.results,
+      categories: categories.results,
+      tags: tags.results,
+      transactions: txs.results,
+      budgets: budgets.results,
+      ledger_name: ledger.external_id,
+      exported_at: new Date().toISOString(),
     };
 
-    for (const ledger of ledgers.results) {
-      // 获取账本下的所有变更（包括 user-global 变更）
-      const changes = await db
-        .prepare(`
-          SELECT entity_type, entity_sync_id, action, payload_json
-          FROM sync_changes
-          WHERE ledger_id = ? OR (scope = 'user' AND user_id = ?)
-          ORDER BY change_id ASC
-        `)
-        .bind(ledger.id, userId)
-        .all<{ entity_type: string; entity_sync_id: string; action: string; payload_json: string }>();
-
-      result[ledger.external_id] = changes.results.map(c => ({
-        entity_type: c.entity_type,
-        entity_sync_id: c.entity_sync_id,
-        action: c.action,
-        payload: c.payload_json ? JSON.parse(c.payload_json) : {},
-      }));
-    }
-
-    // 获取 user-global 变更（不属于任何账本的 category/account/tag）
-    const userGlobalChanges = await db
-      .prepare(`
-        SELECT entity_type, entity_sync_id, action, payload_json
-        FROM sync_changes
-        WHERE scope = 'user' AND user_id = ?
-        ORDER BY change_id ASC
-      `)
-      .bind(userId)
-      .all<{ entity_type: string; entity_sync_id: string; action: string; payload_json: string }>();
-
-    if (userGlobalChanges.results.length > 0) {
-      result['__user_global__'] = userGlobalChanges.results.map(c => ({
-        entity_type: c.entity_type,
-        entity_sync_id: c.entity_sync_id,
-        action: c.action,
-        payload: c.payload_json ? JSON.parse(c.payload_json) : {},
-      }));
-    }
-
-    return c.json(result);
+    return c.json({
+      ledger_id: ledgerId,
+      latest_cursor: latestCursor,
+      snapshot: {
+        change_id: latestCursor,
+        ledger_id: ledgerId,
+        entity_type: 'ledger_snapshot',
+        entity_sync_id: ledger.external_id,
+        action: 'upsert',
+        payload: { content: JSON.stringify(snapshot), metadata: { source: 'lazy_rebuild' } },
+        updated_at: new Date().toISOString(),
+        updated_by_device_id: null,
+      },
+    });
   } catch (error) {
     console.error('[SYNC] /sync/full error:', error);
     return c.json({ error: 'Internal server error' }, 500);
