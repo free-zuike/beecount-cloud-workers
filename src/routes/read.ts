@@ -1367,6 +1367,66 @@ readRouter.get('/debug/transactions', async (c) => {
   return c.json({ transactions: transactions.results });
 });
 
+// ---------------------------------------------------------------------------
+// GET /read/exchange-rate-overrides - 列出用户的汇率覆盖
+// ---------------------------------------------------------------------------
+
+readRouter.get('/exchange-rate-overrides', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+
+  const rows = await db
+    .prepare(
+      `SELECT sync_id, base_currency, quote_currency, rate, updated_at
+       FROM exchange_rate_overrides
+       WHERE user_id = ?
+       ORDER BY quote_currency, sync_id`
+    )
+    .bind(userId)
+    .all<{ sync_id: string; base_currency: string; quote_currency: string; rate: string; updated_at: string }>();
+
+  return c.json(rows.results.map(r => ({
+    sync_id: r.sync_id,
+    base_currency: r.base_currency,
+    quote_currency: r.quote_currency,
+    rate: r.rate,
+    updated_at: r.updated_at,
+  })));
+});
+
+// ---------------------------------------------------------------------------
+// GET /read/exchange-rates - 获取实时汇率
+// ---------------------------------------------------------------------------
+
+readRouter.get('/exchange-rates', async (c) => {
+  const base = c.req.query('base');
+  if (!base || !/^[A-Za-z]{3,8}$/.test(base)) {
+    return c.json({ error: 'Invalid base currency' }, 400);
+  }
+
+  try {
+    // 从外部 API 获取汇率
+    const response = await fetch(`https://api.exchangerate-api.com/v4/latest/${base}`);
+    if (!response.ok) {
+      return c.json({ error: 'Failed to fetch rates' }, 502);
+    }
+    const data = await response.json() as { rates: Record<string, number>; date: string };
+
+    return c.json({
+      base: base.toUpperCase(),
+      rate_date: data.date,
+      source: 'exchangerate-api.com',
+      fetched_at: new Date().toISOString(),
+      stale: false,
+      rates: Object.fromEntries(
+        Object.entries(data.rates).map(([k, v]) => [k, String(v)])
+      ),
+    });
+  } catch (error) {
+    return c.json({ error: 'Exchange rate fetch failed' }, 502);
+  }
+});
+
 /** 调试端点 - 查看所有同步变更 */
 readRouter.get('/debug/sync-changes', async (c) => {
   const userId = c.get('userId');

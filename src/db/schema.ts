@@ -490,6 +490,20 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       )
     `).run();
 
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS exchange_rate_overrides (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        sync_id TEXT NOT NULL,
+        base_currency TEXT NOT NULL,
+        quote_currency TEXT NOT NULL,
+        rate TEXT NOT NULL,
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        UNIQUE(user_id, base_currency, quote_currency)
+      )
+    `).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_exchange_rate_overrides_user ON exchange_rate_overrides(user_id)').run();
+
     console.log('[INIT] Database tables created/verified successfully');
 
   } catch (error) {
