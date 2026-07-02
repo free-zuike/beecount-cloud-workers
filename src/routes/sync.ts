@@ -1018,13 +1018,13 @@ async function applyUserChangeToProjection(
          (ledger_id, sync_id, user_id, name, kind, level, sort_order,
           icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
           parent_name, source_change_id)
-         VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
-        entity_sync_id, userId, payload.name ?? null, payload.kind ?? null,
+        '', entity_sync_id, userId, payload.name ?? null, payload.kind ?? null,
         payload.level ?? null, payload.sort_order ?? null, payload.icon ?? null,
         payload.icon_type ?? null, payload.custom_icon_path ?? null,
         payload.icon_cloud_file_id ?? null, payload.icon_cloud_sha256 ?? null,
-        payload.parent_name ?? null, change.change_id
+        payload.parent_name ?? null, change.change_id ?? 0
       ).run();
     }
   } else if (entity_type === 'account') {
@@ -1048,13 +1048,13 @@ async function applyUserChangeToProjection(
         `INSERT INTO read_account_projection
          (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
           note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
-         VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
-        entity_sync_id, userId, payload.name ?? null, payload.account_type ?? null,
+        '', entity_sync_id, userId, payload.name ?? null, payload.account_type ?? null,
         payload.currency ?? null, payload.initial_balance ?? 0, payload.note ?? null,
         payload.credit_limit ?? null, payload.billing_day ?? null,
         payload.payment_due_day ?? null, payload.bank_name ?? null,
-        payload.card_last_four ?? null, change.change_id
+        payload.card_last_four ?? null, change.change_id ?? 0
       ).run();
     }
   } else if (entity_type === 'tag') {
@@ -1068,8 +1068,8 @@ async function applyUserChangeToProjection(
     } else {
       await db.prepare(
         `INSERT INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
-         VALUES (NULL, ?, ?, ?, ?, ?)`
-      ).bind(entity_sync_id, userId, payload.name ?? null, payload.color ?? null, change.change_id).run();
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind('', entity_sync_id, userId, payload.name ?? null, payload.color ?? null, change.change_id ?? 0).run();
     }
   }
 }
