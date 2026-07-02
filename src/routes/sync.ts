@@ -190,6 +190,9 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       const first = req.changes[0];
       console.log('[SYNC] first change keys:', Object.keys(first));
       console.log('[SYNC] first change payload type:', typeof first.payload, 'is_null:', first.payload === null);
+      console.log('[SYNC] first change entity_sync_id:', first.entity_sync_id, 'type:', typeof first.entity_sync_id);
+      console.log('[SYNC] first change action:', first.action, 'type:', typeof first.action);
+      console.log('[SYNC] first change ledger_id:', first.ledger_id, 'type:', typeof first.ledger_id);
     }
     
     const serverNow = nowUtc();
@@ -491,12 +494,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         const ledgerRowRef = isUserGlobal ? null : { id: ledgerRowId as string, external_id: '' };
 
         // 添加到批量插入
-        insertPromises.push({
-          result: db.prepare(
-            `INSERT INTO sync_changes
-             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id, scope)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          ).bind(
+        const bindParams = [
             userId,
             isUserGlobal ? null : (ledgerRowId ?? null),
             change.entity_type ?? '',
@@ -507,7 +505,19 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
             deviceId ?? 'unknown',
             userId,
             scope ?? 'ledger',
-          ).run(),
+        ];
+        // 检查是否有 undefined 值
+        for (let i = 0; i < bindParams.length; i++) {
+          if (bindParams[i] === undefined) {
+            console.error('[SYNC] UNDEFINED at bind index', i, 'for change:', change.entity_type, change.entity_sync_id);
+          }
+        }
+        insertPromises.push({
+          result: db.prepare(
+            `INSERT INTO sync_changes
+             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id, scope)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(...bindParams).run(),
           change,
           ledgerRow: isUserGlobal ? null : { id: ledgerRowId as string, user_id: userId, external_id: '' },
         });
