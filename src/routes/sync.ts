@@ -543,14 +543,14 @@ syncRouter.get('/pull', async (c) => {
     const params: (string | number)[] = [userId, since];
     
     if (ledgerId) {
-      query += ' AND l.external_id = ?';
+      // 同时返回指定账本的变更 + 所有 user-global 变更
+      query += ' AND (l.external_id = ? OR c.scope = \'user\')';
       params.push(ledgerId);
     }
 
-    if (deviceId) {
-      query += ' AND c.updated_by_device_id != ?';
-      params.push(deviceId);
-    }
+    // 注意：不再用 updated_by_device_id 过滤设备自身变更
+    // 在无 WebSocket 推送的环境下，设备需要能看到自己推送的变更
+    // 重复处理由客户端游标 (since) 防止
     
     query += ' ORDER BY c.change_id ASC LIMIT ?';
     params.push(limit + 1);
@@ -674,18 +674,38 @@ syncRouter.get('/full', async (c) => {
     };
 
     for (const ledger of ledgers.results) {
-      // 获取账本下的所有变更
+      // 获取账本下的所有变更（包括 user-global 变更）
       const changes = await db
         .prepare(`
           SELECT entity_type, entity_sync_id, action, payload_json
           FROM sync_changes
-          WHERE ledger_id = ?
+          WHERE ledger_id = ? OR (scope = 'user' AND user_id = ?)
           ORDER BY change_id ASC
         `)
-        .bind(ledger.id)
+        .bind(ledger.id, userId)
         .all<{ entity_type: string; entity_sync_id: string; action: string; payload_json: string }>();
 
       result[ledger.external_id] = changes.results.map(c => ({
+        entity_type: c.entity_type,
+        entity_sync_id: c.entity_sync_id,
+        action: c.action,
+        payload: c.payload_json ? JSON.parse(c.payload_json) : {},
+      }));
+    }
+
+    // 获取 user-global 变更（不属于任何账本的 category/account/tag）
+    const userGlobalChanges = await db
+      .prepare(`
+        SELECT entity_type, entity_sync_id, action, payload_json
+        FROM sync_changes
+        WHERE scope = 'user' AND user_id = ?
+        ORDER BY change_id ASC
+      `)
+      .bind(userId)
+      .all<{ entity_type: string; entity_sync_id: string; action: string; payload_json: string }>();
+
+    if (userGlobalChanges.results.length > 0) {
+      result['__user_global__'] = userGlobalChanges.results.map(c => ({
         entity_type: c.entity_type,
         entity_sync_id: c.entity_sync_id,
         action: c.action,
