@@ -655,47 +655,37 @@ syncRouter.get('/debug', async (c) => {
   }
   const db = c.env.DB;
 
-  const totalChanges = await db.prepare('SELECT COUNT(*) as cnt FROM sync_changes WHERE user_id = ?').bind(userId).first<{ cnt: number }>();
-  const categoryChanges = await db.prepare("SELECT COUNT(*) as cnt FROM sync_changes WHERE user_id = ? AND entity_type = 'category'").bind(userId).first<{ cnt: number }>();
-  const accountChanges = await db.prepare("SELECT COUNT(*) as cnt FROM sync_changes WHERE user_id = ? AND entity_type = 'account'").bind(userId).first<{ cnt: number }>();
-  const tagChanges = await db.prepare("SELECT COUNT(*) as cnt FROM sync_changes WHERE user_id = ? AND entity_type = 'tag'").bind(userId).first<{ cnt: number }>();
-  const txChanges = await db.prepare("SELECT COUNT(*) as cnt FROM sync_changes WHERE user_id = ? AND entity_type = 'transaction'").bind(userId).first<{ cnt: number }>();
-  const maxChangeId = await db.prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE user_id = ?').bind(userId).first<{ max_id: number | null }>();
+  // 统计 sync_changes 中各 entity_type 的数量
+  const entityCounts = await db.prepare(
+    "SELECT entity_type, scope, COUNT(*) as cnt FROM sync_changes WHERE user_id = ? GROUP BY entity_type, scope"
+  ).bind(userId).all<{ entity_type: string; scope: string; cnt: number }>();
 
-  const catProjection = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM read_category_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
-  const txProjection = await db.prepare("SELECT COUNT(*) as cnt FROM read_tx_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
-  const accountProjection = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM read_account_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
-  const tagProjection = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM read_tag_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
+  // 统计 projection 中各表的数量
+  const catProjCount = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM read_category_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
+  const txProjCount = await db.prepare("SELECT COUNT(*) as cnt FROM read_tx_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
+  const accProjCount = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM read_account_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
+  const tagProjCount = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM read_tag_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
+  const budgetProjCount = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM read_budget_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
 
-  const ledgers = await db.prepare("SELECT COUNT(*) as cnt FROM ledgers WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
+  // sync_cursors 状态
+  const cursors = await db.prepare("SELECT * FROM sync_cursors WHERE user_id = ?").bind(userId).all();
 
-  const sampleCategories = await db
-    .prepare("SELECT entity_sync_id, action, payload_json, updated_at FROM sync_changes WHERE user_id = ? AND entity_type = 'category' ORDER BY change_id DESC LIMIT 3")
-    .bind(userId)
-    .all<{ entity_sync_id: string; action: string; payload_json: string; updated_at: string }>();
+  // 最近3条 category 变更
+  const recentCategories = await db.prepare(
+    "SELECT entity_sync_id, action, payload_json, updated_at FROM sync_changes WHERE user_id = ? AND entity_type = 'category' ORDER BY change_id DESC LIMIT 3"
+  ).bind(userId).all();
 
   return c.json({
-    sync_changes: {
-      total: totalChanges?.cnt ?? 0,
-      category: categoryChanges?.cnt ?? 0,
-      account: accountChanges?.cnt ?? 0,
-      tag: tagChanges?.cnt ?? 0,
-      transaction: txChanges?.cnt ?? 0,
-      max_change_id: maxChangeId?.max_id ?? 0,
-    },
+    sync_changes: entityCounts.results,
     projections: {
-      category: catProjection?.cnt ?? 0,
-      transaction: txProjection?.cnt ?? 0,
-      account: accountProjection?.cnt ?? 0,
-      tag: tagProjection?.cnt ?? 0,
+      category: catProjCount?.cnt ?? 0,
+      transaction: txProjCount?.cnt ?? 0,
+      account: accProjCount?.cnt ?? 0,
+      tag: tagProjCount?.cnt ?? 0,
+      budget: budgetProjCount?.cnt ?? 0,
     },
-    ledgers: ledgers?.cnt ?? 0,
-    sample_categories: sampleCategories.results.map(c => ({
-      sync_id: c.entity_sync_id,
-      action: c.action,
-      updated_at: c.updated_at,
-      name: (() => { try { return JSON.parse(c.payload_json).name; } catch { return '?'; } })(),
-    })),
+    cursors: cursors.results,
+    recent_categories: recentCategories.results,
   });
 });
 
