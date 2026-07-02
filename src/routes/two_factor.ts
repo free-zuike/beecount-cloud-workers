@@ -229,7 +229,7 @@ async function verifyTotpCode(secret: string, code: string, window: number = 2):
 // ===========================
 
 const TwoFAConfirmSchema = z.object({
-  code: z.string().regex(/^\d{6,8}$/, '必须是6-8位数字'),
+  code: z.string().regex(/^\d{6}$/, '必须是6位数字'),
 });
 
 const TwoFAVerifySchema = z.object({

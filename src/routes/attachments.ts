@@ -259,6 +259,7 @@ class S3Service {
 type Bindings = {
     DB: D1Database;
     JWT_SECRET: string;
+    R2?: R2Bucket;
     S3_ENDPOINT?: string;
     S3_REGION?: string;
     S3_ACCESS_KEY_ID?: string;
@@ -636,6 +637,72 @@ attachmentsRouter.post('/exists', zValidator('json', AttachmentExistsRequestSche
     }
 
     return c.json(results);
+});
+
+// POST /attachments/category-icons/upload - 分类图标上传（user-global，无 ledger_id）
+attachmentsRouter.post('/category-icons/upload', async (c) => {
+    const userId = c.get('userId');
+    const db = c.env.DB;
+
+    try {
+        const formData = await c.req.formData();
+        const file = formData.get('file') as File | null;
+
+        if (!file) {
+            return c.json({ error: 'No file provided' }, 400);
+        }
+
+        const MAX_ICON_BYTES = 5 * 1024 * 1024;
+        if (file.size > MAX_ICON_BYTES) {
+            return c.json({ error: 'Icon too large (max 5MB)' }, 413);
+        }
+
+        const fileBuffer = await file.arrayBuffer();
+        const hashBuffer = await crypto.subtle.digest('SHA-256', fileBuffer);
+        const sha256Hash = Array.from(new Uint8Array(hashBuffer))
+            .map(b => b.toString(16).padStart(2, '0')).join('');
+        const mimeType = file.type || 'image/png';
+        const fileName = file.name || 'icon.png';
+        const size = file.size;
+
+        // user-global 存储路径
+        const r2Key = `category-icons/${userId}/${randomUUID()}_${fileName}`;
+
+        // 尝试上传到 R2/S3
+        const config = await getFirstEnabledS3Config(db, c.env);
+        if (config) {
+            const { url, headers } = await signRequest(
+                config.accessKeyId, config.secretAccessKey, config.region,
+                config.endpoint, config.bucketName, r2Key, 'PUT',
+                mimeType, size
+            );
+            await fetch(url, { method: 'PUT', headers, body: fileBuffer });
+        } else if (c.env.R2) {
+            await c.env.R2.put(r2Key, fileBuffer, {
+                httpMetadata: { contentType: mimeType }
+            });
+        }
+
+        const now = new Date().toISOString();
+        const fileId = randomUUID();
+
+        await db.prepare(
+            `INSERT INTO attachment_files
+             (id, ledger_id, user_id, sha256, size_bytes, mime_type, file_name, storage_path, attachment_kind, created_at)
+             VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'category_icon', ?)`
+        ).bind(fileId, userId, sha256Hash, size, mimeType, fileName, r2Key, now).run();
+
+        return c.json({
+            file_id: fileId,
+            sha256: sha256Hash,
+            size,
+            mime_type: mimeType,
+            file_name: fileName,
+        });
+    } catch (error) {
+        console.error('[ATTACHMENT] Category icon upload error:', error);
+        return c.json({ error: 'Upload failed' }, 500);
+    }
 });
 
 export default attachmentsRouter;

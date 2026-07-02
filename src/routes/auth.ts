@@ -172,10 +172,17 @@ authRouter.post('/register', zValidator('json', z.object({
   if (isRateLimited('register', clientIp)) {
     return c.json({ error: 'Too many requests' }, 429);
   }
+
+  // 检查注册是否启用（与原版对齐）
+  const db = c.env.DB;
+  const settings = await db.prepare('SELECT setup_completed FROM system_settings WHERE id = ?').bind('default').first<{ setup_completed: number }>();
+  if (settings && settings.setup_completed) {
+    return c.json({ error: 'Registration disabled' }, 403);
+  }
+
   const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType } = c.req.valid('json');
   const email = rawEmail.trim().toLowerCase();
   const resolvedDeviceId = deviceId || randomUUID();
-  const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
   const isApp = clientType !== 'web';
   const tokenScopes = isApp ? ['app:write'] : ['web:read', 'web:write', 'ops:write'];

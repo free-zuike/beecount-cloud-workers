@@ -119,9 +119,9 @@ patsRouter.get('/', async (c) => {
 
   const rows = await db
     .prepare(
-      `SELECT id, name, prefix, scopes_json, expires_at, last_used_at, created_at
+      `SELECT id, name, prefix, scopes_json, expires_at, last_used_at, last_used_ip, revoked_at, created_at
        FROM personal_access_tokens
-       WHERE user_id = ? AND revoked_at IS NULL
+       WHERE user_id = ?
        ORDER BY created_at DESC`
     )
     .bind(userId)
@@ -132,6 +132,8 @@ patsRouter.get('/', async (c) => {
       scopes_json: string;
       expires_at: string | null;
       last_used_at: string | null;
+      last_used_ip: string | null;
+      revoked_at: string | null;
       created_at: string;
     }>();
 
@@ -142,6 +144,8 @@ patsRouter.get('/', async (c) => {
     scopes: JSON.parse(row.scopes_json || '[]'),
     expires_at: row.expires_at,
     last_used_at: row.last_used_at,
+    last_used_ip: row.last_used_ip,
+    revoked_at: row.revoked_at,
     created_at: row.created_at,
   }));
 
@@ -211,7 +215,7 @@ patsRouter.post('/', zValidator('json', PatCreateSchema), async (c) => {
     scopes: req.scopes,
     expires_at: expiresAt,
     created_at: serverNow,
-  });
+  }, 201);
 });
 
 // ---------------------------------------------------------------------------
@@ -242,6 +246,15 @@ patsRouter.patch('/:id', zValidator('json', PatUpdateSchema), async (c) => {
 
   if (!pat) {
     return c.json({ error: 'PAT not found' }, 404);
+  }
+
+  // 检查是否已撤销（与原版对齐：已撤销的 PAT 不能编辑）
+  const revokedCheck = await db
+    .prepare('SELECT id FROM personal_access_tokens WHERE id = ? AND revoked_at IS NOT NULL')
+    .bind(patId)
+    .first();
+  if (revokedCheck) {
+    return c.json({ error: 'PAT has been revoked' }, 409);
   }
 
   // 构建更新语句

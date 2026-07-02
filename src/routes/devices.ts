@@ -116,7 +116,7 @@ devicesRouter.get('/', async (c) => {
     session_count: 1,
   }));
 
-  return c.json({ devices: result });
+  return c.json(result);
 });
 
 // ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ devicesRouter.delete('/:id', async (c) => {
     .bind(serverNow, deviceId)
     .run();
 
-  return c.json({ success: true });
+  return c.json({ ok: true, device_id: deviceId });
 });
 
 export default devicesRouter;

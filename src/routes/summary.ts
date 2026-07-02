@@ -86,12 +86,11 @@ summaryRouter.get('/', async (c) => {
 
   return c.json({
     ledger_id: ledger.external_id,
-    tx_count: stats?.tx_count ?? 0,
+    transaction_count: stats?.tx_count ?? 0,
     income_total: incomeTotal,
     expense_total: expenseTotal,
     balance: incomeTotal - expenseTotal,
-    first_tx_at: stats?.first_tx_at ?? null,
-    last_tx_at: stats?.last_tx_at ?? null,
+    latest_happened_at: stats?.last_tx_at ?? null,
   });
 });
 

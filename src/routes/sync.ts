@@ -629,15 +629,22 @@ syncRouter.get('/pull', async (c) => {
   const db = c.env.DB;
   
   const since = parseInt(c.req.query('since') ?? '0');
-  const limit = parseInt(c.req.query('limit') ?? '100');
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '1000', 10), 5000);
   const ledgerId = c.req.query('ledger_id');
   const deviceId = c.req.query('device_id');
 
   console.log('[SYNC] /sync/pull since:', since, 'limit:', limit, 'ledger_id:', ledgerId, 'device_id:', deviceId);
 
   try {
-    // device heartbeat
+    // 设备验证 + heartbeat
     if (deviceId) {
+      const device = await db
+        .prepare('SELECT id FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL')
+        .bind(deviceId, userId)
+        .first();
+      if (!device) {
+        return c.json({ error: 'Invalid device' }, 401);
+      }
       await db.prepare('UPDATE devices SET last_seen_at = ? WHERE id = ? AND user_id = ?')
         .bind(new Date().toISOString(), deviceId, userId).run();
     }
