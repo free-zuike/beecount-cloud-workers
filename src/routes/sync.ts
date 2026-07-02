@@ -545,7 +545,12 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 // ---------------------------------------------------------------------------
 
 syncRouter.get('/debug', async (c) => {
-  const userId = c.get('userId');
+  let userId: string;
+  try {
+    userId = c.get('userId');
+  } catch {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
   const db = c.env.DB;
 
   const totalChanges = await db.prepare('SELECT COUNT(*) as cnt FROM sync_changes WHERE user_id = ?').bind(userId).first<{ cnt: number }>();
@@ -618,13 +623,17 @@ syncRouter.get('/pull', async (c) => {
       SELECT c.change_id, c.entity_type, c.entity_sync_id, c.action, c.payload_json, c.updated_at, c.updated_by_device_id, c.scope, l.external_id as ledger_id
       FROM sync_changes c
       LEFT JOIN ledgers l ON c.ledger_id = l.id
-      WHERE c.user_id = ? AND c.change_id > ?
+      WHERE c.user_id = ?
+        AND c.change_id > ?
+        AND (
+          c.scope = 'user'
+          OR c.scope = 'ledger'
+        )
     `;
     
     const params: (string | number)[] = [userId, since];
     
     if (ledgerId) {
-      // 同时返回指定账本的变更 + 所有 user-global 变更
       query += ' AND (l.external_id = ? OR c.scope = \'user\')';
       params.push(ledgerId);
     }
