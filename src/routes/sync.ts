@@ -314,6 +314,19 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       const batchChanges = changes.slice(startIdx, startIdx + BATCH_INSERT_SIZE);
       console.log('[SYNC] Processing insertion batch', Math.floor(startIdx / BATCH_INSERT_SIZE) + 1, 'with', batchChanges.length, 'changes');
       
+      // 打印前3条变更的详情（调试用）
+      if (startIdx === 0) {
+        for (const ch of batchChanges.slice(0, 3)) {
+          console.log('[SYNC] sample change:', JSON.stringify({
+            entity_type: ch.entity_type,
+            ledger_id: ch.ledger_id,
+            entity_sync_id: ch.entity_sync_id,
+            action: ch.action,
+            updated_at: ch.updated_at,
+          }));
+        }
+      }
+      
       const insertPromises: Array<{
         result: Promise<{ meta: { last_row_id: number } }>;
         change: typeof changes[0];
@@ -339,7 +352,10 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           scope = 'user';
         } else {
           const ledgerRow = ledgerMap[change.ledger_id as string];
-          if (!ledgerRow) continue;
+          if (!ledgerRow) {
+            console.log('[SYNC] SKIPPED - ledger not found for', change.entity_type, 'ledger_id:', change.ledger_id);
+            continue;
+          }
           ledgerRowId = ledgerRow.id;
           key = `${ledgerRow.id}:${change.entity_type}:${change.entity_sync_id}`;
         }
@@ -361,6 +377,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         if (existingTuple && existingTuple.ts > incomingTuple.ts) {
           rejected++;
           conflictCount++;
+          console.log('[SYNC] REJECTED - older change:', change.entity_type, change.entity_sync_id, 'server_ts:', existingTuple.ts, 'incoming_ts:', incomingTuple.ts);
           if (conflictList.length < 20) {
             conflictList.push({
               reason: 'lww_rejected_older_change',
@@ -376,6 +393,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         // 完全相同的 (ts, device_id) → 幂等重放
         if (existingTuple && existingTuple.ts === incomingTuple.ts && existingTuple.deviceId === incomingTuple.deviceId) {
           accepted++;
+          console.log('[SYNC] IDEMPOTENT - same (ts,device):', change.entity_type, change.entity_sync_id);
           continue;
         }
 
@@ -477,6 +495,11 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
     console.log('[SYNC] /sync/push result - accepted:', accepted, 'rejected:', rejected, 'conflicts:', conflictCount, 'server_cursor:', maxCursor);
     console.log(`[SYNC] ===== ${CODE_VERSION} SUCCESS =====`);
+
+    // 统计最终状态
+    const totalChanges = await db.prepare('SELECT COUNT(*) as cnt FROM sync_changes WHERE user_id = ?').bind(userId).first<{ cnt: number }>();
+    const categoryCount = await db.prepare("SELECT COUNT(*) as cnt FROM sync_changes WHERE user_id = ? AND entity_type = 'category'").bind(userId).first<{ cnt: number }>();
+    console.log('[SYNC] DB totals - all_changes:', totalChanges?.cnt, 'categories:', categoryCount?.cnt);
 
     await insertAuditLog({
       db, userId, action: 'sync_push', entityType: 'sync',
