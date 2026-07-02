@@ -242,11 +242,39 @@ summaryRouter.get('/workspace/ledger-counts', async (c) => {
   console.log('[SUMMARY] Stats:', stats);
 
   return c.json({
-    ledger_id: ledger.external_id,
     tx_count: stats?.tx_count ?? 0,
     first_tx_at: stats?.first_tx_at ?? null,
     last_tx_at: stats?.last_tx_at ?? null,
   });
+});
+
+// 别名：前端调用 /read/summary/workspace/ledger-counts，转发到 workspaceRouter
+summaryRouter.get('/workspace/ledger-counts', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerId = c.req.query('ledger_id') ?? null;
+
+  let ledgerQuery = 'SELECT id FROM ledgers WHERE user_id = ?';
+  const ledgerParams: string[] = [userId];
+  if (ledgerId) { ledgerQuery += ' AND external_id = ?'; ledgerParams.push(ledgerId); }
+
+  const ledgers = await db.prepare(ledgerQuery).bind(...ledgerParams).all<{ id: string }>();
+  if (ledgers.results.length === 0) {
+    return c.json({ tx_count: 0, days_since_first_tx: 0, distinct_days: 0, first_tx_at: null });
+  }
+
+  const ids = ledgers.results.map((l) => l.id);
+  const row = await db.prepare(`SELECT COUNT(*) as cnt, MIN(happened_at) as first_at FROM read_tx_projection WHERE ledger_id IN (${ids.map(() => '?').join(',')})`).bind(...ids).first<{ cnt: number; first_at: string | null }>();
+
+  const txCount = row?.cnt ?? 0;
+  const firstAt = row?.first_at ?? null;
+  let daysSinceFirstTx = 0;
+  if (firstAt) {
+    const diff = Date.now() - new Date(firstAt).getTime();
+    daysSinceFirstTx = Math.floor(diff / (1000 * 60 * 60 * 24)) + 1;
+  }
+
+  return c.json({ tx_count: txCount, days_since_first_tx: daysSinceFirstTx, distinct_days: 0, first_tx_at: firstAt });
 });
 
 export default summaryRouter;
