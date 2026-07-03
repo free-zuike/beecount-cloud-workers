@@ -209,7 +209,7 @@ async function fetchLedgerChanges(
 
 export async function performBackup(
   db: D1Database,
-  runId: number,
+  runId: string,
   ledgerId: string,
   remoteConfig: Record<string, string>,
   shouldEncrypt?: boolean,

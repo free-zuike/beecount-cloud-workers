@@ -1151,10 +1151,11 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
     insertResult = await db
       .prepare(
         `INSERT INTO backup_schedules
-         (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, timezone_offset, next_run_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, timezone_offset, next_run_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
+        randomUUID(),
         req.name,
         userId,
         req.cron_expr,
@@ -1174,10 +1175,11 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
     insertResult = await db
       .prepare(
         `INSERT INTO backup_schedules
-         (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, next_run_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, next_run_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
+        randomUUID(),
         req.name,
         userId,
         req.cron_expr,
@@ -1435,15 +1437,14 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
     }
   }
 
-  const runInsertResult = await db
+  const runId = randomUUID();
+  await db
     .prepare(
-      `INSERT INTO backup_runs (schedule_id, ledger_id, remote_id, status, started_at)
-       VALUES (?, ?, ?, 'pending', ?)`
+      `INSERT INTO backup_runs (id, schedule_id, ledger_id, remote_id, status, started_at)
+       VALUES (?, ?, ?, ?, 'pending', ?)`
     )
-    .bind(scheduleId, ledgerId || '', remoteId, serverNow)
+    .bind(runId, scheduleId, ledgerId || '', remoteId, serverNow)
     .run();
-
-  const runId = (runInsertResult as any).lastRowId;
 
   const backupResult = await performBackup(db, runId, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2);
   
@@ -1573,19 +1574,18 @@ backupRouter.post('/run-now', zValidator('json', RunNowSchema), async (c) => {
     return c.json({ error: 'Ledger not found' }, 404);
   }
 
-  const runInsertResult2 = await db
+  const runId2 = randomUUID();
+  await db
     .prepare(
       `INSERT INTO backup_runs
-       (schedule_id, ledger_id, remote_id, status, started_at)
-       VALUES (NULL, ?, ?, 'pending', ?)`
+       (id, schedule_id, ledger_id, remote_id, status, started_at)
+       VALUES (?, NULL, ?, ?, 'pending', ?)`
     )
-    .bind(ledger.id, req.remote_id ?? null, serverNow)
+    .bind(runId2, ledger.id, req.remote_id ?? null, serverNow)
     .run();
 
-  const runId = (runInsertResult2 as any).lastRowId;
-
   return c.json({
-    id: runId,
+    id: runId2,
     ledger_id: req.ledger_id,
     remote_id: req.remote_id,
     status: 'pending',
