@@ -30,12 +30,8 @@ wsRouter.get('/', async (c) => {
     const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
     const doStub = c.env.BEECOUNT_DO.get(doId);
 
-    // 将请求转发给 DO 的 /ws 路径
-    const doUrl = new URL(c.req.url);
-    doUrl.pathname = '/ws';
-    const doReq = new Request(doUrl.toString(), c.req);
-
-    return doStub.fetch(doReq);
+    // 转发原始请求（保留所有头，包括 Upgrade）
+    return doStub.fetch(c.req.raw);
   } catch (error) {
     console.error('[WS] Connection error:', error);
     return c.json({ error: 'WebSocket connection failed' }, 500);
