@@ -1007,6 +1007,14 @@ async function applyUserChangeToProjection(
   }
 
   if (entity_type === 'category') {
+    // APP 用 camelCase (parentName)，原版用 snake_case (parent_name)
+    const parentName = (payload as any).parentName ?? payload.parent_name ?? null;
+    const sortOrder = (payload as any).sortOrder ?? payload.sort_order ?? null;
+    const iconType = (payload as any).iconType ?? payload.icon_type ?? null;
+    const customIconPath = (payload as any).customIconPath ?? payload.custom_icon_path ?? null;
+    const iconCloudFileId = (payload as any).iconCloudFileId ?? payload.icon_cloud_file_id ?? null;
+    const iconCloudSha256 = (payload as any).iconCloudSha256 ?? payload.icon_cloud_sha256 ?? null;
+
     const existing = await db.prepare('SELECT sync_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
       .bind(entity_sync_id, userId).first();
     if (existing) {
@@ -1017,10 +1025,10 @@ async function applyUserChangeToProjection(
          WHERE sync_id=? AND user_id=?`
       ).bind(
         payload.name ?? null, payload.kind ?? null, payload.level ?? null,
-        payload.sort_order ?? null, payload.icon ?? null, payload.icon_type ?? null,
-        payload.custom_icon_path ?? null, payload.icon_cloud_file_id ?? null,
-        payload.icon_cloud_sha256 ?? null, payload.parent_name ?? null,
-        change.change_id, entity_sync_id, userId
+        sortOrder, payload.icon ?? null, iconType,
+        customIconPath, iconCloudFileId, iconCloudSha256,
+        parentName, change.change_id ?? 0,
+        entity_sync_id, userId
       ).run();
     } else {
       await db.prepare(
@@ -1031,13 +1039,21 @@ async function applyUserChangeToProjection(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         null, entity_sync_id, userId, payload.name ?? null, payload.kind ?? null,
-        payload.level ?? null, payload.sort_order ?? null, payload.icon ?? null,
-        payload.icon_type ?? null, payload.custom_icon_path ?? null,
-        payload.icon_cloud_file_id ?? null, payload.icon_cloud_sha256 ?? null,
-        payload.parent_name ?? null, change.change_id ?? 0
+        payload.level ?? null, sortOrder, payload.icon ?? null, iconType,
+        customIconPath, iconCloudFileId, iconCloudSha256,
+        parentName, change.change_id ?? 0
       ).run();
     }
   } else if (entity_type === 'account') {
+    // APP 用 camelCase，原版用 snake_case
+    const accountType = (payload as any).accountType ?? payload.account_type ?? null;
+    const initialBalance = (payload as any).initialBalance ?? payload.initial_balance ?? 0;
+    const creditLimit = (payload as any).creditLimit ?? payload.credit_limit ?? null;
+    const billingDay = (payload as any).billingDay ?? payload.billing_day ?? null;
+    const paymentDueDay = (payload as any).paymentDueDay ?? payload.payment_due_day ?? null;
+    const bankName = (payload as any).bankName ?? payload.bank_name ?? null;
+    const cardLastFour = (payload as any).cardLastFour ?? payload.card_last_four ?? null;
+
     const existing = await db.prepare('SELECT sync_id FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
       .bind(entity_sync_id, userId).first();
     if (existing) {
@@ -1047,11 +1063,10 @@ async function applyUserChangeToProjection(
          source_change_id=?
          WHERE sync_id=? AND user_id=?`
       ).bind(
-        payload.name ?? null, payload.account_type ?? null, payload.currency ?? null,
-        payload.initial_balance ?? 0, payload.note ?? null, payload.credit_limit ?? null,
-        payload.billing_day ?? null, payload.payment_due_day ?? null,
-        payload.bank_name ?? null, payload.card_last_four ?? null,
-        change.change_id, entity_sync_id, userId
+        payload.name ?? null, accountType, payload.currency ?? null,
+        initialBalance, payload.note ?? null, creditLimit,
+        billingDay, paymentDueDay, bankName, cardLastFour,
+        change.change_id ?? 0, entity_sync_id, userId
       ).run();
     } else {
       await db.prepare(
@@ -1060,11 +1075,11 @@ async function applyUserChangeToProjection(
           note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
-        null, entity_sync_id, userId, payload.name ?? null, payload.account_type ?? null,
-        payload.currency ?? null, payload.initial_balance ?? 0, payload.note ?? null,
-        payload.credit_limit ?? null, payload.billing_day ?? null,
-        payload.payment_due_day ?? null, payload.bank_name ?? null,
-        payload.card_last_four ?? null, change.change_id ?? 0
+        null, entity_sync_id, userId, payload.name ?? null, accountType,
+        payload.currency ?? null, initialBalance, payload.note ?? null,
+        creditLimit ?? null, billingDay ?? null,
+        paymentDueDay ?? null, bankName ?? null,
+        cardLastFour ?? null, change.change_id ?? 0
       ).run();
     }
   } else if (entity_type === 'tag') {
