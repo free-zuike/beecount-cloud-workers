@@ -100,14 +100,8 @@ export async function fetchWorkspaceTransactions(
   if (options?.txSyncId) query.set('tx_sync_id', options.txSyncId)
   if (options?.tagSyncId) query.set('tag_sync_id', options.tagSyncId)
   if (options?.categorySyncId) query.set('category_sync_id', options.categorySyncId)
-  if (options?.accountSyncId) query.set('account_sync_id', options.accountSyncId)
-  if (typeof options?.amountMin === 'number') query.set('amount_min', `${options.amountMin}`)
-  if (typeof options?.amountMax === 'number') query.set('amount_max', `${options.amountMax}`)
-  if (options?.dateFrom) query.set('date_from', options.dateFrom)
-  if (options?.dateTo) query.set('date_to', options.dateTo)
-  if (typeof options?.limit === 'number') query.set('limit', `${options.limit}`)
-  if (typeof options?.offset === 'number') query.set('offset', `${options.offset}`)
   const suffix = query.toString() ? `?${query.toString()}` : ''
+  console.log('[API_DEBUG] fetchWorkspaceTransactions URL:', `/read/workspace/transactions${suffix}`)
   const response = await authedGet<WorkspaceTransactionPage | WorkspaceTransaction[]>(
     `/read/workspace/transactions${suffix}`,
     token

@@ -157,6 +157,7 @@ export function GlobalEntityDialogs() {
 
   const loadTagTxs = useCallback(
     async (tagSyncId: string, offset: number) => {
+      console.log('[TAG_DEBUG] loadTagTxs called with tagSyncId:', tagSyncId, 'offset:', offset)
       setTagLoading(true)
       try {
         const page = await fetchWorkspaceTransactions(token, {
@@ -164,6 +165,7 @@ export function GlobalEntityDialogs() {
           limit: DETAIL_PAGE_SIZE,
           offset,
         })
+        console.log('[TAG_DEBUG] API returned', page.items?.length, 'items, total:', page.total)
         setTagTxs((prev) => (offset === 0 ? page.items : [...prev, ...page.items]))
         setTagTotal(page.total)
         setTagOffset(offset + page.items.length)
@@ -179,6 +181,7 @@ export function GlobalEntityDialogs() {
   // 监听 tag detail
   useEffect(() => {
     return onOpenDetailTag((nextTag) => {
+      console.log('[TAG_DEBUG] onOpenDetailTag received:', JSON.stringify({ id: nextTag.id, name: nextTag.name }))
       setTag(nextTag)
       setTagTxs([])
       setTagTotal(0)
