@@ -509,6 +509,10 @@ readRouter.get('/workspace/transactions', async (c) => {
     query += ' AND tag_sync_ids_json LIKE ?';
     bindings.push(`%"${tagSyncId}"%`);
   }
+  if (accountName) {
+    query += ' AND account_name = ?';
+    bindings.push(accountName);
+  }
 
   query += ' ORDER BY happened_at DESC LIMIT ? OFFSET ?';
   bindings.push(limit, offset);
