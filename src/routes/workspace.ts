@@ -585,13 +585,24 @@ workspaceRouter.get('/tags', async (c) => {
 
   // 预聚合每个 tag 的 tx 统计
   const tagStats: Record<string, { tx_count: number; expense_total: number; income_total: number }> = {};
-  const tagRowsForStats = await db.prepare(`SELECT sync_id FROM read_tag_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`).bind(...ledgerInternalIds).all<{ sync_id: string }>();
+  const tagRowsForStats = await db.prepare(`SELECT sync_id, ledger_id FROM read_tag_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`).bind(...ledgerInternalIds).all<{ sync_id: string; ledger_id: string | null }>();
   const tagSyncIds = tagRowsForStats.results.map(r => r.sync_id);
 
   if (tagSyncIds.length > 0) {
     // 按 tag_sync_ids_json 匹配
     for (const tagId of tagSyncIds) {
-      const txRows = await db.prepare(`SELECT tx_type, amount FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND tag_sync_ids_json LIKE ?`).bind(...ledgerInternalIds, `%"${tagId}"%`).all<{ tx_type: string; amount: number }>();
+      // 检查该标签是否为 user-global（ledger_id IS NULL）
+      const tagRow = tagRowsForStats.results.find(r => r.sync_id === tagId);
+      const isUserGlobal = tagRow && !tagRow.ledger_id;
+      
+      let txRows;
+      if (isUserGlobal) {
+        // user-global 标签：匹配所有账本的交易
+        txRows = await db.prepare(`SELECT tx_type, amount FROM read_tx_projection WHERE tag_sync_ids_json LIKE ?`).bind(`%"${tagId}"%`).all<{ tx_type: string; amount: number }>();
+      } else {
+        // ledger-scoped 标签：只匹配对应账本的交易
+        txRows = await db.prepare(`SELECT tx_type, amount FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND tag_sync_ids_json LIKE ?`).bind(...ledgerInternalIds, `%"${tagId}"%`).all<{ tx_type: string; amount: number }>();
+      }
       let txCount = 0, expenseTotal = 0, incomeTotal = 0;
       for (const r of txRows.results) {
         txCount++;
