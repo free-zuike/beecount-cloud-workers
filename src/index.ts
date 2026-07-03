@@ -168,7 +168,35 @@ app.get('*', spaMiddleware);
 export { BeeCountDO };
 
 export default {
-  fetch: app.fetch,
+  async fetch(request: Request, env: Bindings, ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url);
+
+    // WebSocket 升级必须在 Worker 层处理（Hono 中间件会丢失 Upgrade 头）
+    if (url.pathname === '/ws' && request.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
+      const token = url.searchParams.get('token');
+      if (!token) {
+        return new Response(JSON.stringify({ error: 'Missing token' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      try {
+        const { validateAccessToken } = await import('./auth');
+        const result = await validateAccessToken(token, env.JWT_SECRET);
+        if (!result || !('userId' in result)) {
+          return new Response(JSON.stringify({ error: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        const userId = (result as any).userId;
+        const doId = env.BEECOUNT_DO.idFromName(`ws-${userId}`);
+        const doStub = env.BEECOUNT_DO.get(doId);
+
+        return doStub.fetch(request);
+      } catch (error) {
+        return new Response(JSON.stringify({ error: 'WebSocket failed' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      }
+    }
+
+    return app.fetch(request, env, ctx);
+  },
   
   async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
     console.log('[CRON] Scheduled event triggered:', new Date().toISOString());
