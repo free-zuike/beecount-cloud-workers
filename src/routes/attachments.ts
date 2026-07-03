@@ -260,6 +260,7 @@ type Bindings = {
     DB: D1Database;
     JWT_SECRET: string;
     R2?: R2Bucket;
+    R2_ATTACHMENTS?: R2Bucket;
     S3_ENDPOINT?: string;
     S3_REGION?: string;
     S3_ACCESS_KEY_ID?: string;
@@ -364,6 +365,14 @@ const handleUpload = async (c: any) => {
             if (!uploadSuccess) {
                 return c.json({ error: 'Failed to upload to S3' }, 500);
             }
+        } else if (c.env.R2_ATTACHMENTS) {
+            // 使用 R2 存储附件
+            const r2Key = `attachments/${ledger.external_id}/${fileId}_${actualFileName}`;
+            console.log('[ATTACHMENT] Uploading to R2, key:', r2Key);
+            await c.env.R2_ATTACHMENTS.put(r2Key, fileBuffer, {
+                httpMetadata: { contentType: mimeType }
+            });
+            console.log('[ATTACHMENT] R2 upload successful');
         }
 
         const now = new Date().toISOString();
@@ -528,8 +537,32 @@ attachmentsRouter.get('/:id', async (c) => {
                     'Content-Type': row.mime_type || 'application/octet-stream',
                     'Content-Disposition': `inline; filename="${encodeURIComponent(row.file_name || 'attachment')}"`,
                     'Content-Length': String(row.size_bytes),
+                    'Access-Control-Allow-Origin': '*',
                 },
             });
+        }
+    }
+
+    // 尝试从 R2 下载
+    if (c.env.R2_ATTACHMENTS) {
+        // 尝试多种存储路径格式
+        const possiblePaths = [
+            row.storage_path,
+            `attachments/${row.ledger_external_id}/${row.id}_${row.file_name}`,
+        ];
+        for (const key of possiblePaths) {
+            if (!key) continue;
+            const obj = await c.env.R2_ATTACHMENTS.get(key);
+            if (obj) {
+                return new Response(obj.body, {
+                    headers: {
+                        'Content-Type': obj.httpMetadata?.contentType || row.mime_type || 'application/octet-stream',
+                        'Content-Length': String(obj.size),
+                        'Cache-Control': 'public, max-age=31536000, immutable',
+                        'Access-Control-Allow-Origin': '*',
+                    },
+                });
+            }
         }
     }
 
