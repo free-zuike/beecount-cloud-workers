@@ -234,6 +234,8 @@ workspaceRouter.get('/transactions', async (c) => {
   const ledgerId = c.req.query('ledger_id') ?? null;
   const txType = c.req.query('tx_type') ?? null;
   const accountName = c.req.query('account_name') ?? null;
+  const tagSyncId = c.req.query('tag_sync_id') ?? null;
+  const categorySyncId = c.req.query('category_sync_id') ?? null;
   const q = c.req.query('q') ?? null;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '20', 10), 2000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
@@ -276,6 +278,18 @@ workspaceRouter.get('/transactions', async (c) => {
     txQuery += ` AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ? OR tags_csv LIKE ?)`;
     const pattern = `%${q}%`;
     txParams.push(pattern, pattern, pattern, pattern);
+  }
+
+  // 按 tag_sync_id 精确过滤（原版对齐）
+  if (tagSyncId) {
+    txQuery += ` AND tag_sync_ids_json LIKE ?`;
+    txParams.push(`%"${tagSyncId}"%`);
+  }
+
+  // 按 category_sync_id 精确过滤（原版对齐）
+  if (categorySyncId) {
+    txQuery += ` AND category_sync_id = ?`;
+    txParams.push(categorySyncId);
   }
 
   txQuery += ' ORDER BY happened_at DESC, tx_index DESC LIMIT ? OFFSET ?';
