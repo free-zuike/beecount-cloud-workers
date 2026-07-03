@@ -381,7 +381,7 @@ workspaceRouter.get('/accounts', async (c) => {
     ledgerMeta[l.id] = { external_id: l.external_id, name: l.name };
   });
 
-  let acctQuery = `SELECT * FROM read_account_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`;
+  let acctQuery = `SELECT * FROM read_account_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`;
   const acctParams: string[] = [...ledgerInternalIds];
 
   if (q) {
@@ -475,7 +475,7 @@ workspaceRouter.get('/categories', async (c) => {
     ledgerMeta[l.id] = { external_id: l.external_id, name: l.name };
   });
 
-  let catQuery = `SELECT * FROM read_category_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`;
+  let catQuery = `SELECT * FROM read_category_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`;
   const catParams: string[] = [...ledgerInternalIds];
 
   if (q) {
@@ -556,7 +556,7 @@ workspaceRouter.get('/tags', async (c) => {
     ledgerMeta[l.id] = { external_id: l.external_id, name: l.name };
   });
 
-  let tagQuery = `SELECT * FROM read_tag_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`;
+  let tagQuery = `SELECT * FROM read_tag_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`;
   const tagParams: string[] = [...ledgerInternalIds];
 
   if (q) {
