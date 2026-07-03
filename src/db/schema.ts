@@ -283,7 +283,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_remotes (
-        id TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         backend_type TEXT NOT NULL,
         config_summary TEXT NOT NULL,
@@ -300,7 +300,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_schedules (
-        id TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         user_id TEXT NOT NULL,
         cron_expr TEXT NOT NULL,
@@ -322,11 +322,11 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_runs (
-        id TEXT PRIMARY KEY,
-        schedule_id TEXT REFERENCES backup_schedules(id) ON DELETE SET NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        schedule_id INTEGER REFERENCES backup_schedules(id) ON DELETE SET NULL,
         user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
         ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
-        remote_id TEXT REFERENCES backup_remotes(id) ON DELETE SET NULL,
+        remote_id INTEGER REFERENCES backup_remotes(id) ON DELETE SET NULL,
         status TEXT NOT NULL DEFAULT 'pending',
         error_message TEXT,
         bytes_total INTEGER,
@@ -344,9 +344,9 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_restores (
-        id TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-        run_id TEXT REFERENCES backup_runs(id) ON DELETE SET NULL,
+        run_id INTEGER REFERENCES backup_runs(id) ON DELETE SET NULL,
         status TEXT NOT NULL DEFAULT 'preparing',
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
