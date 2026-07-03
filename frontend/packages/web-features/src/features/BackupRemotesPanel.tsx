@@ -83,8 +83,8 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
     {
       key: 'root_path',
       label: 'Root Path (主路径)',
-      placeholder: 'backups / 留空',
-      hint: 'R2 存储桶中的路径前缀，留空使用默认值 backups/',
+      placeholder: 'beecount / 留空',
+      hint: 'R2 存储桶中的路径前缀，留空使用默认值 beecount/',
     },
   ],
   s3: [
