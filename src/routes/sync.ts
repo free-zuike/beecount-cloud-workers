@@ -55,6 +55,22 @@ function safeJsonStringify(obj: unknown): string {
   return JSON.stringify(obj);
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function resolveTagsCsv(db: D1Database, tags: string | null, tagIds: string[] | null): Promise<string | null> {
+  if (!tags && !tagIds?.length) return null;
+  const parts = (tags ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  if (parts.length === 0) return null;
+  const nameMap: Record<string, string> = {};
+  const uuidParts = parts.filter((p) => UUID_RE.test(p));
+  if (uuidParts.length > 0) {
+    const rows = await db.prepare(`SELECT sync_id, name FROM read_tag_projection WHERE sync_id IN (${uuidParts.map(() => '?').join(',')})`).bind(...uuidParts).all<{ sync_id: string; name: string }>();
+    for (const r of rows.results) nameMap[r.sync_id] = r.name;
+  }
+  const resolved = parts.map((p) => (UUID_RE.test(p) ? (nameMap[p] ?? p) : p));
+  return resolved.length > 0 ? resolved.join(',') : null;
+}
+
 const USER_GLOBAL_TYPES = ['category', 'account', 'tag'];
 
 function isUserGlobalType(entityType: string): boolean {
@@ -1192,6 +1208,10 @@ async function applyChangeToProjection(
           .bind(ledgerId, change.entity_sync_id)
           .run();
       } else {
+        const tagPayload = (payload.tags as string) ?? null;
+        const tagIdsPayload = Array.isArray(payload.tagIds) ? payload.tagIds as string[] : null;
+        const resolvedTagsCsv = await resolveTagsCsv(db, tagPayload, tagIdsPayload);
+
         const existing = await db
           .prepare('SELECT sync_id FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
           .bind(ledgerId, change.entity_sync_id)
@@ -1224,7 +1244,7 @@ async function applyChangeToProjection(
               payload.fromAccountName ?? null,
               payload.toAccountId ?? null,
               payload.toAccountName ?? null,
-              payload.tags ?? null,
+              resolvedTagsCsv,
               payload.tagIds ? safeJsonStringify(payload.tagIds) : null,
               payload.attachments ? safeJsonStringify(payload.attachments) : null,
               payload.tx_index ?? 0,
@@ -1262,7 +1282,7 @@ async function applyChangeToProjection(
               payload.fromAccountName ?? null,
               payload.toAccountId ?? null,
               payload.toAccountName ?? null,
-              payload.tags ?? null,
+              resolvedTagsCsv,
               payload.tagIds ? safeJsonStringify(payload.tagIds) : null,
               payload.attachments ? safeJsonStringify(payload.attachments) : null,
               payload.tx_index ?? 0,

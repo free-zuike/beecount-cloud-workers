@@ -36,6 +36,22 @@ import { insertAuditLog } from '../lib/audit';
 // 辅助函数
 // ===========================
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function resolveTagsCsv(db: D1Database, tags: string | null, tagIds: string[] | null): Promise<string | null> {
+  if (!tags && !tagIds?.length) return null;
+  const parts = (tags ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  if (parts.length === 0) return null;
+  const nameMap: Record<string, string> = {};
+  const uuidParts = parts.filter((p) => UUID_RE.test(p));
+  if (uuidParts.length > 0) {
+    const rows = await db.prepare(`SELECT sync_id, name FROM read_tag_projection WHERE sync_id IN (${uuidParts.map(() => '?').join(',')})`).bind(...uuidParts).all<{ sync_id: string; name: string }>();
+    for (const r of rows.results) nameMap[r.sync_id] = r.name;
+  }
+  const resolved = parts.map((p) => (UUID_RE.test(p) ? (nameMap[p] ?? p) : p));
+  return resolved.length > 0 ? resolved.join(',') : null;
+}
+
 /** 获取当前 UTC 时间 */
 function nowUtc(): string {
   return new Date().toISOString();
@@ -496,7 +512,9 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
   const syncId = randomUUID();
   const happenedAt = typeof req.happened_at === 'string' ? req.happened_at : new Date(req.happened_at).toISOString();
 
-  // 构建 payload
+  const rawTags = typeof req.tags === 'string' ? req.tags : Array.isArray(req.tags) ? req.tags.join(',') : null;
+  const resolvedTagsCsv = await resolveTagsCsv(db, rawTags, req.tag_ids ?? null);
+
   const payload: Record<string, unknown> = {
     tx_type: req.tx_type,
     amount: req.amount,
@@ -511,7 +529,7 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     account_id: req.account_id ?? null,
     from_account_id: req.from_account_id ?? null,
     to_account_id: req.to_account_id ?? null,
-    tags: typeof req.tags === 'string' ? req.tags : Array.isArray(req.tags) ? req.tags.join(',') : null,
+    tags: resolvedTagsCsv,
     tag_ids: req.tag_ids ?? null,
     attachments: req.attachments ?? null,
   };
@@ -557,7 +575,7 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
       req.from_account_name ?? null,
       req.to_account_id ?? null,
       req.to_account_name ?? null,
-      typeof req.tags === 'string' ? req.tags : Array.isArray(req.tags) ? req.tags.join(',') : null,
+      resolvedTagsCsv,
       req.tag_ids ? safeJsonStringify(req.tag_ids) : null,
       req.attachments ? safeJsonStringify(req.attachments) : null,
       0,
@@ -872,8 +890,10 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   if (req.account_id !== undefined) newPayload.account_id = req.account_id;
   if (req.from_account_id !== undefined) newPayload.from_account_id = req.from_account_id;
   if (req.to_account_id !== undefined) newPayload.to_account_id = req.to_account_id;
-  if (req.tags !== undefined)
-    newPayload.tags = typeof req.tags === 'string' ? req.tags : Array.isArray(req.tags) ? req.tags.join(',') : null;
+  if (req.tags !== undefined) {
+    const rawTags = typeof req.tags === 'string' ? req.tags : Array.isArray(req.tags) ? req.tags.join(',') : null;
+    newPayload.tags = await resolveTagsCsv(db, rawTags, req.tag_ids ?? null);
+  }
   if (req.tag_ids !== undefined) newPayload.tag_ids = req.tag_ids;
   if (req.attachments !== undefined) newPayload.attachments = req.attachments;
 
