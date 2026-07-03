@@ -363,7 +363,7 @@ CREATE INDEX IF NOT EXISTS ix_read_tx_ledger_account ON read_tx_projection(ledge
 CREATE INDEX IF NOT EXISTS ix_read_tx_user_time ON read_tx_projection(user_id, happened_at DESC);
 
 CREATE TABLE IF NOT EXISTS read_account_projection (
-    ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+    ledger_id TEXT,
     sync_id TEXT NOT NULL,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT,
@@ -381,7 +381,7 @@ CREATE TABLE IF NOT EXISTS read_account_projection (
 );
 
 CREATE TABLE IF NOT EXISTS read_category_projection (
-    ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+    ledger_id TEXT,
     sync_id TEXT NOT NULL,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT,
@@ -401,7 +401,7 @@ CREATE TABLE IF NOT EXISTS read_category_projection (
 CREATE INDEX IF NOT EXISTS ix_read_cat_ledger_kind ON read_category_projection(ledger_id, kind);
 
 CREATE TABLE IF NOT EXISTS read_tag_projection (
-    ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+    ledger_id TEXT,
     sync_id TEXT NOT NULL,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT,

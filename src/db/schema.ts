@@ -409,7 +409,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS read_account_projection (
-        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        ledger_id TEXT,
         sync_id TEXT NOT NULL,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         name TEXT,
@@ -429,7 +429,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS read_category_projection (
-        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        ledger_id TEXT,
         sync_id TEXT NOT NULL,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         name TEXT,
@@ -451,7 +451,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS read_tag_projection (
-        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        ledger_id TEXT,
         sync_id TEXT NOT NULL,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         name TEXT,

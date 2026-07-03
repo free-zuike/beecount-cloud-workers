@@ -1030,7 +1030,7 @@ async function applyUserChangeToProjection(
           parent_name, source_change_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
-        '', entity_sync_id, userId, payload.name ?? null, payload.kind ?? null,
+        null, entity_sync_id, userId, payload.name ?? null, payload.kind ?? null,
         payload.level ?? null, payload.sort_order ?? null, payload.icon ?? null,
         payload.icon_type ?? null, payload.custom_icon_path ?? null,
         payload.icon_cloud_file_id ?? null, payload.icon_cloud_sha256 ?? null,
@@ -1060,7 +1060,7 @@ async function applyUserChangeToProjection(
           note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
-        '', entity_sync_id, userId, payload.name ?? null, payload.account_type ?? null,
+        null, entity_sync_id, userId, payload.name ?? null, payload.account_type ?? null,
         payload.currency ?? null, payload.initial_balance ?? 0, payload.note ?? null,
         payload.credit_limit ?? null, payload.billing_day ?? null,
         payload.payment_due_day ?? null, payload.bank_name ?? null,
@@ -1079,7 +1079,7 @@ async function applyUserChangeToProjection(
       await db.prepare(
         `INSERT INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
          VALUES (?, ?, ?, ?, ?, ?)`
-      ).bind('', entity_sync_id, userId, payload.name ?? null, payload.color ?? null, change.change_id ?? 0).run();
+      ).bind(null, entity_sync_id, userId, payload.name ?? null, payload.color ?? null, change.change_id ?? 0).run();
     }
   }
 }
