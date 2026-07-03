@@ -623,10 +623,10 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
-    .bind(userId, ledger.id, 'account', accountSyncId, 'upsert', safeJsonStringify({
+    .bind(userId, 'account', accountSyncId, 'upsert', safeJsonStringify({
       name: req.name,
       account_type: req.account_type ?? null,
       currency: req.currency ?? null,
