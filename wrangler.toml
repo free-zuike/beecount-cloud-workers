@@ -21,7 +21,7 @@ class_name = "BeeCountDO"
 
 [[r2_buckets]]
 binding = "R2"
-bucket_name = "beecount-avatars"
+bucket_name = "beecountstorage"
 
 [[migrations]]
 tag = "v3"
