@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import { validateAccessToken } from '../auth';
-import { getWsManager } from '../lib/ws-manager';
 
 type Bindings = {
   JWT_SECRET: string;
@@ -26,9 +25,17 @@ wsRouter.get('/', async (c) => {
       return c.json({ error: 'Expected WebSocket upgrade' }, 426);
     }
 
-    // Workers 无状态模式不支持 WebSocketPair 持久连接
-    // APP 会自动回退到 HTTP 轮询（sync/pull），返回 503 让 APP 快速切换
-    return c.json({ error: 'WebSocket not supported in stateless mode. Use HTTP polling.' }, 503);
+    // 通过 Durable Object 处理 WebSocket 连接
+    const userId = validationResult.userId;
+    const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
+    const doStub = c.env.BEECOUNT_DO.get(doId);
+
+    // 将请求转发给 DO 的 /ws 路径
+    const doUrl = new URL(c.req.url);
+    doUrl.pathname = '/ws';
+    const doReq = new Request(doUrl.toString(), c.req);
+
+    return doStub.fetch(doReq);
   } catch (error) {
     console.error('[WS] Connection error:', error);
     return c.json({ error: 'WebSocket connection failed' }, 500);

@@ -155,6 +155,7 @@ type SyncPushResponse = {
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
+  BEECOUNT_DO: DurableObjectNamespace;
 };
 
 type Variables = {
@@ -603,7 +604,26 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       details: { accepted, rejected, conflict_count: conflictCount, device_id: deviceId },
     });
 
-    // WS 广播 sync_change 给同一用户的所有设备
+    // WS 广播 sync_change 给同一用户的所有设备（通过 Durable Object）
+    try {
+      const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
+      const doStub = c.env.BEECOUNT_DO.get(doId);
+      await doStub.fetch(new Request(`https://dummy/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: JSON.stringify({
+            type: 'sync_change',
+            serverCursor: maxCursor,
+            serverTimestamp: serverNow,
+          }),
+        }),
+      }));
+    } catch (e) {
+      console.log('[SYNC] DO broadcast failed (non-fatal):', e);
+    }
+
+    // 同时广播到内存 WS manager（兼容同 isolate 内的连接）
     try {
       const { getWsManager } = await import('../lib/ws-manager');
       await getWsManager().broadcastToUser(userId, {

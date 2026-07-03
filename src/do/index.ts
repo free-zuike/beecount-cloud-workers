@@ -82,8 +82,11 @@ export class BeeCountDO extends DurableObject {
   // WebSocket 事件
   async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer): Promise<void> {
     const msg = typeof data === 'string' ? data : new TextDecoder().decode(data);
-    for (const ws of this.ctx.getWebSockets()) {
-      if (ws !== ws && ws.readyState === WebSocket.OPEN) ws.send(msg);
+    // 广播给所有连接的客户端
+    for (const socket of this.ctx.getWebSockets()) {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(msg);
+      }
     }
   }
 
