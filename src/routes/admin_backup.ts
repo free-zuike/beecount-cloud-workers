@@ -1391,7 +1391,10 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
           const parsedConfig = JSON.parse(configStr);
           console.log('[Backup] parsedConfig keys:', Object.keys(parsedConfig));
           console.log('[Backup] parsedConfig.root_path:', parsedConfig.root_path);
-          if (Object.keys(parsedConfig).length > 0 && parsedConfig.bucket) {
+          const hasConfig = Object.keys(parsedConfig).length > 0;
+          const hasS3Config = parsedConfig.bucket && parsedConfig.access_key_id && parsedConfig.secret_access_key;
+          const isR2Type = remote.backend_type === 'r2';
+          if (hasConfig && (hasS3Config || isR2Type)) {
             console.log('[Backup] Found remote config:', remote.backend_type);
             remoteConfig = {
               backend_type: remote.backend_type,

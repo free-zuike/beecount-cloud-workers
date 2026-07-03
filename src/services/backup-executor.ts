@@ -346,8 +346,17 @@ export async function performBackup(
       if (!r2) {
         return { success: false, message: 'R2 bucket not configured' };
       }
+
+      let basePrefix = '';
+      if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' &&
+          remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
+        basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+      } else if (remoteConfig.root_path && typeof remoteConfig.root_path === 'string' && remoteConfig.root_path.trim() !== '') {
+        basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+      }
+
       const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `backups/${ledgerId}/${timestamp}_backup.json`;
+      const backupKey = `${basePrefix}backups/${ledgerId}/${timestamp}_backup.json`;
       await r2.put(backupKey, backupContent, { httpMetadata: { contentType: 'application/json' } });
       return {
         success: true,
