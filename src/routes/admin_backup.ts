@@ -29,6 +29,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
+import { randomUUID } from 'crypto';
 import { getFirstEnabledS3Config } from './sys_config';
 import { signS3Request } from '../lib/s3';
 import { performBackup, calculateNextRun } from '../services/backup-executor';
@@ -620,15 +621,17 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
   const db = c.env.DB;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
+  const remoteId = randomUUID();
 
   const configJson = JSON.stringify(req.config);
 
-  const result = await db
+  await db
     .prepare(
-      `INSERT INTO backup_remotes (name, backend_type, config_summary, encrypted, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO backup_remotes (id, name, backend_type, config_summary, encrypted, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
+      remoteId,
       req.name,
       req.backend_type,
       configJson,
@@ -637,8 +640,6 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
       serverNow
     )
     .run();
-
-  const remoteId = (result as any).lastRowId;
 
   if (req.is_default) {
     await db
