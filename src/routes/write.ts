@@ -642,25 +642,38 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
 
   const newChangeId = changeResult.meta.last_row_id as number;
 
-  await db
-    .prepare(
-      `INSERT INTO read_account_projection
-       (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
-        note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(ledger_id, sync_id) DO UPDATE SET name = ?, account_type = ?, currency = ?, initial_balance = ?,
-        note = ?, credit_limit = ?, billing_day = ?, payment_due_day = ?, bank_name = ?, card_last_four = ?, source_change_id = ?`
-    )
-    .bind(
-      ledger.id, accountSyncId, userId, req.name, req.account_type ?? null,
-      req.currency ?? null, req.initial_balance ?? 0, req.note ?? null,
-      req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
-      req.bank_name ?? null, req.card_last_four ?? null, newChangeId,
-      req.name, req.account_type ?? null, req.currency ?? null, req.initial_balance ?? 0, req.note ?? null,
-      req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
-      req.bank_name ?? null, req.card_last_four ?? null, newChangeId,
-    )
-    .run();
+  const existingAccount = await db
+    .prepare('SELECT sync_id FROM read_account_projection WHERE sync_id = ? AND user_id = ? AND ledger_id IS NULL')
+    .bind(accountSyncId, userId)
+    .first();
+
+  if (existingAccount) {
+    await db
+      .prepare(
+        `UPDATE read_account_projection SET
+         name = ?, account_type = ?, currency = ?, initial_balance = ?,
+         note = ?, credit_limit = ?, billing_day = ?, payment_due_day = ?,
+         bank_name = ?, card_last_four = ?, source_change_id = ?
+         WHERE sync_id = ? AND user_id = ? AND ledger_id IS NULL`
+      )
+      .bind(req.name, req.account_type ?? null, req.currency ?? null, req.initial_balance ?? 0,
+        req.note ?? null, req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
+        req.bank_name ?? null, req.card_last_four ?? null, newChangeId, accountSyncId, userId)
+      .run();
+  } else {
+    await db
+      .prepare(
+        `INSERT INTO read_account_projection
+         (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+          note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
+         VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(accountSyncId, userId, req.name, req.account_type ?? null,
+        req.currency ?? null, req.initial_balance ?? 0, req.note ?? null,
+        req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
+        req.bank_name ?? null, req.card_last_four ?? null, newChangeId)
+      .run();
+  }
 
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'update', entityType: 'account', entityId: accountSyncId,
