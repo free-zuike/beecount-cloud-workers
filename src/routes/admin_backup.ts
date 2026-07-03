@@ -1065,7 +1065,7 @@ backupRouter.get('/schedules', async (c) => {
          ORDER BY s.created_at DESC`
       )
       .all<{
-        id: number;
+        id: string;
         name: string;
         user_id: string;
         cron_expr: string;
@@ -1091,7 +1091,7 @@ backupRouter.get('/schedules', async (c) => {
          ORDER BY s.created_at DESC`
       )
       .all<{
-        id: number;
+        id: string;
         name: string;
         user_id: string;
         cron_expr: string;
@@ -1112,7 +1112,7 @@ backupRouter.get('/schedules', async (c) => {
       } catch {}
     }
     return {
-      id: Number(row.id),
+      id: String(row.id),
       name: row.name,
       cron_expr: row.cron_expr,
       retention_days: row.retention_days ?? 30,
