@@ -571,7 +571,7 @@ workspaceRouter.get('/tags', async (c) => {
 
   // 预聚合每个 tag 的 tx 统计
   const tagStats: Record<string, { tx_count: number; expense_total: number; income_total: number }> = {};
-  const tagRowsForStats = await db.prepare(`SELECT sync_id FROM read_tag_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`).bind(...ledgerInternalIds).all<{ sync_id: string }>();
+  const tagRowsForStats = await db.prepare(`SELECT sync_id FROM read_tag_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`).bind(...ledgerInternalIds).all<{ sync_id: string }>();
   const tagSyncIds = tagRowsForStats.results.map(r => r.sync_id);
 
   if (tagSyncIds.length > 0) {
