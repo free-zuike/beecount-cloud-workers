@@ -713,10 +713,10 @@ writeRouter.delete('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteBa
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
-    .bind(userId, ledger.id, 'account', accountSyncId, 'delete', '{}', serverNow, userId)
+    .bind(userId, 'account', accountSyncId, 'delete', '{}', serverNow, userId)
     .run();
 
   const newChangeId = changeResult.meta.last_row_id as number;
@@ -763,10 +763,10 @@ writeRouter.patch('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteTagUpda
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
-    .bind(userId, ledger.id, 'tag', tagSyncId, 'upsert', safeJsonStringify({ name: req.name, color: req.color ?? null }), serverNow, userId)
+    .bind(userId, 'tag', tagSyncId, 'upsert', safeJsonStringify({ name: req.name, color: req.color ?? null }), serverNow, userId)
     .run();
 
   const newChangeId = changeResult.meta.last_row_id as number;
@@ -819,10 +819,10 @@ writeRouter.delete('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteBaseSc
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
-    .bind(userId, ledger.id, 'tag', tagSyncId, 'delete', '{}', serverNow, userId)
+    .bind(userId, 'tag', tagSyncId, 'delete', '{}', serverNow, userId)
     .run();
 
   const newChangeId = changeResult.meta.last_row_id as number;
@@ -1064,10 +1064,10 @@ writeRouter.post('/ledgers/:ledgerId/accounts', zValidator('json', WriteAccountC
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
-    .bind(userId, ledger.id, 'account', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
+    .bind(userId, 'account', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
     .run();
 
   const newChangeId = changeResult.meta.last_row_id as number;
@@ -1158,10 +1158,10 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
-    .bind(userId, ledger.id, 'category', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
+    .bind(userId, 'category', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
     .run();
 
   const newChangeId = changeResult.meta.last_row_id as number;
@@ -1220,10 +1220,10 @@ writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteC
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
-    .bind(userId, ledger.id, 'category', categorySyncId, 'upsert', safeJsonStringify({
+    .bind(userId, 'category', categorySyncId, 'upsert', safeJsonStringify({
       name: req.name,
       kind: req.kind,
       level: req.level ?? null,
@@ -1300,10 +1300,10 @@ writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', Write
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
-    .bind(userId, ledger.id, 'category', categorySyncId, 'delete', '{}', serverNow, userId)
+    .bind(userId, 'category', categorySyncId, 'delete', '{}', serverNow, userId)
     .run();
 
   const newChangeId = changeResult.meta.last_row_id as number;
@@ -1355,10 +1355,10 @@ writeRouter.post('/ledgers/:ledgerId/tags', zValidator('json', WriteTagCreateSch
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
-    .bind(userId, ledger.id, 'tag', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
+    .bind(userId, 'tag', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
     .run();
 
   const newChangeId = changeResult.meta.last_row_id as number;
@@ -1734,10 +1734,10 @@ writeRouter.post('/categories/init-defaults', async (c) => {
     await db
       .prepare(
         `INSERT INTO sync_changes
-         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
       )
-      .bind(userId, ledger.id, 'category', parentSyncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
+      .bind(userId, 'category', parentSyncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
       .run();
 
     await db
@@ -1772,10 +1772,10 @@ writeRouter.post('/categories/init-defaults', async (c) => {
         await db
           .prepare(
             `INSERT INTO sync_changes
-             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+             VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
           )
-          .bind(userId, ledger.id, 'category', childSyncId, 'upsert', safeJsonStringify(childPayload), serverNow, userId)
+          .bind(userId, 'category', childSyncId, 'upsert', safeJsonStringify(childPayload), serverNow, userId)
           .run();
 
         await db
