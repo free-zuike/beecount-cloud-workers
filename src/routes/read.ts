@@ -525,7 +525,7 @@ readRouter.get('/workspace/transactions', async (c) => {
       amount: row.amount as number,
       happened_at: row.happened_at as string,
       note: row.note as string | null,
-      tags_list: tagIds,
+      tags_list: parseTagsCsv(row.tags_csv as string | null),
       attachments: attachments,
       account_id: row.account_id as string | null,
       account_name: row.account_name as string | null,
