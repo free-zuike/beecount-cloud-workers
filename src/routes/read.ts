@@ -843,14 +843,33 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
   console.log('[READ] All transactions for ledger_id:', ledger.id, JSON.stringify(allTx.results));
 
   // 构建查询
+  let ledgerTxQuery = 'SELECT * FROM read_tx_projection WHERE ledger_id = ?';
+  const ledgerTxBindings: (string | number)[] = [ledger.id];
+
+  if (txType) {
+    ledgerTxQuery += ' AND tx_type = ?';
+    ledgerTxBindings.push(txType);
+  }
+  if (q) {
+    ledgerTxQuery += ' AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ?)';
+    const like = `%${q}%`;
+    ledgerTxBindings.push(like, like, like);
+  }
+  if (startAt) {
+    ledgerTxQuery += ' AND happened_at >= ?';
+    ledgerTxBindings.push(startAt);
+  }
+  if (endAt) {
+    ledgerTxQuery += ' AND happened_at <= ?';
+    ledgerTxBindings.push(endAt);
+  }
+
+  ledgerTxQuery += ' ORDER BY happened_at DESC, tx_index DESC LIMIT ? OFFSET ?';
+  ledgerTxBindings.push(limit, offset);
+
   const rows = await db
-    .prepare(
-      `SELECT * FROM read_tx_projection
-       WHERE ledger_id = ?
-       ORDER BY happened_at DESC, tx_index DESC
-       LIMIT ? OFFSET ?`
-    )
-    .bind(ledger.id, limit, offset)
+    .prepare(ledgerTxQuery)
+    .bind(...ledgerTxBindings)
     .all<Record<string, unknown>>();
 
   console.log('[READ] Found transactions:', rows.results.length);

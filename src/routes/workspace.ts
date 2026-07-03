@@ -398,6 +398,11 @@ workspaceRouter.get('/accounts', async (c) => {
   let acctQuery = `SELECT * FROM read_account_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`;
   const acctParams: string[] = [...ledgerInternalIds];
 
+  if (filterUserId) {
+    acctQuery += ' AND user_id = ?';
+    acctParams.push(filterUserId);
+  }
+
   if (q) {
     acctQuery += ' AND name LIKE ?';
     acctParams.push(`%${q}%`);
@@ -421,9 +426,9 @@ workspaceRouter.get('/accounts', async (c) => {
         COALESCE(SUM(CASE WHEN tx_type = 'income' AND account_sync_id = ? THEN amount ELSE 0 END), 0) as income_in,
         COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND from_account_sync_id = ? THEN amount ELSE 0 END), 0) as expense_transfer,
         COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND to_account_sync_id = ? THEN amount ELSE 0 END), 0) as income_transfer,
-        COUNT(*) as tx_count
+        COUNT(CASE WHEN account_sync_id = ? OR from_account_sync_id = ? OR to_account_sync_id = ? THEN 1 END) as tx_count
       FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})
-    `).bind(accountSyncId, accountSyncId, accountSyncId, accountSyncId, ...ledgerInternalIds).first<{ expense_in: number; income_in: number; expense_transfer: number; income_transfer: number; tx_count: number }>();
+    `).bind(accountSyncId, accountSyncId, accountSyncId, accountSyncId, accountSyncId, accountSyncId, accountSyncId, ...ledgerInternalIds).first<{ expense_in: number; income_in: number; expense_transfer: number; income_transfer: number; tx_count: number }>();
 
     const incomeTotal = (txStats?.income_in ?? 0) + (txStats?.income_transfer ?? 0);
     const expenseTotal = (txStats?.expense_in ?? 0) + (txStats?.expense_transfer ?? 0);
