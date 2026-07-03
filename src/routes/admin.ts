@@ -988,7 +988,9 @@ adminRouter.get('/integrity/scan', async (c) => {
          FROM sync_changes sc
          LEFT JOIN ledgers l ON l.id = sc.ledger_id
          LEFT JOIN users u ON u.id = l.user_id
-         WHERE NOT EXISTS (SELECT 1 FROM ledgers l WHERE l.id = sc.ledger_id)
+         WHERE sc.ledger_id IS NOT NULL
+           AND sc.entity_type NOT IN ('category', 'account', 'tag')
+           AND NOT EXISTS (SELECT 1 FROM ledgers l WHERE l.id = sc.ledger_id)
          GROUP BY sc.ledger_id
          LIMIT 10`
       )
