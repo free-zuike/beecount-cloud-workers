@@ -260,7 +260,6 @@ type Bindings = {
     DB: D1Database;
     JWT_SECRET: string;
     R2?: R2Bucket;
-    R2_ATTACHMENTS?: R2Bucket;
     S3_ENDPOINT?: string;
     S3_REGION?: string;
     S3_ACCESS_KEY_ID?: string;
@@ -365,11 +364,11 @@ const handleUpload = async (c: any) => {
             if (!uploadSuccess) {
                 return c.json({ error: 'Failed to upload to S3' }, 500);
             }
-        } else if (c.env.R2_ATTACHMENTS) {
-            // 使用 R2 存储附件
+        } else if (c.env.R2) {
+            // 使用 R2 存储附件（与头像共用同一 bucket，不同目录）
             const r2Key = `attachments/${ledger.external_id}/${fileId}_${actualFileName}`;
             console.log('[ATTACHMENT] Uploading to R2, key:', r2Key);
-            await c.env.R2_ATTACHMENTS.put(r2Key, fileBuffer, {
+            await c.env.R2.put(r2Key, fileBuffer, {
                 httpMetadata: { contentType: mimeType }
             });
             console.log('[ATTACHMENT] R2 upload successful');
@@ -543,8 +542,8 @@ attachmentsRouter.get('/:id', async (c) => {
         }
     }
 
-    // 尝试从 R2 下载
-    if (c.env.R2_ATTACHMENTS) {
+    // 尝试从 R2 下载（与头像共用同一 bucket）
+    if (c.env.R2) {
         // 尝试多种存储路径格式
         const possiblePaths = [
             row.storage_path,
@@ -552,7 +551,7 @@ attachmentsRouter.get('/:id', async (c) => {
         ];
         for (const key of possiblePaths) {
             if (!key) continue;
-            const obj = await c.env.R2_ATTACHMENTS.get(key);
+            const obj = await c.env.R2.get(key);
             if (obj) {
                 return new Response(obj.body, {
                     headers: {

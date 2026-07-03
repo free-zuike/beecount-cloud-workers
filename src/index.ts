@@ -37,7 +37,6 @@ type Bindings = {
   ASSETS: { fetch: (request: Request) => Promise<Response> };
   BEECOUNT_DO: DurableObjectNamespace;
   R2: R2Bucket;
-  R2_ATTACHMENTS: R2Bucket;
   API_PREFIX: string;
   JWT_SECRET: string;
   CORS_ORIGINS?: string;

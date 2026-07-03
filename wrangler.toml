@@ -23,10 +23,6 @@ class_name = "BeeCountDO"
 binding = "R2"
 bucket_name = "beecount-avatars"
 
-[[r2_buckets]]
-binding = "R2_ATTACHMENTS"
-bucket_name = "beecount-attachments"
-
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["BeeCountDO"]
