@@ -375,6 +375,7 @@ twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (
   }
 
   const decryptedSecret = await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret);
+  console.log('[2FA] confirm: userId=', userId, 'secret_len=', decryptedSecret?.length, 'code=', code);
   const isValid = await verifyTotpCode(decryptedSecret, code);
   if (!isValid) {
     return c.json({ error: 'Invalid TOTP code.' }, 400);
