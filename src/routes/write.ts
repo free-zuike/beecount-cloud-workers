@@ -62,6 +62,13 @@ function safeJsonStringify(obj: unknown): string {
   return JSON.stringify(obj);
 }
 
+/** 查找账本：先试 external_id，再试内部 id */
+async function findLedger(db: D1Database, userId: string, ledgerId: string): Promise<{ id: string; external_id: string } | null> {
+  const byExt = await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?').bind(userId, ledgerId).first<{ id: string; external_id: string }>();
+  if (byExt) return byExt;
+  return db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND id = ?').bind(userId, ledgerId).first<{ id: string; external_id: string }>();
+}
+
 // ===========================
 // Schema 定义
 // ===========================
@@ -486,13 +493,10 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
 
   console.log('[WRITE] /transactions POST called, userId:', userId, 'req:', JSON.stringify(req));
 
-  // 查找账本 - 如果提供了 ledger_id，使用它；否则使用用户的第一个账本
+  // 查找账本 - 先试 external_id，再试内部 id
   let ledger;
   if (req.ledger_id) {
-    ledger = await db
-      .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
-      .bind(userId, req.ledger_id)
-      .first<{ id: string; external_id: string }>();
+    ledger = await findLedger(db, userId, req.ledger_id);
   }
   
   // 如果没有指定账本或找不到，使用用户的第一个账本
@@ -861,14 +865,14 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   const userId = c.get('userId');
   const db = c.env.DB;
   const txSyncId = c.req.param('id');
+  const ledgerIdParam = c.req.param('ledgerId');
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
   // 查找账本
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  const ledger = ledgerIdParam
+    ? await findLedger(db, userId, ledgerIdParam)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
@@ -988,13 +992,13 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
   const userId = c.get('userId');
   const db = c.env.DB;
   const txSyncId = c.req.param('id');
+  const ledgerIdParam = c.req.param('ledgerId');
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  const ledger = ledgerIdParam
+    ? await findLedger(db, userId, ledgerIdParam)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
