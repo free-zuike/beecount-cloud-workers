@@ -516,22 +516,24 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
   const resolvedTagsCsv = await resolveTagsCsv(db, rawTags, req.tag_ids ?? null);
 
   const payload: Record<string, unknown> = {
-    tx_type: req.tx_type,
+    syncId: syncId,
+    type: req.tx_type,
     amount: req.amount,
-    happened_at: happenedAt,
+    happenedAt: happenedAt,
     note: req.note ?? null,
-    category_name: req.category_name ?? null,
-    category_kind: req.category_kind ?? null,
-    account_name: req.account_name ?? null,
-    from_account_name: req.from_account_name ?? null,
-    to_account_name: req.to_account_name ?? null,
-    category_id: req.category_id ?? null,
-    account_id: req.account_id ?? null,
-    from_account_id: req.from_account_id ?? null,
-    to_account_id: req.to_account_id ?? null,
+    categoryName: req.category_name ?? null,
+    categoryKind: req.category_kind ?? null,
+    accountName: req.account_name ?? null,
+    fromAccountName: req.from_account_name ?? null,
+    toAccountName: req.to_account_name ?? null,
+    categoryId: req.category_id ?? null,
+    accountId: req.account_id ?? null,
+    fromAccountId: req.from_account_id ?? null,
+    toAccountId: req.to_account_id ?? null,
     tags: resolvedTagsCsv,
-    tag_ids: req.tag_ids ?? null,
+    tagIds: req.tag_ids ?? null,
     attachments: req.attachments ?? null,
+    ledgerSyncId: ledger.external_id,
   };
 
   // 写入 SyncChange
@@ -891,23 +893,23 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   if (req.tx_type !== undefined) newPayload.tx_type = req.tx_type;
   if (req.amount !== undefined) newPayload.amount = req.amount;
   if (req.happened_at !== undefined)
-    newPayload.happened_at =
+    newPayload.happenedAt =
       typeof req.happened_at === 'string' ? req.happened_at : req.happened_at ? req.happened_at.toISOString() : null;
   if (req.note !== undefined) newPayload.note = req.note;
-  if (req.category_name !== undefined) newPayload.category_name = req.category_name;
-  if (req.category_kind !== undefined) newPayload.category_kind = req.category_kind;
-  if (req.account_name !== undefined) newPayload.account_name = req.account_name;
-  if (req.from_account_name !== undefined) newPayload.from_account_name = req.from_account_name;
-  if (req.to_account_name !== undefined) newPayload.to_account_name = req.to_account_name;
-  if (req.category_id !== undefined) newPayload.category_id = req.category_id;
-  if (req.account_id !== undefined) newPayload.account_id = req.account_id;
-  if (req.from_account_id !== undefined) newPayload.from_account_id = req.from_account_id;
-  if (req.to_account_id !== undefined) newPayload.to_account_id = req.to_account_id;
+  if (req.category_name !== undefined) newPayload.categoryName = req.category_name;
+  if (req.category_kind !== undefined) newPayload.categoryKind = req.category_kind;
+  if (req.account_name !== undefined) newPayload.accountName = req.account_name;
+  if (req.from_account_name !== undefined) newPayload.fromAccountName = req.from_account_name;
+  if (req.to_account_name !== undefined) newPayload.toAccountName = req.to_account_name;
+  if (req.category_id !== undefined) newPayload.categoryId = req.category_id;
+  if (req.account_id !== undefined) newPayload.accountId = req.account_id;
+  if (req.from_account_id !== undefined) newPayload.fromAccountId = req.from_account_id;
+  if (req.to_account_id !== undefined) newPayload.toAccountId = req.to_account_id;
   if (req.tags !== undefined) {
     const rawTags = typeof req.tags === 'string' ? req.tags : Array.isArray(req.tags) ? req.tags.join(',') : null;
     newPayload.tags = await resolveTagsCsv(db, rawTags, req.tag_ids ?? null);
   }
-  if (req.tag_ids !== undefined) newPayload.tag_ids = req.tag_ids;
+  if (req.tag_ids !== undefined) newPayload.tagIds = req.tag_ids;
   if (req.attachments !== undefined) newPayload.attachments = req.attachments;
 
   // 写入 SyncChange
