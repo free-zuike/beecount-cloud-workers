@@ -134,7 +134,12 @@ async function callAiChatJson(
   
   const data = await response.json() as {
     choices?: Array<{ message?: { content?: string } }>;
+    error?: { message?: string; code?: string | number; type?: string };
   };
+
+  if (data.error) {
+    throw new Error(`AI API error: ${data.error.code || 'unknown'} - ${data.error.message || JSON.stringify(data.error)}`);
+  }
   
   const content = data.choices?.[0]?.message?.content ?? '';
   return content;

@@ -838,10 +838,11 @@ workspaceRouter.get('/analytics', async (c) => {
     const year = parseInt(yearStr, 10);
     const month = parseInt(monthStr, 10);
     if (year && month) {
-      const startAt = `${year}-${String(month).padStart(2, '0')}-01T00:00:00Z`;
-      const endMonth = month === 12 ? 1 : month + 1;
-      const endYear = month === 12 ? year + 1 : year;
-      const endAt = `${endYear}-${String(endMonth).padStart(2, '0')}-01T00:00:00Z`;
+      // 用时区偏移计算本地月份边界，再转回UTC
+      const localStart = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0) - tzOffsetMinutes * 60000);
+      const localEnd = new Date(Date.UTC(year, month, 1, 0, 0, 0) - tzOffsetMinutes * 60000);
+      const startAt = localStart.toISOString();
+      const endAt = localEnd.toISOString();
       txQuery += ' AND happened_at >= ? AND happened_at < ?';
       txParams.push(startAt, endAt);
     }
