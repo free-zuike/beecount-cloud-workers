@@ -103,9 +103,19 @@ async function callAiChatJson(
   apiKey: string,
   model: string,
   messages: Array<{ role: string; content: string | Array<unknown> }>,
-  timeout: number = 30000
+  timeout: number = 30000,
+  useJsonFormat: boolean = true
 ): Promise<string> {
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    temperature: 0.2,
+  };
+  if (useJsonFormat) {
+    body.response_format = { type: 'json_object' };
+  }
   
   const response = await fetch(url, {
     method: 'POST',
@@ -113,12 +123,7 @@ async function callAiChatJson(
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.2,
-      response_format: { type: 'json_object' },
-    }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeout),
   });
   
@@ -740,8 +745,18 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
       { role: 'user', content: 'Hi' }
     ];
     
-    const content = await callAiChatJson(baseUrl, apiKey, model || 'gpt-3.5-turbo', messages, 10000);
+    const content = await callAiChatJson(baseUrl, apiKey, model || 'gpt-3.5-turbo', messages, 10000, false);
     
+    if (!content || content.trim().length === 0) {
+      return c.json({
+        success: false,
+        error_code: 'AI_TEST_EMPTY_RESPONSE',
+        error_message: 'AI provider returned empty response',
+        latency_ms: Date.now() - startTime,
+        preview: '',
+      });
+    }
+
     return c.json({
       success: true,
       latency_ms: Date.now() - startTime,

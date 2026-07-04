@@ -209,7 +209,13 @@ export function AboutDialog({ open, onOpenChange }: Props) {
         `${GITHUB_API_BASE}/releases?per_page=${PAGE_SIZE}&page=${p}`,
         { headers: { Accept: 'application/vnd.github+json' } },
       )
-      if (!res.ok) throw new Error(`GitHub ${res.status}`)
+      if (!res.ok) {
+        if (res.status === 403 || res.status === 401) {
+          setError('GitHub API 速率限制，请稍后再试')
+          return
+        }
+        throw new Error(`GitHub ${res.status}`)
+      }
       const data = (await res.json()) as GithubRelease[]
       const cleaned = data.filter((r) => !r.draft)
       setReleases((prev) => (p === 1 ? cleaned : [...prev, ...cleaned]))
