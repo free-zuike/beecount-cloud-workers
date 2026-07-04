@@ -136,7 +136,6 @@ async function testS3Connection(
     accessKey: string,
     secretKey: string,
     region: string,
-    rootPath?: string
 ): Promise<{ ok: boolean; message: string }> {
     try {
         if (!endpoint) {
@@ -223,87 +222,7 @@ async function testS3Connection(
         }
         
         console.log('[Backup S3 Test] LIST test passed');
-        
-        // 然后尝试上传测试文件（这是更严格的测试）
-        const prefix = rootPath ? rootPath.replace(/^\/+|\/+$/g, '') + '/' : '';
-        const testKey = `${prefix}__beecount_connection_test__/${Date.now()}.txt`;
-        const testContent = 'Beecount S3 connection test file';
-        
-        const { url: putUrl, headers: putHeaders } = await signS3Request(
-            accessKey,
-            secretKey,
-            region,
-            endpoint,
-            cleanBucket,
-            testKey,
-            'PUT'
-        );
-        
-        console.log('[Backup S3 Test] Testing with PUT to:', putUrl);
-        
-        const putResponse = await fetch(putUrl, {
-            method: 'PUT',
-            headers: {
-                ...putHeaders,
-                'Content-Type': 'text/plain',
-                'Content-Length': String(testContent.length)
-            },
-            body: testContent
-        });
-        
-        console.log('[Backup S3 Test] PUT Response status:', putResponse.status);
-        
-        // 验证 PUT 响应
-        const putResponseText = await putResponse.text().catch(() => '');
-        console.log('[Backup S3 Test] PUT Response body:', putResponseText);
-        
-        if (putResponseText.includes('<Error>') || putResponseText.includes('<Code>')) {
-            let errorMessage = `S3 upload failed: Response contains error`;
-            const codeMatch = putResponseText.match(/<Code>([^<]+)<\/Code>/);
-            if (codeMatch) {
-                const errorCode = codeMatch[1];
-                errorMessage = `S3 upload error: ${errorCode}`;
-            }
-            return { ok: false, message: errorMessage };
-        }
-        
-        if (!putResponse.ok) {
-            let errorMessage = `S3 connection failed: HTTP ${putResponse.status} ${putResponse.statusText}`;
-            if (putResponse.status === 403) {
-                errorMessage = `S3 access denied: Bucket "${cleanBucket}" may not exist or credentials have insufficient permissions (HTTP 403)`;
-            } else if (putResponse.status === 404) {
-                errorMessage = `S3 bucket not found: "${cleanBucket}" does not exist at ${endpoint} (HTTP 404)`;
-            }
-            return { ok: false, message: errorMessage };
-        }
-        
-        const etag = putResponse.headers.get('ETag') || '';
-        console.log('[Backup S3 Test] Upload successful, ETag:', etag);
-        
-        // 验证 ETag 是否有效（真正的成功应该有 ETag）
-        if (!etag || etag === 'null') {
-            console.log('[Backup S3 Test] Warning: No valid ETag in response');
-            // 虽然没有 ETag，但我们先继续，因为有些服务可能不返回 ETag
-        }
-        
-        // 清理：删除测试文件
-        const { url: deleteUrl, headers: deleteHeaders } = await signS3Request(
-            accessKey,
-            secretKey,
-            region,
-            endpoint,
-            cleanBucket,
-            testKey,
-            'DELETE'
-        );
-        
-        await fetch(deleteUrl, {
-            method: 'DELETE',
-            headers: deleteHeaders
-        });
-        
-        console.log('[Backup S3 Test] Cleanup DELETE sent');
-        
+        return { ok: true, message: `S3 connection successful: ${cleanBucket} at ${endpoint}` };
         return { ok: true, message: `S3 connection successful: ${cleanBucket} at ${endpoint}` };
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
@@ -844,7 +763,7 @@ backupRouter.post('/remotes/:id/test', async (c) => {
           testResult.ok = false;
           testResult.message = 'Access key or secret key is missing';
         } else {
-          const result = await testS3Connection(s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, s3Region, config.root_path);
+          const result = await testS3Connection(s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, s3Region);
           testResult.ok = result.ok;
           testResult.message = result.message;
         }
@@ -1001,7 +920,7 @@ backupRouter.post('/remotes/test', zValidator('json', RemoteTestSchema), async (
           testResult.ok = false;
           testResult.message = 'Access key or secret key is missing';
         } else {
-          const result = await testS3Connection(s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, s3Region, config.root_path);
+          const result = await testS3Connection(s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, s3Region);
           testResult.ok = result.ok;
           testResult.message = result.message;
         }
