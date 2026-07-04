@@ -35,9 +35,9 @@ API_PREFIX = "/api/v1"
 [observability]
 enabled = true
 
-# 自动构建前端 (使用 pnpm，禁用 frozen-lockfile)
-[build]
-command = "cd frontend && VITE_APP_VERSION=1.5.2 pnpm install --no-frozen-lockfile && VITE_APP_VERSION=1.5.2 pnpm build"
+# 自动构建前端 (CI/CD 中使用)
+# [build]
+# command = "cd frontend && VITE_APP_VERSION=1.5.2 pnpm install --no-frozen-lockfile && VITE_APP_VERSION=1.5.2 pnpm build"
 
 # 静态资产配置 - 官方前端构建输出在 apps/web/dist
 [assets]
