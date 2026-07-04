@@ -247,6 +247,7 @@ interface WriteCommitMeta {
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
+  R2?: R2Bucket;
 };
 
 type Variables = {
@@ -1016,11 +1017,47 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
 
   const newChangeId = changeResult.meta.last_row_id as number;
 
+  // 删除前先收集交易关联的附件 fileId，用于清理 R2 文件
+  const attRows = await db
+    .prepare('SELECT id, storage_path FROM attachment_files WHERE ledger_id = ? AND attachment_kind = ?')
+    .bind(ledger.id, 'transaction')
+    .all<{ id: string; storage_path: string }>();
+
+  // 从 transaction 投影中读取 attachments_json 匹配具体 fileId
+  const txRow = await db
+    .prepare('SELECT attachments_json FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+    .bind(ledger.id, txSyncId)
+    .first<{ attachments_json: string | null }>();
+
+  const fileIdsToClean: string[] = [];
+  if (txRow?.attachments_json) {
+    try {
+      const atts = JSON.parse(txRow.attachments_json);
+      if (Array.isArray(atts)) {
+        for (const a of atts) {
+          if (a.cloudFileId) fileIdsToClean.push(a.cloudFileId);
+        }
+      }
+    } catch {}
+  }
+
   // 从 projection 删除
   await db
     .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
     .bind(ledger.id, txSyncId)
     .run();
+
+  // 清理附件记录和 R2 文件
+  for (const fid of fileIdsToClean) {
+    const att = attRows.results.find(r => r.id === fid);
+    if (att) {
+      // 删除 R2 文件
+      if (c.env.R2 && att.storage_path) {
+        try { await c.env.R2.delete(att.storage_path); } catch {}
+      }
+      await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fid).run();
+    }
+  }
 
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'transaction', entityId: txSyncId,
