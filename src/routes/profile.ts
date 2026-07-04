@@ -135,8 +135,9 @@ profileRouter.post('/avatar', async (c) => {
     if (!file) return c.json({ error: 'No file provided' }, 400);
 
     const mimeLower = (file.type || '').toLowerCase();
+    console.log('[Avatar] Upload: name=', file.name, 'type=', file.type, 'size=', file.size);
     const ext = ALLOWED_MIME[mimeLower];
-    if (!ext) return c.json({ error: 'Profile avatar format invalid (jpg/png/webp only)' }, 400);
+    if (!ext) return c.json({ error: `Profile avatar format invalid: ${mimeLower || 'unknown'} (jpg/png/webp/gif/heic only)` }, 400);
 
     const fileBuffer = await file.arrayBuffer();
     if (fileBuffer.byteLength > MAX_AVATAR_BYTES) {
