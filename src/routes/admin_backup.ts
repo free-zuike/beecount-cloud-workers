@@ -135,7 +135,8 @@ async function testS3Connection(
     bucket: string,
     accessKey: string,
     secretKey: string,
-    region: string
+    region: string,
+    rootPath?: string
 ): Promise<{ ok: boolean; message: string }> {
     try {
         if (!endpoint) {
@@ -224,7 +225,8 @@ async function testS3Connection(
         console.log('[Backup S3 Test] LIST test passed');
         
         // 然后尝试上传测试文件（这是更严格的测试）
-        const testKey = `__beecount_connection_test__/${Date.now()}.txt`;
+        const prefix = rootPath ? rootPath.replace(/^\/+|\/+$/g, '') + '/' : '';
+        const testKey = `${prefix}__beecount_connection_test__/${Date.now()}.txt`;
         const testContent = 'Beecount S3 connection test file';
         
         const { url: putUrl, headers: putHeaders } = await signS3Request(
@@ -842,7 +844,7 @@ backupRouter.post('/remotes/:id/test', async (c) => {
           testResult.ok = false;
           testResult.message = 'Access key or secret key is missing';
         } else {
-          const result = await testS3Connection(s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, s3Region);
+          const result = await testS3Connection(s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, s3Region, config.root_path);
           testResult.ok = result.ok;
           testResult.message = result.message;
         }
@@ -999,7 +1001,7 @@ backupRouter.post('/remotes/test', zValidator('json', RemoteTestSchema), async (
           testResult.ok = false;
           testResult.message = 'Access key or secret key is missing';
         } else {
-          const result = await testS3Connection(s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, s3Region);
+          const result = await testS3Connection(s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, s3Region, config.root_path);
           testResult.ok = result.ok;
           testResult.message = result.message;
         }
