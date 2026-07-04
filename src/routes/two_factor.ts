@@ -32,9 +32,7 @@ function nowUtc(): string {
   return new Date().toISOString();
 }
 
-// ===========================
-// TOTP Secret 加密/解密（与原版兼容）
-// ===========================
+import * as OTPAuth from 'otpauth';
 
 async function deriveKey(secret: string): Promise<CryptoKey> {
   const encoder = new TextEncoder();
@@ -79,14 +77,8 @@ async function getDecryptedTotpSecret(encrypted: string, jwtSecret: string): Pro
  * 生成随机 TOTP secret (Base32 编码)
  */
 function generateTotpSecret(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  let secret = '';
-  const bytes = new Uint8Array(20);
-  crypto.getRandomValues(bytes);
-  for (const b of bytes) {
-    secret += chars[b % chars.length];
-  }
-  return secret;
+  const totp = new OTPAuth.TOTP({ issuer: 'BeeCount', algorithm: 'SHA1', digits: 6, period: 30 });
+  return totp.secret.base32;
 }
 
 /**
@@ -124,37 +116,8 @@ async function sha256Hash(input: string): Promise<string> {
  * 生成 TOTP URI (用于二维码)
  */
 function buildOtpauthUri(secret: string, email: string): string {
-  const issuer = 'BeeCount';
-  const label = encodeURIComponent(`${issuer}:${email}`);
-  const encodedIssuer = encodeURIComponent(issuer);
-  return `otpauth://totp/${label}?secret=${secret}&issuer=${encodedIssuer}&algorithm=SHA1&digits=6&period=30`;
-}
-
-/**
- * Base32 解码
- */
-function base32Decode(encoded: string): Uint8Array {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  encoded = encoded.toUpperCase().replace(/[^A-Z2-7]/g, '');
-  
-  const bits = [];
-  for (let i = 0; i < encoded.length; i++) {
-    const charIndex = chars.indexOf(encoded[i]);
-    for (let j = 4; j >= 0; j--) {
-      bits.push((charIndex >> j) & 1);
-    }
-  }
-
-  const bytes = [];
-  for (let i = 0; i < bits.length; i += 8) {
-    let byte = 0;
-    for (let j = 0; j < 8 && i + j < bits.length; j++) {
-      byte = (byte << 1) | bits[i + j];
-    }
-    bytes.push(byte);
-  }
-
-  return new Uint8Array(bytes);
+  const totp = new OTPAuth.TOTP({ issuer: 'BeeCount', label: email, secret: OTPAuth.Secret.fromBase32(secret) });
+  return totp.toString();
 }
 
 /**
@@ -166,59 +129,11 @@ function base32Decode(encoded: string): Uint8Array {
  * @returns 是否验证通过
  */
 async function verifyTotpCode(secret: string, code: string, window: number = 2): Promise<boolean> {
-  // 验证格式
   if (!/^\d{6}$/.test(code)) return false;
-
   try {
-    const secretBytes = base32Decode(secret);
-    
-    // 获取当前时间戳（秒）
-    const timestamp = Math.floor(Date.now() / 1000);
-    
-    // 时间步长（30秒）
-    const step = 30;
-    
-    for (let offset = -window; offset <= window; offset++) {
-      // 计算当前步长的计数器值
-      const counter = Math.floor((timestamp + offset * step) / step);
-      
-      // 将计数器转换为 8 字节的大端序
-      const counterBuffer = new ArrayBuffer(8);
-      const counterView = new DataView(counterBuffer);
-      counterView.setUint32(0, Math.floor(counter / 0x100000000), false);
-      counterView.setUint32(4, counter % 0x100000000, false);
-      
-      // HMAC-SHA1 计算
-      const hmacKey = await crypto.subtle.importKey(
-        'raw',
-        secretBytes,
-        { name: 'HMAC', hash: 'SHA-1' },
-        false,
-        ['sign']
-      );
-      
-      const hmacResult = await crypto.subtle.sign('HMAC', hmacKey, counterBuffer);
-      const hmacArray = new Uint8Array(hmacResult);
-      
-      // 动态截断（取最后 4 位作为偏移量）
-      const truncOffset = hmacArray[hmacArray.length - 1] & 0x0F;
-      
-      // 从偏移量处取 4 字节，转换为无符号整数
-      const truncated = (hmacArray[truncOffset] & 0x7F) << 24 |
-                       (hmacArray[truncOffset + 1] & 0xFF) << 16 |
-                       (hmacArray[truncOffset + 2] & 0xFF) << 8 |
-                       (hmacArray[truncOffset + 3] & 0xFF);
-      
-      // 取模得到 6 位数字
-      const totp = truncated % 1000000;
-      const totpStr = totp.toString().padStart(6, '0');
-      
-      if (totpStr === code) {
-        return true;
-      }
-    }
-    
-    return false;
+    const totp = new OTPAuth.TOTP({ issuer: 'BeeCount', secret: OTPAuth.Secret.fromBase32(secret) });
+    const delta = totp.validate({ token: code, window });
+    return delta !== null;
   } catch {
     return false;
   }

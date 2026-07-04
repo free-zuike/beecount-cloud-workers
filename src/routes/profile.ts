@@ -120,6 +120,7 @@ profileRouter.post('/me/change-password', zValidator('json', z.object({
 });
 
 const ALLOWED_MIME: Record<string, string> = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/heic': 'heic', 'image/heif': 'heif' };
+const FILE_EXT_MIME: Record<string, string> = { 'jpg': 'jpg', 'jpeg': 'jpg', 'png': 'png', 'webp': 'webp', 'gif': 'gif', 'heic': 'heic', 'heif': 'heif' };
 const MAX_AVATAR_BYTES = 1 * 1024 * 1024;
 
 // POST /avatar - 上传头像
@@ -135,9 +136,14 @@ profileRouter.post('/avatar', async (c) => {
     if (!file) return c.json({ error: 'No file provided' }, 400);
 
     const mimeLower = (file.type || '').toLowerCase();
-    console.log('[Avatar] Upload: name=', file.name, 'type=', file.type, 'size=', file.size);
-    const ext = ALLOWED_MIME[mimeLower];
-    if (!ext) return c.json({ error: `Profile avatar format invalid: ${mimeLower || 'unknown'} (jpg/png/webp/gif/heic only)` }, 400);
+    const fileName = (file.name || '').toLowerCase();
+    const fileExt = fileName.includes('.') ? fileName.split('.').pop() || '' : '';
+    const extFromMime = ALLOWED_MIME[mimeLower];
+    const extFromFile = FILE_EXT_MIME[fileExt];
+    const ext = extFromMime || extFromFile;
+    const actualMime = extFromMime ? mimeLower : extFromFile ? `image/${extFromFile}` : '';
+    console.log('[Avatar] Upload: name=', file.name, 'type=', file.type, 'ext=', fileExt, 'size=', file.size);
+    if (!ext) return c.json({ error: `Profile avatar format invalid: ${mimeLower || fileExt || 'unknown'}` }, 400);
 
     const fileBuffer = await file.arrayBuffer();
     if (fileBuffer.byteLength > MAX_AVATAR_BYTES) {
