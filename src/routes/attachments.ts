@@ -544,10 +544,13 @@ attachmentsRouter.get('/:id', async (c) => {
 
     // 尝试从 R2 下载（与头像共用同一 bucket）
     if (c.env.R2) {
-        // 尝试多种存储路径格式
+        // 尝试多种存储路径格式（兼容不同版本的 storage_path）
+        const normalizedPath = row.storage_path.replace(/^attachments\/attachments\//, 'attachments/');
         const possiblePaths = [
+            normalizedPath,
             row.storage_path,
-            `attachments/${row.ledger_external_id}/${row.id}_${row.file_name}`,
+            `attachments/${row.id}_${row.file_name}`,
+            `sha_${row.sha256}.${(row.file_name || '').split('.').pop() || 'bin'}`,
         ];
         for (const key of possiblePaths) {
             if (!key) continue;

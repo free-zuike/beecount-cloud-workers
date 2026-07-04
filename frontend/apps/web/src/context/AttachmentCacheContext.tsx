@@ -68,8 +68,16 @@ export function AttachmentCacheProvider({ children }: { children: ReactNode }) {
     (fileId: string) => {
       const normalized = fileId.trim()
       if (!normalized) return
-      if (previewMapRef.current[normalized] !== undefined) return
       if (inflightRef.current.has(normalized)) return
+      // 如果之前下载失败(值为''),清除以便重试
+      if (previewMapRef.current[normalized] === '') {
+        setPreviewMap((prev) => {
+          const next = { ...prev }
+          delete next[normalized]
+          return next
+        })
+      }
+      if (previewMapRef.current[normalized] !== undefined) return
       inflightRef.current.add(normalized)
       void (async () => {
         try {
