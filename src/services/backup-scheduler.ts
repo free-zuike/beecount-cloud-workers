@@ -46,6 +46,11 @@ export async function processBackupSchedule(
 
     console.log(`[CRON] Executing schedule ${schedule.id}: ${schedule.name}`);
 
+    // 先更新 next_run_at 防止重复触发
+    const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
+    await db.prepare('UPDATE backup_schedules SET next_run_at = ? WHERE id = ?')
+      .bind(nextRun, schedule.id).run();
+
     const ledger = await db.prepare('SELECT id FROM ledgers WHERE user_id = ? LIMIT 1')
       .bind(schedule.user_id).first<{ id: string }>();
     if (!ledger) {
