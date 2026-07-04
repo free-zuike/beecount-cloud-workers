@@ -493,7 +493,7 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
 
   console.log('[WRITE] /transactions POST called, userId:', userId, 'req:', JSON.stringify(req));
 
-  // 查找账本 - 先试 external_id，再试内部 id
+  // 查找账本
   let ledger;
   if (req.ledger_id) {
     ledger = await findLedger(db, userId, req.ledger_id);
