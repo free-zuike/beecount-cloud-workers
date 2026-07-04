@@ -508,12 +508,12 @@ attachmentsRouter.get('/:id', async (c) => {
     const row = await db
         .prepare(
             `SELECT a.id, a.sha256, a.size_bytes, a.mime_type, a.file_name, a.storage_path,
-                    l.external_id as ledger_external_id
+                    a.ledger_id, l.external_id as ledger_external_id
              FROM attachment_files a
-             JOIN ledgers l ON a.ledger_id = l.id
-             WHERE a.id = ? AND l.user_id = ?`
+             LEFT JOIN ledgers l ON a.ledger_id = l.id
+             WHERE a.id = ? AND (a.user_id = ? OR (l.user_id = ?))`
         )
-        .bind(fileId, userId)
+        .bind(fileId, userId, userId)
         .first<{
             id: string;
             sha256: string;
