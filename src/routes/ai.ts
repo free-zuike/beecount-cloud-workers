@@ -111,13 +111,14 @@ async function callAiChatJson(
   const body: Record<string, unknown> = {
     model,
     messages,
+    max_tokens: 16,
     temperature: 0.2,
   };
   if (useJsonFormat) {
     body.response_format = { type: 'json_object' };
   }
   
-  const response = await fetch(url, {
+  let response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -126,6 +127,23 @@ async function callAiChatJson(
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeout),
   });
+  
+  // 推理模型锁 temperature 时自适应重试
+  if (!response.ok && response.status === 400) {
+    const errText = await response.text();
+    if (errText.includes('temperature')) {
+      delete body.temperature;
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeout),
+      });
+    }
+  }
   
   if (!response.ok) {
     const errorText = await response.text();
@@ -770,18 +788,17 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Connection failed';
     
-    // 根据错误信息判断错误类型
     let errorCode = 'AI_TEST_UNKNOWN';
-    if (errorMsg.includes('401') || errorMsg.includes('auth') || errorMsg.includes('key')) {
+    if (errorMsg.includes('401') || errorMsg.includes('403') || errorMsg.includes('auth') || errorMsg.includes('API key')) {
       errorCode = 'AI_TEST_AUTH';
-    } else if (errorMsg.includes('404') || errorMsg.includes('model')) {
-      errorCode = 'AI_TEST_MODEL_NOT_FOUND';
-    } else if (errorMsg.includes('timeout')) {
-      errorCode = 'AI_TEST_TIMEOUT';
-    } else if (errorMsg.includes('network') || errorMsg.includes('fetch')) {
-      errorCode = 'AI_TEST_NETWORK';
-    } else if (errorMsg.includes('rate') || errorMsg.includes('429')) {
+    } else if (errorMsg.includes('429') || errorMsg.includes('rate') || errorMsg.includes('quota') || errorMsg.includes('余额')) {
       errorCode = 'AI_TEST_RATE_LIMITED';
+    } else if (errorMsg.includes('404') || errorMsg.includes('model not found') || errorMsg.includes('not exist')) {
+      errorCode = 'AI_TEST_MODEL_NOT_FOUND';
+    } else if (errorMsg.includes('timeout') || errorMsg.includes('AbortError')) {
+      errorCode = 'AI_TEST_TIMEOUT';
+    } else if (errorMsg.includes('network') || errorMsg.includes('fetch') || errorMsg.includes('ECONNREFUSED')) {
+      errorCode = 'AI_TEST_NETWORK';
     }
     
     return c.json({

@@ -549,8 +549,8 @@ attachmentsRouter.get('/:id', async (c) => {
         const possiblePaths = [
             normalizedPath,
             row.storage_path,
+            `attachments/${row.ledger_external_id}/${row.id}_${row.file_name}`,
             `attachments/${row.id}_${row.file_name}`,
-            `sha_${row.sha256}.${(row.file_name || '').split('.').pop() || 'bin'}`,
         ];
         for (const key of possiblePaths) {
             if (!key) continue;
