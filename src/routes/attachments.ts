@@ -691,7 +691,22 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
         const fileName = file.name || 'icon.png';
         const size = file.size;
 
-        // user-global 存储路径
+        // 去重：同一用户同SHA256的category_icon不重复创建
+        const existing = await db.prepare(
+            'SELECT id, file_name, storage_path FROM attachment_files WHERE user_id = ? AND sha256 = ? AND attachment_kind = ?'
+        ).bind(userId, sha256Hash, 'category_icon').first<{ id: string; file_name: string; storage_path: string }>();
+        if (existing) {
+            return c.json({
+                file_id: existing.id,
+                ledger_id: '',
+                sha256: sha256Hash,
+                size,
+                mime_type: mimeType,
+                file_name: existing.file_name,
+                created_at: new Date().toISOString(),
+            });
+        }
+
         const r2Key = `category-icons/${userId}/${randomUUID()}_${fileName}`;
 
         // 尝试上传到 R2（优先）或 S3
