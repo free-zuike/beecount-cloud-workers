@@ -1219,10 +1219,10 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
        (ledger_id, sync_id, user_id, name, kind, level, sort_order,
         icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
         parent_name, source_change_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
-      ledger.id, syncId, userId, req.name, req.kind, req.level ?? null,
+      syncId, userId, req.name, req.kind, req.level ?? null,
       req.sort_order ?? null, req.icon ?? null, req.icon_type ?? null,
       req.custom_icon_path ?? null, req.icon_cloud_file_id ?? null,
       req.icon_cloud_sha256 ?? null, req.parent_name ?? null, newChangeId,
@@ -1271,43 +1271,40 @@ writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteC
        VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
     .bind(userId, 'category', categorySyncId, 'upsert', safeJsonStringify({
-      name: req.name,
-      kind: req.kind,
-      level: req.level ?? null,
-      sort_order: req.sort_order ?? null,
-      icon: req.icon ?? null,
-      icon_type: req.icon_type ?? null,
-      custom_icon_path: req.custom_icon_path ?? null,
-      icon_cloud_file_id: req.icon_cloud_file_id ?? null,
-      icon_cloud_sha256: req.icon_cloud_sha256 ?? null,
+      name: req.name, kind: req.kind, level: req.level ?? null, sort_order: req.sort_order ?? null,
+      icon: req.icon ?? null, icon_type: req.icon_type ?? null, custom_icon_path: req.custom_icon_path ?? null,
+      icon_cloud_file_id: req.icon_cloud_file_id ?? null, icon_cloud_sha256: req.icon_cloud_sha256 ?? null,
       parent_name: req.parent_name ?? null,
     }), serverNow, userId)
     .run();
-
   const newChangeId = changeResult.meta.last_row_id as number;
 
-  await db
-    .prepare(
+  // 分类是 user-global 实体(ledger_id=NULL)，用 sync_id + user_id 判断是否已存在
+  const existing = await db
+    .prepare('SELECT sync_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+    .bind(categorySyncId, userId).first();
+  
+  if (existing) {
+    await db.prepare(
+      `UPDATE read_category_projection SET name=?, kind=?, level=?, sort_order=?, icon=?, icon_type=?,
+       custom_icon_path=?, icon_cloud_file_id=?, icon_cloud_sha256=?, parent_name=?, source_change_id=?
+       WHERE sync_id=? AND user_id=?`
+    ).bind(req.name, req.kind, req.level ?? null, req.sort_order ?? null, req.icon ?? null,
+      req.icon_type ?? null, req.custom_icon_path ?? null, req.icon_cloud_file_id ?? null,
+      req.icon_cloud_sha256 ?? null, req.parent_name ?? null, newChangeId,
+      categorySyncId, userId).run();
+  } else {
+    await db.prepare(
       `INSERT INTO read_category_projection
        (ledger_id, sync_id, user_id, name, kind, level, sort_order,
         icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
         parent_name, source_change_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(ledger_id, sync_id) DO UPDATE SET name = ?, kind = ?, level = ?, sort_order = ?,
-        icon = ?, icon_type = ?, custom_icon_path = ?, icon_cloud_file_id = ?,
-        icon_cloud_sha256 = ?, parent_name = ?, source_change_id = ?`
-    )
-    .bind(
-      ledger.id, categorySyncId, userId, req.name, req.kind, req.level ?? null,
+       VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(categorySyncId, userId, req.name, req.kind, req.level ?? null,
       req.sort_order ?? null, req.icon ?? null, req.icon_type ?? null,
       req.custom_icon_path ?? null, req.icon_cloud_file_id ?? null,
-      req.icon_cloud_sha256 ?? null, req.parent_name ?? null, newChangeId,
-      req.name, req.kind, req.level ?? null, req.sort_order ?? null,
-      req.icon ?? null, req.icon_type ?? null, req.custom_icon_path ?? null,
-      req.icon_cloud_file_id ?? null, req.icon_cloud_sha256 ?? null,
-      req.parent_name ?? null, newChangeId,
-    )
-    .run();
+      req.icon_cloud_sha256 ?? null, req.parent_name ?? null, newChangeId).run();
+  }
 
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'update', entityType: 'category', entityId: categorySyncId,
@@ -1356,8 +1353,8 @@ writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', Write
   const newChangeId = changeResult.meta.last_row_id as number;
 
   await db
-    .prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND ledger_id = ?')
-    .bind(categorySyncId, ledger.id)
+    .prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+    .bind(categorySyncId, userId)
     .run();
 
   await insertAuditLog({
