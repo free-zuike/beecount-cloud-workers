@@ -718,6 +718,9 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
             await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(old.id).run();
         }
 
+        // 重新上传前，更新所有引用该旧图标的分类的icon_cloud_file_id为新值
+        // （具体哪个分类引用由调用方在分类更新时处理）
+
         const r2Key = `category-icons/${userId}/${randomUUID()}_${fileName}`;
 
         // 尝试上传到 R2（优先）或 S3
