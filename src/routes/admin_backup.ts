@@ -1391,16 +1391,18 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
           const parsedConfig = JSON.parse(configStr);
           console.log('[Backup] parsedConfig keys:', Object.keys(parsedConfig));
           console.log('[Backup] parsedConfig.root_path:', parsedConfig.root_path);
-          const hasConfig = Object.keys(parsedConfig).length > 0;
           const hasS3Config = parsedConfig.bucket && parsedConfig.access_key_id && parsedConfig.secret_access_key;
           const isR2Type = remote.backend_type === 'r2';
-          if (hasConfig && (hasS3Config || isR2Type)) {
+          const isS3Type = remote.backend_type === 's3';
+          if ((isS3Type && hasS3Config) || isR2Type) {
             console.log('[Backup] Found remote config:', remote.backend_type);
+            const defaultRootPath = 'beecount';
+            const rootPath = (parsedConfig.root_path || '').replace(/^\/+|\/+$/g, '') || defaultRootPath;
             remoteConfig = {
               backend_type: remote.backend_type,
               ...parsedConfig,
-              // 将 root_path 转换为 savePath（与 attachments.ts 中的 getS3Config 保持一致）
-              savePath: parsedConfig.root_path ? parsedConfig.root_path.replace(/^\/+|\/+$/g, '') : 'custom'
+              path_style: parsedConfig.path_style !== undefined ? parsedConfig.path_style : 'true',
+              savePath: rootPath
             };
             console.log('[Backup] Full remoteConfig:', JSON.stringify(remoteConfig));
             shouldEncrypt = remote.encrypted === 1;

@@ -262,13 +262,17 @@ export async function performBackup(
       }
 
       let basePrefix = '';
+      const DEFAULT_PREFIX = 'beecount';
       if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' &&
-          remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
+          remoteConfig.savePath.trim() !== '' && remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
         basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
         console.log(`[Backup] Using savePath: ${basePrefix}`);
       } else if (remoteConfig.root_path && typeof remoteConfig.root_path === 'string' && remoteConfig.root_path.trim() !== '') {
         basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
         console.log(`[Backup] Using root_path: ${basePrefix}`);
+      } else {
+        basePrefix = DEFAULT_PREFIX + '/';
+        console.log(`[Backup] Using default prefix: ${basePrefix}`);
       }
 
       const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
@@ -348,11 +352,14 @@ export async function performBackup(
       }
 
       let basePrefix = '';
+      const DEFAULT_PREFIX = 'beecount';
       if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' &&
-          remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
+          remoteConfig.savePath.trim() !== '' && remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
         basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
       } else if (remoteConfig.root_path && typeof remoteConfig.root_path === 'string' && remoteConfig.root_path.trim() !== '') {
         basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+      } else {
+        basePrefix = DEFAULT_PREFIX + '/';
       }
 
       const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
