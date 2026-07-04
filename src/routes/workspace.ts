@@ -154,6 +154,12 @@ workspaceRouter.get('/transactions.csv', async (c) => {
   const categoryName = c.req.query('category_name');
   const accountName = c.req.query('account_name');
   const txType = c.req.query('tx_type');
+  const q = c.req.query('q');
+  const accountSyncId = c.req.query('account_sync_id');
+  const categorySyncId = c.req.query('category_sync_id');
+  const tagSyncId = c.req.query('tag_sync_id');
+  const amountMin = c.req.query('amount_min') ? Number(c.req.query('amount_min')) : null;
+  const amountMax = c.req.query('amount_max') ? Number(c.req.query('amount_max')) : null;
 
   if (txType) {
     txQuery += ' AND tx_type = ?';
@@ -179,6 +185,32 @@ workspaceRouter.get('/transactions.csv', async (c) => {
   if (dateTo) {
     txQuery += ' AND happened_at <= ?';
     params.push(dateTo + 'T23:59:59.999Z');
+  }
+
+  if (q) {
+    txQuery += ' AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ?)';
+    const like = `%${q}%`;
+    params.push(like, like, like);
+  }
+  if (accountSyncId) {
+    txQuery += ' AND account_sync_id = ?';
+    params.push(accountSyncId);
+  }
+  if (categorySyncId) {
+    txQuery += ' AND category_sync_id = ?';
+    params.push(categorySyncId);
+  }
+  if (tagSyncId) {
+    txQuery += ' AND tag_sync_ids_json LIKE ?';
+    params.push(`%"${tagSyncId}"%`);
+  }
+  if (amountMin !== null && Number.isFinite(amountMin)) {
+    txQuery += ' AND amount >= ?';
+    params.push(amountMin);
+  }
+  if (amountMax !== null && Number.isFinite(amountMax)) {
+    txQuery += ' AND amount <= ?';
+    params.push(amountMax);
   }
 
   txQuery += ' ORDER BY happened_at DESC, tx_index DESC';
@@ -497,6 +529,11 @@ workspaceRouter.get('/categories', async (c) => {
   let catQuery = `SELECT * FROM read_category_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`;
   const catParams: string[] = [...ledgerInternalIds];
 
+  if (filterUserId) {
+    catQuery += ' AND user_id = ?';
+    catParams.push(filterUserId);
+  }
+
   if (q) {
     catQuery += ' AND name LIKE ?';
     catParams.push(`%${q}%`);
@@ -577,6 +614,11 @@ workspaceRouter.get('/tags', async (c) => {
 
   let tagQuery = `SELECT * FROM read_tag_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`;
   const tagParams: string[] = [...ledgerInternalIds];
+
+  if (filterUserId) {
+    tagQuery += ' AND user_id = ?';
+    tagParams.push(filterUserId);
+  }
 
   if (q) {
     tagQuery += ' AND name LIKE ?';
@@ -788,9 +830,26 @@ workspaceRouter.get('/analytics', async (c) => {
 
   const ledgerInternalIds = ledgers.results.map((l) => l.id);
 
+  let txQuery = `SELECT tx_type, amount, happened_at, category_name FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`;
+  const txParams: (string | number)[] = [...ledgerInternalIds];
+
+  if (period) {
+    const [yearStr, monthStr] = period.split('-');
+    const year = parseInt(yearStr, 10);
+    const month = parseInt(monthStr, 10);
+    if (year && month) {
+      const startAt = `${year}-${String(month).padStart(2, '0')}-01T00:00:00Z`;
+      const endMonth = month === 12 ? 1 : month + 1;
+      const endYear = month === 12 ? year + 1 : year;
+      const endAt = `${endYear}-${String(endMonth).padStart(2, '0')}-01T00:00:00Z`;
+      txQuery += ' AND happened_at >= ? AND happened_at < ?';
+      txParams.push(startAt, endAt);
+    }
+  }
+
   const txRows = await db
-    .prepare(`SELECT tx_type, amount, happened_at, category_name FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`)
-    .bind(...ledgerInternalIds)
+    .prepare(txQuery)
+    .bind(...txParams)
     .all<{ tx_type: string; amount: number; happened_at: string; category_name: string | null }>();
 
   let incomeTotal = 0;
