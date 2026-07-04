@@ -629,16 +629,18 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
        VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
     .bind(userId, 'account', accountSyncId, 'upsert', safeJsonStringify({
+      syncId: accountSyncId,
       name: req.name,
-      account_type: req.account_type ?? null,
+      type: req.account_type ?? null,
       currency: req.currency ?? null,
-      initial_balance: req.initial_balance ?? 0,
+      initialBalance: req.initial_balance ?? 0,
+      sortOrder: 0,
       note: req.note ?? null,
-      credit_limit: req.credit_limit ?? null,
-      billing_day: req.billing_day ?? null,
-      payment_due_day: req.payment_due_day ?? null,
-      bank_name: req.bank_name ?? null,
-      card_last_four: req.card_last_four ?? null,
+      creditLimit: req.credit_limit ?? null,
+      billingDay: req.billing_day ?? null,
+      paymentDueDay: req.payment_due_day ?? null,
+      bankName: req.bank_name ?? null,
+      cardLastFour: req.card_last_four ?? null,
     }), serverNow, userId)
     .run();
 
@@ -1051,16 +1053,18 @@ writeRouter.post('/ledgers/:ledgerId/accounts', zValidator('json', WriteAccountC
 
   const syncId = randomUUID();
   const payload: Record<string, unknown> = {
+    syncId: syncId,
     name: req.name,
-    account_type: req.account_type ?? null,
+    type: req.account_type ?? null,
     currency: req.currency ?? null,
-    initial_balance: req.initial_balance ?? 0,
+    initialBalance: req.initial_balance ?? 0,
+    sortOrder: 0,
     note: req.note ?? null,
-    credit_limit: req.credit_limit ?? null,
-    billing_day: req.billing_day ?? null,
-    payment_due_day: req.payment_due_day ?? null,
-    bank_name: req.bank_name ?? null,
-    card_last_four: req.card_last_four ?? null,
+    creditLimit: req.credit_limit ?? null,
+    billingDay: req.billing_day ?? null,
+    paymentDueDay: req.payment_due_day ?? null,
+    bankName: req.bank_name ?? null,
+    cardLastFour: req.card_last_four ?? null,
   };
 
   const changeResult = await db
