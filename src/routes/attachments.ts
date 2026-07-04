@@ -721,15 +721,17 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
         ).bind(fileId, userId, sha256Hash, size, mimeType, fileName, r2Key, now).run();
 
         console.log('[ATTACH] Category icon upload: name=', file.name, 'type=', file.type, 'size=', file.size);
-        return c.json({
+        const result = {
             file_id: fileId,
             ledger_id: null,
             sha256: sha256Hash,
-            size,
-            mime_type: mimeType,
-            file_name: fileName,
-            created_at: now,
-        });
+            size: Number(size),
+            mime_type: String(mimeType),
+            file_name: String(fileName),
+            created_at: String(now),
+        };
+        console.log('[ATTACH] Category icon upload response:', JSON.stringify(result));
+        return c.json(result);
     } catch (error) {
         console.error('[ATTACHMENT] Category icon upload error:', error);
         return c.json({ error: `Upload failed: ${(error as Error).message}` }, 500);
