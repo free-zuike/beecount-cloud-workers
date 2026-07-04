@@ -544,10 +544,13 @@ attachmentsRouter.get('/:id', async (c) => {
             console.log('[ATTACH] Trying R2 key:', key);
             const obj = await c.env.R2.get(key);
             if (obj) {
-                console.log('[ATTACH] R2 found:', key, 'size:', obj.size);
+                const ext = (row.file_name || '').split('.').pop()?.toLowerCase() || '';
+                const mimeGuess = ext === 'png' ? 'image/png' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : ext === 'gif' ? 'image/gif' : (obj.httpMetadata?.contentType || row.mime_type || 'application/octet-stream');
+                console.log('[ATTACH] R2 found:', key, 'size:', obj.size, 'mime:', mimeGuess);
                 return new Response(obj.body, {
                     headers: {
-                        'Content-Type': obj.httpMetadata?.contentType || row.mime_type || 'application/octet-stream',
+                        'Content-Type': mimeGuess,
+                        'Content-Disposition': `inline; filename="${encodeURIComponent(row.file_name || 'attachment')}"`,
                         'Content-Length': String(obj.size),
                         'Cache-Control': 'public, max-age=31536000, immutable',
                         'Access-Control-Allow-Origin': '*',
