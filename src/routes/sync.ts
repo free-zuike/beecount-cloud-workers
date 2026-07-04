@@ -794,14 +794,14 @@ syncRouter.get('/pull', async (c) => {
         scope: string | null;
       }>();
 
-    const maxRow = await db
-      .prepare(`SELECT MAX(change_id) as max_id FROM sync_changes WHERE user_id = ?`)
-      .bind(userId)
-      .first<{ max_id: number | null }>();
-
     const allResults = changes.results;
     const hasMore = allResults.length > limit;
     const limitedResults = hasMore ? allResults.slice(0, limit) : allResults;
+
+    let serverCursor = since;
+    for (const r of limitedResults) {
+      serverCursor = Math.max(serverCursor, r.change_id);
+    }
 
     // 补全 transaction payload 中缺失的 createdByUserId/updatedByUserId（与原版对齐）
     await enrichTxPayloadsWithUserIds(db, limitedResults);
@@ -838,7 +838,7 @@ syncRouter.get('/pull', async (c) => {
         updated_by_device_id: c.updated_by_device_id ?? null,
         scope: c.scope || 'ledger',
       })),
-      server_cursor: maxRow?.max_id ?? 0,
+      server_cursor: serverCursor,
       has_more: hasMore,
     });
   } catch (error) {
