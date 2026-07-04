@@ -694,19 +694,21 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
         // user-global 存储路径
         const r2Key = `category-icons/${userId}/${randomUUID()}_${fileName}`;
 
-        // 尝试上传到 R2/S3
-        const config = await getFirstEnabledS3Config(db, c.env);
-        if (config) {
-            const { url, headers } = await signRequest(
-                config.accessKeyId, config.secretAccessKey, config.region,
-                config.endpoint, config.bucketName, r2Key, 'PUT',
-                mimeType, size
-            );
-            await fetch(url, { method: 'PUT', headers, body: fileBuffer });
-        } else if (c.env.R2) {
+        // 尝试上传到 R2（优先）或 S3
+        if (c.env.R2) {
             await c.env.R2.put(r2Key, fileBuffer, {
                 httpMetadata: { contentType: mimeType }
             });
+        } else {
+            const config = await getFirstEnabledS3Config(db, c.env);
+            if (config) {
+                const { url, headers } = await signRequest(
+                    config.accessKeyId, config.secretAccessKey, config.region,
+                    config.endpoint, config.bucketName, r2Key, 'PUT',
+                    mimeType, size
+                );
+                await fetch(url, { method: 'PUT', headers, body: fileBuffer });
+            }
         }
 
         const now = new Date().toISOString();
@@ -718,6 +720,7 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
              VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'category_icon', ?)`
         ).bind(fileId, userId, sha256Hash, size, mimeType, fileName, r2Key, now).run();
 
+        console.log('[ATTACH] Category icon upload: name=', file.name, 'type=', file.type, 'size=', file.size);
         return c.json({
             file_id: fileId,
             sha256: sha256Hash,
@@ -727,7 +730,7 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
         });
     } catch (error) {
         console.error('[ATTACHMENT] Category icon upload error:', error);
-        return c.json({ error: 'Upload failed' }, 500);
+        return c.json({ error: `Upload failed: ${(error as Error).message}` }, 500);
     }
 });
 
