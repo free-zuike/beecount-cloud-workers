@@ -374,7 +374,8 @@ twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (
     return c.json({ error: 'No pending 2FA setup. Call /2fa/setup first.' }, 400);
   }
 
-  const isValid = await verifyTotpCode(user.totp_secret_encrypted, code);
+  const decryptedSecret = await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret);
+  const isValid = await verifyTotpCode(decryptedSecret, code);
   if (!isValid) {
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }
@@ -449,7 +450,8 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   let isValid = false;
 
   if (method === 'totp') {
-    isValid = await verifyTotpCode(user.totp_secret_encrypted, code);
+    const decryptedSecret = await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret);
+    isValid = await verifyTotpCode(decryptedSecret, code);
   } else if (method === 'recovery_code') {
     const codeHash = await sha256Hash(code);
     const recoveryCodes = await db
@@ -537,7 +539,8 @@ twoFactorRouter.post('/disable', zValidator('json', TwoFADisableSchema), async (
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }
 
-  const isValid = await verifyTotpCode(user.totp_secret_encrypted, code);
+  const decryptedSecret = await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret);
+  const isValid = await verifyTotpCode(decryptedSecret, code);
   if (!isValid) {
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }
@@ -572,7 +575,8 @@ twoFactorRouter.post('/recovery-codes/regenerate', zValidator('json', TwoFARegen
     return c.json({ error: '2FA not enabled.' }, 400);
   }
 
-  const isValid = await verifyTotpCode(user.totp_secret_encrypted, code);
+  const decryptedSecret = await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret);
+  const isValid = await verifyTotpCode(decryptedSecret, code);
   if (!isValid) {
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }
