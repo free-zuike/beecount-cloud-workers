@@ -528,21 +528,7 @@ attachmentsRouter.get('/:id', async (c) => {
         return c.json({ error: 'Attachment not found' }, 404);
     }
 
-    if (await s3.isConfigured()) {
-        const s3Response = await s3.download(row.storage_path);
-        if (s3Response) {
-            return new Response(s3Response.body, {
-                headers: {
-                    'Content-Type': row.mime_type || 'application/octet-stream',
-                    'Content-Disposition': `inline; filename="${encodeURIComponent(row.file_name || 'attachment')}"`,
-                    'Content-Length': String(row.size_bytes),
-                    'Access-Control-Allow-Origin': '*',
-                },
-            });
-        }
-    }
-
-    // 尝试从 R2 下载（与头像共用同一 bucket）
+    // 先尝试 R2（附件存储在 R2 bucket）
     if (c.env.R2) {
         // 尝试多种存储路径格式（兼容不同版本的 storage_path）
         const normalizedPath = row.storage_path.replace(/^attachments\/attachments\//, 'attachments/');
