@@ -760,12 +760,12 @@ syncRouter.get('/pull', async (c) => {
       LEFT JOIN ledgers l ON c.ledger_id = l.id
       WHERE c.user_id = ?
         AND (
-          c.scope = 'user'
+          (c.scope = 'user' AND c.change_id > ?)
           OR (c.scope = 'ledger' AND c.change_id > ?)
         )
     `;
     
-    const params: (string | number)[] = [userId, since];
+    const params: (string | number)[] = [userId, since, since];
     
     if (ledgerId) {
       query += ' AND (l.external_id = ? OR c.scope = \'user\')';
