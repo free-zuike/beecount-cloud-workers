@@ -723,7 +723,7 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
         console.log('[ATTACH] Category icon upload: name=', file.name, 'type=', file.type, 'size=', file.size);
         const result = {
             file_id: fileId,
-            ledger_id: null,
+            ledger_id: '',
             sha256: sha256Hash,
             size: Number(size),
             mime_type: String(mimeType),
