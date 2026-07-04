@@ -529,6 +529,7 @@ attachmentsRouter.get('/:id', async (c) => {
     }
 
     // 先尝试 R2（附件存储在 R2 bucket）
+    console.log('[ATTACH] R2 available:', !!c.env.R2, 'storage_path:', row.storage_path);
     if (c.env.R2) {
         // 尝试多种存储路径格式（兼容不同版本的 storage_path）
         const normalizedPath = row.storage_path.replace(/^attachments\/attachments\//, 'attachments/');
@@ -540,8 +541,10 @@ attachmentsRouter.get('/:id', async (c) => {
         ];
         for (const key of possiblePaths) {
             if (!key) continue;
+            console.log('[ATTACH] Trying R2 key:', key);
             const obj = await c.env.R2.get(key);
             if (obj) {
+                console.log('[ATTACH] R2 found:', key, 'size:', obj.size);
                 return new Response(obj.body, {
                     headers: {
                         'Content-Type': obj.httpMetadata?.contentType || row.mime_type || 'application/octet-stream',
@@ -553,9 +556,8 @@ attachmentsRouter.get('/:id', async (c) => {
             }
         }
     }
-
+    console.log('[ATTACH] R2 not found, returning metadata');
     return c.json({
-        file_id: row.id,
         ledger_id: row.ledger_external_id,
         sha256: row.sha256,
         size: row.size_bytes,
