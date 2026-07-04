@@ -1062,7 +1062,7 @@ async function applyUserChangeToProjection(
     }
   } else if (entity_type === 'account') {
     // APP 用 camelCase，原版用 snake_case
-    const accountType = (payload as any).accountType ?? payload.account_type ?? null;
+    const accountType = (payload as any).accountType ?? payload.account_type ?? (payload as any).type ?? null;
     const initialBalance = (payload as any).initialBalance ?? payload.initial_balance ?? 0;
     const creditLimit = (payload as any).creditLimit ?? payload.credit_limit ?? null;
     const billingDay = (payload as any).billingDay ?? payload.billing_day ?? null;
