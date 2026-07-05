@@ -445,6 +445,7 @@ writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaU
 writeRouter.delete('/ledgers/:ledgerId', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
+  const r2 = c.env.R2;
   const ledgerId = c.req.param('ledgerId');
   const serverNow = nowUtc();
 
@@ -457,20 +458,43 @@ writeRouter.delete('/ledgers/:ledgerId', async (c) => {
     return c.json({ error: 'Ledger not found' }, 404);
   }
 
-  // 只添加 ledger_snapshot delete 变更，不直接删除账本
-  // 让同步和 projection 应用逻辑处理实际删除
-  await db
+  // 1. 写 ledger_snapshot delete tombstone
+  const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )    .bind(userId, ledger.id, 'ledger_snapshot', ledger.external_id, 'delete', '{}', serverNow, userId)
+    )
+    .bind(userId, ledger.id, 'ledger_snapshot', ledger.external_id, 'delete', '{}', serverNow, userId)
     .run();
+  const newChangeId = changeResult.meta.last_row_id as number;
+
+  // 2. 清空投影表
+  await db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id).run();
+  await db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').bind(ledger.id).run();
+
+  // 3. 删 LedgerMember（保留 owner）
+  await db.prepare('DELETE FROM ledger_members WHERE ledger_id = ? AND user_id != ?').bind(ledger.id, userId).run();
+
+  // 4. 删附件文件（DB + R2）
+  const attachments = await db
+    .prepare('SELECT id, storage_path FROM attachment_files WHERE ledger_id = ?')
+    .bind(ledger.id).all<{ id: string; storage_path: string }>();
+  for (const att of (attachments.results || [])) {
+    if (r2 && att.storage_path) {
+      try { await r2.delete(att.storage_path); } catch {}
+    }
+    await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(att.id).run();
+  }
+
+  // 5. 删 sync_changes 历史（只留 tombstone）
+  await db.prepare('DELETE FROM sync_changes WHERE ledger_id = ? AND change_id != ? AND entity_type != ?').bind(ledger.id, newChangeId, 'ledger_snapshot').run();
 
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'ledger', entityId: ledgerId,
+    details: { ledgerExternalId: ledger.external_id, attachmentsDeleted: (attachments.results || []).length },
   });
 
-  return c.json({ success: true, ledger_id: ledgerId });
+  return c.json({ success: true, ledger_id: ledgerId, new_change_id: newChangeId });
 });
 
 // ---------------------------------------------------------------------------
