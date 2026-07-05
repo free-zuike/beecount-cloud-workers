@@ -108,30 +108,30 @@ async function enrichTxPayloadsWithUserIds(
   }
   if (pending.length === 0) return;
 
-  // 批量查询 projection
+  // 批量查询 projection（含 last_edited_by_user_id）
   const syncIds = [...new Set(pending.map(p => p.syncId))];
   const ledgerIds = [...new Set(pending.map(p => p.ledgerId))];
   const placeholdersSid = syncIds.map(() => '?').join(',');
   const placeholdersLid = ledgerIds.map(() => '?').join(',');
   const projRows = await db.prepare(
-    `SELECT ledger_id, sync_id, created_by_user_id FROM read_tx_projection
+    `SELECT ledger_id, sync_id, created_by_user_id, last_edited_by_user_id FROM read_tx_projection
      WHERE sync_id IN (${placeholdersSid}) AND ledger_id IN (${placeholdersLid})`
   ).bind(...syncIds, ...ledgerIds)
-    .all<{ ledger_id: string; sync_id: string; created_by_user_id: string | null }>();
+    .all<{ ledger_id: string; sync_id: string; created_by_user_id: string | null; last_edited_by_user_id: string | null }>();
 
-  const projMap = new Map<string, string | null>();
+  const projMap = new Map<string, { cb: string | null; eb: string | null }>();
   for (const r of projRows.results) {
-    projMap.set(`${r.ledger_id}:${r.sync_id}`, r.created_by_user_id);
+    projMap.set(`${r.ledger_id}:${r.sync_id}`, { cb: r.created_by_user_id, eb: r.last_edited_by_user_id });
   }
 
   // 补全 payload
   for (const { ledgerId, syncId, idx } of pending) {
-    const creatorId = projMap.get(`${ledgerId}:${syncId}`);
-    if (!creatorId) continue;
+    const entry = projMap.get(`${ledgerId}:${syncId}`);
+    if (!entry) continue;
     try {
       const payload = JSON.parse(rows[idx].payload_json);
-      if (!payload.createdByUserId) payload.createdByUserId = creatorId;
-      if (!payload.updatedByUserId) payload.updatedByUserId = creatorId;
+      if (!payload.createdByUserId && entry.cb) payload.createdByUserId = entry.cb;
+      if (!payload.updatedByUserId) payload.updatedByUserId = entry.eb || entry.cb;
       rows[idx] = { ...rows[idx], payload_json: JSON.stringify(payload) };
     } catch { /* skip */ }
   }
@@ -248,6 +248,8 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     const conflictSamples: Array<Record<string, unknown>> = [];
     let maxCursor = 0;
     const touchedLedgers: Record<string, string> = {};
+    let touchedUserGlobal = false;
+    const pendingSharedResourceEvents: Array<Record<string, unknown>> = [];
 
     const changes = req.changes;
     
@@ -476,15 +478,30 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           rejected++;
           conflictCount++;
           console.log('[SYNC] REJECTED - older change:', change.entity_type, change.entity_sync_id, 'server_ts:', existingTuple.ts, 'incoming_ts:', incomingTuple.ts);
+          const conflictSample = {
+            reason: 'lww_rejected_older_change',
+            ledgerId: change.ledger_id,
+            entityType: change.entity_type,
+            entitySyncId: change.entity_sync_id,
+            existingChangeId: existingTuple.changeId,
+          };
           if (conflictList.length < 20) {
-            conflictList.push({
-              reason: 'lww_rejected_older_change',
-              ledgerId: change.ledger_id,
-              entityType: change.entity_type,
-              entitySyncId: change.entity_sync_id,
-              existingChangeId: existingTuple.changeId,
-            });
+            conflictList.push(conflictSample);
           }
+          // 原版对齐：冲突写审计日志
+          await insertAuditLog({
+            db, userId,
+            ledgerId: isUserGlobal ? null : (ledgerRowId ?? null),
+            action: 'sync_push',
+            entityType: 'sync_conflict',
+            details: {
+              ...conflictSample,
+              incomingUpdatedAt: clampedUpdatedAt.toISOString(),
+              existingUpdatedAt: new Date(existingTuple.ts).toISOString(),
+              incomingDeviceId: deviceId,
+              existingDeviceId: existingTuple.deviceId,
+            },
+          });
           continue;
         }
 
@@ -541,6 +558,20 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
         if (!isUserGlobal && ledgerRowId) {
           touchedLedgers[ledgerMap[change.ledger_id as string]?.external_id ?? (change.ledger_id as string)] = ledgerRowId;
+        }
+
+        // 追踪 user-global 变更（与原版对齐：push 后广播 __user_global__ 通道）
+        if (isUserGlobal) {
+          touchedUserGlobal = true;
+          // 共享账本 fan-out：仅对 category/account/tag 推 shared_resource_change
+          if (USER_GLOBAL_TYPES.includes(change.entity_type)) {
+            pendingSharedResourceEvents.push({
+              resource_type: change.entity_type,
+              action: change.action,
+              sync_id: change.entity_sync_id,
+              payload: change.payload || { sync_id: change.entity_sync_id },
+            });
+          }
         }
       }
 
@@ -648,6 +679,81 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         serverTimestamp: serverNow,
       });
     } catch {}
+
+    // 与原版对齐：user-global 变更广播 __user_global__ 通道
+    if (touchedUserGlobal) {
+      const userGlobalPayload = {
+        type: 'sync_change',
+        ledgerId: '__user_global__',
+        serverCursor: maxCursor,
+        serverTimestamp: serverNow,
+      };
+      try {
+        const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
+        const doStub = c.env.BEECOUNT_DO.get(doId);
+        await doStub.fetch(new Request(`https://dummy/broadcast`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: JSON.stringify(userGlobalPayload) }),
+        }));
+      } catch {}
+      try {
+        const { getWsManager } = await import('../lib/ws-manager');
+        await getWsManager().broadcastToUser(userId, userGlobalPayload);
+      } catch {}
+    }
+
+    // 与原版对齐：共享账本 fan-out — 对 caller 作为 owner 的所有共享账本，
+    // 推 shared_resource_change 给非 owner member
+    if (pendingSharedResourceEvents.length > 0) {
+      try {
+        // 查找 caller 作为 owner 且有多个 member 的共享账本
+        const sharedLedgers = await db.prepare(
+          `SELECT l.id, l.external_id
+           FROM ledgers l
+           JOIN ledger_members lm ON lm.ledger_id = l.id
+           WHERE l.user_id = ?
+           GROUP BY l.id, l.external_id
+           HAVING COUNT(lm.user_id) > 1`
+        ).bind(userId).all<{ id: string; external_id: string }>();
+
+        for (const sl of sharedLedgers.results) {
+          // 查找该账本的所有 member
+          const members = await db.prepare(
+            `SELECT user_id, role FROM ledger_members WHERE ledger_id = ?`
+          ).bind(sl.id).all<{ user_id: string; role: string }>();
+
+          for (const member of members.results) {
+            if (member.role === 'owner') continue;
+            // 给每个非 owner member 广播 shared_resource_change
+            for (const ev of pendingSharedResourceEvents) {
+              const msg = {
+                type: 'shared_resource_change',
+                ledgerId: sl.external_id,
+                resourceType: ev.resource_type,
+                action: ev.action,
+                payload: ev.payload,
+              };
+              try {
+                const doId = c.env.BEECOUNT_DO.idFromName(`ws-${member.user_id}`);
+                const doStub = c.env.BEECOUNT_DO.get(doId);
+                await doStub.fetch(new Request(`https://dummy/broadcast`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ message: JSON.stringify(msg) }),
+                }));
+              } catch {}
+              try {
+                const { getWsManager } = await import('../lib/ws-manager');
+                await getWsManager().broadcastToUser(member.user_id, msg);
+              } catch {}
+            }
+          }
+        }
+      } catch (e) {
+        console.log('[SYNC] shared_resource fan-out failed (non-fatal):', e);
+      }
+    }
 
     return c.json(response);
   } catch (error: any) {
@@ -1227,7 +1333,7 @@ async function applyChangeToProjection(
                from_account_sync_id = ?, from_account_name = ?,
                to_account_sync_id = ?, to_account_name = ?,
                tags_csv = ?, tag_sync_ids_json = ?, attachments_json = ?,
-               tx_index = ?, source_change_id = ?
+               tx_index = ?, last_edited_by_user_id = ?, source_change_id = ?
                WHERE ledger_id = ? AND sync_id = ?`
             )
             .bind(
@@ -1248,6 +1354,7 @@ async function applyChangeToProjection(
               payload.tagIds ? safeJsonStringify(payload.tagIds) : null,
               payload.attachments ? safeJsonStringify(payload.attachments) : null,
               payload.tx_index ?? 0,
+              payload.updatedByUserId ?? userId,
               change.change_id,
               ledgerId,
               change.entity_sync_id,
@@ -1262,8 +1369,9 @@ async function applyChangeToProjection(
                 account_sync_id, account_name,
                 from_account_sync_id, from_account_name,
                 to_account_sync_id, to_account_name,
-                tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                tags_csv, tag_sync_ids_json, attachments_json, tx_index,
+                created_by_user_id, last_edited_by_user_id, source_change_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             )
             .bind(
               ledgerId,
@@ -1286,6 +1394,8 @@ async function applyChangeToProjection(
               payload.tagIds ? safeJsonStringify(payload.tagIds) : null,
               payload.attachments ? safeJsonStringify(payload.attachments) : null,
               payload.tx_index ?? 0,
+              payload.createdByUserId ?? userId,
+              payload.updatedByUserId ?? userId,
               change.change_id,
             )
             .run();

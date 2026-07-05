@@ -70,6 +70,7 @@ interface ReadLedgerOut {
   ledger_id: string;
   ledger_name: string;
   currency: string;
+  month_start_day: number;
   transaction_count: number;
   income_total: number;
   expense_total: number;
@@ -115,6 +116,8 @@ interface ReadTransactionOut {
   created_by_display_name: string | null;
   created_by_avatar_url: string | null;
   created_by_avatar_version: number | null;
+  exclude_from_stats: boolean;
+  exclude_from_budget: boolean;
 }
 
 /** 账户输出 */
@@ -315,6 +318,7 @@ readRouter.get('/ledgers', async (c) => {
       ledger_id: ledger.external_id,
       ledger_name: ledger.name ?? ledger.external_id,
       currency: ledger.currency || 'CNY',
+      month_start_day: ledger.month_start_day ?? 1,
       transaction_count: totals?.tx_count ?? 0,
       income_total: totals?.income_total ?? 0,
       expense_total: totals?.expense_total ?? 0,
@@ -580,7 +584,7 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
   // 查询账本
   const ledger = await db
     .prepare(
-      `SELECT l.id, l.external_id, l.name, l.currency
+      `SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
        FROM ledgers l
        WHERE l.user_id = ? AND l.external_id = ?`
     )
@@ -590,6 +594,7 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
       external_id: string;
       name: string | null;
       currency: string;
+      month_start_day: number;
     }>();
 
   if (!ledger) {
@@ -644,6 +649,7 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
     ledger_id: ledger.external_id,
     ledger_name: ledger.name ?? ledger.external_id,
     currency: ledger.currency || 'CNY',
+    month_start_day: ledger.month_start_day ?? 1,
     transaction_count: totals?.tx_count ?? 0,
     income_total: totals?.income_total ?? 0,
     expense_total: totals?.expense_total ?? 0,

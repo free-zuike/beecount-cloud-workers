@@ -395,12 +395,16 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         attachments_json TEXT,
         tx_index INTEGER DEFAULT 0,
         created_by_user_id TEXT,
+        last_edited_by_user_id TEXT,
         source_change_id INTEGER DEFAULT 0,
         exclude_from_stats BOOLEAN DEFAULT 0,
         exclude_from_budget BOOLEAN DEFAULT 0,
         PRIMARY KEY (ledger_id, sync_id)
       )
     `).run();
+
+    // Migrate: add last_edited_by_user_id to existing read_tx_projection
+    await safeAddColumn('read_tx_projection', 'last_edited_by_user_id', 'TEXT');
 
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_tx_ledger_time ON read_tx_projection(ledger_id, happened_at DESC, tx_index DESC)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_tx_ledger_category ON read_tx_projection(ledger_id, category_sync_id)').run();

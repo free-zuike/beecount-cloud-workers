@@ -353,7 +353,10 @@ CREATE TABLE IF NOT EXISTS read_tx_projection (
     attachments_json TEXT,
     tx_index INTEGER DEFAULT 0,
     created_by_user_id TEXT,
+    last_edited_by_user_id TEXT,
     source_change_id INTEGER DEFAULT 0,
+    exclude_from_stats BOOLEAN DEFAULT 0,
+    exclude_from_budget BOOLEAN DEFAULT 0,
     PRIMARY KEY (ledger_id, sync_id)
 );
 
