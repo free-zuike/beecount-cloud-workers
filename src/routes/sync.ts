@@ -1264,41 +1264,22 @@ async function applyChangeToProjection(
     return;
   }
 
-  // 处理 ledger_snapshot upsert - 创建或更新账本
-  if (change.entity_type === 'ledger_snapshot' && change.action === 'upsert') {
+  // 处理 ledger / ledger_snapshot upsert - 创建或更新账本元数据
+  if ((change.entity_type === 'ledger' || change.entity_type === 'ledger_snapshot') && change.action === 'upsert') {
     const payload = change.payload as Record<string, unknown>;
-    const name = (payload.ledgerName ?? payload.ledger_name ?? payload.name ?? '账本') as string;
-    const currency = (payload.currency ?? 'CNY') as string;
-    
-    // 检查账本是否存在
-    const existing = await db
-      .prepare('SELECT id FROM ledgers WHERE id = ?')
-      .bind(ledgerId)
-      .first();
-    
-    if (existing) {
-      // 更新账本
-      await db
-        .prepare('UPDATE ledgers SET name = ?, currency = ? WHERE id = ?')
-        .bind(name, currency, ledgerId)
-        .run();
-    } else {
-      // 查找账本的 external_id
-      const ledgerInfo = await db
-        .prepare('SELECT external_id FROM ledgers WHERE id = ?')
-        .bind(ledgerId)
-        .first<{ external_id: string }>();
-      
-      const externalId = ledgerInfo?.external_id ?? change.entity_sync_id;
-      
-      // 创建账本（如果不存在）
-      await db
-        .prepare(
-          `INSERT OR IGNORE INTO ledgers (id, user_id, external_id, name, currency, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`
-        )
-        .bind(ledgerId, userId, externalId, name, currency, nowUtc())
-        .run();
+    const name = (payload.ledgerName ?? payload.ledger_name ?? payload.name ?? null) as string | null;
+    const currency = (payload.currency ?? null) as string | null;
+    const monthStartDay = (payload.monthStartDay ?? payload.month_start_day ?? null) as number | null;
+
+    // 只要有任一字段就更新 ledgers 表
+    if (name || currency || monthStartDay) {
+      const sets: string[] = [];
+      const vals: unknown[] = [];
+      if (name) { sets.push('name = ?'); vals.push(name); }
+      if (currency) { sets.push('currency = ?'); vals.push(currency); }
+      if (monthStartDay) { sets.push('month_start_day = ?'); vals.push(monthStartDay); }
+      vals.push(ledgerId);
+      await db.prepare(`UPDATE ledgers SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
     }
     return;
   }
