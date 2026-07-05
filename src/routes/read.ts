@@ -270,65 +270,62 @@ readRouter.get('/ledgers', async (c) => {
 
   console.log('[READ] Found ledgers:', ledgers.results.length);
 
+  // 批量查询：软删除检查、收支汇总、成员数（避免 N+1）
+  const ledgerIds = ledgers.results.map(l => l.id);
   const result: ReadLedgerOut[] = [];
 
-  for (const ledger of ledgers.results) {
-    console.log('[READ] Processing ledger:', ledger.external_id, ledger.name);
+  if (ledgerIds.length > 0) {
+    const placeholders = ledgerIds.map(() => '?').join(',');
 
-    // 检查账本是否软删除（存在 ledger_snapshot delete tombstone）
-    const tombstone = await db
-      .prepare(
-        `SELECT action FROM sync_changes
-         WHERE ledger_id = ? AND entity_type = 'ledger_snapshot' AND action = 'delete'
-         ORDER BY change_id DESC LIMIT 1`
-      )
-      .bind(ledger.id)
-      .first<{ action: string }>();
+    // 1. 批量查软删除
+    const tombstoneRows = await db.prepare(
+      `SELECT ledger_id, action FROM sync_changes
+       WHERE entity_type = 'ledger_snapshot' AND action = 'delete'
+       AND ledger_id IN (${placeholders})
+       GROUP BY ledger_id`
+    ).bind(...ledgerIds).all<{ ledger_id: string; action: string }>();
+    const tombstoneSet = new Set(tombstoneRows.results.map(r => r.ledger_id));
 
-    if (tombstone?.action === 'delete') {
-      console.log('[READ] Ledger is soft deleted, skipping:', ledger.external_id);
-      continue; // 跳过软删除的账本
+    // 2. 批量查收支汇总
+    const totalsRows = await db.prepare(
+      `SELECT ledger_id,
+              COUNT(*) as tx_count,
+              COALESCE(SUM(CASE WHEN tx_type = 'income' THEN amount ELSE 0 END), 0) as income_total,
+              COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN amount ELSE 0 END), 0) as expense_total
+       FROM read_tx_projection WHERE ledger_id IN (${placeholders})
+       GROUP BY ledger_id`
+    ).bind(...ledgerIds).all<{ ledger_id: string; tx_count: number; income_total: number; expense_total: number }>();
+    const totalsMap = new Map(totalsRows.results.map(r => [r.ledger_id, r]));
+
+    // 3. 批量查成员数
+    const memberRows = await db.prepare(
+      `SELECT ledger_id, COUNT(*) as cnt FROM ledger_members
+       WHERE ledger_id IN (${placeholders}) GROUP BY ledger_id`
+    ).bind(...ledgerIds).all<{ ledger_id: string; cnt: number }>();
+    const memberMap = new Map(memberRows.results.map(r => [r.ledger_id, r.cnt]));
+
+    for (const ledger of ledgers.results) {
+      if (tombstoneSet.has(ledger.id)) continue;
+
+      const totals = totalsMap.get(ledger.id);
+      const memberCount = memberMap.get(ledger.id) ?? 0;
+
+      result.push({
+        ledger_id: ledger.external_id,
+        ledger_name: ledger.name ?? ledger.external_id,
+        currency: ledger.currency || 'CNY',
+        month_start_day: ledger.month_start_day ?? 1,
+        transaction_count: totals?.tx_count ?? 0,
+        income_total: totals?.income_total ?? 0,
+        expense_total: totals?.expense_total ?? 0,
+        balance: (totals?.income_total ?? 0) - (totals?.expense_total ?? 0),
+        exported_at: now,
+        updated_at: now,
+        role: 'owner',
+        is_shared: memberCount > 0,
+        member_count: memberCount + 1,
+      });
     }
-
-    // 从 projection 计算汇总统计
-    const totals = await db
-      .prepare(
-        `SELECT
-           COUNT(*) as tx_count,
-           COALESCE(SUM(CASE WHEN tx_type = 'income' THEN amount ELSE 0 END), 0) as income_total,
-           COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN amount ELSE 0 END), 0) as expense_total
-         FROM read_tx_projection
-         WHERE ledger_id = ?`
-      )
-      .bind(ledger.id)
-      .first<{
-        tx_count: number;
-        income_total: number;
-        expense_total: number;
-      }>();
-
-    // 计算成员数
-    const memberCount = await db
-      .prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?')
-      .bind(ledger.id)
-      .first<{ cnt: number }>();
-    const totalMembers = (memberCount?.cnt ?? 0) + 1; // +1 for owner
-
-    result.push({
-      ledger_id: ledger.external_id,
-      ledger_name: ledger.name ?? ledger.external_id,
-      currency: ledger.currency || 'CNY',
-      month_start_day: ledger.month_start_day ?? 1,
-      transaction_count: totals?.tx_count ?? 0,
-      income_total: totals?.income_total ?? 0,
-      expense_total: totals?.expense_total ?? 0,
-      balance: (totals?.income_total ?? 0) - (totals?.expense_total ?? 0),
-      exported_at: now,
-      updated_at: now,
-      role: 'owner',
-      is_shared: totalMembers > 1,
-      member_count: totalMembers,
-    });
   }
 
   console.log('[READ] Returning result:', result.length, 'ledgers');

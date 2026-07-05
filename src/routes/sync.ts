@@ -397,6 +397,20 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     // ====================== 优化3：批量写入变更（分小批次避免 CPU 超时） ======================
     const conflictList: typeof conflictSamples = [];
     const BATCH_INSERT_SIZE = 15; // 每批处理 15 个插入
+
+    // 批量预加载 member role（避免每条变更都查一次 ledger_members）
+    const memberRoleMap = new Map<string, string>();
+    const uniqueLedgerIds = [...new Set(changes.filter(c => c.ledger_id).map(c => ledgerMap[c.ledger_id as string]?.id).filter(Boolean))];
+    if (uniqueLedgerIds.length > 0) {
+      const placeholders = uniqueLedgerIds.map(() => '?').join(',');
+      const memberRows = await db.prepare(
+        `SELECT ledger_id, role FROM ledger_members WHERE user_id = ? AND ledger_id IN (${placeholders})`
+      ).bind(userId, ...uniqueLedgerIds).all<{ ledger_id: string; role: string }>();
+      for (const r of memberRows.results) {
+        memberRoleMap.set(r.ledger_id, r.role);
+      }
+    }
+
     const processedChanges: Array<{
       change: typeof changes[0];
       ledgerRow: typeof ledgerMap[string] | null;
@@ -450,8 +464,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
             continue;
           }
           // Editor 只能推 transaction/budget；ledger/ledger_snapshot 只有 owner 能推（与原版对齐）
-          const memberRole = await db.prepare('SELECT role FROM ledger_members WHERE ledger_id = ? AND user_id = ?').bind(ledgerRow.id, userId).first<{ role: string }>();
-          const callerRole = memberRole?.role ?? (ledgerRow.user_id === userId ? 'owner' : null);
+          const callerRole = memberRoleMap.get(ledgerRow.id) ?? (ledgerRow.user_id === userId ? 'owner' : null);
           if (callerRole !== 'owner' && (change.entity_type === 'ledger' || change.entity_type === 'ledger_snapshot')) {
             rejected++;
             continue;
