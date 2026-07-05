@@ -399,7 +399,7 @@ authRouter.post('/login', zValidator('json', z.object({
   // 清理已撤销和过期的旧 token
   await db.prepare(
     "DELETE FROM refresh_tokens WHERE user_id = ? AND (revoked_at IS NOT NULL OR expires_at < datetime('now'))"
-  ).bind(userId).run();
+  ).bind(user.id).run();
 
   // 返回符合蜜蜂记账 APP 期望的格式
   return c.json({
