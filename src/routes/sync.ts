@@ -1290,6 +1290,7 @@ async function applyChangeToProjection(
     'category',
     'tag',
     'budget',
+    'ledger',
     'recurring_transaction',
     'attachment',
   ];
