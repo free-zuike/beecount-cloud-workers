@@ -755,8 +755,8 @@ writeRouter.delete('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteBa
   const newChangeId = changeResult.meta.last_row_id as number;
 
   await db
-    .prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND ledger_id = ?')
-    .bind(accountSyncId, ledger.id)
+    .prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
+    .bind(accountSyncId, userId)
     .run();
 
   await insertAuditLog({
@@ -861,8 +861,8 @@ writeRouter.delete('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteBaseSc
   const newChangeId = changeResult.meta.last_row_id as number;
 
   await db
-    .prepare('DELETE FROM read_tag_projection WHERE sync_id = ? AND ledger_id = ?')
-    .bind(tagSyncId, ledger.id)
+    .prepare('DELETE FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
+    .bind(tagSyncId, userId)
     .run();
 
   await insertAuditLog({
