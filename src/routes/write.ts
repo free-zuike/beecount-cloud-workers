@@ -489,6 +489,9 @@ writeRouter.delete('/ledgers/:ledgerId', async (c) => {
   // 5. 删 sync_changes 历史（只留 tombstone）
   await db.prepare('DELETE FROM sync_changes WHERE ledger_id = ? AND change_id != ? AND entity_type != ?').bind(ledger.id, newChangeId, 'ledger_snapshot').run();
 
+  // 6. 删 sync_cursors（该账本的游标）
+  await db.prepare('DELETE FROM sync_cursors WHERE ledger_external_id = ?').bind(ledger.external_id).run();
+
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'ledger', entityId: ledgerId,
     details: { ledgerExternalId: ledger.external_id, attachmentsDeleted: (attachments.results || []).length },
