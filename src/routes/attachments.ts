@@ -708,10 +708,10 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
         }
 
         // 修改图标时：删除该用户之前的所有category_icon记录和R2文件，保留最新的
-        const oldIcons = await db.prepare(
+        const oldIconsResult = await db.prepare(
             'SELECT id, storage_path FROM attachment_files WHERE user_id = ? AND attachment_kind = ?'
         ).bind(userId, 'category_icon').all<{ id: string; storage_path: string }>();
-        for (const old of oldIcons) {
+        for (const old of oldIconsResult.results || []) {
             if (c.env.R2 && old.storage_path) {
                 try { await c.env.R2.delete(old.storage_path); } catch {}
             }
