@@ -314,7 +314,7 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
     .bind(ledgerId, userId, ledgerExternalId, req.ledger_name, req.currency, serverNow)
     .run();
 
-  // 写入 SyncChange
+  // 写入 SyncChange（与原版对齐：entity_type = 'ledger'）
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
@@ -324,10 +324,10 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
     .bind(
       userId,
       ledgerId,
-      'ledger_snapshot',
-      syncId,
+      'ledger',
+      ledgerExternalId,
       'upsert',
-      safeJsonStringify({ id: ledgerExternalId, ledgerName: req.ledger_name, currency: req.currency, monthStartDay: req.month_start_day ?? 1 }),
+      safeJsonStringify({ ledgerName: req.ledger_name, currency: req.currency, monthStartDay: req.month_start_day ?? 1 }),
       serverNow,
       userId,
     )
@@ -406,8 +406,8 @@ writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaU
     ).bind(
       userId,
       ledger.id,
-      'ledger_snapshot',
-      syncId,
+      'ledger',
+      ledger.external_id,
       'upsert',
       safeJsonStringify(newPayload),
       serverNow,
@@ -487,7 +487,7 @@ writeRouter.delete('/ledgers/:ledgerId', async (c) => {
   }
 
   // 5. 删 sync_changes 历史（只留 tombstone）
-  await db.prepare('DELETE FROM sync_changes WHERE ledger_id = ? AND change_id != ? AND entity_type != ?').bind(ledger.id, newChangeId, 'ledger_snapshot').run();
+  await db.prepare('DELETE FROM sync_changes WHERE ledger_id = ? AND change_id != ?').bind(ledger.id, newChangeId).run();
 
   // 6. 删 sync_cursors（该账本的游标）
   await db.prepare('DELETE FROM sync_cursors WHERE ledger_external_id = ?').bind(ledger.external_id).run();

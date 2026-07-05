@@ -250,15 +250,17 @@ readRouter.get('/ledgers', async (c) => {
 
   console.log('[READ] /ledgers called, userId:', userId);
 
-  // 查询用户账本
+  // 查询用户账本（含共享账本，与原版 list_accessible_memberships 对齐）
   const ledgers = await db
     .prepare(
-      `SELECT l.id, l.external_id, l.name, l.currency, l.created_at, l.month_start_day
+      `SELECT DISTINCT l.id, l.external_id, l.name, l.currency, l.created_at, l.month_start_day,
+              COALESCE(lm.role, 'owner') as role
        FROM ledgers l
-       WHERE l.user_id = ?
+       LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
+       WHERE l.user_id = ? OR lm.user_id = ?
        ORDER BY l.created_at DESC`
     )
-    .bind(userId)
+    .bind(userId, userId, userId)
     .all<{
       id: string;
       external_id: string;
@@ -266,6 +268,7 @@ readRouter.get('/ledgers', async (c) => {
       currency: string;
       created_at: string;
       month_start_day: number | null;
+      role: string;
     }>();
 
   console.log('[READ] Found ledgers:', ledgers.results.length);
@@ -321,7 +324,7 @@ readRouter.get('/ledgers', async (c) => {
         balance: (totals?.income_total ?? 0) - (totals?.expense_total ?? 0),
         exported_at: now,
         updated_at: now,
-        role: 'owner',
+        role: (ledger.role || 'owner') as 'owner' | 'editor' | 'viewer',
         is_shared: memberCount > 0,
         member_count: memberCount + 1,
       });

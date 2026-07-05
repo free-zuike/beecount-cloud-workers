@@ -1142,6 +1142,18 @@ async function applyUserChangeToProjection(
   }
 
   if (entity_type === 'category') {
+    // Rename cascade：名称变化时级联更新 read_tx_projection 的 denorm 列
+    const newName = (payload.name as string) ?? null;
+    if (newName) {
+      const prevRow = await db.prepare('SELECT name, kind FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+        .bind(entity_sync_id, userId).first<{ name: string | null; kind: string | null }>();
+      const oldName = prevRow?.name;
+      if (oldName && oldName !== newName) {
+        await db.prepare('UPDATE read_tx_projection SET category_name = ?, category_kind = ? WHERE user_id = ? AND category_sync_id = ?')
+          .bind(newName, payload.kind ?? prevRow?.kind ?? null, userId, entity_sync_id).run();
+      }
+    }
+
     // APP 用 camelCase (parentName)，原版用 snake_case (parent_name)
     const parentName = (payload as any).parentName ?? payload.parent_name ?? null;
     const sortOrder = (payload as any).sortOrder ?? payload.sort_order ?? null;
@@ -1180,6 +1192,22 @@ async function applyUserChangeToProjection(
       ).run();
     }
   } else if (entity_type === 'account') {
+    // Rename cascade：名称变化时级联更新 read_tx_projection 的 account_name 等列
+    const newName = (payload.name as string) ?? null;
+    if (newName) {
+      const prevRow = await db.prepare('SELECT name FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
+        .bind(entity_sync_id, userId).first<{ name: string | null }>();
+      const oldName = prevRow?.name;
+      if (oldName && oldName !== newName) {
+        await db.prepare('UPDATE read_tx_projection SET account_name = ? WHERE user_id = ? AND account_sync_id = ?')
+          .bind(newName, userId, entity_sync_id).run();
+        await db.prepare('UPDATE read_tx_projection SET from_account_name = ? WHERE user_id = ? AND from_account_sync_id = ?')
+          .bind(newName, userId, entity_sync_id).run();
+        await db.prepare('UPDATE read_tx_projection SET to_account_name = ? WHERE user_id = ? AND to_account_sync_id = ?')
+          .bind(newName, userId, entity_sync_id).run();
+      }
+    }
+
     // APP 用 camelCase，原版用 snake_case
     const accountType = (payload as any).accountType ?? payload.account_type ?? (payload as any).type ?? null;
     const initialBalance = (payload as any).initialBalance ?? payload.initial_balance ?? 0;
@@ -1218,6 +1246,31 @@ async function applyUserChangeToProjection(
       ).run();
     }
   } else if (entity_type === 'tag') {
+    // Rename cascade：标签改名时更新 read_tx_projection 的 tags_csv
+    const newName = (payload.name as string) ?? null;
+    if (newName) {
+      const prevRow = await db.prepare('SELECT name FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
+        .bind(entity_sync_id, userId).first<{ name: string | null }>();
+      const oldName = prevRow?.name;
+      if (oldName && oldName !== newName) {
+        // 按 tag_sync_ids_json 精确匹配
+        const likePattern = `%"${entity_sync_id}"%`;
+        const txRows = await db.prepare(
+          `SELECT ledger_id, sync_id, tags_csv FROM read_tx_projection
+           WHERE user_id = ? AND tag_sync_ids_json LIKE ?`
+        ).bind(userId, likePattern).all<{ ledger_id: string; sync_id: string; tags_csv: string | null }>();
+        for (const tx of txRows.results) {
+          if (!tx.tags_csv) continue;
+          const parts = tx.tags_csv.split(',').map(p => p.trim());
+          const replaced = parts.map(p => p === oldName ? newName : p);
+          if (replaced.join(',') !== parts.join(',')) {
+            await db.prepare('UPDATE read_tx_projection SET tags_csv = ? WHERE ledger_id = ? AND sync_id = ?')
+              .bind(replaced.join(','), tx.ledger_id, tx.sync_id).run();
+          }
+        }
+      }
+    }
+
     const existing = await db.prepare('SELECT sync_id FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
       .bind(entity_sync_id, userId).first();
     if (existing) {
