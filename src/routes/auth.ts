@@ -396,6 +396,11 @@ authRouter.post('/login', zValidator('json', z.object({
   const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
   const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web');
 
+  // 清理已撤销和过期的旧 token
+  await db.prepare(
+    "DELETE FROM refresh_tokens WHERE user_id = ? AND (revoked_at IS NOT NULL OR expires_at < datetime('now'))"
+  ).bind(userId).run();
+
   // 返回符合蜜蜂记账 APP 期望的格式
   return c.json({
     requires_2fa: false,
