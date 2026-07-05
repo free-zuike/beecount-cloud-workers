@@ -541,34 +541,23 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     return c.json({ error: 'No ledger found' }, 400);
   }
 
-  const syncId = randomUUID();
-  const happenedAt = typeof req.happened_at === 'string' ? req.happened_at : new Date(req.happened_at).toISOString();
+  // 清理分类图标 R2 文件
+  if (c.env.R2) {
+    try {
+      const catIcon = await db.prepare(
+        'SELECT icon_cloud_file_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
+      ).bind(categorySyncId, userId).first<{ icon_cloud_file_id: string | null }>();
+      if (catIcon?.icon_cloud_file_id) {
+        const iconRow = await db.prepare(
+          "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'category_icon'"
+        ).bind(catIcon.icon_cloud_file_id).first<{ storage_path: string }>();
+        if (iconRow?.storage_path) {
+          try { await c.env.R2.delete(iconRow.storage_path); } catch {}
+        }
+      }
+    } catch {}
+  }
 
-  const rawTags = typeof req.tags === 'string' ? req.tags : Array.isArray(req.tags) ? req.tags.join(',') : null;
-  const resolvedTagsCsv = await resolveTagsCsv(db, rawTags, req.tag_ids ?? null);
-
-  const payload: Record<string, unknown> = {
-    syncId: syncId,
-    type: req.tx_type,
-    amount: req.amount,
-    happenedAt: happenedAt,
-    note: req.note ?? null,
-    categoryName: req.category_name ?? null,
-    categoryKind: req.category_kind ?? null,
-    accountName: req.account_name ?? null,
-    fromAccountName: req.from_account_name ?? null,
-    toAccountName: req.to_account_name ?? null,
-    categoryId: req.category_id ?? null,
-    accountId: req.account_id ?? null,
-    fromAccountId: req.from_account_id ?? null,
-    toAccountId: req.to_account_id ?? null,
-    tags: resolvedTagsCsv,
-    tagIds: req.tag_ids ?? null,
-    attachments: req.attachments ?? null,
-    ledgerSyncId: ledger.external_id,
-  };
-
-  // 写入 SyncChange
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
