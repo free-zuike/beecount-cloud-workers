@@ -101,6 +101,7 @@ interface AdminDeviceOut {
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
+  R2?: R2Bucket;
 };
 
 type Variables = {
@@ -469,6 +470,36 @@ adminRouter.delete('/users/:id', async (c) => {
 
   if (!user) {
     return c.json({ error: 'User not found' }, 404);
+  }
+
+  // 清理 R2 存储文件（avatars + category-icons + attachments）
+  if (c.env.R2) {
+    try {
+      // 1. 清理头像
+      const profile = await db.prepare('SELECT avatar_file_id FROM user_profiles WHERE user_id = ?')
+        .bind(userId).first<{ avatar_file_id: string | null }>();
+      if (profile?.avatar_file_id) {
+        try { await c.env.R2.delete(`avatars/${userId}/${profile.avatar_file_id}`); } catch {}
+      }
+
+      // 2. 清理分类图标
+      const iconFiles = await db.prepare(
+        "SELECT storage_path FROM attachment_files WHERE user_id = ? AND attachment_kind = 'category_icon'"
+      ).bind(userId).all<{ storage_path: string }>();
+      for (const f of iconFiles.results) {
+        try { await c.env.R2.delete(f.storage_path); } catch {}
+      }
+
+      // 3. 清理附件文件
+      const attFiles = await db.prepare(
+        "SELECT storage_path FROM attachment_files WHERE user_id = ? AND attachment_kind = 'transaction'"
+      ).bind(userId).all<{ storage_path: string }>();
+      for (const f of attFiles.results) {
+        try { await c.env.R2.delete(f.storage_path); } catch {}
+      }
+    } catch (e) {
+      console.log('[ADMIN] R2 cleanup failed (non-fatal):', e);
+    }
   }
 
   // 物理删除（CASCADE 会删除关联数据）
