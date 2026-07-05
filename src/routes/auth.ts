@@ -435,6 +435,11 @@ authRouter.post('/refresh', zValidator('json', z.object({
 
     await revokeRefreshToken(refreshToken, db);
 
+    // 清理已撤销和过期的旧 token（防止无限堆积）
+    await db.prepare(
+      "DELETE FROM refresh_tokens WHERE user_id = ? AND (revoked_at IS NOT NULL OR expires_at < datetime('now'))"
+    ).bind(userId).run();
+
     const user = await db.prepare('SELECT id, email, is_admin FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string; is_admin: number }>();
 
     return c.json({
