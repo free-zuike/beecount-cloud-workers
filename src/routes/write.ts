@@ -541,22 +541,29 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     return c.json({ error: 'No ledger found' }, 400);
   }
 
-  // 清理分类图标 R2 文件
-  if (c.env.R2) {
-    try {
-      const catIcon = await db.prepare(
-        'SELECT icon_cloud_file_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
-      ).bind(categorySyncId, userId).first<{ icon_cloud_file_id: string | null }>();
-      if (catIcon?.icon_cloud_file_id) {
-        const iconRow = await db.prepare(
-          "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'category_icon'"
-        ).bind(catIcon.icon_cloud_file_id).first<{ storage_path: string }>();
-        if (iconRow?.storage_path) {
-          try { await c.env.R2.delete(iconRow.storage_path); } catch {}
-        }
-      }
-    } catch {}
-  }
+  const syncId = randomUUID();
+  const payload: Record<string, unknown> = {
+    tx_type: req.tx_type,
+    amount: req.amount,
+    happened_at: req.happened_at ? new Date(req.happened_at as string).toISOString() : new Date().toISOString(),
+    note: req.note ?? null,
+    category_id: req.category_id ?? null,
+    category_name: req.category_name ?? null,
+    category_kind: req.category_kind ?? null,
+    account_id: req.account_id ?? null,
+    account_name: req.account_name ?? null,
+    from_account_id: req.from_account_id ?? null,
+    from_account_name: req.from_account_name ?? null,
+    to_account_id: req.to_account_id ?? null,
+    to_account_name: req.to_account_name ?? null,
+    tags: req.tags ?? null,
+    tag_ids: req.tag_ids ?? null,
+    attachments: req.attachments ?? null,
+    exclude_from_stats: req.exclude_from_stats ?? false,
+    exclude_from_budget: req.exclude_from_budget ?? false,
+  };
+  const happenedAt = payload.happened_at as string;
+  const resolvedTagsCsv = await resolveTagsCsv(db, req.tags as string | null, req.tag_ids as string[] | null);
 
   const changeResult = await db
     .prepare(
@@ -1355,6 +1362,23 @@ writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', Write
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  // 清理分类图标 R2 文件
+  if (c.env.R2) {
+    try {
+      const catIcon = await db.prepare(
+        'SELECT icon_cloud_file_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
+      ).bind(categorySyncId, userId).first<{ icon_cloud_file_id: string | null }>();
+      if (catIcon?.icon_cloud_file_id) {
+        const iconRow = await db.prepare(
+          "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'category_icon'"
+        ).bind(catIcon.icon_cloud_file_id).first<{ storage_path: string }>();
+        if (iconRow?.storage_path) {
+          try { await c.env.R2.delete(iconRow.storage_path); } catch {}
+        }
+      }
+    } catch {}
   }
 
   const changeResult = await db
