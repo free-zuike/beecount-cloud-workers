@@ -1064,9 +1064,9 @@ syncRouter.get('/full', async (c) => {
 
   try {
     const ledger = await db
-      .prepare(`SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?`)
+      .prepare(`SELECT id, external_id, name, currency, month_start_day FROM ledgers WHERE user_id = ? AND external_id = ?`)
       .bind(userId, ledgerId)
-      .first<{ id: string; external_id: string }>();
+      .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number }>();
 
     if (!ledger) {
       return c.json({ ledger_id: ledgerId, snapshot: null, latest_cursor: 0 });
@@ -1104,13 +1104,16 @@ syncRouter.get('/full', async (c) => {
     ]);
 
     const snapshot = {
+      ledgerSyncId: ledger.external_id,
+      ledgerName: ledger.name || ledger.external_id,
+      currency: ledger.currency || 'CNY',
+      monthStartDay: ledger.month_start_day || 1,
+      count: txs.results.length,
+      items: txs.results,
       accounts: accounts.results,
       categories: categories.results,
       tags: tags.results,
-      transactions: txs.results,
       budgets: budgets.results,
-      ledger_name: ledger.external_id,
-      exported_at: new Date().toISOString(),
     };
 
     return c.json({
