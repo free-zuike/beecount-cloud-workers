@@ -664,34 +664,57 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       details: { accepted, rejected, conflict_count: conflictCount, device_id: deviceId },
     });
 
-    // WS 广播 sync_change 给同一用户的所有设备（通过 Durable Object）
-    try {
-      const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
-      const doStub = c.env.BEECOUNT_DO.get(doId);
-      await doStub.fetch(new Request(`https://dummy/broadcast`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: JSON.stringify({
-            type: 'sync_change',
-            serverCursor: maxCursor,
-            serverTimestamp: serverNow,
-          }),
-        }),
-      }));
-    } catch (e) {
-      console.log('[SYNC] DO broadcast failed (non-fatal):', e);
+    // WS 广播给所有受影响账本的成员（通过 Durable Object）
+    if (Object.keys(touchedLedgers).length > 0) {
+      try {
+        const { getWsManager } = await import('../lib/ws-manager');
+        for (const [extId, internalId] of Object.entries(touchedLedgers)) {
+          const members = await db.prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ?')
+            .bind(internalId).all<{ user_id: string }>();
+          const memberIds = new Set([userId, ...members.results.map(m => m.user_id)]);
+          for (const uid of memberIds) {
+            try {
+              const doId = c.env.BEECOUNT_DO.idFromName(`ws-${uid}`);
+              const doStub = c.env.BEECOUNT_DO.get(doId);
+              await doStub.fetch(new Request(`https://dummy/broadcast`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  message: JSON.stringify({
+                    type: 'sync_change',
+                    ledgerId: extId,
+                    serverCursor: maxCursor,
+                    serverTimestamp: serverNow,
+                  }),
+                }),
+              }));
+            } catch {}
+          }
+        }
+      } catch (e) {
+        console.log('[SYNC] DO broadcast failed (non-fatal):', e);
+      }
     }
 
-    // 同时广播到内存 WS manager（兼容同 isolate 内的连接）
-    try {
-      const { getWsManager } = await import('../lib/ws-manager');
-      await getWsManager().broadcastToUser(userId, {
-        type: 'sync_change',
-        serverCursor: maxCursor,
-        serverTimestamp: serverNow,
-      });
-    } catch {}
+    // 广播给所有受影响账本的成员（与原版 broadcast_to_ledger 对齐）
+    if (Object.keys(touchedLedgers).length > 0) {
+      try {
+        const { getWsManager } = await import('../lib/ws-manager');
+        for (const [extId, internalId] of Object.entries(touchedLedgers)) {
+          const members = await db.prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ?')
+            .bind(internalId).all<{ user_id: string }>();
+          const memberIds = new Set([userId, ...members.results.map(m => m.user_id)]);
+          for (const uid of memberIds) {
+            await getWsManager().broadcastToUser(uid, {
+              type: 'sync_change',
+              ledgerId: extId,
+              serverCursor: maxCursor,
+              serverTimestamp: serverNow,
+            });
+          }
+        }
+      } catch {}
+    }
 
     // 与原版对齐：user-global 变更广播 __user_global__ 通道
     if (touchedUserGlobal) {
