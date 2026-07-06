@@ -1207,18 +1207,37 @@ async function applyUserChangeToProjection(
             'SELECT icon_cloud_file_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
           ).bind(entity_sync_id, userId).first<{ icon_cloud_file_id: string | null }>();
           if (catIcon?.icon_cloud_file_id) {
-            const iconRow = await db.prepare(
-              "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'category_icon'"
-            ).bind(catIcon.icon_cloud_file_id).first<{ storage_path: string }>();
-            if (iconRow?.storage_path) {
-              try { await r2.delete(iconRow.storage_path); } catch {}
-              await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(catIcon.icon_cloud_file_id).run();
+            const fileId = catIcon.icon_cloud_file_id;
+            // 先删 projection 行（gc_orphan 要求目标行已删后再调）
+            await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+              .bind(entity_sync_id, userId).run();
+            // 检查是否仍被其他 category 引用
+            const stillUsed = await db.prepare(
+              'SELECT COUNT(*) as cnt FROM read_category_projection WHERE icon_cloud_file_id = ? AND user_id = ?'
+            ).bind(fileId, userId).first<{ cnt: number }>();
+            if (!stillUsed || stillUsed.cnt === 0) {
+              // 无引用，安全删除 R2 + attachment_files
+              const iconRow = await db.prepare(
+                "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'category_icon'"
+              ).bind(fileId).first<{ storage_path: string }>();
+              if (iconRow?.storage_path && r2) {
+                try { await r2.delete(iconRow.storage_path); } catch {}
+              }
+              await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
             }
+          } else {
+            // 无图标，只删 projection 行
+            await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+              .bind(entity_sync_id, userId).run();
           }
-        } catch {}
+        } catch {
+          await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+            .bind(entity_sync_id, userId).run();
+        }
+      } else {
+        await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+          .bind(entity_sync_id, userId).run();
       }
-      await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
-        .bind(entity_sync_id, userId).run();
     } else if (entity_type === 'account') {
       await db.prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
         .bind(entity_sync_id, userId).run();
