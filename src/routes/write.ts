@@ -1613,12 +1613,14 @@ writeRouter.post('/ledgers/:ledgerId/budgets', zValidator('json', WriteBudgetCre
 
   const syncId = randomUUID();
   const payload: Record<string, unknown> = {
-    budget_type: req.type,
-    category_sync_id: req.category_id ?? null,
+    syncId: syncId,
+    type: req.type,
+    categoryId: req.category_id ?? null,
     amount: req.amount,
     period: req.period,
-    start_day: req.start_day,
+    startDay: req.start_day,
     enabled: req.enabled,
+    ledgerSyncId: ledger.external_id,
   };
 
   const changeResult = await db
@@ -1704,12 +1706,14 @@ writeRouter.patch('/ledgers/:ledgerId/budgets/:id', zValidator('json', WriteBudg
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(userId, ledger.id, 'budget', budgetSyncId, 'upsert', safeJsonStringify({
-      budget_type: budgetType,
-      category_sync_id: categoryId,
+      syncId: budgetSyncId,
+      type: budgetType,
+      categoryId: categoryId,
       amount,
       period,
-      start_day: startDay,
+      startDay: startDay,
       enabled,
+      ledgerSyncId: ledger.external_id,
     }), serverNow, userId)
     .run();
 
