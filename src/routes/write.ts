@@ -1683,6 +1683,78 @@ writeRouter.delete('/ledgers/:ledgerId/budgets/:id', zValidator('json', WriteBas
 });
 
 // ---------------------------------------------------------------------------
+// GET /write/budgets/usage - 预算当前周期用量
+// ---------------------------------------------------------------------------
+
+/**
+ * 按当前周期计算每个 enabled budget 的已用金额（与原版 list_budgets_usage 对齐）
+ */
+writeRouter.get('/ledgers/:ledgerId/budgets/usage', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerIdParam = c.req.param('ledgerId');
+
+  const ledger = ledgerIdParam
+    ? await findLedger(db, userId, ledgerIdParam)
+    : await db.prepare('SELECT id, external_id, month_start_day FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string; month_start_day: number }>();
+
+  if (!ledger) {
+    return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  // 获取所有预算（含 disabled，与 list_budgets 一致）
+  const budgets = await db.prepare(
+    'SELECT sync_id, budget_type, category_sync_id, enabled FROM read_budget_projection WHERE ledger_id = ?'
+  ).bind(ledger.id).all<{ sync_id: string; budget_type: string | null; category_sync_id: string | null; enabled: number }>();
+
+  // 当前周期范围（跟随 month_start_day）
+  const now = new Date();
+  const startDay = Math.max(1, Math.min(28, (ledger as any).month_start_day || 1));
+  let periodStart: Date, periodEnd: Date;
+  if (now.getDate() >= startDay) {
+    periodStart = new Date(now.getFullYear(), now.getMonth(), startDay);
+    periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, startDay);
+  } else {
+    periodStart = new Date(now.getFullYear(), now.getMonth() - 1, startDay);
+    periodEnd = new Date(now.getFullYear(), now.getMonth(), startDay);
+  }
+  const startStr = periodStart.toISOString();
+  const endStr = periodEnd.toISOString();
+
+  // 去重：(budget_type, category_sync_id) 维度，sync_id 字典序最大胜出
+  const dedup = new Map<string, typeof budgets.results[0]>();
+  for (const b of budgets.results) {
+    const btype = b.budget_type || 'total';
+    if (btype === 'category' && !b.category_sync_id) continue;
+    const key = `${btype}:${b.category_sync_id || ''}`;
+    const cur = dedup.get(key);
+    if (!cur || cur.sync_id < b.sync_id) dedup.set(key, b);
+  }
+
+  const items: Array<{ budget_id: string; used: number }> = [];
+  for (const b of dedup.values()) {
+    let baseQuery = `SELECT COALESCE(SUM(amount), 0) as total FROM read_tx_projection
+      WHERE ledger_id = ? AND tx_type = 'expense' AND happened_at >= ? AND happened_at < ?`;
+    const params: (string | number)[] = [ledger.id, startStr, endStr];
+
+    if (b.budget_type === 'category' && b.category_sync_id) {
+      // 查子分类
+      const childIds = await db.prepare(
+        'SELECT sync_id FROM read_category_projection WHERE user_id = ? AND parent_name = (SELECT name FROM read_category_projection WHERE sync_id = ? AND user_id = ?)'
+      ).bind(userId, b.category_sync_id, userId).all<{ sync_id: string }>();
+      const ids = [b.category_sync_id, ...childIds.results.map(c => c.sync_id)];
+      baseQuery += ` AND category_sync_id IN (${ids.map(() => '?').join(',')})`;
+      params.push(...ids);
+    }
+
+    const result = await db.prepare(baseQuery).bind(...params).first<{ total: number }>();
+    items.push({ budget_id: b.sync_id, used: Math.abs(result?.total || 0) });
+  }
+
+  return c.json({ items });
+});
+
+// ---------------------------------------------------------------------------
 // POST /write/categories/init-defaults - 创建默认分类
 // ---------------------------------------------------------------------------
 

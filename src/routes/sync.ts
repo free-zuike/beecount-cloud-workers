@@ -25,6 +25,31 @@ import { insertAuditLog } from '../lib/audit';
 const CODE_VERSION = 'v1.3-projection-fix';
 
 // ===========================
+// Snapshot Cache（与原版 snapshot_cache 对齐）
+// ===========================
+
+interface CacheEntry { snapshot: unknown; changeId: number; ts: number }
+const snapshotCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 60_000; // 60 秒过期
+
+function snapshotCacheGet(ledgerId: string, changeId: number): unknown | null {
+  const entry = snapshotCache.get(ledgerId);
+  if (!entry) return null;
+  if (entry.changeId !== changeId) { snapshotCache.delete(ledgerId); return null; }
+  if (Date.now() - entry.ts > CACHE_TTL_MS) { snapshotCache.delete(ledgerId); return null; }
+  return entry.snapshot;
+}
+
+function snapshotCachePut(ledgerId: string, changeId: number, snapshot: unknown): void {
+  snapshotCache.set(ledgerId, { snapshot, changeId, ts: Date.now() });
+  // 防止内存泄漏：超过 100 个 entry 时清一半
+  if (snapshotCache.size > 100) {
+    const keys = [...snapshotCache.keys()];
+    for (let i = 0; i < keys.length / 2; i++) snapshotCache.delete(keys[i]);
+  }
+}
+
+// ===========================
 // 辅助函数
 // ===========================
 
@@ -1116,18 +1141,23 @@ syncRouter.get('/full', async (c) => {
       db.prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?').bind(ledger.id).all(),
     ]);
 
-    const snapshot = {
-      ledgerSyncId: ledger.external_id,
-      ledgerName: ledger.name || ledger.external_id,
-      currency: ledger.currency || 'CNY',
-      monthStartDay: ledger.month_start_day || 1,
-      count: txs.results.length,
-      items: txs.results,
-      accounts: accounts.results,
-      categories: categories.results,
-      tags: tags.results,
-      budgets: budgets.results,
-    };
+    // 检查缓存（与原版 snapshot_cache 对齐）
+    let snapshot = snapshotCacheGet(ledger.id, latestCursor) as Record<string, unknown> | null;
+    if (!snapshot) {
+      snapshot = {
+        ledgerSyncId: ledger.external_id,
+        ledgerName: ledger.name || ledger.external_id,
+        currency: ledger.currency || 'CNY',
+        monthStartDay: ledger.month_start_day || 1,
+        count: txs.results.length,
+        items: txs.results,
+        accounts: accounts.results,
+        categories: categories.results,
+        tags: tags.results,
+        budgets: budgets.results,
+      };
+      snapshotCachePut(ledger.id, latestCursor, snapshot);
+    }
 
     return c.json({
       ledger_id: ledgerId,
@@ -1177,6 +1207,10 @@ async function applyUserChangeToProjection(
       await db.prepare('DELETE FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
         .bind(entity_sync_id, userId).run();
     }
+    // 与原版 _compact_entity_upsert_events 对齐：实体删除后清掉 upsert 历史，只留 delete 事件
+    await db.prepare(
+      `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
+    ).bind(userId, entity_type, entity_sync_id).run();
     return;
   }
 
