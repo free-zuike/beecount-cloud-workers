@@ -852,7 +852,8 @@ workspaceRouter.get('/analytics', async (c) => {
 
   const ledgerInternalIds = ledgers.results.map((l) => l.id);
 
-  let txQuery = `SELECT tx_type, amount, happened_at, category_name FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`;
+  // exclude_from_stats=true 的交易不计入收支统计（与原版对齐）
+  let txQuery = `SELECT tx_type, amount, happened_at, category_name FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`;
   const txParams: (string | number)[] = [...ledgerInternalIds];
 
   if (period) {
