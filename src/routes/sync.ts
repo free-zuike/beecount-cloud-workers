@@ -1201,19 +1201,40 @@ async function applyUserChangeToProjection(
     const iconCloudFileId = (payload as any).iconCloudFileId ?? payload.icon_cloud_file_id ?? null;
     const iconCloudSha256 = (payload as any).iconCloudSha256 ?? payload.icon_cloud_sha256 ?? null;
 
-    const existing = await db.prepare('SELECT sync_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
-      .bind(entity_sync_id, userId).first();
-    if (existing) {
+    // merge_with_existing：payload 缺失/None 的字段用已有行的旧值补齐
+    const existingRow = await db.prepare(
+      'SELECT name, kind, level, sort_order, icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256, parent_name FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
+    ).bind(entity_sync_id, userId).first<{
+      name: string | null; kind: string | null; level: number | null;
+      sort_order: number | null; icon: string | null; icon_type: string | null;
+      custom_icon_path: string | null; icon_cloud_file_id: string | null;
+      icon_cloud_sha256: string | null; parent_name: string | null;
+    }>();
+
+    const merged = {
+      name: payload.name ?? existingRow?.name ?? null,
+      kind: payload.kind ?? existingRow?.kind ?? null,
+      level: payload.level ?? existingRow?.level ?? null,
+      sort_order: sortOrder ?? existingRow?.sort_order ?? null,
+      icon: payload.icon ?? existingRow?.icon ?? null,
+      icon_type: iconType ?? existingRow?.icon_type ?? null,
+      custom_icon_path: customIconPath ?? existingRow?.custom_icon_path ?? null,
+      icon_cloud_file_id: iconCloudFileId ?? existingRow?.icon_cloud_file_id ?? null,
+      icon_cloud_sha256: iconCloudSha256 ?? existingRow?.icon_cloud_sha256 ?? null,
+      parent_name: parentName ?? existingRow?.parent_name ?? null,
+    };
+
+    if (existingRow) {
       await db.prepare(
         `UPDATE read_category_projection SET name=?, kind=?, level=?, sort_order=?,
          icon=?, icon_type=?, custom_icon_path=?, icon_cloud_file_id=?, icon_cloud_sha256=?,
          parent_name=?, source_change_id=?
          WHERE sync_id=? AND user_id=?`
       ).bind(
-        payload.name ?? null, payload.kind ?? null, payload.level ?? null,
-        sortOrder, payload.icon ?? null, iconType,
-        customIconPath, iconCloudFileId, iconCloudSha256,
-        parentName, change.change_id ?? 0,
+        merged.name, merged.kind, merged.level, merged.sort_order,
+        merged.icon, merged.icon_type, merged.custom_icon_path,
+        merged.icon_cloud_file_id, merged.icon_cloud_sha256,
+        merged.parent_name, change.change_id ?? 0,
         entity_sync_id, userId
       ).run();
     } else {
@@ -1224,10 +1245,10 @@ async function applyUserChangeToProjection(
           parent_name, source_change_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
-        null, entity_sync_id, userId, payload.name ?? null, payload.kind ?? null,
-        payload.level ?? null, sortOrder, payload.icon ?? null, iconType,
-        customIconPath, iconCloudFileId, iconCloudSha256,
-        parentName, change.change_id ?? 0
+        null, entity_sync_id, userId, merged.name, merged.kind,
+        merged.level, merged.sort_order, merged.icon, merged.icon_type,
+        merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
+        merged.parent_name, change.change_id ?? 0
       ).run();
     }
   } else if (entity_type === 'account') {
@@ -1256,18 +1277,39 @@ async function applyUserChangeToProjection(
     const bankName = (payload as any).bankName ?? payload.bank_name ?? null;
     const cardLastFour = (payload as any).cardLastFour ?? payload.card_last_four ?? null;
 
-    const existing = await db.prepare('SELECT sync_id FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
-      .bind(entity_sync_id, userId).first();
-    if (existing) {
+    // merge_with_existing
+    const existingRow = await db.prepare(
+      'SELECT name, account_type, currency, initial_balance, note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four FROM read_account_projection WHERE sync_id = ? AND user_id = ?'
+    ).bind(entity_sync_id, userId).first<{
+      name: string | null; account_type: string | null; currency: string | null;
+      initial_balance: number | null; note: string | null; credit_limit: number | null;
+      billing_day: number | null; payment_due_day: number | null;
+      bank_name: string | null; card_last_four: string | null;
+    }>();
+
+    const merged = {
+      name: payload.name ?? existingRow?.name ?? null,
+      account_type: accountType ?? existingRow?.account_type ?? null,
+      currency: payload.currency ?? existingRow?.currency ?? null,
+      initial_balance: initialBalance ?? existingRow?.initial_balance ?? 0,
+      note: payload.note ?? existingRow?.note ?? null,
+      credit_limit: creditLimit ?? existingRow?.credit_limit ?? null,
+      billing_day: billingDay ?? existingRow?.billing_day ?? null,
+      payment_due_day: paymentDueDay ?? existingRow?.payment_due_day ?? null,
+      bank_name: bankName ?? existingRow?.bank_name ?? null,
+      card_last_four: cardLastFour ?? existingRow?.card_last_four ?? null,
+    };
+
+    if (existingRow) {
       await db.prepare(
         `UPDATE read_account_projection SET name=?, account_type=?, currency=?, initial_balance=?,
          note=?, credit_limit=?, billing_day=?, payment_due_day=?, bank_name=?, card_last_four=?,
          source_change_id=?
          WHERE sync_id=? AND user_id=?`
       ).bind(
-        payload.name ?? null, accountType, payload.currency ?? null,
-        initialBalance, payload.note ?? null, creditLimit,
-        billingDay, paymentDueDay, bankName, cardLastFour,
+        merged.name, merged.account_type, merged.currency, merged.initial_balance,
+        merged.note, merged.credit_limit, merged.billing_day, merged.payment_due_day,
+        merged.bank_name, merged.card_last_four,
         change.change_id ?? 0, entity_sync_id, userId
       ).run();
     } else {
@@ -1277,11 +1319,11 @@ async function applyUserChangeToProjection(
           note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
-        null, entity_sync_id, userId, payload.name ?? null, accountType,
-        payload.currency ?? null, initialBalance, payload.note ?? null,
-        creditLimit ?? null, billingDay ?? null,
-        paymentDueDay ?? null, bankName ?? null,
-        cardLastFour ?? null, change.change_id ?? 0
+        null, entity_sync_id, userId, merged.name, merged.account_type,
+        merged.currency, merged.initial_balance, merged.note,
+        merged.credit_limit, merged.billing_day,
+        merged.payment_due_day, merged.bank_name,
+        merged.card_last_four, change.change_id ?? 0
       ).run();
     }
   } else if (entity_type === 'tag') {
@@ -1310,18 +1352,26 @@ async function applyUserChangeToProjection(
       }
     }
 
-    const existing = await db.prepare('SELECT sync_id FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
-      .bind(entity_sync_id, userId).first();
-    if (existing) {
+    // merge_with_existing
+    const existingRow = await db.prepare(
+      'SELECT name, color FROM read_tag_projection WHERE sync_id = ? AND user_id = ?'
+    ).bind(entity_sync_id, userId).first<{ name: string | null; color: string | null }>();
+
+    const merged = {
+      name: payload.name ?? existingRow?.name ?? null,
+      color: payload.color ?? existingRow?.color ?? null,
+    };
+
+    if (existingRow) {
       await db.prepare(
         `UPDATE read_tag_projection SET name=?, color=?, source_change_id=?
          WHERE sync_id=? AND user_id=?`
-      ).bind(payload.name ?? null, payload.color ?? null, change.change_id, entity_sync_id, userId).run();
+      ).bind(merged.name, merged.color, change.change_id, entity_sync_id, userId).run();
     } else {
       await db.prepare(
         `INSERT INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
          VALUES (?, ?, ?, ?, ?, ?)`
-      ).bind(null, entity_sync_id, userId, payload.name ?? null, payload.color ?? null, change.change_id ?? 0).run();
+      ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
     }
   }
 }
