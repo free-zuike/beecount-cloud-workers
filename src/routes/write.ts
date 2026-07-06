@@ -618,26 +618,27 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
 
   const syncId = randomUUID();
   const payload: Record<string, unknown> = {
-    tx_type: req.tx_type,
+    syncId: syncId,
+    type: req.tx_type,
     amount: req.amount,
-    happened_at: req.happened_at ? new Date(req.happened_at as string).toISOString() : new Date().toISOString(),
+    happenedAt: req.happened_at ? new Date(req.happened_at as string).toISOString() : new Date().toISOString(),
     note: req.note ?? null,
-    category_id: req.category_id ?? null,
-    category_name: req.category_name ?? null,
-    category_kind: req.category_kind ?? null,
-    account_id: req.account_id ?? null,
-    account_name: req.account_name ?? null,
-    from_account_id: req.from_account_id ?? null,
-    from_account_name: req.from_account_name ?? null,
-    to_account_id: req.to_account_id ?? null,
-    to_account_name: req.to_account_name ?? null,
+    categoryId: req.category_id ?? null,
+    categoryName: req.category_name ?? null,
+    categoryKind: req.category_kind ?? null,
+    accountId: req.account_id ?? null,
+    accountName: req.account_name ?? null,
+    fromAccountId: req.from_account_id ?? null,
+    fromAccountName: req.from_account_name ?? null,
+    toAccountId: req.to_account_id ?? null,
+    toAccountName: req.to_account_name ?? null,
     tags: req.tags ?? null,
-    tag_ids: req.tag_ids ?? null,
+    tagIds: req.tag_ids ?? null,
     attachments: req.attachments ?? null,
-    exclude_from_stats: req.exclude_from_stats ?? false,
-    exclude_from_budget: req.exclude_from_budget ?? false,
+    excludeFromStats: req.exclude_from_stats ?? false,
+    excludeFromBudget: req.exclude_from_budget ?? false,
   };
-  const happenedAt = payload.happened_at as string;
+  const happenedAt = payload.happenedAt as string;
   const resolvedTagsCsv = await resolveTagsCsv(db, req.tags as string | null, req.tag_ids as string[] | null);
 
   const changeResult = await db
@@ -1009,8 +1010,8 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   const existingPayload = JSON.parse(latestChange.payload_json);
   const newPayload = { ...existingPayload };
 
-  // 合并更新字段
-  if (req.tx_type !== undefined) newPayload.tx_type = req.tx_type;
+  // 合并更新字段（统一用 camelCase 与 mobile 对齐）
+  if (req.tx_type !== undefined) newPayload.type = req.tx_type;
   if (req.amount !== undefined) newPayload.amount = req.amount;
   if (req.happened_at !== undefined)
     newPayload.happenedAt =
@@ -1322,16 +1323,17 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
 
   const syncId = randomUUID();
   const payload: Record<string, unknown> = {
+    syncId: syncId,
     name: req.name,
     kind: req.kind,
     level: req.level ?? null,
-    sort_order: req.sort_order ?? null,
+    sortOrder: req.sort_order ?? null,
     icon: req.icon ?? null,
-    icon_type: req.icon_type ?? null,
-    custom_icon_path: req.custom_icon_path ?? null,
-    icon_cloud_file_id: req.icon_cloud_file_id ?? null,
-    icon_cloud_sha256: req.icon_cloud_sha256 ?? null,
-    parent_name: req.parent_name ?? null,
+    iconType: req.icon_type ?? null,
+    customIconPath: req.custom_icon_path ?? null,
+    iconCloudFileId: req.icon_cloud_file_id ?? null,
+    iconCloudSha256: req.icon_cloud_sha256 ?? null,
+    parentName: req.parent_name ?? null,
   };
 
   const changeResult = await db
@@ -1406,10 +1408,10 @@ writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteC
        VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
     .bind(userId, 'category', categorySyncId, 'upsert', safeJsonStringify({
-      name: req.name, kind: req.kind, level: req.level ?? null, sort_order: req.sort_order ?? null,
-      icon: req.icon ?? null, icon_type: req.icon_type ?? null, custom_icon_path: req.custom_icon_path ?? null,
-      icon_cloud_file_id: req.icon_cloud_file_id ?? null, icon_cloud_sha256: req.icon_cloud_sha256 ?? null,
-      parent_name: req.parent_name ?? null,
+      syncId: categorySyncId, name: req.name, kind: req.kind, level: req.level ?? null, sortOrder: req.sort_order ?? null,
+      icon: req.icon ?? null, iconType: req.icon_type ?? null, customIconPath: req.custom_icon_path ?? null,
+      iconCloudFileId: req.icon_cloud_file_id ?? null, iconCloudSha256: req.icon_cloud_sha256 ?? null,
+      parentName: req.parent_name ?? null,
     }), serverNow, userId)
     .run();
   const newChangeId = changeResult.meta.last_row_id as number;
