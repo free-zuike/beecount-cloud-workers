@@ -1312,17 +1312,17 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
   
   const existingCategory = await db
     .prepare(
-      `SELECT id, name, kind FROM read_category_projection 
+      `SELECT sync_id, name, kind FROM read_category_projection 
        WHERE user_id = ? AND LOWER(name) = ? AND LOWER(kind) = ? LIMIT 1`
     )
     .bind(userId, normalizedName, normalizedKind)
-    .first<{ id: string; name: string; kind: string }>();
+    .first<{ sync_id: string; name: string; kind: string }>();
   
   if (existingCategory) {
     return c.json({
       error: 'Category already exists',
       detail: `A category named "${existingCategory.name}" with kind "${existingCategory.kind}" already exists`,
-      existing_id: existingCategory.id,
+      existing_id: existingCategory.sync_id,
     }, 409);
   }
 
