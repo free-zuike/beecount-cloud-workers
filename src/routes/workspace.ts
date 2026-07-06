@@ -272,11 +272,14 @@ workspaceRouter.get('/transactions', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') ?? '20', 10), 2000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
 
-  let ledgerQuery = 'SELECT id, external_id, name FROM ledgers WHERE user_id = ?';
-  const ledgerParams: string[] = [userId];
+  // 查询用户可见账本（含共享账本，与原版 _visible_workspace_ledgers 对齐）
+  let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
+    LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
+    WHERE l.user_id = ? OR lm.user_id = ?`;
+  const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
-    ledgerQuery += ' AND external_id = ?';
+    ledgerQuery += ' AND l.external_id = ?';
     ledgerParams.push(ledgerId);
   }
 
