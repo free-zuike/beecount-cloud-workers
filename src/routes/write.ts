@@ -2014,13 +2014,14 @@ writeRouter.post('/categories/init-defaults', async (c) => {
     parentSyncIds[cat.name] = parentSyncId;
 
     const payload: Record<string, unknown> = {
+      syncId: parentSyncId,
       name: cat.name,
       kind: cat.kind,
       level: 1,
-      sort_order: cat.sort_order,
+      sortOrder: cat.sort_order,
       icon: cat.icon,
-      icon_type: 'emoji',
-      parent_name: null,
+      iconType: 'emoji',
+      parentName: null,
     };
 
     await db
@@ -2052,13 +2053,14 @@ writeRouter.post('/categories/init-defaults', async (c) => {
       for (const child of cat.children) {
         const childSyncId = randomUUID();
         const childPayload: Record<string, unknown> = {
+          syncId: childSyncId,
           name: child.name,
           kind: cat.kind,
           level: 2,
-          sort_order: cat.sort_order * 100 + (cat.children.indexOf(child) + 1),
+          sortOrder: cat.sort_order * 100 + (cat.children.indexOf(child) + 1),
           icon: child.icon,
-          icon_type: 'emoji',
-          parent_name: cat.name,
+          iconType: 'emoji',
+          parentName: cat.name,
         };
 
         await db
