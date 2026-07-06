@@ -137,6 +137,8 @@ workspaceRouter.get('/transactions.csv', async (c) => {
   if (!ledgerId) {
     return c.json({ error: 'ledger_id is required' }, 400);
   }
+  const tzOffsetMinutes = parseInt(c.req.query('tz_offset_minutes') ?? '0', 10);
+  const tzMs = tzOffsetMinutes * 60 * 1000;
 
   const ledger = await db
     .prepare('SELECT id, name FROM ledgers WHERE user_id = ? AND external_id = ?')
@@ -227,11 +229,15 @@ workspaceRouter.get('/transactions.csv', async (c) => {
     return str;
   }
 
-  const header = ['日期', '类型', '金额', '账户', '分类', '标签', '备注'];
+  const header = ['日期', '时间', '类型', '金额', '账户', '分类', '标签', '备注'];
   const rows = [header.join(',')];
 
   for (const tx of txRows.results) {
-    const date = String(tx.happened_at ?? '').slice(0, 10);
+    // 应用时区偏移到本地时间（与原版对齐）
+    const utcDate = new Date(String(tx.happened_at ?? ''));
+    const localDate = new Date(utcDate.getTime() + tzMs);
+    const date = localDate.toISOString().slice(0, 10);
+    const time = localDate.toISOString().slice(11, 19);
     const txTypeVal = String(tx.tx_type ?? '');
     const amount = String(tx.amount ?? 0);
     const account = String(tx.account_name ?? tx.from_account_name ?? '');
@@ -240,7 +246,7 @@ workspaceRouter.get('/transactions.csv', async (c) => {
     const note = String(tx.note ?? '');
 
     rows.push(
-      [date, txTypeVal, amount, account, category, tags, note].map(escapeCsvField).join(',')
+      [date, time, txTypeVal, amount, account, category, tags, note].map(escapeCsvField).join(',')
     );
   }
 
