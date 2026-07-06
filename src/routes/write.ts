@@ -1295,6 +1295,7 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
   const db = c.env.DB;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
+  console.log('[WRITE] Creating category:', JSON.stringify({ name: req.name, kind: req.kind, parent_name: req.parent_name, icon_cloud_file_id: req.icon_cloud_file_id }));
 
   const ledger = await db
     .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
@@ -1375,7 +1376,11 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
   });
 
   // WS 广播
-  await broadcastWriteEvent(c, ledger.id, newChangeId);
+  try {
+    await broadcastWriteEvent(c, ledger.id, newChangeId);
+  } catch (broadcastErr) {
+    console.error('[WRITE] broadcastWriteEvent failed:', broadcastErr);
+  }
 
   return c.json({
     ledger_id: ledger.external_id,
