@@ -74,7 +74,13 @@ export function formatIsoDateTime(value: string | null | undefined): string {
   if (!value) return '-'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return date.toISOString().slice(0, 19).replace('T', ' ')
+  // 使用本地时间显示（与 mobile 对齐），而非 toISOString() 的 UTC
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+  const hh = String(date.getHours()).padStart(2, '0')
+  const mi = String(date.getMinutes()).padStart(2, '0')
+  const ss = String(date.getSeconds()).padStart(2, '0')
+  return `${date.getFullYear()}-${mm}-${dd} ${hh}:${mi}:${ss}`
 }
 
 export function formatLedgerLabel(ledger: ReadLedger, roleLabel: string): string {
