@@ -1063,18 +1063,31 @@ syncRouter.get('/full', async (c) => {
   }
 
   try {
-    const ledger = await db
+    // 支持共享账本：先查 owner 的，再查通过 ledger_members 共享的
+    let ledger = await db
       .prepare(`SELECT id, external_id, name, currency, month_start_day FROM ledgers WHERE user_id = ? AND external_id = ?`)
       .bind(userId, ledgerId)
       .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number }>();
 
     if (!ledger) {
+      // 检查是否通过 ledger_members 共享
+      const shared = await db
+        .prepare(`SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
+                  FROM ledgers l JOIN ledger_members lm ON l.id = lm.ledger_id
+                  WHERE lm.user_id = ? AND l.external_id = ?`)
+        .bind(userId, ledgerId)
+        .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number }>();
+      if (shared) ledger = shared;
+    }
+
+    if (!ledger) {
       return c.json({ ledger_id: ledgerId, snapshot: null, latest_cursor: 0 });
     }
 
+    // latest_cursor 只取该账本的 max change_id（与原版 _max_cursor_for_ledgers 对齐）
     const latestCursorRow = await db
-      .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE user_id = ?')
-      .bind(userId)
+      .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id = ?')
+      .bind(ledger.id)
       .first<{ max_id: number | null }>();
     const latestCursor = latestCursorRow?.max_id ?? 0;
 
