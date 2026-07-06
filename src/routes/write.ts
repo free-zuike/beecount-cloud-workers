@@ -637,6 +637,8 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     attachments: req.attachments ?? null,
     excludeFromStats: req.exclude_from_stats ?? false,
     excludeFromBudget: req.exclude_from_budget ?? false,
+    createdByUserId: userId,
+    updatedByUserId: userId,
   };
   const happenedAt = payload.happenedAt as string;
   const resolvedTagsCsv = await resolveTagsCsv(db, req.tags as string | null, req.tag_ids as string[] | null);
@@ -1236,6 +1238,8 @@ writeRouter.post('/ledgers/:ledgerId/accounts', zValidator('json', WriteAccountC
     paymentDueDay: req.payment_due_day ?? null,
     bankName: req.bank_name ?? null,
     cardLastFour: req.card_last_four ?? null,
+    createdByUserId: userId,
+    updatedByUserId: userId,
   };
 
   const changeResult = await db
@@ -1334,6 +1338,8 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
     iconCloudFileId: req.icon_cloud_file_id ?? null,
     iconCloudSha256: req.icon_cloud_sha256 ?? null,
     parentName: req.parent_name ?? null,
+    createdByUserId: userId,
+    updatedByUserId: userId,
   };
 
   const changeResult = await db
@@ -1554,6 +1560,8 @@ writeRouter.post('/ledgers/:ledgerId/tags', zValidator('json', WriteTagCreateSch
   const payload: Record<string, unknown> = {
     name: req.name,
     color: req.color ?? null,
+    createdByUserId: userId,
+    updatedByUserId: userId,
   };
 
   const changeResult = await db
@@ -1623,6 +1631,8 @@ writeRouter.post('/ledgers/:ledgerId/budgets', zValidator('json', WriteBudgetCre
     startDay: req.start_day,
     enabled: req.enabled,
     ledgerSyncId: ledger.external_id,
+    createdByUserId: userId,
+    updatedByUserId: userId,
   };
 
   const changeResult = await db
@@ -1716,6 +1726,7 @@ writeRouter.patch('/ledgers/:ledgerId/budgets/:id', zValidator('json', WriteBudg
       startDay: startDay,
       enabled,
       ledgerSyncId: ledger.external_id,
+      updatedByUserId: userId,
     }), serverNow, userId)
     .run();
 
