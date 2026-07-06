@@ -33,6 +33,81 @@ import { randomUUID } from 'crypto';
 import { insertAuditLog } from '../lib/audit';
 
 // ===========================
+// WS 广播 helper（与原版 broadcast_to_ledger 对齐）
+// ===========================
+
+async function broadcastWriteEvent(c: any, ledgerId: string, changeId: number): Promise<void> {
+  const db: D1Database = c.env.DB;
+  const ledger = await db.prepare('SELECT external_id FROM ledgers WHERE id = ?').bind(ledgerId).first<{ external_id: string }>();
+  if (!ledger) return;
+
+  const members = await db.prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ?').bind(ledgerId).all<{ user_id: string }>();
+  const ledgerRow = await db.prepare('SELECT user_id FROM ledgers WHERE id = ?').bind(ledgerId).first<{ user_id: string }>();
+  const allUserIds = new Set([ledgerRow?.user_id, ...members.results.map((m: any) => m.user_id)].filter(Boolean));
+
+  const payload = {
+    type: 'sync_change',
+    ledgerId: ledger.external_id,
+    serverCursor: changeId,
+    serverTimestamp: new Date().toISOString(),
+  };
+
+  for (const uid of allUserIds) {
+    // DO broadcast
+    try {
+      const doId = c.env.BEECOUNT_DO.idFromName(`ws-${uid}`);
+      const doStub = c.env.BEECOUNT_DO.get(doId);
+      await doStub.fetch(new Request('https://dummy/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: JSON.stringify(payload) }),
+      }));
+    } catch {}
+    // ws-manager broadcast
+    try {
+      const { getWsManager } = await import('../lib/ws-manager');
+      await getWsManager().broadcastToUser(uid, payload);
+    } catch {}
+  }
+}
+
+async function broadcastSharedResourceEvents(
+  c: any,
+  ownerUserId: string,
+  events: Array<{ resource_type: string; action: string; sync_id: string; payload: unknown }>
+): Promise<void> {
+  if (events.length === 0) return;
+  const db: D1Database = c.env.DB;
+  // 查 owner 作为 owner 的共享账本（member_count > 1）
+  const sharedLedgers = await db.prepare(
+    `SELECT l.id, l.external_id FROM ledgers l
+     JOIN ledger_members lm ON l.id = lm.ledger_id
+     WHERE l.user_id = ?
+     GROUP BY l.id, l.external_id
+     HAVING COUNT(lm.user_id) > 1`
+  ).bind(ownerUserId).all<{ id: string; external_id: string }>();
+
+  for (const sl of sharedLedgers.results) {
+    const members = await db.prepare('SELECT user_id, role FROM ledger_members WHERE ledger_id = ?').bind(sl.id).all<{ user_id: string; role: string }>();
+    for (const m of members.results) {
+      if (m.role === 'owner') continue;
+      for (const ev of events) {
+        const msg = { type: 'shared_resource_change', ledgerId: sl.external_id, resourceType: ev.resource_type, action: ev.action, payload: ev.payload };
+        try {
+          const doId = c.env.BEECOUNT_DO.idFromName(`ws-${m.user_id}`);
+          const doStub = c.env.BEECOUNT_DO.get(doId);
+          await doStub.fetch(new Request('https://dummy/broadcast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: JSON.stringify(msg) }) }));
+        } catch {}
+        try {
+          const { getWsManager } = await import('../lib/ws-manager');
+          await getWsManager().broadcastToUser(m.user_id, msg);
+        } catch {}
+      }
+    }
+  }
+}
+
+// ===========================
 // 辅助函数
 // ===========================
 
@@ -620,6 +695,9 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     details: { tx_type: req.tx_type, amount: req.amount, happened_at: happenedAt },
   });
 
+  // WS 广播给所有账本成员（与原版 broadcast_to_ledger 对齐）
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -712,6 +790,9 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
     details: { name: req.name },
   });
 
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -761,6 +842,9 @@ writeRouter.delete('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteBa
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'account', entityId: accountSyncId,
   });
+
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
 
   return c.json({
     ledger_id: ledger.external_id,
@@ -818,6 +902,9 @@ writeRouter.patch('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteTagUpda
     details: { name: req.name },
   });
 
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -867,6 +954,9 @@ writeRouter.delete('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteBaseSc
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'tag', entityId: tagSyncId,
   });
+
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
 
   return c.json({
     ledger_id: ledger.external_id,
@@ -995,6 +1085,9 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
     details: { fields_updated: Object.keys(newPayload).filter(k => newPayload[k] !== existingPayload[k]) },
   });
 
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -1096,6 +1189,9 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
     db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'transaction', entityId: txSyncId,
   });
 
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -1171,6 +1267,9 @@ writeRouter.post('/ledgers/:ledgerId/accounts', zValidator('json', WriteAccountC
     db, userId, ledgerId: ledger.id, action: 'create', entityType: 'account', entityId: syncId,
     details: { name: req.name },
   });
+
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
 
   return c.json({
     ledger_id: ledger.external_id,
@@ -1267,6 +1366,9 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
     details: { name: req.name, kind: req.kind },
   });
 
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -1344,6 +1446,9 @@ writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteC
     details: { name: req.name },
   });
 
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -1411,6 +1516,9 @@ writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', Write
     db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'category', entityId: categorySyncId,
   });
 
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -1470,6 +1578,9 @@ writeRouter.post('/ledgers/:ledgerId/tags', zValidator('json', WriteTagCreateSch
     db, userId, ledgerId: ledger.id, action: 'create', entityType: 'tag', entityId: syncId,
     details: { name: req.name },
   });
+
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
 
   return c.json({
     ledger_id: ledger.external_id,
@@ -1538,6 +1649,9 @@ writeRouter.post('/ledgers/:ledgerId/budgets', zValidator('json', WriteBudgetCre
     db, userId, ledgerId: ledger.id, action: 'create', entityType: 'budget', entityId: syncId,
     details: { amount: req.amount, period: req.period },
   });
+
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
 
   return c.json({
     ledger_id: ledger.external_id,
@@ -1622,6 +1736,9 @@ writeRouter.patch('/ledgers/:ledgerId/budgets/:id', zValidator('json', WriteBudg
     details: { amount: req.amount },
   });
 
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
+
   return c.json({
     ledger_id: ledger.external_id,
     base_change_id: req.base_change_id,
@@ -1671,6 +1788,9 @@ writeRouter.delete('/ledgers/:ledgerId/budgets/:id', zValidator('json', WriteBas
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'budget', entityId: budgetSyncId,
   });
+
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
 
   return c.json({
     ledger_id: ledger.external_id,
