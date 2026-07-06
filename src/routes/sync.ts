@@ -197,6 +197,7 @@ type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
   BEECOUNT_DO: DurableObjectNamespace;
+  R2?: R2Bucket;
 };
 
 type Variables = {
@@ -636,7 +637,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
                 entity_sync_id: change.entity_sync_id,
                 action: change.action,
                 payload: change.payload,
-              });
+              }, c.env.R2);
             } else if (ledgerRow) {
               await applyChangeToProjection(db, ledgerRow.id, userId, {
                 change_id: newChangeId,
@@ -1193,11 +1194,29 @@ async function applyUserChangeToProjection(
     action: string;
     payload: Record<string, unknown>;
   },
+  r2?: R2Bucket,
 ): Promise<void> {
   const { entity_type, entity_sync_id, action, payload } = change;
 
   if (action === 'delete') {
     if (entity_type === 'category') {
+      // 删除前清理分类图标 R2 文件（与原版 gc_orphan_attachments 对齐）
+      if (r2) {
+        try {
+          const catIcon = await db.prepare(
+            'SELECT icon_cloud_file_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
+          ).bind(entity_sync_id, userId).first<{ icon_cloud_file_id: string | null }>();
+          if (catIcon?.icon_cloud_file_id) {
+            const iconRow = await db.prepare(
+              "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'category_icon'"
+            ).bind(catIcon.icon_cloud_file_id).first<{ storage_path: string }>();
+            if (iconRow?.storage_path) {
+              try { await r2.delete(iconRow.storage_path); } catch {}
+              await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(catIcon.icon_cloud_file_id).run();
+            }
+          }
+        } catch {}
+      }
       await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
         .bind(entity_sync_id, userId).run();
     } else if (entity_type === 'account') {
