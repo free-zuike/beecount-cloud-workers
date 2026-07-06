@@ -75,3 +75,23 @@ export async function downloadAttachment(
     mimeType: res.headers.get('content-type')
   }
 }
+
+export async function uploadCategoryIcon(
+  token: string,
+  payload: { file: File }
+): Promise<{ file_id: string; sha256: string }> {
+  const body = new FormData()
+  body.append('file', payload.file)
+
+  const res = await fetch(`${API_BASE}/attachments/category-icons/upload`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`
+    },
+    body
+  })
+  if (!res.ok) {
+    throw await extractApiError(res)
+  }
+  return res.json()
+}

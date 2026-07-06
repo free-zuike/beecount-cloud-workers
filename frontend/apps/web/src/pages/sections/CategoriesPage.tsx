@@ -7,7 +7,7 @@ import {
   fetchWorkspaceTags,
   fetchWorkspaceTransactions,
   updateCategory,
-  uploadAttachment,
+  uploadCategoryIcon,
   type ReadCategory,
   type WorkspaceCategory,
   type WorkspaceTag,
@@ -228,7 +228,7 @@ export function CategoriesPage() {
             return null
           }
           try {
-            const out = await uploadAttachment(token, { ledger_id: activeLedgerId, file })
+            const out = await uploadCategoryIcon(token, { file })
             return { fileId: out.file_id, sha256: out.sha256 }
           } catch (err) {
             notifyError(err)
