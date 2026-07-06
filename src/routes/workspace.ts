@@ -67,6 +67,7 @@ function generateInviteCode(): string {
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
+  BEECOUNT_DO: DurableObjectNamespace;
 };
 
 type Variables = {
@@ -1405,6 +1406,24 @@ workspaceRouter.delete('/ledgers/:id/members/:memberUserId', async (c) => {
     details: { removed_user_id: memberUserId },
   });
 
+  // WS 广播 member_change（与原版 broadcast_to_ledger + extra_user_ids 对齐）
+  try {
+    const members = await db.prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ?').bind(ledger.id).all<{ user_id: string }>();
+    const allUserIds = new Set([userId, ...members.results.map(m => m.user_id), memberUserId]);
+    const payload = { type: 'member_change', ledgerId: ledgerExternalId, changeType: 'removed', userId: memberUserId, isSelf: false };
+    for (const uid of allUserIds) {
+      try {
+        const doId = c.env.BEECOUNT_DO.idFromName(`ws-${uid}`);
+        const doStub = c.env.BEECOUNT_DO.get(doId);
+        await doStub.fetch(new Request('https://dummy/broadcast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: JSON.stringify(payload) }) }));
+      } catch {}
+      try {
+        const { getWsManager } = await import('../lib/ws-manager');
+        await getWsManager().broadcastToUser(uid, payload);
+      } catch {}
+    }
+  } catch {}
+
   return c.json({ success: true });
 });
 
@@ -1680,6 +1699,29 @@ workspaceRouter.post('/ledgers/:id/transfer', zValidator('json', TransferSchema)
     db, userId, ledgerId: ledger.id, action: 'transfer_owner', entityType: 'ledger', entityId: ledgerExternalId,
     details: { from_user_id: userId, to_user_id: req.target_user_id },
   });
+
+  // WS 广播双 role_changed（与原版对齐）
+  try {
+    const members = await db.prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ?').bind(ledger.id).all<{ user_id: string }>();
+    const allUserIds = new Set([userId, ...members.results.map(m => m.user_id)]);
+    const events = [
+      { type: 'member_change', ledgerId: ledgerExternalId, changeType: 'role_changed', userId: req.target_user_id, newRole: 'owner' },
+      { type: 'member_change', ledgerId: ledgerExternalId, changeType: 'role_changed', userId: userId, newRole: 'editor' },
+    ];
+    for (const uid of allUserIds) {
+      for (const payload of events) {
+        try {
+          const doId = c.env.BEECOUNT_DO.idFromName(`ws-${uid}`);
+          const doStub = c.env.BEECOUNT_DO.get(doId);
+          await doStub.fetch(new Request('https://dummy/broadcast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: JSON.stringify(payload) }) }));
+        } catch {}
+        try {
+          const { getWsManager } = await import('../lib/ws-manager');
+          await getWsManager().broadcastToUser(uid, payload);
+        } catch {}
+      }
+    }
+  } catch {}
 
   return c.json({ success: true, new_owner_id: req.target_user_id });
 });
