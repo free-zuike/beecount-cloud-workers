@@ -410,11 +410,14 @@ workspaceRouter.get('/accounts', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') ?? '500', 10), 5000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
 
-  let ledgerQuery = 'SELECT id, external_id, name FROM ledgers WHERE user_id = ?';
-  const ledgerParams: string[] = [userId];
+  // 含共享账本
+  let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
+    LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
+    WHERE l.user_id = ? OR lm.user_id = ?`;
+  const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
-    ledgerQuery += ' AND external_id = ?';
+    ledgerQuery += ' AND l.external_id = ?';
     ledgerParams.push(ledgerId);
   }
 
@@ -509,11 +512,14 @@ workspaceRouter.get('/categories', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') ?? '500', 10), 5000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
 
-  let ledgerQuery = 'SELECT id, external_id, name FROM ledgers WHERE user_id = ?';
-  const ledgerParams: string[] = [userId];
+  // 含共享账本
+  let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
+    LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
+    WHERE l.user_id = ? OR lm.user_id = ?`;
+  const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
-    ledgerQuery += ' AND external_id = ?';
+    ledgerQuery += ' AND l.external_id = ?';
     ledgerParams.push(ledgerId);
   }
 
@@ -595,11 +601,14 @@ workspaceRouter.get('/tags', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') ?? '500', 10), 5000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
 
-  let ledgerQuery = 'SELECT id, external_id, name FROM ledgers WHERE user_id = ?';
-  const ledgerParams: string[] = [userId];
+  // 含共享账本
+  let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
+    LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
+    WHERE l.user_id = ? OR lm.user_id = ?`;
+  const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
-    ledgerQuery += ' AND external_id = ?';
+    ledgerQuery += ' AND l.external_id = ?';
     ledgerParams.push(ledgerId);
   }
 
@@ -697,11 +706,14 @@ workspaceRouter.get('/budgets', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') ?? '500', 10), 5000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
 
-  let ledgerQuery = 'SELECT id, external_id, name FROM ledgers WHERE user_id = ?';
-  const ledgerParams: string[] = [userId];
+  // 含共享账本
+  let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
+    LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
+    WHERE l.user_id = ? OR lm.user_id = ?`;
+  const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
-    ledgerQuery += ' AND external_id = ?';
+    ledgerQuery += ' AND l.external_id = ?';
     ledgerParams.push(ledgerId);
   }
 
@@ -759,11 +771,14 @@ workspaceRouter.get('/ledger-counts', async (c) => {
   const ledgerId = c.req.query('ledger_id') ?? null;
   const filterUserId = c.req.query('user_id') ?? null;
 
-  let ledgerQuery = 'SELECT id FROM ledgers WHERE user_id = ?';
-  const ledgerParams: string[] = [userId];
+  // 含共享账本
+  let ledgerQuery = `SELECT DISTINCT l.id FROM ledgers l
+    LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
+    WHERE l.user_id = ? OR lm.user_id = ?`;
+  const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
-    ledgerQuery += ' AND external_id = ?';
+    ledgerQuery += ' AND l.external_id = ?';
     ledgerParams.push(ledgerId);
   }
 
@@ -812,8 +827,11 @@ workspaceRouter.get('/analytics', async (c) => {
   const period = c.req.query('period') ?? null;
   const tzOffsetMinutes = parseInt(c.req.query('tz_offset_minutes') ?? '0', 10);
 
-  let ledgerQuery = 'SELECT id FROM ledgers WHERE user_id = ?';
-  const ledgerParams: string[] = [userId];
+  // 含共享账本
+  let ledgerQuery = `SELECT DISTINCT l.id FROM ledgers l
+    LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
+    WHERE l.user_id = ? OR lm.user_id = ?`;
+  const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
     ledgerQuery += ' AND external_id = ?';

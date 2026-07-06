@@ -1070,16 +1070,26 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
     .bind(ledger.id, txSyncId)
     .run();
 
-  // 清理附件记录和 R2 文件
+  // 清理附件记录和 R2 文件（检查是否仍被其他 tx 引用，与原版 gc_orphan_attachments 对齐）
   for (const fid of fileIdsToClean) {
     const att = attRows.results.find(r => r.id === fid);
-    if (att) {
-      // 删除 R2 文件
-      if (c.env.R2 && att.storage_path) {
-        try { await c.env.R2.delete(att.storage_path); } catch {}
-      }
-      await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fid).run();
+    if (!att) continue;
+
+    // 检查是否仍被其他 tx 的 attachments_json 引用
+    const patNoSpace = `%"cloudFileId":"${fid}"%`;
+    const patWithSpace = `%"cloudFileId": "${fid}"%`;
+    const stillReferenced = await db.prepare(
+      `SELECT COUNT(*) as cnt FROM read_tx_projection
+       WHERE user_id = ? AND (attachments_json LIKE ? OR attachments_json LIKE ?) AND NOT (ledger_id = ? AND sync_id = ?)`
+    ).bind(userId, patNoSpace, patWithSpace, ledger.id, txSyncId).first<{ cnt: number }>();
+
+    if (stillReferenced && stillReferenced.cnt > 0) continue;
+
+    // 无其他引用，安全删除
+    if (c.env.R2 && att.storage_path) {
+      try { await c.env.R2.delete(att.storage_path); } catch {}
     }
+    await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fid).run();
   }
 
   await insertAuditLog({
