@@ -765,14 +765,19 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
         .bind(userId, ledgerId, 'tag', tagSyncId, 'upsert', safeJsonStringify({ name: tagName, color: null }), serverNow, userId)
         .run();
 
-      await db
-        .prepare(
-          `INSERT INTO read_tag_projection
-           (ledger_id, sync_id, user_id, name, color, source_change_id)
-           VALUES (?, ?, ?, ?, ?, ?)`
-        )
-        .bind(ledgerId, tagSyncId, userId, tagName, null, 0)
-        .run();
+      try {
+        await db
+          .prepare(
+            `INSERT INTO read_tag_projection
+             (ledger_id, sync_id, user_id, name, color, source_change_id)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          )
+          .bind(ledgerId, tagSyncId, userId, tagName, null, 0)
+          .run();
+      } catch (projErr) {
+        await db.prepare('DELETE FROM sync_changes WHERE entity_sync_id = ? AND entity_type = ?').bind(tagSyncId, 'tag').run();
+        throw projErr;
+      }
 
       autoTagSyncIds.push(tagSyncId);
       createdTags.set(tagName, tagSyncId);
@@ -850,15 +855,20 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
               .bind(userId, ledgerId, 'account', accountSyncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
               .run();
 
-            await db
-              .prepare(
-                `INSERT INTO read_account_projection
-                 (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
-                  note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-              )
-              .bind(ledgerId, accountSyncId, userId, accountName, null, null, 0, null, null, null, null, null, null, 0)
-              .run();
+            try {
+              await db
+                .prepare(
+                  `INSERT INTO read_account_projection
+                   (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+                    note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                )
+                .bind(ledgerId, accountSyncId, userId, accountName, null, null, 0, null, null, null, null, null, null, 0)
+                .run();
+            } catch (projErr) {
+              await db.prepare('DELETE FROM sync_changes WHERE entity_sync_id = ? AND entity_type = ?').bind(accountSyncId, 'account').run();
+              throw projErr;
+            }
             
             createdAccounts.set(accountName, accountSyncId);
           }
@@ -905,16 +915,21 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
               .bind(userId, ledgerId, 'category', categorySyncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
               .run();
 
-            await db
-              .prepare(
-                `INSERT INTO read_category_projection
-                 (ledger_id, sync_id, user_id, name, kind, level, sort_order,
-                  icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
-                  parent_name, source_change_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-              )
-              .bind(ledgerId, categorySyncId, userId, categoryName, 'expense', null, null, null, null, null, null, null, null, 0)
-              .run();
+            try {
+              await db
+                .prepare(
+                  `INSERT INTO read_category_projection
+                   (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+                    icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+                    parent_name, source_change_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                )
+                .bind(ledgerId, categorySyncId, userId, categoryName, 'expense', null, null, null, null, null, null, null, null, 0)
+                .run();
+            } catch (projErr) {
+              await db.prepare('DELETE FROM sync_changes WHERE entity_sync_id = ? AND entity_type = ?').bind(categorySyncId, 'category').run();
+              throw projErr;
+            }
             
             createdCategories.set(categoryName, categorySyncId);
           }
@@ -1066,20 +1081,25 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
 
               lastChangeId = changeResult.meta.last_row_id as number;
 
-              await db
-                .prepare(
-                  `INSERT INTO read_tx_projection
-                   (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
-                    category_sync_id, category_name, category_kind,
-                    account_sync_id, account_name,
-                    tags_csv, tag_sync_ids_json, source_change_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-                )
-                .bind(ledgerId, syncId, userId, finalTxType, finalAmount, happenedAt, note || null,
-                      categorySyncId, categoryName || null, categoryKind,
-                      accountSyncId, accountName || null,
-                      tagsCsv, allTagSyncIds.length > 0 ? safeJsonStringify(allTagSyncIds) : null, lastChangeId)
-                .run();
+              try {
+                await db
+                  .prepare(
+                    `INSERT INTO read_tx_projection
+                     (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
+                      category_sync_id, category_name, category_kind,
+                      account_sync_id, account_name,
+                      tags_csv, tag_sync_ids_json, source_change_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                  )
+                  .bind(ledgerId, syncId, userId, finalTxType, finalAmount, happenedAt, note || null,
+                        categorySyncId, categoryName || null, categoryKind,
+                        accountSyncId, accountName || null,
+                        tagsCsv, allTagSyncIds.length > 0 ? safeJsonStringify(allTagSyncIds) : null, lastChangeId)
+                  .run();
+              } catch (projErr) {
+                await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(lastChangeId).run();
+                throw projErr;
+              }
 
               success++;
             }

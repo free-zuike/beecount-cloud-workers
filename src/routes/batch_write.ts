@@ -161,14 +161,19 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
     const changeId = (insertResult as any).lastRowId;
     maxChangeId = Math.max(maxChangeId, changeId);
 
-    // 更新 projection
-    await db
-      .prepare(`INSERT OR REPLACE INTO read_tx_projection
-        (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, account_sync_id, from_account_sync_id, to_account_sync_id, source_change_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null,
-        categorySyncId, accountSyncId, tx.from_account_id || null, tx.to_account_id || null, changeId)
-      .run();
+    // 更新 projection（失败时回删 sync_changes）
+    try {
+      await db
+        .prepare(`INSERT OR REPLACE INTO read_tx_projection
+          (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, account_sync_id, from_account_sync_id, to_account_sync_id, source_change_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null,
+          categorySyncId, accountSyncId, tx.from_account_id || null, tx.to_account_id || null, changeId)
+        .run();
+    } catch (projErr) {
+      await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(changeId).run();
+      throw projErr;
+    }
 
     createdSyncIds.push(txSyncId);
   }
