@@ -756,8 +756,8 @@ readRouter.get('/ledgers/:ledgerExternalId/stats', async (c) => {
       .first<{ cnt: number }>(),
     db
       .prepare(
-        `SELECT COUNT(*) as cnt FROM attachment_files
-         WHERE user_id = ? AND attachment_kind = 'category_icon'`
+        `SELECT COUNT(*) as cnt FROM read_category_projection
+         WHERE user_id = ? AND icon_cloud_file_id IS NOT NULL AND icon_cloud_file_id != ''`
       )
       .bind(userId)
       .first<{ cnt: number }>(),
