@@ -689,6 +689,14 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
             .map(b => b.toString(16).padStart(2, '0')).join('');
         const mimeType = file.type || 'image/png';
         const fileName = file.name || 'icon.png';
+        // 如果 MIME 类型是通用类型，根据文件扩展名推断实际类型
+        const effectiveMimeType = mimeType === 'application/octet-stream' || mimeType === 'application/octet-stream'
+            ? (fileName.endsWith('.png') ? 'image/png'
+                : fileName.endsWith('.jpg') || fileName.endsWith('.jpeg') ? 'image/jpeg'
+                : fileName.endsWith('.gif') ? 'image/gif'
+                : fileName.endsWith('.webp') ? 'image/webp'
+                : 'image/png')
+            : mimeType;
         const size = file.size;
 
         // 去重：同一用户同SHA256的category_icon不重复创建
@@ -712,7 +720,7 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
         // 尝试上传到 R2（优先）或 S3
         if (c.env.R2) {
             await c.env.R2.put(r2Key, fileBuffer, {
-                httpMetadata: { contentType: mimeType }
+                httpMetadata: { contentType: effectiveMimeType }
             });
         } else {
             const config = await getFirstEnabledS3Config(db, c.env);
@@ -733,7 +741,7 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
             `INSERT INTO attachment_files
              (id, ledger_id, user_id, sha256, size_bytes, mime_type, file_name, storage_path, attachment_kind, created_at)
              VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'category_icon', ?)`
-        ).bind(fileId, userId, sha256Hash, size, mimeType, fileName, r2Key, now).run();
+        ).bind(fileId, userId, sha256Hash, size, effectiveMimeType, fileName, r2Key, now).run();
 
         console.log('[ATTACH] Category icon upload: name=', file.name, 'type=', file.type, 'size=', file.size);
         const result = {
