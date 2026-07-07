@@ -646,7 +646,7 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     updatedByUserId: userId,
   };
   const happenedAt = payload.happenedAt as string;
-  const resolvedTagsCsv = await resolveTagsCsv(db, req.tags as string | null, req.tag_ids as string[] | null);
+  const resolvedTagsCsv = await resolveTagsCsv(db, req.tags as string | string[] | null, req.tag_ids as string[] | null);
 
   const syncChangeResult = await db
     .prepare(
