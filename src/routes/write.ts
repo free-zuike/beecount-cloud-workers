@@ -113,9 +113,14 @@ async function broadcastSharedResourceEvents(
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-async function resolveTagsCsv(db: D1Database, tags: string | null, tagIds: string[] | null): Promise<string | null> {
+async function resolveTagsCsv(db: D1Database, tags: string | string[] | null, tagIds: string[] | null): Promise<string | null> {
   if (!tags && !tagIds?.length) return null;
-  const parts = (tags ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  let parts: string[];
+  if (Array.isArray(tags)) {
+    parts = tags.map(t => String(t).trim()).filter(Boolean);
+  } else {
+    parts = (tags ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  }
   if (parts.length === 0) return null;
   const nameMap: Record<string, string> = {};
   const uuidParts = parts.filter((p) => UUID_RE.test(p));
