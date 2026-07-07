@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 读路由模块 - 实现 BeeCount Cloud 只读查询接口
  *
  * 参考原版 BeeCount-Cloud (Python/FastAPI) 的 /read/* 端点：
@@ -456,8 +456,8 @@ readRouter.get('/workspace/transactions', async (c) => {
 
   if (ledgerId) {
     const ledger = await db
-      .prepare('SELECT id FROM ledgers WHERE user_id = ? AND (external_id = ? OR id = ?)')
-      .bind(userId, ledgerId, ledgerId)
+      .prepare('SELECT id FROM ledgers WHERE user_id = ? AND external_id = ?')
+      .bind(userId, ledgerId)
       .first<{ id: string }>();
     
     if (ledger) {
@@ -586,9 +586,9 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
     .prepare(
       `SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
        FROM ledgers l
-       WHERE l.user_id = ? AND (l.external_id = ? OR l.id = ?)`
+       WHERE l.user_id = ? AND l.external_id = ?`
     )
-    .bind(userId, ledgerExternalId, ledgerExternalId)
+    .bind(userId, ledgerExternalId)
     .first<{
       id: string;
       external_id: string;
@@ -689,9 +689,9 @@ readRouter.get('/ledgers/:ledgerExternalId/stats', async (c) => {
   const ledger = await db
     .prepare(
       `SELECT l.id, l.external_id FROM ledgers l
-       WHERE l.user_id = ? AND (l.external_id = ? OR l.id = ?)`
+       WHERE l.user_id = ? AND l.external_id = ?`
     )
-    .bind(userId, ledgerExternalId, ledgerExternalId)
+    .bind(userId, ledgerExternalId)
     .first<{ id: string; external_id: string }>();
 
   if (!ledger) {
@@ -823,9 +823,9 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
   const ledger = await db
     .prepare(
       `SELECT l.id, l.external_id, l.name FROM ledgers l
-       WHERE l.user_id = ? AND (l.external_id = ? OR l.id = ?)`
+       WHERE l.user_id = ? AND l.external_id = ?`
     )
-    .bind(userId, ledgerExternalId, ledgerExternalId)
+    .bind(userId, ledgerExternalId)
     .first<{ id: string; external_id: string; name: string | null }>();
 
   if (!ledger) {
@@ -984,9 +984,9 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
   const ledger = await db
     .prepare(
       `SELECT l.id, l.external_id, l.name FROM ledgers l
-       WHERE l.user_id = ? AND (l.external_id = ? OR l.id = ?)`
+       WHERE l.user_id = ? AND l.external_id = ?`
     )
-    .bind(userId, ledgerExternalId, ledgerExternalId)
+    .bind(userId, ledgerExternalId)
     .first<{ id: string; external_id: string; name: string | null }>();
 
   if (!ledger) {
@@ -1079,9 +1079,9 @@ readRouter.get('/ledgers/:ledgerExternalId/categories', async (c) => {
   const ledger = await db
     .prepare(
       `SELECT l.id, l.external_id, l.name FROM ledgers l
-       WHERE l.user_id = ? AND (l.external_id = ? OR l.id = ?)`
+       WHERE l.user_id = ? AND l.external_id = ?`
     )
-    .bind(userId, ledgerExternalId, ledgerExternalId)
+    .bind(userId, ledgerExternalId)
     .first<{ id: string; external_id: string; name: string | null }>();
 
   if (!ledger) {
@@ -1282,8 +1282,8 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
   const ledgerExtId = c.req.param('ledgerExternalId');
 
   const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND (external_id = ? OR id = ?)')
-    .bind(userId, ledgerExtId, ledgerExtId)
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerExtId)
     .first<{ id: string; external_id: string }>();
   if (!ledger) return c.json({ error: 'Ledger not found' }, 404);
 
