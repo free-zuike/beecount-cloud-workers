@@ -1260,7 +1260,7 @@ writeRouter.post('/ledgers/:ledgerId/accounts', zValidator('json', WriteAccountC
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
-        ledger.id, syncId, userId, req.name, req.account_type ?? null,
+        null, syncId, userId, req.name, req.account_type ?? null,
         req.currency ?? null, req.initial_balance ?? 0, req.note ?? null,
         req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
         req.bank_name ?? null, req.card_last_four ?? null, newChangeId,
