@@ -897,7 +897,7 @@ writeRouter.patch('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteTagUpda
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(ledger_id, sync_id) DO UPDATE SET name = ?, color = ?, source_change_id = ?`
       )
-      .bind(ledger.id, tagSyncId, userId, req.name, req.color ?? null, newChangeId, req.name, req.color ?? null, newChangeId)
+      .bind(null, tagSyncId, userId, req.name, req.color ?? null, newChangeId, req.name, req.color ?? null, newChangeId)
       .run();
   } catch (projErr) {
     await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(newChangeId).run();
@@ -1606,7 +1606,7 @@ writeRouter.post('/ledgers/:ledgerId/tags', zValidator('json', WriteTagCreateSch
          (ledger_id, sync_id, user_id, name, color, source_change_id)
          VALUES (?, ?, ?, ?, ?, ?)`
       )
-      .bind(ledger.id, syncId, userId, req.name, req.color ?? null, newChangeId)
+      .bind(null, syncId, userId, req.name, req.color ?? null, newChangeId)
       .run();
   } catch (projErr) {
     await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(newChangeId).run();
@@ -2092,7 +2092,7 @@ writeRouter.post('/categories/init-defaults', async (c) => {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
-        ledger.id, parentSyncId, userId, cat.name, cat.kind, 1,
+        null, parentSyncId, userId, cat.name, cat.kind, 1,
         cat.sort_order, cat.icon, 'emoji', null, null, null, null, 0,
       )
       .run();
@@ -2131,7 +2131,7 @@ writeRouter.post('/categories/init-defaults', async (c) => {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .bind(
-            ledger.id, childSyncId, userId, child.name, cat.kind, 2,
+            null, childSyncId, userId, child.name, cat.kind, 2,
             cat.sort_order * 100 + (cat.children.indexOf(child) + 1),
             child.icon, 'emoji', null, null, null, cat.name, 0,
           )
