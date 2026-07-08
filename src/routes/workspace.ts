@@ -1741,9 +1741,12 @@ workspaceRouter.get('/net-worth-history', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
 
+  // 含共享账本
   const ledgers = await db
-    .prepare('SELECT id, external_id, currency FROM ledgers WHERE user_id = ?')
-    .bind(userId)
+    .prepare(`SELECT DISTINCT l.id, l.external_id, l.currency FROM ledgers l
+      LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
+      WHERE l.user_id = ? OR lm.user_id = ?`)
+    .bind(userId, userId, userId)
     .all<{ id: string; external_id: string; currency: string }>();
 
   if (ledgers.results.length === 0) {
