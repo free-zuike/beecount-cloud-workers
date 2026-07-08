@@ -1522,6 +1522,10 @@ async function applyChangeToProjection(
           .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
           .bind(ledgerId, change.entity_sync_id)
           .run();
+        // 与原版 _compact_entity_upsert_events 对齐：清理 upsert 历史
+        await db.prepare(
+          `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'transaction' AND entity_sync_id = ? AND action != 'delete'`
+        ).bind(ledgerId, change.entity_sync_id).run();
       } else {
         const tagPayload = (payload.tags as string) ?? null;
         const tagIdsPayload = Array.isArray(payload.tagIds) ? payload.tagIds as string[] : null;
@@ -1803,6 +1807,10 @@ async function applyChangeToProjection(
           .prepare('DELETE FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
           .bind(ledgerId, change.entity_sync_id)
           .run();
+        // 与原版 _compact_entity_upsert_events 对齐
+        await db.prepare(
+          `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'budget' AND entity_sync_id = ? AND action != 'delete'`
+        ).bind(ledgerId, change.entity_sync_id).run();
       } else {
         const existing = await db
           .prepare('SELECT sync_id FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
