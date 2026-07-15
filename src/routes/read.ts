@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 读路由模块 - 实现 BeeCount Cloud 只读查询接口
  *
  * 参考原版 BeeCount-Cloud (Python/FastAPI) 的 /read/* 端点：
@@ -93,6 +93,8 @@ interface ReadTransactionOut {
   tx_index: number;
   tx_type: string;
   amount: number;
+  currency_code: string | null;
+  native_amount: number | null;
   happened_at: string;
   note: string | null;
   category_name: string | null;
@@ -293,9 +295,10 @@ readRouter.get('/ledgers', async (c) => {
     const totalsRows = await db.prepare(
       `SELECT ledger_id,
               COUNT(*) as tx_count,
-              COALESCE(SUM(CASE WHEN tx_type = 'income' THEN amount ELSE 0 END), 0) as income_total,
-              COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN amount ELSE 0 END), 0) as expense_total
+              COALESCE(SUM(CASE WHEN tx_type = 'income' THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as income_total,
+              COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as expense_total
        FROM read_tx_projection WHERE ledger_id IN (${placeholders})
+       AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)
        GROUP BY ledger_id`
     ).bind(...ledgerIds).all<{ ledger_id: string; tx_count: number; income_total: number; expense_total: number }>();
     const totalsMap = new Map(totalsRows.results.map(r => [r.ledger_id, r]));
@@ -535,6 +538,8 @@ readRouter.get('/workspace/transactions', async (c) => {
       ledger_id: row.ledger_id as string,
       tx_type: row.tx_type as string,
       amount: row.amount as number,
+      currency_code: (row.currency_code as string) ?? null,
+      native_amount: (row.native_amount as number) ?? null,
       happened_at: row.happened_at as string,
       note: row.note as string | null,
       tags_list: parseTagsCsv(row.tags_csv as string | null),
@@ -626,10 +631,11 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
     .prepare(
       `SELECT
          COUNT(*) as tx_count,
-         COALESCE(SUM(CASE WHEN tx_type = 'income' THEN amount ELSE 0 END), 0) as income_total,
-         COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN amount ELSE 0 END), 0) as expense_total
+         COALESCE(SUM(CASE WHEN tx_type = 'income' THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as income_total,
+         COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as expense_total
        FROM read_tx_projection
-       WHERE ledger_id = ?`
+       WHERE ledger_id = ?
+       AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`
     )
     .bind(ledger.id)
     .first<{
@@ -931,6 +937,8 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
       tx_index: (row.tx_index as number) ?? 0,
       tx_type: row.tx_type as string,
       amount: (row.amount as number) ?? 0,
+      currency_code: (row.currency_code as string) ?? null,
+      native_amount: (row.native_amount as number) ?? null,
       happened_at: row.happened_at as string,
       note: row.note as string | null,
       category_name: row.category_name as string | null,
@@ -1310,17 +1318,19 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
     let spent = 0;
     if (b.category_sync_id) {
       const row = await db
-        .prepare(`SELECT COALESCE(SUM(amount), 0) as total FROM read_tx_projection
+        .prepare(`SELECT COALESCE(SUM(COALESCE(native_amount, amount)), 0) as total FROM read_tx_projection
                    WHERE ledger_id = ? AND category_sync_id = ? AND tx_type = 'expense'
-                   AND happened_at >= ? AND happened_at < ?`)
+                   AND happened_at >= ? AND happened_at < ?
+                   AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`)
         .bind(ledger.id, b.category_sync_id, `${currentMonth}-01`, `${nextMonth}-01`)
         .first<{ total: number }>();
       spent = row?.total ?? 0;
     } else {
       const row = await db
-        .prepare(`SELECT COALESCE(SUM(amount), 0) as total FROM read_tx_projection
+        .prepare(`SELECT COALESCE(SUM(COALESCE(native_amount, amount)), 0) as total FROM read_tx_projection
                    WHERE ledger_id = ? AND tx_type = 'expense'
-                   AND happened_at >= ? AND happened_at < ?`)
+                   AND happened_at >= ? AND happened_at < ?
+                   AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`)
         .bind(ledger.id, `${currentMonth}-01`, `${nextMonth}-01`)
         .first<{ total: number }>();
       spent = row?.total ?? 0;

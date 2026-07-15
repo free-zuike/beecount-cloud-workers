@@ -229,7 +229,7 @@ workspaceRouter.get('/transactions.csv', async (c) => {
     return str;
   }
 
-  const header = ['日期', '时间', '类型', '金额', '账户', '分类', '标签', '备注'];
+  const header = ['日期', '时间', '类型', '金额', '币种', '账户', '分类', '标签', '备注'];
   const rows = [header.join(',')];
 
   for (const tx of txRows.results) {
@@ -240,13 +240,14 @@ workspaceRouter.get('/transactions.csv', async (c) => {
     const time = localDate.toISOString().slice(11, 19);
     const txTypeVal = String(tx.tx_type ?? '');
     const amount = String(tx.amount ?? 0);
+    const currency = String(tx.currency_code ?? '');
     const account = String(tx.account_name ?? tx.from_account_name ?? '');
     const category = String(tx.category_name ?? '');
     const tags = String(tx.tags_csv ?? '');
     const note = String(tx.note ?? '');
 
     rows.push(
-      [date, time, txTypeVal, amount, account, category, tags, note].map(escapeCsvField).join(',')
+      [date, time, txTypeVal, amount, currency, account, category, tags, note].map(escapeCsvField).join(',')
     );
   }
 
@@ -369,6 +370,8 @@ workspaceRouter.get('/transactions', async (c) => {
       tx_index: row.tx_index,
       tx_type: row.tx_type,
       amount: row.amount,
+      currency_code: row.currency_code ?? null,
+      native_amount: row.native_amount ?? null,
       happened_at: row.happened_at,
       note: row.note,
       category_name: row.category_name,
@@ -467,10 +470,10 @@ workspaceRouter.get('/accounts', async (c) => {
     // 计算该账户关联的交易统计
     const txStats = await db.prepare(`
       SELECT 
-        COALESCE(SUM(CASE WHEN tx_type = 'expense' AND account_sync_id = ? THEN amount ELSE 0 END), 0) as expense_in,
-        COALESCE(SUM(CASE WHEN tx_type = 'income' AND account_sync_id = ? THEN amount ELSE 0 END), 0) as income_in,
-        COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND from_account_sync_id = ? THEN amount ELSE 0 END), 0) as expense_transfer,
-        COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND to_account_sync_id = ? THEN amount ELSE 0 END), 0) as income_transfer,
+        COALESCE(SUM(CASE WHEN tx_type = 'expense' AND account_sync_id = ? THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as expense_in,
+        COALESCE(SUM(CASE WHEN tx_type = 'income' AND account_sync_id = ? THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as income_in,
+        COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND from_account_sync_id = ? THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as expense_transfer,
+        COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND to_account_sync_id = ? THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as income_transfer,
         COUNT(CASE WHEN account_sync_id = ? OR from_account_sync_id = ? OR to_account_sync_id = ? THEN 1 END) as tx_count
       FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})
     `).bind(accountSyncId, accountSyncId, accountSyncId, accountSyncId, accountSyncId, accountSyncId, accountSyncId, ...ledgerInternalIds).first<{ expense_in: number; income_in: number; expense_transfer: number; income_transfer: number; tx_count: number }>();
@@ -663,17 +666,15 @@ workspaceRouter.get('/tags', async (c) => {
       
       let txRows;
       if (isUserGlobal) {
-        // user-global 标签：匹配所有账本的交易
-        txRows = await db.prepare(`SELECT tx_type, amount FROM read_tx_projection WHERE tag_sync_ids_json LIKE ?`).bind(`%"${tagId}"%`).all<{ tx_type: string; amount: number }>();
+        txRows = await db.prepare(`SELECT tx_type, COALESCE(native_amount, amount) as effective_amount FROM read_tx_projection WHERE tag_sync_ids_json LIKE ? AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`).bind(`%"${tagId}"%`).all<{ tx_type: string; effective_amount: number }>();
       } else {
-        // ledger-scoped 标签：只匹配对应账本的交易
-        txRows = await db.prepare(`SELECT tx_type, amount FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND tag_sync_ids_json LIKE ?`).bind(...ledgerInternalIds, `%"${tagId}"%`).all<{ tx_type: string; amount: number }>();
+        txRows = await db.prepare(`SELECT tx_type, COALESCE(native_amount, amount) as effective_amount FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND tag_sync_ids_json LIKE ? AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`).bind(...ledgerInternalIds, `%"${tagId}"%`).all<{ tx_type: string; effective_amount: number }>();
       }
       let txCount = 0, expenseTotal = 0, incomeTotal = 0;
       for (const r of txRows.results) {
         txCount++;
-        if (r.tx_type === 'expense') expenseTotal += r.amount;
-        else if (r.tx_type === 'income') incomeTotal += r.amount;
+        if (r.tx_type === 'expense') expenseTotal += r.effective_amount;
+        else if (r.tx_type === 'income') incomeTotal += r.effective_amount;
       }
       tagStats[tagId] = { tx_count: txCount, expense_total: expenseTotal, income_total: incomeTotal };
     }
@@ -859,7 +860,7 @@ workspaceRouter.get('/analytics', async (c) => {
   const ledgerInternalIds = ledgers.results.map((l) => l.id);
 
   // exclude_from_stats=true 的交易不计入收支统计（与原版对齐）
-  let txQuery = `SELECT tx_type, amount, happened_at, category_name FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`;
+  let txQuery = `SELECT tx_type, COALESCE(native_amount, amount) as effective_amount, happened_at, category_name FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`;
   const txParams: (string | number)[] = [...ledgerInternalIds];
 
   if (period) {
@@ -880,7 +881,7 @@ workspaceRouter.get('/analytics', async (c) => {
   const txRows = await db
     .prepare(txQuery)
     .bind(...txParams)
-    .all<{ tx_type: string; amount: number; happened_at: string; category_name: string | null }>();
+    .all<{ tx_type: string; effective_amount: number; amount: number; happened_at: string; category_name: string | null }>();
 
   let incomeTotal = 0;
   let expenseTotal = 0;
@@ -891,10 +892,11 @@ workspaceRouter.get('/analytics', async (c) => {
   let lastTxAt: string | null = null;
 
   for (const tx of txRows.results) {
+    const amt = Number(tx.effective_amount ?? tx.amount ?? 0);
     if (tx.tx_type === 'income') {
-      incomeTotal += tx.amount;
+      incomeTotal += amt;
     } else if (tx.tx_type === 'expense') {
-      expenseTotal += tx.amount;
+      expenseTotal += amt;
     }
 
     const date = new Date(tx.happened_at);
@@ -927,11 +929,11 @@ workspaceRouter.get('/analytics', async (c) => {
     }
 
     if (tx.tx_type === 'income') {
-      seriesMap[bucket].income += tx.amount;
-      categoryMap[tx.category_name ?? 'Uncategorized'].income += tx.amount;
+      seriesMap[bucket].income += amt;
+      categoryMap[tx.category_name ?? 'Uncategorized'].income += amt;
     } else if (tx.tx_type === 'expense') {
-      seriesMap[bucket].expense += tx.amount;
-      categoryMap[tx.category_name ?? 'Uncategorized'].expense += tx.amount;
+      seriesMap[bucket].expense += amt;
+      categoryMap[tx.category_name ?? 'Uncategorized'].expense += amt;
     }
     categoryMap[tx.category_name ?? 'Uncategorized'].count += 1;
   }
@@ -1537,23 +1539,24 @@ workspaceRouter.get('/ledgers/:id/member-stats', zValidator('query', MemberStats
     const placeholders = allUserIds.map(() => '?').join(',');
     const txRows = await db
       .prepare(
-        `SELECT created_by_user_id, tx_type, amount
+        `SELECT created_by_user_id, tx_type, COALESCE(native_amount, amount) as effective_amount
          FROM read_tx_projection
          WHERE ledger_id = ? AND created_by_user_id IN (${placeholders})
            AND tx_type != 'transfer'
+           AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)
            ${dateFilter}`
       )
       .bind(ledger.id, ...allUserIds, ...dateParams)
-      .all<{ created_by_user_id: string | null; tx_type: string; amount: number }>();
+      .all<{ created_by_user_id: string | null; tx_type: string; effective_amount: number }>();
 
     for (const tx of txRows.results) {
       if (!tx.created_by_user_id) continue;
       if (!stats[tx.created_by_user_id]) continue;
       stats[tx.created_by_user_id].tx_count += 1;
       if (tx.tx_type === 'income') {
-        stats[tx.created_by_user_id].income += tx.amount;
+        stats[tx.created_by_user_id].income += tx.effective_amount;
       } else if (tx.tx_type === 'expense') {
-        stats[tx.created_by_user_id].expense += tx.amount;
+        stats[tx.created_by_user_id].expense += tx.effective_amount;
       }
     }
   }
@@ -1764,9 +1767,9 @@ workspaceRouter.get('/net-worth-history', async (c) => {
 
   // 获取所有交易
   const txs = await db
-    .prepare(`SELECT happened_at, tx_type, amount, account_sync_id, from_account_sync_id, to_account_sync_id FROM read_tx_projection WHERE ledger_id IN (${placeholders})`)
+    .prepare(`SELECT happened_at, tx_type, COALESCE(native_amount, amount) as effective_amount, account_sync_id, from_account_sync_id, to_account_sync_id FROM read_tx_projection WHERE ledger_id IN (${placeholders})`)
     .bind(...ledgerInternalIds)
-    .all<{ happened_at: string; tx_type: string; amount: number; account_sync_id: string | null; from_account_sync_id: string | null; to_account_sync_id: string | null }>();
+    .all<{ happened_at: string; tx_type: string; effective_amount: number; account_sync_id: string | null; from_account_sync_id: string | null; to_account_sync_id: string | null }>();
 
   // 检查是否多币种
   const currencies = new Set(accounts.results.map(a => a.currency).filter(Boolean));
@@ -1792,9 +1795,9 @@ workspaceRouter.get('/net-worth-history', async (c) => {
     }
 
     if (tx.tx_type === 'income') {
-      monthlyMap[month].assets += tx.amount;
+      monthlyMap[month].assets += tx.effective_amount;
     } else if (tx.tx_type === 'expense') {
-      monthlyMap[month].liabilities += tx.amount;
+      monthlyMap[month].liabilities += tx.effective_amount;
     } else if (tx.tx_type === 'transfer') {
       // 转账不影响净值
     }

@@ -998,6 +998,10 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
             const categoryName = colIndex['category_name'] !== undefined ? row[colIndex['category_name']] ?? '' : '';
             const accountName = colIndex['account_name'] !== undefined ? row[colIndex['account_name']] ?? '' : '';
             const tags = colIndex['tags'] !== undefined ? row[colIndex['tags']] ?? '' : '';
+            const currencyCode = colIndex['currency'] !== undefined ? row[colIndex['currency']] ?? null :
+                                 colIndex['currency_code'] !== undefined ? row[colIndex['currency_code']] ?? null : null;
+            const nativeAmountRaw = colIndex['native_amount'] !== undefined ? row[colIndex['native_amount']] ?? null : null;
+            const nativeAmount = nativeAmountRaw != null && nativeAmountRaw !== '' ? Number(nativeAmountRaw) : null;
 
             const txType = parseTxType(txTypeRaw, amount);
 
@@ -1088,13 +1092,15 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
                      (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
                       category_sync_id, category_name, category_kind,
                       account_sync_id, account_name,
-                      tags_csv, tag_sync_ids_json, source_change_id)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                      tags_csv, tag_sync_ids_json, source_change_id,
+                      currency_code, native_amount)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
                   )
                   .bind(ledgerId, syncId, userId, finalTxType, finalAmount, happenedAt, note || null,
                         categorySyncId, categoryName || null, categoryKind,
                         accountSyncId, accountName || null,
-                        tagsCsv, allTagSyncIds.length > 0 ? safeJsonStringify(allTagSyncIds) : null, lastChangeId)
+                        tagsCsv, allTagSyncIds.length > 0 ? safeJsonStringify(allTagSyncIds) : null, lastChangeId,
+                        currencyCode, nativeAmount)
                   .run();
               } catch (projErr) {
                 await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(lastChangeId).run();

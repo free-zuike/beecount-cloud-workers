@@ -1044,6 +1044,8 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   }
   if (req.tag_ids !== undefined) newPayload.tagIds = req.tag_ids;
   if (req.attachments !== undefined) newPayload.attachments = req.attachments;
+  if (req.currency_code !== undefined) newPayload.currencyCode = req.currency_code;
+  if (req.native_amount !== undefined) newPayload.nativeAmount = req.native_amount;
 
   // 写入 SyncChange
   const changeResult = await db
@@ -1068,6 +1070,7 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
          from_account_sync_id = ?, from_account_name = ?,
          to_account_sync_id = ?, to_account_name = ?,
          tags_csv = ?, tag_sync_ids_json = ?, attachments_json = ?,
+         currency_code = ?, native_amount = ?,
          source_change_id = ?
          WHERE ledger_id = ? AND sync_id = ?`
       )
@@ -1079,6 +1082,7 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
         newPayload.toAccountId ?? null, newPayload.toAccountName ?? null,
         newPayload.tags ?? null, newPayload.tagIds ? safeJsonStringify(newPayload.tagIds) : null,
         newPayload.attachments ? safeJsonStringify(newPayload.attachments) : null,
+        newPayload.currencyCode ?? null, newPayload.nativeAmount ?? null,
         newChangeId, ledger.id, txSyncId,
       )
       .run();
@@ -1915,8 +1919,9 @@ writeRouter.get('/ledgers/:ledgerId/budgets/usage', async (c) => {
 
   const items: Array<{ budget_id: string; used: number }> = [];
   for (const b of dedup.values()) {
-    let baseQuery = `SELECT COALESCE(SUM(amount), 0) as total FROM read_tx_projection
-      WHERE ledger_id = ? AND tx_type = 'expense' AND happened_at >= ? AND happened_at < ?`;
+    let baseQuery = `SELECT COALESCE(SUM(COALESCE(native_amount, amount)), 0) as total FROM read_tx_projection
+      WHERE ledger_id = ? AND tx_type = 'expense' AND happened_at >= ? AND happened_at < ?
+      AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`;
     const params: (string | number)[] = [ledger.id, startStr, endStr];
 
     if (b.budget_type === 'category' && b.category_sync_id) {
