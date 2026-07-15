@@ -215,10 +215,11 @@ async function handleListLedgers(db: D1Database, userId: string): Promise<unknow
       .prepare(
         `SELECT
            COUNT(*) as tx_count,
-           COALESCE(SUM(CASE WHEN tx_type = 'income' THEN amount ELSE 0 END), 0) as income_total,
-           COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN amount ELSE 0 END), 0) as expense_total
+           COALESCE(SUM(CASE WHEN tx_type = 'income' THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as income_total,
+           COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as expense_total
          FROM read_tx_projection
-         WHERE ledger_id = ?`
+         WHERE ledger_id = ?
+         AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`
       )
       .bind(ledger.id)
       .first<{
@@ -430,12 +431,13 @@ async function handleGetSummary(
     .prepare(
       `SELECT
          COUNT(*) as tx_count,
-         COALESCE(SUM(CASE WHEN tx_type = 'income' THEN amount ELSE 0 END), 0) as income_total,
-         COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN amount ELSE 0 END), 0) as expense_total,
+         COALESCE(SUM(CASE WHEN tx_type = 'income' THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as income_total,
+         COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as expense_total,
          MIN(happened_at) as first_tx_at,
          MAX(happened_at) as last_tx_at
        FROM read_tx_projection
-       WHERE ledger_id = ?`
+       WHERE ledger_id = ?
+       AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`
     )
     .bind(ledger.id)
     .first<{

@@ -119,6 +119,7 @@ export function GlobalEditDialogs() {
         editingOwnerUserId: tx.created_by_user_id || '',
         tx_type: tx.tx_type,
         amount: String(tx.amount),
+        currency_code: tx.currency_code ?? null,
         happened_at: tx.happened_at,
         note: tx.note || '',
         category_name: tx.category_name || '',
@@ -231,6 +232,7 @@ export function GlobalEditDialogs() {
           : null,
       tags: editTxForm.tags.filter((s) => s.length > 0),
       attachments: editTxForm.attachments,
+      currency_code: editTxForm.currency_code,
     }
 
     try {

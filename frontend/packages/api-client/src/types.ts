@@ -159,6 +159,8 @@ export type ReadTransaction = {
   tx_index: number
   tx_type: 'expense' | 'income' | 'transfer'
   amount: number
+  currency_code?: string | null
+  native_amount?: number | null
   happened_at: string
   note: string | null
   category_name: string | null
@@ -496,6 +498,8 @@ export type AdminBackupRestoreResponse = {
 export type TxPayload = {
   tx_type: 'expense' | 'income' | 'transfer'
   amount: number
+  currency_code?: string | null
+  native_amount?: number | null
   happened_at: string
   note?: string | null
   category_name?: string | null

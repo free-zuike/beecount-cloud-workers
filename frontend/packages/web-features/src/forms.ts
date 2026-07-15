@@ -5,6 +5,7 @@ export type TxForm = {
   editingOwnerUserId: string
   tx_type: 'expense' | 'income' | 'transfer'
   amount: string
+  currency_code: string | null
   happened_at: string
   note: string
   category_name: string
@@ -84,6 +85,7 @@ export const txDefaults = (): TxForm => ({
   editingOwnerUserId: '',
   tx_type: 'expense',
   amount: '',
+  currency_code: null,
   happened_at: new Date().toISOString(),
   note: '',
   category_name: '',

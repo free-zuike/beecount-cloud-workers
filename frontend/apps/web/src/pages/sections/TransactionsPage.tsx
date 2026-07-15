@@ -1345,7 +1345,8 @@ export function TransactionsPage() {
         to_account_id: isTransfer ? accountByName.get(toAccountName.toLowerCase()) || null : null,
         tags: txForm.tags.length > 0 ? txForm.tags : null,
         tag_ids: txTagIds.length > 0 ? txTagIds : null,
-        attachments: txForm.attachments.length > 0 ? txForm.attachments : null
+        attachments: txForm.attachments.length > 0 ? txForm.attachments : null,
+        currency_code: txForm.currency_code,
       }
       // eslint-disable-next-line no-console
       console.info('[tx-save] request', {
@@ -1836,6 +1837,7 @@ export function TransactionsPage() {
                     editingOwnerUserId: tx.created_by_user_id || '',
                     tx_type: tx.tx_type,
                     amount: String(tx.amount),
+                    currency_code: tx.currency_code ?? null,
                     happened_at: tx.happened_at,
                     note: tx.note || '',
                     category_name: tx.category_name || '',
