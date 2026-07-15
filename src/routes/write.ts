@@ -196,6 +196,8 @@ const WriteTransactionCreateSchema = WriteBaseSchema.extend({
   attachments: z.array(z.record(z.any())).nullable().optional(),
   exclude_from_stats: z.boolean().optional(),
   exclude_from_budget: z.boolean().optional(),
+  currency_code: z.string().nullable().optional(),
+  native_amount: z.number().nullable().optional(),
 });
 
 /** 更新交易请求 */
@@ -218,6 +220,8 @@ const WriteTransactionUpdateSchema = WriteBaseSchema.extend({
   attachments: z.array(z.record(z.any())).nullable().optional(),
   exclude_from_stats: z.boolean().optional(),
   exclude_from_budget: z.boolean().optional(),
+  currency_code: z.string().nullable().optional(),
+  native_amount: z.number().nullable().optional(),
 });
 
 /** 创建账户请求 */
@@ -644,6 +648,8 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     excludeFromBudget: req.exclude_from_budget ?? false,
     createdByUserId: userId,
     updatedByUserId: userId,
+    currencyCode: req.currency_code ?? null,
+    nativeAmount: req.native_amount ?? null,
   };
   const happenedAt = payload.happenedAt as string;
   const resolvedTagsCsv = await resolveTagsCsv(db, req.tags as string | string[] | null, req.tag_ids as string[] | null);

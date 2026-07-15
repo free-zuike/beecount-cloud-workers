@@ -405,6 +405,9 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     // Migrate: add last_edited_by_user_id to existing read_tx_projection
     await safeAddColumn('read_tx_projection', 'last_edited_by_user_id', 'TEXT');
+    // Migrate: add currency_code/native_amount for multi-currency (0018)
+    await safeAddColumn('read_tx_projection', 'currency_code', 'TEXT');
+    await safeAddColumn('read_tx_projection', 'native_amount', 'REAL');
 
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_tx_ledger_time ON read_tx_projection(ledger_id, happened_at DESC, tx_index DESC)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_tx_ledger_category ON read_tx_projection(ledger_id, category_sync_id)').run();

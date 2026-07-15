@@ -1039,14 +1039,13 @@ syncRouter.get('/ledgers', async (c) => {
         .first<{ action: string }>();
       if (tombstone?.action === 'delete') continue;
 
-      // 检查是否有任何变更
+      // 检查是否有任何变更（空账本也返回）
       const latestChangeId = await db
         .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id = ?')
         .bind(l.id)
         .first<{ max_id: number | null }>();
-      if (!latestChangeId?.max_id) continue;
 
-      // 获取最新变更时间
+      // 获取最新变更时间（无变更时用 created_at）
       const latestUpdated = await db
         .prepare('SELECT updated_at FROM sync_changes WHERE ledger_id = ? ORDER BY change_id DESC LIMIT 1')
         .bind(l.id)
@@ -1546,7 +1545,8 @@ async function applyChangeToProjection(
                from_account_sync_id = ?, from_account_name = ?,
                to_account_sync_id = ?, to_account_name = ?,
                tags_csv = ?, tag_sync_ids_json = ?, attachments_json = ?,
-               tx_index = ?, last_edited_by_user_id = ?, source_change_id = ?
+               tx_index = ?, last_edited_by_user_id = ?, source_change_id = ?,
+               currency_code = ?, native_amount = ?
                WHERE ledger_id = ? AND sync_id = ?`
             )
             .bind(
@@ -1569,6 +1569,8 @@ async function applyChangeToProjection(
               payload.tx_index ?? 0,
               payload.updatedByUserId ?? userId,
               change.change_id,
+              payload.currency_code ?? payload.currencyCode ?? null,
+              payload.native_amount ?? payload.nativeAmount ?? null,
               ledgerId,
               change.entity_sync_id,
             )
@@ -1583,8 +1585,9 @@ async function applyChangeToProjection(
                 from_account_sync_id, from_account_name,
                 to_account_sync_id, to_account_name,
                 tags_csv, tag_sync_ids_json, attachments_json, tx_index,
-                created_by_user_id, last_edited_by_user_id, source_change_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                created_by_user_id, last_edited_by_user_id, source_change_id,
+                currency_code, native_amount)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             )
             .bind(
               ledgerId,
@@ -1610,6 +1613,8 @@ async function applyChangeToProjection(
               payload.createdByUserId ?? userId,
               payload.updatedByUserId ?? userId,
               change.change_id,
+              payload.currency_code ?? payload.currencyCode ?? null,
+              payload.native_amount ?? payload.nativeAmount ?? null,
             )
             .run();
         }
