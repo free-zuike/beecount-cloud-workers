@@ -17,6 +17,7 @@ export interface SyncPullResponse {
   changes: SyncChangeEnvelope[]
   server_cursor: number
   has_more: boolean
+  projection_errors?: Array<{ change_id: number; entity_type: string; entity_sync_id: string; error: string }>
 }
 
 function cursorKey(userId: string): string {
@@ -52,9 +53,10 @@ export async function drainPull(
   token: string,
   userId: string,
   deviceId: string | null
-): Promise<{ changes: SyncChangeEnvelope[]; cursor: number }> {
+): Promise<{ changes: SyncChangeEnvelope[]; cursor: number; projection_errors?: Array<{ change_id: number; entity_type: string; entity_sync_id: string; error: string }> }> {
   let cursor = loadCursor(userId)
   const collected: SyncChangeEnvelope[] = []
+  let allProjectionErrors: Array<{ change_id: number; entity_type: string; entity_sync_id: string; error: string }> = []
   // Cap the drain loop so a misbehaving server can't spin us forever.
   for (let iteration = 0; iteration < 50; iteration += 1) {
     const params = new URLSearchParams()
@@ -71,13 +73,16 @@ export async function drainPull(
     if (Array.isArray(body.changes) && body.changes.length > 0) {
       collected.push(...body.changes)
     }
+    if (Array.isArray(body.projection_errors) && body.projection_errors.length > 0) {
+      allProjectionErrors.push(...body.projection_errors)
+    }
     if (typeof body.server_cursor === 'number' && body.server_cursor > cursor) {
       cursor = body.server_cursor
       saveCursor(userId, cursor)
     }
     if (!body.has_more) break
   }
-  return { changes: collected, cursor }
+  return { changes: collected, cursor, projection_errors: allProjectionErrors.length > 0 ? allProjectionErrors : undefined }
 }
 
 export interface PollerControls {
@@ -95,7 +100,7 @@ export function startPoller(params: {
   token: string
   userId: string
   deviceId: string | null
-  onChanges: (changes: SyncChangeEnvelope[]) => void
+  onChanges: (changes: SyncChangeEnvelope[], projectionErrors?: Array<{ change_id: number; entity_type: string; entity_sync_id: string; error: string }>) => void
 }): PollerControls {
   let stopped = false
   let inflight = false
@@ -104,9 +109,9 @@ export function startPoller(params: {
     if (typeof document !== 'undefined' && document.hidden) return
     inflight = true
     try {
-      const { changes } = await drainPull(params.token, params.userId, params.deviceId)
-      if (changes.length > 0 && !stopped) {
-        params.onChanges(changes)
+      const { changes, projection_errors } = await drainPull(params.token, params.userId, params.deviceId)
+      if ((changes.length > 0 || (projection_errors && projection_errors.length > 0)) && !stopped) {
+        params.onChanges(changes, projection_errors)
       }
     } catch (_) {
       // Swallow network errors — next tick will retry.

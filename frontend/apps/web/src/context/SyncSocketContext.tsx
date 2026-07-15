@@ -36,6 +36,8 @@ export type SyncEventKind =
   | 'restore_progress'
   /** 本地 poller 拉到一批 change_envelope;payload.changes 是 envelope 数组 */
   | 'sync_change_batch'
+  /** 同步异常事件;payload.errors 是 projection_errors 数组 */
+  | 'sync_error'
   /** 订阅"任何 server 事件",原始 payload 透传 */
   | 'any'
 
@@ -49,7 +51,12 @@ export interface SyncChangeBatchPayload {
   changes: SyncChangeEnvelope[]
 }
 
-export type SyncEventPayload = SyncEventBase | SyncChangeBatchPayload
+export interface SyncErrorPayload {
+  type: 'sync_error'
+  errors: Array<{ change_id: number; entity_type: string; entity_sync_id: string; error: string }>
+}
+
+export type SyncEventPayload = SyncEventBase | SyncChangeBatchPayload | SyncErrorPayload
 
 type Handler = (payload: SyncEventPayload) => void
 
@@ -138,6 +145,9 @@ export function SyncSocketProvider({ children }: { children: ReactNode }) {
         if (res.changes.length > 0) {
           emit({ type: 'sync_change_batch', changes: res.changes })
         }
+        if (res.projection_errors && res.projection_errors.length > 0) {
+          emit({ type: 'sync_error', errors: res.projection_errors })
+        }
       })
     },
   })
@@ -152,9 +162,12 @@ export function SyncSocketProvider({ children }: { children: ReactNode }) {
       token,
       userId,
       deviceId: syncDeviceId,
-      onChanges: (changes) => {
+      onChanges: (changes, projectionErrors) => {
         if (changes.length > 0) {
           emit({ type: 'sync_change_batch', changes })
+        }
+        if (projectionErrors && projectionErrors.length > 0) {
+          emit({ type: 'sync_error', errors: projectionErrors })
         }
       },
     })
@@ -208,4 +221,19 @@ export function useSyncRefresh(handler: () => void): void {
   useSyncEvent('sync_change', wrapped)
   useSyncEvent('backup_restore', wrapped)
   useSyncEvent('sync_change_batch', wrapped)
+}
+
+/**
+ * 便捷 hook:订阅同步异常事件。当服务端投影更新失败时触发。
+ * handler 接收 errors 数组，包含失败的 change_id、entity_type、entity_sync_id 和错误信息。
+ */
+export function useSyncError(handler: (errors: Array<{ change_id: number; entity_type: string; entity_sync_id: string; error: string }>) => void): void {
+  const handlerRef = useRef(handler)
+  handlerRef.current = handler
+  const wrapped = useCallback((payload: SyncEventPayload) => {
+    if (payload.type === 'sync_error' && 'errors' in payload) {
+      handlerRef.current(payload.errors)
+    }
+  }, [])
+  useSyncEvent('sync_error', wrapped)
 }

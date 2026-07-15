@@ -187,6 +187,7 @@ type SyncPushResponse = {
   conflict_samples: Array<Record<string, unknown>>;
   server_cursor: number;
   server_timestamp: string;
+  projection_errors?: Array<{ change_id: number; entity_type: string; entity_sync_id: string; error: string }>;
 };
 
 // ===========================
@@ -276,6 +277,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     const touchedLedgers: Record<string, string> = {};
     let touchedUserGlobal = false;
     const pendingSharedResourceEvents: Array<Record<string, unknown>> = [];
+    const projectionErrors: Array<{ change_id: number; entity_type: string; entity_sync_id: string; error: string }> = [];
 
     const changes = req.changes;
     
@@ -650,6 +652,12 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
             }
           } catch (err) {
             console.error('[SYNC] Error applying change to projection:', err);
+            projectionErrors.push({
+              change_id: newChangeId,
+              entity_type: change.entity_type,
+              entity_sync_id: change.entity_sync_id,
+              error: err instanceof Error ? err.message : String(err),
+            });
           }
         }
         processedChanges.length = 0; // 清空已处理的列表
@@ -675,9 +683,10 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       conflict_samples: conflictSamples,
       server_cursor: maxCursor,
       server_timestamp: serverNow,
+      projection_errors: projectionErrors.length > 0 ? projectionErrors : undefined,
     };
 
-    console.log('[SYNC] /sync/push result - accepted:', accepted, 'rejected:', rejected, 'conflicts:', conflictCount, 'server_cursor:', maxCursor);
+    console.log('[SYNC] /sync/push result - accepted:', accepted, 'rejected:', rejected, 'conflicts:', conflictCount, 'server_cursor:', maxCursor, 'projection_errors:', projectionErrors.length);
     console.log(`[SYNC] ===== ${CODE_VERSION} SUCCESS =====`);
 
     // 统计最终状态
@@ -1512,7 +1521,7 @@ async function applyChangeToProjection(
     return;
   }
 
-  const payload = change.payload as Record<string, unknown>;
+  const payload = (change.payload ?? {}) as Record<string, unknown>;
 
   switch (change.entity_type) {
     case 'transaction': {
