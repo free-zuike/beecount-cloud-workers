@@ -981,7 +981,11 @@ syncRouter.get('/pull', async (c) => {
     }
 
     // 补全 transaction payload 中缺失的 createdByUserId/updatedByUserId（与原版对齐）
-    await enrichTxPayloadsWithUserIds(db, limitedResults);
+    try {
+      await enrichTxPayloadsWithUserIds(db, limitedResults);
+    } catch (err) {
+      console.error('[SYNC] /sync/pull enrichTxPayloads error (non-fatal):', err);
+    }
 
     const resultTypeCounts: Record<string, number> = {};
     for (const r of limitedResults) {
@@ -1004,23 +1008,41 @@ syncRouter.get('/pull', async (c) => {
     }
 
     return c.json({
-      changes: limitedResults.map(c => ({
-        change_id: c.change_id,
-        ledger_id: c.scope === 'user' ? '__user_global__' : (c.ledger_id ?? ''),
-        entity_type: c.entity_type,
-        entity_sync_id: c.entity_sync_id,
-        action: c.action,
-        payload: c.payload_json ? JSON.parse(c.payload_json) : {},
-        updated_at: c.updated_at,
-        updated_by_device_id: c.updated_by_device_id ?? null,
-        scope: c.scope || 'ledger',
-      })),
+      changes: limitedResults.map(c => {
+        let payload = {};
+        if (c.payload_json) {
+          try {
+            payload = JSON.parse(c.payload_json);
+          } catch (err) {
+            console.error('[SYNC] /sync/pull JSON.parse error for change_id:', c.change_id, 'entity_type:', c.entity_type, 'error:', err);
+            // 返回空 payload 而不是崩溃
+            payload = {};
+          }
+        }
+        return {
+          change_id: c.change_id,
+          ledger_id: c.scope === 'user' ? '__user_global__' : (c.ledger_id ?? ''),
+          entity_type: c.entity_type,
+          entity_sync_id: c.entity_sync_id,
+          action: c.action,
+          payload,
+          updated_at: c.updated_at,
+          updated_by_device_id: c.updated_by_device_id ?? null,
+          scope: c.scope || 'ledger',
+        };
+      }),
       server_cursor: serverCursor,
       has_more: hasMore,
     });
   } catch (error) {
-    console.error('[SYNC] /sync/pull error:', error);
-    return c.json({ error: 'Internal server error' }, 500);
+    console.error('[SYNC] /sync/pull error - BEGIN ====================================');
+    console.error('[SYNC] error:', error);
+    if (error instanceof Error) {
+      console.error('[SYNC] Error message:', error.message);
+      console.error('[SYNC] Error stack:', error.stack);
+    }
+    console.error('[SYNC] /sync/pull error - END ======================================');
+    return c.json({ error: 'Internal server error', message: error instanceof Error ? error.message : String(error) }, 500);
   }
 });
 
