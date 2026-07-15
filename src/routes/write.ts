@@ -1047,6 +1047,19 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   if (req.currency_code !== undefined) newPayload.currencyCode = req.currency_code;
   if (req.native_amount !== undefined) newPayload.nativeAmount = req.native_amount;
 
+  // 多币种联动折算（与原版 rescale_native_amount 对齐）：
+  // item有nativeAmount且payload未显式传native_amount → 按隐含汇率等比缩放
+  if (req.amount !== undefined && req.native_amount === undefined && 'nativeAmount' in existingPayload) {
+    const oldAmount = Number(existingPayload.amount ?? 0);
+    const oldNative = Number(existingPayload.nativeAmount ?? 0);
+    const newAmount = Number(req.amount);
+    if (oldAmount !== 0 && oldNative !== oldAmount && newAmount !== oldAmount) {
+      newPayload.nativeAmount = oldNative / oldAmount * newAmount;
+    } else if (oldNative === oldAmount) {
+      newPayload.nativeAmount = newAmount;
+    }
+  }
+
   // 写入 SyncChange
   const changeResult = await db
     .prepare(
