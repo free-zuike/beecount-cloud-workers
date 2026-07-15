@@ -903,6 +903,76 @@ syncRouter.get('/debug', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /sync/debug/change/:changeId - 检查特定 change_id 的状态
+// ---------------------------------------------------------------------------
+
+syncRouter.get('/debug/change/:changeId', async (c) => {
+  let userId: string;
+  try {
+    userId = c.get('userId');
+  } catch {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  const db = c.env.DB;
+  const changeId = parseInt(c.req.param('changeId'));
+
+  if (!changeId || changeId <= 0) {
+    return c.json({ error: 'Invalid change_id' }, 400);
+  }
+
+  // 查询该 change 的详情
+  const change = await db.prepare(
+    `SELECT change_id, user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, scope
+     FROM sync_changes WHERE change_id = ? AND user_id = ?`
+  ).bind(changeId, userId).first<{
+    change_id: number;
+    user_id: string;
+    ledger_id: string | null;
+    entity_type: string;
+    entity_sync_id: string;
+    action: string;
+    payload_json: string;
+    updated_at: string;
+    updated_by_device_id: string | null;
+    scope: string | null;
+  }>();
+
+  if (!change) {
+    return c.json({ error: 'Change not found', change_id: changeId });
+  }
+
+  // 尝试解析 payload
+  let payloadParseStatus = 'ok';
+  let payloadPreview = null;
+  try {
+    if (change.payload_json) {
+      payloadPreview = JSON.parse(change.payload_json);
+    }
+  } catch (err) {
+    payloadParseStatus = 'error: ' + (err instanceof Error ? err.message : String(err));
+  }
+
+  // 检查 projection 中是否有对应记录
+  let projectionStatus = 'not_checked';
+  if (change.entity_type === 'transaction' && change.ledger_id) {
+    const projRow = await db.prepare(
+      `SELECT sync_id FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?`
+    ).bind(change.ledger_id, change.entity_sync_id).first();
+    projectionStatus = projRow ? 'exists' : 'missing';
+  }
+
+  return c.json({
+    change: {
+      ...change,
+      payload_json_length: change.payload_json?.length ?? 0,
+    },
+    payload_parse: payloadParseStatus,
+    payload_preview: payloadPreview ? JSON.stringify(payloadPreview).substring(0, 500) : null,
+    projection: projectionStatus,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /sync/pull - 增量拉取：客户端按游标拉取服务端变更
 // ---------------------------------------------------------------------------
 
