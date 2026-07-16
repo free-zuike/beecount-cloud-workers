@@ -586,7 +586,7 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
   const ledgerExternalId = c.req.param('ledgerExternalId');
   const now = nowUtc();
 
-  // 查询账本（先查 owner，再查共享账本）
+  // 查询账本（先 external_id，再内部 id，再共享账本）
   let ledger = await db
     .prepare(
       `SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
@@ -603,15 +603,33 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
     }>();
 
   if (!ledger) {
+    // 尝试按内部 id 查找
+    ledger = await db
+      .prepare(
+        `SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
+         FROM ledgers l
+         WHERE l.user_id = ? AND l.id = ?`
+      )
+      .bind(userId, ledgerExternalId)
+      .first<{
+        id: string;
+        external_id: string;
+        name: string | null;
+        currency: string;
+        month_start_day: number;
+      }>();
+  }
+
+  if (!ledger) {
     // 共享账本：通过 ledger_members 查找
     ledger = await db
       .prepare(
         `SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
          FROM ledgers l
          JOIN ledger_members lm ON l.id = lm.ledger_id
-         WHERE lm.user_id = ? AND l.external_id = ?`
+         WHERE lm.user_id = ? AND (l.external_id = ? OR l.id = ?)`
       )
-      .bind(userId, ledgerExternalId)
+      .bind(userId, ledgerExternalId, ledgerExternalId)
       .first<{
         id: string;
         external_id: string;
@@ -844,14 +862,35 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') ?? '20', 10), 2000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
 
-  // 查询账本
-  const ledger = await db
+  // 查询账本（先 external_id，再内部 id，再共享账本）
+  let ledger = await db
     .prepare(
       `SELECT l.id, l.external_id, l.name FROM ledgers l
        WHERE l.user_id = ? AND l.external_id = ?`
     )
     .bind(userId, ledgerExternalId)
     .first<{ id: string; external_id: string; name: string | null }>();
+
+  if (!ledger) {
+    ledger = await db
+      .prepare(
+        `SELECT l.id, l.external_id, l.name FROM ledgers l
+         WHERE l.user_id = ? AND l.id = ?`
+      )
+      .bind(userId, ledgerExternalId)
+      .first<{ id: string; external_id: string; name: string | null }>();
+  }
+
+  if (!ledger) {
+    ledger = await db
+      .prepare(
+        `SELECT l.id, l.external_id, l.name FROM ledgers l
+         JOIN ledger_members lm ON l.id = lm.ledger_id
+         WHERE lm.user_id = ? AND (l.external_id = ? OR l.id = ?)`
+      )
+      .bind(userId, ledgerExternalId, ledgerExternalId)
+      .first<{ id: string; external_id: string; name: string | null }>();
+  }
 
   if (!ledger) {
     console.log('[READ] Ledger not found:', ledgerExternalId);
