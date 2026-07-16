@@ -907,7 +907,7 @@ workspaceRouter.get('/analytics', async (c) => {
     if (scope === 'month') {
       bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}`;
     } else if (scope === 'year') {
-      bucket = String(localDate.getUTCFullYear());
+      bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}`;
     } else {
       const weekStart = new Date(localDate);
       weekStart.setUTCDate(localDate.getUTCDate() - localDate.getUTCDay());
