@@ -189,6 +189,7 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
 });
 
 const batchDeleteHandler = async (c: any) => {
+  console.log('[BATCH] batchDeleteHandler matched, url:', c.req.url);
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');

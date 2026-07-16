@@ -538,6 +538,7 @@ writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaU
  * 删除交易
  */
 writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', WriteBaseSchema), async (c) => {
+  console.log('[WRITE] DELETE /ledgers/:ledgerId/transactions/:id matched, url:', c.req.url);
   const userId = c.get('userId');
   const db = c.env.DB;
   const txSyncId = c.req.param('id');
@@ -639,6 +640,7 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
 // ---------------------------------------------------------------------------
 
 writeRouter.delete('/ledgers/:ledgerId', async (c) => {
+  console.log('[WRITE] DELETE /ledgers/:ledgerId matched, url:', c.req.url, 'ledgerId:', c.req.param('ledgerId'));
   const userId = c.get('userId');
   const db = c.env.DB;
   const r2 = c.env.R2;
