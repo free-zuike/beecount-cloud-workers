@@ -563,6 +563,10 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
               .bind(ledgerRowId || '', change.entity_sync_id).first<{ created_by_user_id: string | null }>();
             p.createdByUserId = existing?.created_by_user_id || userId;
           }
+          // 规范化 tags 字段：Flutter 客户端期望 tags 是 String?，push 时可能传了数组
+          if (Array.isArray(p.tags)) {
+            p.tags = (p.tags as string[]).join(',');
+          }
           payloadForStorage = p;
         }
 
@@ -1079,7 +1083,7 @@ syncRouter.get('/pull', async (c) => {
 
     return c.json({
       changes: limitedResults.map(c => {
-        let payload = {};
+        let payload: Record<string, unknown> = {};
         if (c.payload_json) {
           try {
             payload = JSON.parse(c.payload_json);
@@ -1088,6 +1092,10 @@ syncRouter.get('/pull', async (c) => {
             // 返回空 payload 而不是崩溃
             payload = {};
           }
+        }
+        // 规范化 tags 字段：Flutter 客户端期望 tags 是 String?，但 push 时可能传了数组
+        if (c.entity_type === 'transaction' && Array.isArray(payload.tags)) {
+          payload.tags = (payload.tags as string[]).join(',');
         }
         return {
           change_id: c.change_id,
