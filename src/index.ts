@@ -145,6 +145,7 @@ app.route('/sync', syncRouter);
 app.route('/read', readRouter);
 app.route('/read/summary', summaryRouter);
 app.route('/write', writeRouter);
+app.route('/write', batchWriteRouter);
 app.route('/devices', devicesRouter);
 app.route('/profile', profileRouter);
 app.route('/attachments', attachmentsRouter);

@@ -142,11 +142,19 @@ function safeJsonStringify(obj: unknown): string {
   return JSON.stringify(obj);
 }
 
-/** 查找账本：先试 external_id，再试内部 id */
+/** 查找账本：先试 external_id，再试内部 id，支持共享账本（通过 ledger_members） */
 async function findLedger(db: D1Database, userId: string, ledgerId: string): Promise<{ id: string; external_id: string } | null> {
   const byExt = await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?').bind(userId, ledgerId).first<{ id: string; external_id: string }>();
   if (byExt) return byExt;
-  return db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND id = ?').bind(userId, ledgerId).first<{ id: string; external_id: string }>();
+  const byId = await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND id = ?').bind(userId, ledgerId).first<{ id: string; external_id: string }>();
+  if (byId) return byId;
+  // 共享账本：通过 ledger_members 查找
+  const shared = await db.prepare(
+    `SELECT l.id, l.external_id FROM ledgers l
+     JOIN ledger_members lm ON l.id = lm.ledger_id
+     WHERE lm.user_id = ? AND (l.external_id = ? OR l.id = ?)`
+  ).bind(userId, ledgerId, ledgerId).first<{ id: string; external_id: string }>();
+  return shared ?? null;
 }
 
 // ===========================
