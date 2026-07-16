@@ -186,77 +186,15 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
   console.log('[SUMMARY] Sync completed');
 }
 
+// GET /read/summary/workspace/ledger-counts - 获取账本统计
 summaryRouter.get('/workspace/ledger-counts', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
-  const ledgerExternalId = c.req.query('ledger_id');
-
-  console.log('[SUMMARY] /workspace/ledger-counts called, ledgerId:', ledgerExternalId, 'userId:', userId);
-
-  if (!ledgerExternalId) {
-    // 没有指定账本，返回当前年份作为默认选项
-    return c.json({
-      ledger_id: null,
-      tx_count: 0,
-      first_tx_at: null,
-      last_tx_at: null,
-    });
-  }
-
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
-    .bind(userId, ledgerExternalId)
-    .first<{ id: string; external_id: string }>();
-
-  if (!ledger) {
-    console.log('[SUMMARY] Ledger not found:', ledgerExternalId);
-    // 找不到账本，也返回默认选项
-    return c.json({
-      ledger_id: null,
-      tx_count: 0,
-      first_tx_at: null,
-      last_tx_at: null,
-    });
-  }
-
-  console.log('[SUMMARY] Found ledger:', ledger.id);
-
-  await ensureTxProjectionSynced(db, userId);
-
-  const stats = await db
-    .prepare(
-      `SELECT
-         COUNT(*) as tx_count,
-         MIN(happened_at) as first_tx_at,
-         MAX(happened_at) as last_tx_at
-       FROM read_tx_projection
-       WHERE ledger_id = ?`
-    )
-    .bind(ledger.id)
-    .first<{
-      tx_count: number;
-      first_tx_at: string | null;
-      last_tx_at: string | null;
-    }>();
-
-  console.log('[SUMMARY] Stats:', stats);
-
-  return c.json({
-    tx_count: stats?.tx_count ?? 0,
-    first_tx_at: stats?.first_tx_at ?? null,
-    last_tx_at: stats?.last_tx_at ?? null,
-  });
-});
-
-// 别名：前端调用 /read/summary/workspace/ledger-counts，转发到 workspaceRouter
-summaryRouter.get('/workspace/ledger-counts', async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-  const ledgerId = c.req.query('ledger_id') ?? null;
+  const ledgerExternalId = c.req.query('ledger_id') ?? null;
 
   let ledgerQuery = 'SELECT id FROM ledgers WHERE user_id = ?';
   const ledgerParams: string[] = [userId];
-  if (ledgerId) { ledgerQuery += ' AND external_id = ?'; ledgerParams.push(ledgerId); }
+  if (ledgerExternalId) { ledgerQuery += ' AND external_id = ?'; ledgerParams.push(ledgerExternalId); }
 
   const ledgers = await db.prepare(ledgerQuery).bind(...ledgerParams).all<{ id: string }>();
   if (ledgers.results.length === 0) {
