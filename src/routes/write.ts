@@ -531,6 +531,110 @@ writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaU
 });
 
 // ---------------------------------------------------------------------------
+// DELETE /write/transactions/:id - 删除交易（必须在 DELETE /ledgers/:ledgerId 之前注册）
+// ---------------------------------------------------------------------------
+
+/**
+ * 删除交易
+ */
+writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', WriteBaseSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const txSyncId = c.req.param('id');
+  const ledgerIdParam = c.req.param('ledgerId');
+  const req = c.req.valid('json');
+  const serverNow = nowUtc();
+
+  const ledger = ledgerIdParam
+    ? await findLedger(db, userId, ledgerIdParam)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  // 写入 SyncChange delete tombstone
+  const changeResult = await db
+    .prepare(
+      `INSERT INTO sync_changes
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(userId, ledger.id, 'transaction', txSyncId, 'delete', '{}', serverNow, userId)
+    .run();
+
+  const newChangeId = changeResult.meta.last_row_id as number;
+
+  // 删除前先收集交易关联的附件 fileId，用于清理 R2 文件
+  const attRows = await db
+    .prepare('SELECT id, storage_path FROM attachment_files WHERE ledger_id = ? AND attachment_kind = ?')
+    .bind(ledger.id, 'transaction')
+    .all<{ id: string; storage_path: string }>();
+
+  // 从 transaction 投影中读取 attachments_json 匹配具体 fileId
+  const txRow = await db
+    .prepare('SELECT attachments_json FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+    .bind(ledger.id, txSyncId)
+    .first<{ attachments_json: string | null }>();
+
+  const fileIdsToClean: string[] = [];
+  if (txRow?.attachments_json) {
+    try {
+      const atts = JSON.parse(txRow.attachments_json);
+      if (Array.isArray(atts)) {
+        for (const a of atts) {
+          if (a.cloudFileId) fileIdsToClean.push(a.cloudFileId);
+        }
+      }
+    } catch {}
+  }
+
+  // 从 projection 删除
+  await db
+    .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+    .bind(ledger.id, txSyncId)
+    .run();
+
+  // 清理附件记录和 R2 文件（检查是否仍被其他 tx 引用，与原版 gc_orphan_attachments 对齐）
+  for (const fid of fileIdsToClean) {
+    const att = attRows.results.find(r => r.id === fid);
+    if (!att) continue;
+
+    // 检查是否仍被其他 tx 的 attachments_json 引用
+    const patNoSpace = `%"cloudFileId":"${fid}"%`;
+    const patWithSpace = `%"cloudFileId": "${fid}"%`;
+    const stillReferenced = await db.prepare(
+      `SELECT COUNT(*) as cnt FROM read_tx_projection
+       WHERE user_id = ? AND (attachments_json LIKE ? OR attachments_json LIKE ?) AND NOT (ledger_id = ? AND sync_id = ?)`
+    ).bind(userId, patNoSpace, patWithSpace, ledger.id, txSyncId).first<{ cnt: number }>();
+
+    if (stillReferenced && stillReferenced.cnt > 0) continue;
+
+    // 无其他引用，安全删除
+    if (c.env.R2 && att.storage_path) {
+      try { await c.env.R2.delete(att.storage_path); } catch {}
+    }
+    await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fid).run();
+  }
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'transaction', entityId: txSyncId,
+  });
+
+  // WS 广播
+  await broadcastWriteEvent(c, ledger.id, newChangeId);
+
+  return c.json({
+    ledger_id: ledger.external_id,
+    base_change_id: req.base_change_id,
+    new_change_id: newChangeId,
+    server_timestamp: serverNow,
+    idempotency_replayed: false,
+    entity_id: txSyncId,
+  } as WriteCommitMeta);
+});
+
+// ---------------------------------------------------------------------------
 // DELETE /write/ledgers/:ledgerId - 删除账本
 // ---------------------------------------------------------------------------
 
@@ -1115,110 +1219,6 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'update', entityType: 'transaction', entityId: txSyncId,
     details: { fields_updated: Object.keys(newPayload).filter(k => newPayload[k] !== existingPayload[k]) },
-  });
-
-  // WS 广播
-  await broadcastWriteEvent(c, ledger.id, newChangeId);
-
-  return c.json({
-    ledger_id: ledger.external_id,
-    base_change_id: req.base_change_id,
-    new_change_id: newChangeId,
-    server_timestamp: serverNow,
-    idempotency_replayed: false,
-    entity_id: txSyncId,
-  } as WriteCommitMeta);
-});
-
-// ---------------------------------------------------------------------------
-// DELETE /write/transactions/:id - 删除交易
-// ---------------------------------------------------------------------------
-
-/**
- * 删除交易
- */
-writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', WriteBaseSchema), async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-  const txSyncId = c.req.param('id');
-  const ledgerIdParam = c.req.param('ledgerId');
-  const req = c.req.valid('json');
-  const serverNow = nowUtc();
-
-  const ledger = ledgerIdParam
-    ? await findLedger(db, userId, ledgerIdParam)
-    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
-
-  if (!ledger) {
-    return c.json({ error: 'No ledger found' }, 400);
-  }
-
-  // 写入 SyncChange delete tombstone
-  const changeResult = await db
-    .prepare(
-      `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .bind(userId, ledger.id, 'transaction', txSyncId, 'delete', '{}', serverNow, userId)
-    .run();
-
-  const newChangeId = changeResult.meta.last_row_id as number;
-
-  // 删除前先收集交易关联的附件 fileId，用于清理 R2 文件
-  const attRows = await db
-    .prepare('SELECT id, storage_path FROM attachment_files WHERE ledger_id = ? AND attachment_kind = ?')
-    .bind(ledger.id, 'transaction')
-    .all<{ id: string; storage_path: string }>();
-
-  // 从 transaction 投影中读取 attachments_json 匹配具体 fileId
-  const txRow = await db
-    .prepare('SELECT attachments_json FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
-    .bind(ledger.id, txSyncId)
-    .first<{ attachments_json: string | null }>();
-
-  const fileIdsToClean: string[] = [];
-  if (txRow?.attachments_json) {
-    try {
-      const atts = JSON.parse(txRow.attachments_json);
-      if (Array.isArray(atts)) {
-        for (const a of atts) {
-          if (a.cloudFileId) fileIdsToClean.push(a.cloudFileId);
-        }
-      }
-    } catch {}
-  }
-
-  // 从 projection 删除
-  await db
-    .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
-    .bind(ledger.id, txSyncId)
-    .run();
-
-  // 清理附件记录和 R2 文件（检查是否仍被其他 tx 引用，与原版 gc_orphan_attachments 对齐）
-  for (const fid of fileIdsToClean) {
-    const att = attRows.results.find(r => r.id === fid);
-    if (!att) continue;
-
-    // 检查是否仍被其他 tx 的 attachments_json 引用
-    const patNoSpace = `%"cloudFileId":"${fid}"%`;
-    const patWithSpace = `%"cloudFileId": "${fid}"%`;
-    const stillReferenced = await db.prepare(
-      `SELECT COUNT(*) as cnt FROM read_tx_projection
-       WHERE user_id = ? AND (attachments_json LIKE ? OR attachments_json LIKE ?) AND NOT (ledger_id = ? AND sync_id = ?)`
-    ).bind(userId, patNoSpace, patWithSpace, ledger.id, txSyncId).first<{ cnt: number }>();
-
-    if (stillReferenced && stillReferenced.cnt > 0) continue;
-
-    // 无其他引用，安全删除
-    if (c.env.R2 && att.storage_path) {
-      try { await c.env.R2.delete(att.storage_path); } catch {}
-    }
-    await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fid).run();
-  }
-
-  await insertAuditLog({
-    db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'transaction', entityId: txSyncId,
   });
 
   // WS 广播
