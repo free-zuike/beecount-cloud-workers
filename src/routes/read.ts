@@ -586,8 +586,8 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
   const ledgerExternalId = c.req.param('ledgerExternalId');
   const now = nowUtc();
 
-  // 查询账本
-  const ledger = await db
+  // 查询账本（先查 owner，再查共享账本）
+  let ledger = await db
     .prepare(
       `SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
        FROM ledgers l
@@ -601,6 +601,25 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
       currency: string;
       month_start_day: number;
     }>();
+
+  if (!ledger) {
+    // 共享账本：通过 ledger_members 查找
+    ledger = await db
+      .prepare(
+        `SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
+         FROM ledgers l
+         JOIN ledger_members lm ON l.id = lm.ledger_id
+         WHERE lm.user_id = ? AND l.external_id = ?`
+      )
+      .bind(userId, ledgerExternalId)
+      .first<{
+        id: string;
+        external_id: string;
+        name: string | null;
+        currency: string;
+        month_start_day: number;
+      }>();
+  }
 
   if (!ledger) {
     return c.json({ error: 'Ledger not found' }, 404);
