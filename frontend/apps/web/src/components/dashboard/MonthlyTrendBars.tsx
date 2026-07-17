@@ -22,18 +22,8 @@ interface Props {
   data: SeriesItem[]
 }
 
-// 固定取最近 N 个月。原来有 6 / 12 / 24 期切换,但 server.series 通常只
-// 返当年数据,切到 24 期没新内容,反而让用户疑惑"按钮没用",直接拿掉。
-// 12 是"完整年度"的天然窗口,看得到季节性又不拥挤。
 const TREND_WINDOW = 12
 
-/**
- * 月度收支走势 — 最近 12 期柱图,叠加净额折线,直观看出某个月是赚到了还是
- * 入不敷出。
- *
- * 数据源是后端已经聚合好的 `analyticsData.series`(YYYY-MM bucket),前端只
- * 切片 + 计算 balance(不依赖 server.balance 字段,保险用 income-expense 算)。
- */
 export function MonthlyTrendBars({ data }: Props) {
   const t = useT()
 
@@ -48,29 +38,24 @@ export function MonthlyTrendBars({ data }: Props) {
   const fmt = (v: number) =>
     v.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })
 
-  // 12 期 x 轴 label 直接用月份末位(MM),完整 bucket 由 tooltip 提供
   const xTickFormatter = (bucket: string): string => {
     const parts = bucket.split('-')
     if (parts.length >= 2) return parts.slice(1).join('-')
     return bucket
   }
 
-  // 用 ResizeObserver 测量容器尺寸，避免 ResponsiveContainer 的 -1 问题
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [size, setSize] = useState({ width: 0, height: 0 })
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [dims, setDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
 
   useEffect(() => {
-    if (!containerRef.current || slice.length === 0) return
-    const el = containerRef.current
-    const ro = new ResizeObserver((entries) => {
-      const entry = entries[0]
-      if (entry) {
-        const { width, height } = entry.contentRect
-        if (width > 0 && height > 0) {
-          setSize({ width, height })
-        }
-      }
-    })
+    const el = wrapRef.current
+    if (!el || slice.length === 0) return
+    const measure = () => {
+      const r = el.getBoundingClientRect()
+      if (r.width > 0 && r.height > 0) setDims({ w: r.width, h: r.height })
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
   }, [slice.length])
@@ -86,14 +71,9 @@ export function MonthlyTrendBars({ data }: Props) {
             {t('home.trendBars.empty')}
           </div>
         ) : (
-          <div ref={containerRef} className="h-56">
-            {size.width > 0 && size.height > 0 && (
-              <ComposedChart
-                width={size.width}
-                height={size.height}
-                data={slice}
-                margin={{ left: 0, right: 8, top: 8, bottom: 0 }}
-              >
+          <div ref={wrapRef} className="h-56">
+            {dims.w > 0 && dims.h > 0 && (
+              <ComposedChart width={dims.w} height={dims.h} data={slice} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                 <XAxis
                   dataKey="bucket"
@@ -140,16 +120,8 @@ export function MonthlyTrendBars({ data }: Props) {
                           : v
                   }
                 />
-                <Bar
-                  dataKey="income"
-                  fill="rgb(var(--income-rgb))"
-                  radius={[4, 4, 0, 0]}
-                />
-                <Bar
-                  dataKey="expense"
-                  fill="rgb(var(--expense-rgb))"
-                  radius={[4, 4, 0, 0]}
-                />
+                <Bar dataKey="income" fill="rgb(var(--income-rgb))" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="expense" fill="rgb(var(--expense-rgb))" radius={[4, 4, 0, 0]} />
                 <Line
                   type="monotone"
                   dataKey="balance"
