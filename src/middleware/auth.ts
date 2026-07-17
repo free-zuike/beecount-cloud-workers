@@ -2,6 +2,12 @@ import { Context, Next } from 'hono';
 import { validateAccessToken } from '../auth';
 
 export const authMiddleware = async (c: any, next: Next) => {
+  const url = new URL(c.req.url);
+  // 2FA 验证端点使用 challenge_token（在请求体中），不需要 Authorization header
+  if (url.pathname === '/api/v1/auth/2fa/verify') {
+    return next();
+  }
+
   const authHeader = c.req.header('Authorization');
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return c.json({ error: 'Unauthorized' }, 401);

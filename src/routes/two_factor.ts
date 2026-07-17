@@ -290,7 +290,6 @@ twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (
   }
 
   const decryptedSecret = await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret);
-  console.log('[2FA] confirm: stored_len=', user.totp_secret_encrypted?.length, 'decrypted_len=', decryptedSecret?.length, 'same=', decryptedSecret === user.totp_secret_encrypted, 'code=', code);
   const isValid = await verifyTotpCode(decryptedSecret, code, 10);
   console.log('[2FA] confirm: isValid=', isValid, 'server_ts=', Math.floor(Date.now() / 1000));
   if (!isValid) {
