@@ -5,6 +5,7 @@ import {
   ComposedChart,
   Legend,
   Line,
+  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis
@@ -44,36 +45,23 @@ export function MonthlyTrendBars({ data }: Props) {
     return bucket
   }
 
-  const wrapRef = useRef<HTMLDivElement>(null)
-  const [dims, setDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
-
-  useEffect(() => {
-    const el = wrapRef.current
-    if (!el || slice.length === 0) return
-    const measure = () => {
-      const r = el.getBoundingClientRect()
-      if (r.width > 0 && r.height > 0) setDims({ w: r.width, h: r.height })
-    }
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [slice.length])
-
+  // 始终渲染图表容器（不条件隐藏），让 ResponsiveContainer 始终能测量到父容器。
+  // 用 hidden class 隐藏空态文本。
   return (
     <Card className="bc-panel overflow-hidden">
       <CardHeader>
         <CardTitle className="text-base">{t('home.trendBars.title')}</CardTitle>
       </CardHeader>
       <CardContent>
-        {slice.length === 0 ? (
+        {slice.length === 0 && (
           <div className="flex h-48 items-center justify-center text-xs text-muted-foreground">
             {t('home.trendBars.empty')}
           </div>
-        ) : (
-          <div ref={wrapRef} className="h-56">
-            {dims.w > 0 && dims.h > 0 && (
-              <ComposedChart width={dims.w} height={dims.h} data={slice} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
+        )}
+        <div className={slice.length === 0 ? 'hidden' : ''} style={{ height: slice.length > 0 ? '14rem' : 0 }}>
+          {slice.length > 0 && (
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={slice} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                 <XAxis
                   dataKey="bucket"
@@ -131,9 +119,9 @@ export function MonthlyTrendBars({ data }: Props) {
                   activeDot={{ r: 5 }}
                 />
               </ComposedChart>
-            )}
-          </div>
-        )}
+            </ResponsiveContainer>
+          )}
+        </div>
       </CardContent>
     </Card>
   )
