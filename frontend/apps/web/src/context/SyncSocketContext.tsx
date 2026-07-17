@@ -232,8 +232,7 @@ export function useSyncError(handler: (errors: Array<{ change_id: number; entity
   handlerRef.current = handler
   const wrapped = useCallback((payload: SyncEventPayload) => {
     if (payload.type === 'sync_error') {
-      const p = payload as SyncErrorPayload
-      handlerRef.current(p.errors)
+      handlerRef.current((payload as SyncErrorPayload).errors)
     }
   }, [])
   useSyncEvent('sync_error', wrapped)

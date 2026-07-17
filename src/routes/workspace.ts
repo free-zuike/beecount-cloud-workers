@@ -842,8 +842,8 @@ workspaceRouter.get('/analytics', async (c) => {
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
-    ledgerQuery += ' AND external_id = ?';
-    ledgerParams.push(ledgerId);
+    ledgerQuery += ' AND (external_id = ? OR l.id = ?)';
+    ledgerParams.push(ledgerId, ledgerId);
   }
 
   const ledgers = await db.prepare(ledgerQuery).bind(...ledgerParams).all<{ id: string }>();
