@@ -1,11 +1,10 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bar,
   CartesianGrid,
   ComposedChart,
   Legend,
   Line,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis
@@ -56,6 +55,26 @@ export function MonthlyTrendBars({ data }: Props) {
     return bucket
   }
 
+  // 用 ResizeObserver 测量容器尺寸，避免 ResponsiveContainer 的 -1 问题
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [size, setSize] = useState({ width: 0, height: 0 })
+
+  useEffect(() => {
+    if (!containerRef.current || slice.length === 0) return
+    const el = containerRef.current
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry) {
+        const { width, height } = entry.contentRect
+        if (width > 0 && height > 0) {
+          setSize({ width, height })
+        }
+      }
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [slice.length])
+
   return (
     <Card className="bc-panel overflow-hidden">
       <CardHeader>
@@ -67,9 +86,14 @@ export function MonthlyTrendBars({ data }: Props) {
             {t('home.trendBars.empty')}
           </div>
         ) : (
-          <div className="h-56" style={{ width: '100%', position: 'relative' }}>
-            <ResponsiveContainer width="100%" height="100%" key={`chart-${slice.length}`}>
-              <ComposedChart data={slice} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
+          <div ref={containerRef} className="h-56">
+            {size.width > 0 && size.height > 0 && (
+              <ComposedChart
+                width={size.width}
+                height={size.height}
+                data={slice}
+                margin={{ left: 0, right: 8, top: 8, bottom: 0 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                 <XAxis
                   dataKey="bucket"
@@ -116,8 +140,6 @@ export function MonthlyTrendBars({ data }: Props) {
                           : v
                   }
                 />
-                {/* income / expense 柱子用 token 跟随用户配色偏好。balance 折线
-                    用 primary 色 — 跟主题色绑定,亮暗模式都看得清。 */}
                 <Bar
                   dataKey="income"
                   fill="rgb(var(--income-rgb))"
@@ -137,7 +159,7 @@ export function MonthlyTrendBars({ data }: Props) {
                   activeDot={{ r: 5 }}
                 />
               </ComposedChart>
-            </ResponsiveContainer>
+            )}
           </div>
         )}
       </CardContent>
