@@ -67,8 +67,8 @@ export function MonthlyTrendBars({ data }: Props) {
             {t('home.trendBars.empty')}
           </div>
         ) : (
-          <div className="h-56">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="h-56" style={{ width: '100%', position: 'relative' }}>
+            <ResponsiveContainer width="100%" height="100%" key={`chart-${slice.length}`}>
               <ComposedChart data={slice} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                 <XAxis

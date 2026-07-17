@@ -152,14 +152,10 @@ export function OverviewPage() {
       }),
     ])
     const [rYearExpense, rYearIncome, rMonthly, rAll, rCounts] = results
-    // DEBUG: log year scope result to diagnose empty charts
     if (rYearExpense.status === 'fulfilled') {
-      console.log('[Overview] yearExpense OK, series length:', rYearExpense.value.series?.length, 'summary:', rYearExpense.value.summary)
       setAnalyticsData(rYearExpense.value)
       setCurrentYearSummary(rYearExpense.value.summary)
       setCurrentYearSeries(rYearExpense.value.series || [])
-    } else {
-      console.error('[Overview] yearExpense FAILED:', rYearExpense.reason)
     }
     if (rYearIncome.status === 'fulfilled') {
       setAnalyticsIncomeRanks(rYearIncome.value.category_ranks || [])
