@@ -9,7 +9,7 @@
  * API 请求（/api/*）绕过 SW —— 直接去网络，避免缓存 token/敏感数据。
  */
 
-const CACHE_VERSION = 'beecount-web-v1'
+const CACHE_VERSION = 'beecount-web-v2'
 const PRECACHE = ['/', '/index.html', '/manifest.webmanifest', '/branding/logo.svg']
 
 self.addEventListener('install', (event) => {
