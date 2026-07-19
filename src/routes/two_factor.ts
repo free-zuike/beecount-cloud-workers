@@ -21,7 +21,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
-import { validateAccessToken, createAccessToken, createRefreshToken, verifyPassword } from '../auth';
+import { validateAccessToken, createAccessToken, createRefreshToken, verifyPassword, base64urlDecode } from '../auth';
 import { isRateLimited } from '../lib/rate-limit';
 
 // ===========================
@@ -338,7 +338,9 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   const challengeParts = challenge_token.split('.');
   if (challengeParts.length === 3) {
     try {
-      const payload = JSON.parse(atob(challengeParts[1]));
+      const payloadStr = base64urlDecode(challengeParts[1]);
+      if (!payloadStr) { return c.json({ error: 'Invalid or expired challenge token.' }, 401); }
+      const payload = JSON.parse(payloadStr);
       if (payload.type !== 'totp_challenge') {
         return c.json({ error: 'Invalid or expired challenge token.' }, 401);
       }
