@@ -2,9 +2,10 @@ import { Context, Next } from 'hono';
 import { validateAccessToken } from '../auth';
 
 export const authMiddleware = async (c: any, next: Next) => {
-  const url = new URL(c.req.url);
+  const path = c.req.path;
+  console.log('[AUTH] path=', path);
   // auth 路由自己处理认证（login/refresh/2fa），跳过中间件
-  if (url.pathname.startsWith('/api/v1/auth')) {
+  if (path.startsWith('/api/v1/auth')) {
     return next();
   }
 
