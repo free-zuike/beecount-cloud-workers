@@ -326,7 +326,12 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   }
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
-  const { challenge_token, code, method, device_id, device_name, platform, client_type: clientType } = c.req.valid('json');
+  const body = c.req.valid('json');
+  // challenge_token 可能在请求体中，也可能在 Authorization header 中
+  const authHeader = c.req.header('Authorization');
+  const challenge_token = body.challenge_token
+    || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined);
+  const { code, method, device_id, device_name, platform, client_type: clientType } = body;
   const serverNow = nowUtc();
 
   // 验证 challenge_token 签名（防止伪造）
