@@ -3,8 +3,10 @@ import { validateAccessToken } from '../auth';
 
 export const authMiddleware = async (c: any, next: Next) => {
   const url = new URL(c.req.url);
+  console.log('[AUTH] pathname=', url.pathname);
   // 2FA 验证端点使用 challenge_token（在请求体中），不需要 Authorization header
   if (url.pathname.includes('/2fa/verify')) {
+    console.log('[AUTH] skipping 2fa/verify');
     return next();
   }
 
