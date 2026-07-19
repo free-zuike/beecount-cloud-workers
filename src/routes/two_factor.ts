@@ -335,7 +335,9 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   const serverNow = nowUtc();
 
   // 验证 challenge_token 签名（防止伪造）
+  console.log('[2FA] verify: challenge_token length=', challenge_token?.length, 'starts_with=', challenge_token?.substring(0, 20));
   const challengeResult = await validateAccessToken(challenge_token, jwtSecret);
+  console.log('[2FA] verify: challengeResult=', JSON.stringify(challengeResult));
   if (!challengeResult || !('userId' in challengeResult)) {
     return c.json({ error: 'Invalid or expired challenge token.' }, 401);
   }
