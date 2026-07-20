@@ -20,9 +20,7 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_VERSION).then((cache) => cache.addAll(PRECACHE).catch(() => undefined))
   )
-  // 不再默认 skipWaiting —— 改由前端检测到 waiting 后,通过 postMessage 主动
-  // 触发 (UI 上有「检测到新版本」banner)。这样用户在编辑表单时不会被强制
-  // reload 丢数据。开发模式下可以配置直接 skip,生产留给 UI 决定。
+  self.skipWaiting()
 })
 
 self.addEventListener('activate', (event) => {
