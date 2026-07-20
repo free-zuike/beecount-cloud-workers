@@ -63,9 +63,9 @@ jobs:
           grep "database_id" wrangler.toml
 
       - name: Build frontend
-        run: cd frontend && VITE_APP_VERSION=1.5.2 pnpm install --no-frozen-lockfile && VITE_APP_VERSION=1.5.2 pnpm build
+        run: cd frontend && VITE_APP_VERSION=1.0.0 pnpm install --no-frozen-lockfile && VITE_APP_VERSION=1.0.0 pnpm build
         env:
-          VITE_APP_VERSION: "1.5.2"
+          VITE_APP_VERSION: "1.0.0"
 
       - name: Deploy
         run: npx wrangler deploy

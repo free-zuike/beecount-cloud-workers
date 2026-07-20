@@ -37,7 +37,7 @@ enabled = true
 
 # 自动构建前端 (CI/CD 中使用)
 # [build]
-# command = "cd frontend && VITE_APP_VERSION=1.5.2 pnpm install --no-frozen-lockfile && VITE_APP_VERSION=1.5.2 pnpm build"
+# command = "cd frontend && VITE_APP_VERSION=1.0.0 pnpm install --no-frozen-lockfile && VITE_APP_VERSION=1.0.0 pnpm build"
 
 # 静态资产配置 - 官方前端构建输出在 apps/web/dist
 [assets]

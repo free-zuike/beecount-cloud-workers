@@ -76,7 +76,7 @@ app.get('/healthz', (c) => c.json({ status: 'ok' }));
 app.route('/api/v1/setup', setupRouter);
 app.route('/api/v1/auth', authRouter);
 app.get('/api/v1/version', (c) =>
-  c.json({ name: 'BeeCount Cloud', version: '1.5.2' })
+  c.json({ name: 'BeeCount Cloud', version: '1.0.0' })
 );
 
 // 头像下载公开访问（与原版一致）
