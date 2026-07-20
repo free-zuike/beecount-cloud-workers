@@ -1127,8 +1127,7 @@ workspaceRouter.get('/ledgers/:id/invites', async (c) => {
       created_at: string;
     }>();
 
-  return c.json({
-    invites: invites.results.map((inv) => ({
+  return invites.results.map((inv) => ({
       id: inv.id,
       code: inv.code,
       target_role: inv.target_role,
@@ -1136,8 +1135,7 @@ workspaceRouter.get('/ledgers/:id/invites', async (c) => {
       expires_at: inv.expires_at,
       created_at: inv.created_at,
       share_link: `/invite/${inv.code}`,
-    })),
-  });
+    }));
 });
 
 // ===========================================================================
@@ -1366,12 +1364,10 @@ workspaceRouter.get('/ledgers/:id/members', async (c) => {
     .bind(ledger.user_id)
     .first<{ id: string; email: string }>();
 
-  const result = [
+  return [
     ...(owner ? [{ user_id: owner.id, role: 'owner', joined_at: '', email: owner.email }] : []),
     ...members.results,
   ];
-
-  return c.json({ members: result });
 });
 
 // ===========================================================================
