@@ -20,7 +20,6 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_VERSION).then((cache) => cache.addAll(PRECACHE).catch(() => undefined))
   )
-  self.skipWaiting()
 })
 
 self.addEventListener('activate', (event) => {

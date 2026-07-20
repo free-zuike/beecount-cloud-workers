@@ -9,6 +9,8 @@ const en = {
   'login.submit': 'Login',
   'login.initialPasswordHint': 'On first startup the self-hosted server prints the admin email + password to docker logs and writes them to var/initial_admin_password inside the container. After login, change the password under "User management".',
   'common.close': 'Close',
+  'pwa.update.available': 'New version available',
+  'pwa.update.apply': 'Update now',
   'login.heroHighlight': 'Self-hosted',
   'login.heroTail': ' personal accounting cloud',
   'login.feature.syncTitle': 'Realtime two-way sync',

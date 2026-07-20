@@ -15,6 +15,7 @@ import {
 
 import { App } from './App'
 import { dictionaries } from './i18n'
+import { setupServiceWorkerUpdates } from './lib/pwa-sw-update'
 import './styles.css'
 
 applyTheme(initialThemeMode())
@@ -28,8 +29,10 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker
       .register('/sw.js', { scope: '/' })
+      .then((registration) => {
+        setupServiceWorkerUpdates(registration)
+      })
       .catch((err) => {
-        // 不影响主流程，只在 dev 控制台留个记录。
         // eslint-disable-next-line no-console
         console.warn('[pwa] sw register failed', err)
       })

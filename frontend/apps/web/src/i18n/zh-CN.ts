@@ -9,6 +9,8 @@ const zhCN = {
   'login.submit': '登录',
   'login.initialPasswordHint': '自部署初次启动时,admin 账号 + 密码会打到 docker logs;同时也存于容器内 var/initial_admin_password 文件。登录后可在「用户管理」修改。',
   'common.close': '关闭',
+  'pwa.update.available': '有新版本可用',
+  'pwa.update.apply': '立即更新',
   'login.heroHighlight': '自部署',
   'login.heroTail': '的个人记账云',
   'login.feature.syncTitle': '双向实时同步',

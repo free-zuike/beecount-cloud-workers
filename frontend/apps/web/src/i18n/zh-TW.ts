@@ -9,6 +9,8 @@ const zhTW = {
   'login.submit': '登入',
   'login.initialPasswordHint': '自部署初次啟動時,admin 帳號 + 密碼會打到 docker logs;同時也存於容器內 var/initial_admin_password 檔案。登入後可在「使用者管理」修改。',
   'common.close': '關閉',
+  'pwa.update.available': '有新版本可用',
+  'pwa.update.apply': '立即更新',
   'login.heroHighlight': '自部署',
   'login.heroTail': '的個人記帳雲',
   'login.feature.syncTitle': '雙向即時同步',
