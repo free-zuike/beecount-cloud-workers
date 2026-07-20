@@ -1006,7 +1006,7 @@ const MemberStatsQuerySchema = z.object({
 // POST /workspace/ledgers/:id/invite - 生成邀请码（仅 Owner）
 // ===========================================================================
 
-workspaceRouter.post('/ledgers/:id/invite', zValidator('json', InviteSchema), async (c) => {
+workspaceRouter.post('/ledgers/:id/invites', zValidator('json', InviteSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const ledgerExternalId = c.req.param('id');
