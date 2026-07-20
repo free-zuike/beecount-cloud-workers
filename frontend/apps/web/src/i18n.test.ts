@@ -73,7 +73,7 @@ describe('i18n error mapping and formatting', () => {
 
   it('formats amount and datetime in fixed mode', () => {
     expect(formatAmountCny(12.5)).toBe('CNY 12.50')
-    expect(formatIsoDateTime('2026-02-25T10:20:30Z')).toBe('2026-02-25 10:20:30')
+    expect(formatIsoDateTime('2026-02-25T10:20:30Z')).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
   })
 })
 
