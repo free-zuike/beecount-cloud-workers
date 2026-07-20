@@ -43,11 +43,17 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         theme_primary_color TEXT,
         appearance_json TEXT,
         ai_config_json TEXT,
+        primary_currency TEXT,
         updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
     `).run();
 
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id)').run();
+
+    // 为已有表添加 primary_currency 列（如果不存在）
+    try {
+      await db.prepare("ALTER TABLE user_profiles ADD COLUMN primary_currency TEXT").run();
+    } catch { /* 列已存在则忽略 */ }
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS refresh_tokens (
