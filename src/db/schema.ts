@@ -72,6 +72,11 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_device_id ON refresh_tokens(device_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token_hash)').run();
 
+    // client_type 列后加的，旧表需要 ALTER
+    try {
+      await db.prepare("ALTER TABLE refresh_tokens ADD COLUMN client_type TEXT DEFAULT 'app'").run();
+    } catch { /* 列已存在则忽略 */ }
+
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS personal_access_tokens (
         id TEXT PRIMARY KEY,
