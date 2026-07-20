@@ -7,6 +7,9 @@ import { Amount } from '@beecount/web-features'
 interface Props {
   tags: WorkspaceTag[]
   currency?: string
+  /** 点击某行 → 打开标签详情弹窗。优先级高于 onClickTag。 */
+  onSelectTag?: (tag: WorkspaceTag) => void
+  /** 老接口:仅传 tag 名,跳搜索之类的场景用。`onSelectTag` 没传时才生效。 */
   onClickTag?: (name: string) => void
 }
 
@@ -14,12 +17,13 @@ interface Props {
  * 使用最多的标签 Top 5。按 `tx_count` 降序，右侧显示笔数 + 当年支出金额。
  * bar 宽度相对第一名归一，一眼看出头部和尾部的差距。
  */
-export function HomeTopTags({ tags, currency = 'CNY', onClickTag }: Props) {
+export function HomeTopTags({ tags, currency = 'CNY', onSelectTag, onClickTag }: Props) {
   const t = useT()
   const top = useMemo(() => {
     // 内层 map 回调故意不叫 t 避免和上面 useT() 的 t 冲突
     const withStats = tags
       .map((tag) => ({
+        raw: tag,
         id: tag.id,
         name: tag.name,
         color: tag.color || '#94a3b8',
@@ -32,6 +36,7 @@ export function HomeTopTags({ tags, currency = 'CNY', onClickTag }: Props) {
     const maxCount = withStats[0]?.count ?? 0
     return { list: withStats, maxCount }
   }, [tags])
+  const clickable = Boolean(onSelectTag || onClickTag)
 
   return (
     <Card className="bc-panel overflow-hidden">
@@ -50,10 +55,15 @@ export function HomeTopTags({ tags, currency = 'CNY', onClickTag }: Props) {
               return (
                 <li
                   key={tag.id || `${tag.name}-${i}`}
-                  className={`group relative flex items-center gap-3 ${
-                    onClickTag ? 'cursor-pointer' : ''
+                  className={`group relative flex items-center gap-3 rounded-md ${
+                    clickable
+                      ? '-mx-2 cursor-pointer px-2 py-1 transition-colors hover:bg-muted/40'
+                      : ''
                   }`}
-                  onClick={() => onClickTag?.(tag.name)}
+                  onClick={() => {
+                    if (onSelectTag) onSelectTag(tag.raw)
+                    else onClickTag?.(tag.name)
+                  }}
                 >
                   <span
                     className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-bold text-white shadow-sm"

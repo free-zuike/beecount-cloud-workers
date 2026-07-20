@@ -8,6 +8,10 @@ import {
 } from '@beecount/ui'
 import { TransactionList } from '@beecount/web-features'
 
+import { useAuth } from '../../context/AuthContext'
+import type { DetailScope } from '../../lib/txDialogEvents'
+import { DetailScopeToggle } from './DetailScopeToggle'
+
 interface TagStats {
   count: number
   income: number
@@ -16,6 +20,8 @@ interface TagStats {
 
 interface Props {
   tag: ReadTag | null
+  scope: DetailScope
+  onScopeChange: (next: DetailScope) => void
   transactions: WorkspaceTransaction[]
   total: number
   offset: number
@@ -31,6 +37,8 @@ interface Props {
 /** 点标签卡片弹出的详情:顶部标签色块 + 统计摘要 + 该标签下交易列表(无限加载)。 */
 export function TagDetailDialog({
   tag,
+  scope,
+  onScopeChange,
   transactions,
   total,
   offset,
@@ -43,11 +51,13 @@ export function TagDetailDialog({
   resolveAttachmentPreviewUrl,
 }: Props) {
   const t = useT()
+  const { profileMe } = useAuth()
+  const noteDisplayMode = profileMe?.appearance?.note_display_mode ?? 'category'
   const stats = tag ? tagStatsById[tag.id] : null
   return (
     <Dialog open={Boolean(tag)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="border-b border-border/60 px-6 py-4">
+        <DialogHeader className="flex flex-row items-center justify-between gap-3 border-b border-border/60 px-6 py-4">
           <DialogTitle className="flex items-center gap-2">
             <span
               className="flex h-6 w-6 items-center justify-center rounded-md text-xs font-bold text-white"
@@ -57,6 +67,7 @@ export function TagDetailDialog({
             </span>
             <span className="truncate">{tag?.name || ''}</span>
           </DialogTitle>
+          <DetailScopeToggle value={scope} onChange={onScopeChange} className="shrink-0" />
         </DialogHeader>
         {tag ? (
           <div className="flex min-h-0 flex-1 flex-col">
@@ -90,6 +101,8 @@ export function TagDetailDialog({
                 resolveAttachmentPreviewUrl={resolveAttachmentPreviewUrl as never}
                 emptyTitle={t('transactions.empty.forTag.title')}
                 emptyDescription={t('transactions.empty.forTag.desc')}
+                showLedger={scope === 'all'}
+                noteDisplayMode={noteDisplayMode}
               />
             </div>
           </div>

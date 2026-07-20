@@ -11,6 +11,10 @@ import { useT } from '@beecount/ui'
 import type { BudgetUsage } from '@beecount/web-features'
 
 import { useLedgers } from '../../context/LedgersContext'
+import {
+  dispatchOpenDetailAccount,
+  dispatchOpenDetailTag,
+} from '../../lib/txDialogEvents'
 import { HomeHero } from '../dashboard/HomeHero'
 import { HomeHabitStats } from '../dashboard/HomeHabitStats'
 import { HomeYearHeatmap } from '../dashboard/HomeYearHeatmap'
@@ -38,6 +42,9 @@ interface Props {
   budgets: ReadBudget[]
   budgetUsageById: Record<string, BudgetUsage>
   onJumpToTransactionsWithQuery: (query: string) => void
+  /** Top 卡片点击分类名时的钩子 — page 端反查 WorkspaceCategory 后派发详情。
+   *  没传则 Top 卡片回退到 onJumpToTransactionsWithQuery。 */
+  onCategoryClickFromTop?: (name: string, kind: 'expense' | 'income') => void
 }
 
 /**
@@ -68,6 +75,7 @@ export function OverviewSection({
   budgets,
   budgetUsageById,
   onJumpToTransactionsWithQuery,
+  onCategoryClickFromTop,
 }: Props) {
   const t = useT()
   const { ledgers, activeLedgerId, currency } = useLedgers()
@@ -126,13 +134,21 @@ export function OverviewSection({
           ranks={analyticsData?.category_ranks || []}
           variant="expense"
           title={t('analytics.expenseTop5')}
-          onClickCategory={onJumpToTransactionsWithQuery}
+          onClickCategory={
+            onCategoryClickFromTop
+              ? (name) => onCategoryClickFromTop(name, 'expense')
+              : onJumpToTransactionsWithQuery
+          }
         />
         <TopCategoriesList
           ranks={analyticsIncomeRanks}
           variant="income"
           title={t('analytics.incomeTop5')}
-          onClickCategory={onJumpToTransactionsWithQuery}
+          onClickCategory={
+            onCategoryClickFromTop
+              ? (name) => onCategoryClickFromTop(name, 'income')
+              : onJumpToTransactionsWithQuery
+          }
         />
       </div>
 
@@ -140,9 +156,17 @@ export function OverviewSection({
         <HomeTopTags
           tags={tags}
           currency={currency}
-          onClickTag={onJumpToTransactionsWithQuery}
+          onSelectTag={(tag) =>
+            dispatchOpenDetailTag(tag, { defaultScope: 'current' })
+          }
         />
-        <HomeTopAccounts accounts={accounts} currency={currency} />
+        <HomeTopAccounts
+          accounts={accounts}
+          currency={currency}
+          onSelectAccount={(acc) =>
+            dispatchOpenDetailAccount(acc, { defaultScope: 'current' })
+          }
+        />
       </div>
     </div>
   )

@@ -6,22 +6,8 @@ import { useT } from '@beecount/ui'
 
 import { AppShell } from './app/AppShell'
 import { RequireAuth } from './app/router'
-import { SetupForm } from './app/SetupForm'
 import { LoginPage } from './pages/LoginPage'
 import { clearCursor } from './state/sync-client'
-
-async function checkSetupStatus(): Promise<{ setupCompleted: boolean }> {
-  try {
-    const response = await fetch('/api/v1/setup')
-    if (!response.ok) {
-      return { setupCompleted: false }
-    }
-    const data = await response.json()
-    return { setupCompleted: data.setup_completed || false }
-  } catch {
-    return { setupCompleted: false }
-  }
-}
 
 // Section 页面全部懒加载 — 首屏只下载当前 route 需要的 chunk,显著降低
 // 首次进入 /app/overview 的 JS 体积。每个页面会是独立 chunk,后续切到
@@ -34,6 +20,11 @@ const AccountsPage = lazy(() =>
 )
 const AdminBackupPage = lazy(() =>
   import('./pages/sections/AdminBackupPage').then((m) => ({ default: m.AdminBackupPage })),
+)
+const AdminDataCleanupPage = lazy(() =>
+  import('./pages/sections/AdminDataCleanupPage').then((m) => ({
+    default: m.AdminDataCleanupPage,
+  })),
 )
 const AdminUsersPage = lazy(() =>
   import('./pages/sections/AdminUsersPage').then((m) => ({ default: m.AdminUsersPage })),
@@ -73,6 +64,9 @@ const TagsPage = lazy(() =>
 )
 const ImportPage = lazy(() =>
   import('./pages/sections/ImportPage').then((m) => ({ default: m.ImportPage })),
+)
+const ShareIncomingPage = lazy(() =>
+  import('./pages/sections/ShareIncomingPage').then((m) => ({ default: m.ShareIncomingPage })),
 )
 
 /** 路由切换时的 Suspense fallback。section 切换通常 < 200ms,加个轻量
@@ -130,8 +124,6 @@ function AppRoutes() {
     if (scoped) return scoped
     return localStorage.getItem(LEGACY_TOKEN_KEY) || ''
   })
-  const [setupChecked, setSetupChecked] = useState(false)
-  const [setupCompleted, setSetupCompleted] = useState(true)
 
   useEffect(() => {
     if (token) {
@@ -142,25 +134,6 @@ function AppRoutes() {
       localStorage.removeItem(LEGACY_TOKEN_KEY)
     }
   }, [token])
-
-  useEffect(() => {
-    const checkSetup = async () => {
-      try {
-        const result = await checkSetupStatus()
-        setSetupCompleted(result.setupCompleted)
-        setSetupChecked(true)
-        
-        // 如果设置未完成且不在 /setup 页面，重定向到设置页面
-        if (!result.setupCompleted && !window.location.pathname.startsWith('/setup')) {
-          window.location.href = '/setup'
-        }
-      } catch {
-        setSetupCompleted(false)
-        setSetupChecked(true)
-      }
-    }
-    checkSetup()
-  }, [])
 
   const handleLogout = useCallback(() => {
     const prev = getStoredUserId()
@@ -195,26 +168,6 @@ function AppRoutes() {
       <AppShell token={token} onLogout={handleLogout} />
     </RequireAuth>
   )
-
-  if (!setupChecked) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted border-t-primary" />
-      </div>
-    )
-  }
-
-  if (!setupCompleted) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-gray-50">
-        <div className="w-full max-w-md p-8 bg-white rounded-lg shadow">
-          <h1 className="text-2xl font-bold mb-6 text-center">BeeCount Cloud</h1>
-          <p className="text-muted-foreground text-center mb-6">首次启动，请创建管理员账户</p>
-          <SetupForm onComplete={() => window.location.reload()} />
-        </div>
-      </div>
-    )
-  }
 
   return (
     <Routes>
@@ -308,6 +261,14 @@ function AppRoutes() {
           }
         />
         <Route
+          path="share-incoming"
+          element={
+            <Suspense fallback={<RouteFallback />}>
+              <ShareIncomingPage />
+            </Suspense>
+          }
+        />
+        <Route
           path="admin/users"
           element={
             <Suspense fallback={<RouteFallback />}>
@@ -320,6 +281,14 @@ function AppRoutes() {
           element={
             <Suspense fallback={<RouteFallback />}>
               <AdminBackupPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="admin/data-cleanup"
+          element={
+            <Suspense fallback={<RouteFallback />}>
+              <AdminDataCleanupPage />
             </Suspense>
           }
         />

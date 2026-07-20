@@ -24,25 +24,24 @@ import { Amount } from '../components/Amount'
 import { CurrencySelectorTrigger } from '../components/CurrencySelector'
 import type { AccountForm } from '../forms'
 import { accountDefaults } from '../forms'
+import {
+  accountBalance,
+  type AssetGroup,
+  type AssetSummary,
+  computeCurrencySummary,
+  LIABILITY_TYPES,
+  splitByCurrency
+} from '../lib/assetAggregation'
 
-type AssetGroup = {
-  type: string
-  label: string
-  color: string
-  isLiability: boolean
-  rows: ReadAccount[]
-  subtotal: number
-}
-
-type AssetSummary = {
-  assetTotal: number
-  liabilityTotal: number
-  netWorth: number
-}
 
 type MobileStyleAssetsProps = {
-  groups: AssetGroup[]
-  summary: AssetSummary
+  /** 按币种切分后的汇总(每币种各自 summary + 构成饼图)。单币种时只有 1 条。 */
+  byCurrency: CurrencyBucket[]
+  /** 底部分组列表:跨币种按类型分组,每组小计按币种拆。 */
+  listGroups: AssetGroup[]
+  /** 账户隐藏(issue #240):已隐藏的账户原始行,渲染在所有在用分组之后的
+   *  「已隐藏」折叠分区里;不参与 byCurrency/listGroups 的分组展示。 */
+  hiddenRows: ReadAccount[]
   canManage: boolean
   onEdit: (row: ReadAccount) => void
   onDelete?: (row: ReadAccount) => void
@@ -50,6 +49,12 @@ type MobileStyleAssetsProps = {
   onClickAccount?: (row: ReadAccount) => void
   /** "新建账户"按钮回调 — 渲染在 stats 卡片下方,跟分组列表之间。 */
   onCreate?: () => void
+  /** true 时跳过多币种「每币种一张卡」网格区(折算汇总视图接管了多币种展示);
+   *  账户列表/新建按钮等其余内容照常。缺省 false —— 其它调用方零影响。 */
+  hideCurrencyCards?: boolean
+  /** 账户隐藏(issue #240):底部「已隐藏」分区里,每张隐藏卡的快捷「恢复」
+   *  按钮回调(不经编辑弹窗,直接 PATCH hidden=false)。不传则不渲染该按钮。 */
+  onRestore?: (row: ReadAccount) => void
 }
 
 /**
@@ -59,15 +64,22 @@ type MobileStyleAssetsProps = {
  * 一致，和标签页的小卡片网格做出明显区分。
  */
 function MobileStyleAssets({
-  groups,
-  summary,
+  byCurrency,
+  listGroups,
+  hiddenRows,
   canManage,
   onEdit,
   onDelete,
   onClickAccount,
-  onCreate
+  onCreate,
+  hideCurrencyCards = false,
+  onRestore
 }: MobileStyleAssetsProps) {
   const t = useT()
+  // 多币种 → 每币种一张卡;单币种 → 维持原 hero + 饼图。底部列表小计是否带币种
+  // 符号也跟这个走(多币种才需要符号消歧)。
+  const multiCurrency = byCurrency.length > 1
+  const single = byCurrency[0]
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const toggle = (type: string) =>
     setCollapsed((prev) => {
@@ -79,14 +91,25 @@ function MobileStyleAssets({
 
   return (
     <div className="space-y-4">
-      {/* 第一行：汇总 hero + 构成饼图，左右分列 */}
-      <div className="grid gap-3 lg:grid-cols-[1.1fr_1fr]">
-        <AssetsSummaryHero summary={summary} />
-        <AssetsCompositionMini
-          groups={groups}
-          totalAbs={summary.assetTotal + summary.liabilityTotal}
-        />
-      </div>
+      {/* 第一行的资产概览(单币种 hero+饼图 / 多币种每币种一张卡)。
+          hideCurrencyCards=true 时整块跳过 —— 上层资产页统一用「折算汇总卡」
+          接管净值/资产负债/构成展示(单币种亦然),这里只剩账户列表 + 新建按钮,
+          避免与汇总卡重复出 hero / 构成。缺省 false 时维持原样(其它调用方零影响)。 */}
+      {hideCurrencyCards ? null : multiCurrency ? (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {byCurrency.map((entry) => (
+            <CurrencyAssetCard key={entry.currency} entry={entry} />
+          ))}
+        </div>
+      ) : single ? (
+        <div className="grid gap-3 lg:grid-cols-[1.1fr_1fr]">
+          <AssetsSummaryHero summary={single.summary} currency={single.currency} />
+          <AssetsCompositionMini
+            groups={single.groups}
+            currency={single.currency}
+          />
+        </div>
+      ) : null}
 
       {onCreate ? (
         <div className="flex items-center justify-end">
@@ -98,7 +121,7 @@ function MobileStyleAssets({
 
       {/* 下面是分组 + 真实卡片风格的子项列表 */}
       <div className="space-y-4">
-        {groups.map((group) => {
+        {listGroups.map((group) => {
           const isCollapsed = collapsed.has(group.type)
           return (
             <div
@@ -140,12 +163,21 @@ function MobileStyleAssets({
                   </div>
                 </div>
                 <div className="relative flex items-center gap-3">
-                  <Amount
-                    value={group.subtotal}
-                    size="xl"
-                    bold
-                    tone={group.isLiability ? 'negative' : 'default'}
-                  />
+                  {/* 小计按币种逐条展示 —— 单币种 1 条(同原样);该组跨币种时各币种
+                      一行,绝不相加。多币种页统一带币种符号消歧。 */}
+                  <div className="flex flex-col items-end gap-0.5">
+                    {group.subtotals.map((st) => (
+                      <Amount
+                        key={st.currency}
+                        value={group.isLiability ? Math.abs(st.value) : st.value}
+                        currency={st.currency}
+                        showCurrency={multiCurrency}
+                        size={group.subtotals.length > 1 ? 'md' : 'xl'}
+                        bold
+                        tone={group.isLiability ? 'negative' : 'default'}
+                      />
+                    ))}
+                  </div>
                   <span
                     className={`text-xl text-muted-foreground transition-transform ${
                       isCollapsed ? '' : 'rotate-90'
@@ -176,6 +208,133 @@ function MobileStyleAssets({
           )
         })}
       </div>
+
+      {/* 账户隐藏(issue #240):所有在用分组之后,「已隐藏」折叠分区(默认折叠)。
+          净资产/资产构成(上面的 hero + 饼图)已按 D1 用全量 rows 计算,不受此分区影响。 */}
+      <HiddenAccountsSection
+        rows={hiddenRows}
+        canManage={canManage}
+        onEdit={onEdit}
+        onRestore={onRestore}
+        onClickAccount={onClickAccount}
+      />
+    </div>
+  )
+}
+
+/**
+ * 「已隐藏」分区 —— 置于所有在用分组之后,默认折叠;分区头露 count + 按币种
+ * 小计(对账用,不跨币种相加)。行内弱化展示(降不透明度),点行名进详情看历史,
+ * 「恢复」按钮直接 PATCH hidden=false 回到在用分区(不经编辑弹窗)。
+ */
+function HiddenAccountsSection({
+  rows,
+  canManage,
+  onEdit,
+  onRestore,
+  onClickAccount
+}: {
+  rows: ReadAccount[]
+  canManage: boolean
+  onEdit: (row: ReadAccount) => void
+  onRestore?: (row: ReadAccount) => void
+  onClickAccount?: (row: ReadAccount) => void
+}) {
+  const t = useT()
+  const [collapsed, setCollapsed] = useState(true)
+
+  if (rows.length === 0) return null
+
+  // 小计按币种分别累加,绝不跨币种相加(与 computeTypeGroups 同口径)。
+  const byCurrency = new Map<string, number>()
+  for (const row of rows) {
+    const cur = (row.currency || 'CNY').toUpperCase()
+    byCurrency.set(cur, (byCurrency.get(cur) ?? 0) + accountBalance(row))
+  }
+  const subtotals = [...byCurrency.entries()]
+  const sortedRows = rows.slice().sort((a, b) => a.name.localeCompare(b.name))
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-dashed border-border/50 bg-muted/10">
+      <button
+        type="button"
+        onClick={() => setCollapsed((prev) => !prev)}
+        className="flex w-full items-center justify-between gap-3 px-5 py-3 text-left transition-colors hover:bg-muted/20"
+      >
+        <span className="text-[13px] font-medium text-muted-foreground">
+          {t('accounts.hidden.sectionTitle', { count: rows.length })}
+        </span>
+        <div className="flex items-center gap-3">
+          <div className="flex flex-col items-end gap-0.5">
+            {subtotals.map(([cur, value]) => (
+              <Amount
+                key={cur}
+                value={value}
+                currency={cur}
+                showCurrency={subtotals.length > 1}
+                size="sm"
+                className="text-muted-foreground"
+              />
+            ))}
+          </div>
+          <span
+            className={`text-lg text-muted-foreground transition-transform ${
+              collapsed ? '' : 'rotate-90'
+            }`}
+            aria-hidden
+          >
+            ›
+          </span>
+        </div>
+      </button>
+      {!collapsed ? (
+        <div className="divide-y divide-border/40 border-t border-border/40">
+          {sortedRows.map((row) => (
+            <div
+              key={row.id}
+              className="flex items-center justify-between gap-3 px-5 py-2.5 opacity-70 transition-opacity hover:opacity-100"
+            >
+              <button
+                type="button"
+                onClick={() => onClickAccount?.(row)}
+                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+              >
+                <TypeIcon type={row.account_type || 'other'} size={20} />
+                <span className="truncate text-sm">{row.name}</span>
+                <span className="shrink-0 rounded bg-muted px-1 py-[1px] text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {t('accounts.hidden.badge')}
+                </span>
+              </button>
+              <div className="flex shrink-0 items-center gap-2">
+                <Amount
+                  value={accountBalance(row)}
+                  currency={row.currency || 'CNY'}
+                  size="sm"
+                  className="text-muted-foreground"
+                />
+                <button
+                  type="button"
+                  disabled={!canManage}
+                  onClick={() => onEdit(row)}
+                  className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-40"
+                >
+                  {t('common.edit')}
+                </button>
+                {onRestore ? (
+                  <button
+                    type="button"
+                    disabled={!canManage}
+                    onClick={() => onRestore(row)}
+                    className="rounded-md border border-primary/40 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 disabled:pointer-events-none disabled:opacity-40"
+                  >
+                    {t('accounts.hidden.restore')}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -184,7 +343,13 @@ function MobileStyleAssets({
  * 资产总览 hero：大号净值 + 资产 / 负债两行。跟 overview 页的 OverviewHero
  * 区别在于不接 period income/expense，只展示 account 聚合后的静态净值。
  */
-function AssetsSummaryHero({ summary }: { summary: AssetSummary }) {
+function AssetsSummaryHero({
+  summary,
+  currency
+}: {
+  summary: AssetSummary
+  currency: string
+}) {
   const t = useT()
   return (
     <div className="relative overflow-hidden rounded-2xl border border-primary/30">
@@ -202,6 +367,7 @@ function AssetsSummaryHero({ summary }: { summary: AssetSummary }) {
         </div>
         <Amount
           value={summary.netWorth}
+          currency={currency}
           size="4xl"
           bold
           showCurrency
@@ -215,6 +381,7 @@ function AssetsSummaryHero({ summary }: { summary: AssetSummary }) {
             </div>
             <Amount
               value={summary.assetTotal}
+              currency={currency}
               size="xl"
               bold
               showCurrency
@@ -227,7 +394,8 @@ function AssetsSummaryHero({ summary }: { summary: AssetSummary }) {
               {t('accounts.liabilities')}
             </div>
             <Amount
-              value={summary.liabilityTotal}
+              value={Math.abs(summary.liabilityTotal)}
+              currency={currency}
               size="xl"
               bold
               showCurrency
@@ -245,21 +413,41 @@ function AssetsSummaryHero({ summary }: { summary: AssetSummary }) {
  * 资产构成迷你饼图：基于分组的 color + subtotal，不引第三方图表库，纯 SVG
  * conic-gradient 做分段圆环 + 左侧 legend。够快、够轻、跟配色系统一致。
  */
-function AssetsCompositionMini({
+export function AssetsCompositionMini({
   groups,
-  totalAbs
+  currency,
+  showCurrency = false,
+  embedded = false,
+  title,
+  approx = false
 }: {
   groups: AssetGroup[]
-  totalAbs: number
+  currency: string
+  /** 中心总额是否带币种符号(多币种卡内需要,单币种页保持原样不带)。 */
+  showCurrency?: boolean
+  /** 嵌在币种卡里时去掉自身的边框/卡片底色,避免双层卡片。 */
+  embedded?: boolean
+  /** 标题文案覆盖,缺省走 accounts.composition(折算汇总视图传"资产构成(折X)")。 */
+  title?: string
+  /** true 时中心合计金额前加「≈」前缀,用于折算汇总视图;分币种卡(原币)不传,缺省 false。 */
+  approx?: boolean
 }) {
   const t = useT()
-  const data = groups.map((g) => ({
-    type: g.type,
-    label: g.label,
-    color: g.color,
-    value: g.subtotal
-  }))
-  const total = totalAbs > 0 ? totalAbs : 1
+  // 「资产构成」只含资产类：负债（信用卡/贷款）不进饼图，也不计入中心合计/百分比 ——
+  // 它们体现在「负债」汇总里，不属于资产构成。groups 含负债类型，按 isLiability 过滤掉。
+  // 资产小计带符号（透支资产为负），饼图分段要的是体量 —— 对资产组合计取 abs。
+  const data = groups
+    .filter((g) => !g.isLiability)
+    .map((g) => ({
+      type: g.type,
+      label: g.label,
+      color: g.color,
+      value: Math.abs(g.subtotals.reduce((s, x) => s + x.value, 0))
+    }))
+  // 中心合计 / 扇区 / 百分比分母都用「资产合计」（资产组之和）—— 绝不把 |负债|
+  // 算进来，否则信用卡等负债会被计入资产构成（这正是之前的 bug）。
+  const assetTotal = data.reduce((s, d) => s + d.value, 0)
+  const total = assetTotal > 0 ? assetTotal : 1
   // conic-gradient 分段
   let acc = 0
   const stops: string[] = []
@@ -274,9 +462,15 @@ function AssetsCompositionMini({
     : 'hsl(var(--muted))'
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-border/50 bg-card/80 p-5">
+    <div
+      className={
+        embedded
+          ? 'px-5 pb-5'
+          : 'overflow-hidden rounded-2xl border border-border/50 bg-card/80 p-5'
+      }
+    >
       <div className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-        {t('accounts.composition')}
+        {title ?? t('accounts.composition')}
       </div>
       {data.length === 0 ? (
         <div className="flex h-40 items-center justify-center text-xs text-muted-foreground">
@@ -297,13 +491,24 @@ function AssetsCompositionMini({
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 {t('common.total')}
               </div>
-              <Amount value={totalAbs} size="md" bold className="mt-0.5" />
+              <div className="mt-0.5 flex items-baseline gap-0.5">
+                {approx ? (
+                  <span className="font-mono text-[10px] text-muted-foreground">≈</span>
+                ) : null}
+                <Amount
+                  value={assetTotal}
+                  currency={currency}
+                  showCurrency={showCurrency}
+                  size="md"
+                  bold
+                />
+              </div>
             </div>
           </div>
           {/* legend */}
           <ul className="min-w-0 flex-1 space-y-1.5">
             {data.map((d) => {
-              const pct = totalAbs > 0 ? (d.value / totalAbs) * 100 : 0
+              const pct = assetTotal > 0 ? (d.value / assetTotal) * 100 : 0
               return (
                 <li key={d.type} className="flex items-center gap-2 text-xs">
                   <span
@@ -377,6 +582,11 @@ function BankCardTile({
   const displayBalance = hasStats ? (row.balance as number) : row.initial_balance ?? 0
   // 估值账户：负债显示绝对值欠款，资产显示当前估值。
   const valuationValue = isLiability ? Math.abs(displayBalance) : displayBalance
+  // 信用卡：按负债展示。已用 = max(0, -balance),可用 = 额度 - 已用(对齐 mobile）。
+  const isCreditCard = accountType === 'credit_card'
+  const ccLimit = typeof row.credit_limit === 'number' ? row.credit_limit : null
+  const ccOwed = Math.max(0, -displayBalance)
+  const ccAvailable = ccLimit !== null ? Math.max(0, ccLimit - ccOwed) : null
 
   return (
     <div
@@ -470,6 +680,39 @@ function BankCardTile({
               className="mt-0.5 block text-[18px] leading-tight drop-shadow text-white"
             />
           </div>
+        ) : isCreditCard ? (
+          ccLimit !== null ? (
+            <div className="mt-auto grid grid-cols-3 gap-1 rounded-md bg-black/15 px-2 py-1.5 backdrop-blur-[1px]">
+              <StatCell
+                label={t('accounts.field.creditLimit')}
+                value={ccLimit}
+                currency={currency}
+              />
+              <StatCell
+                label={t('accounts.bankcard.creditUsed')}
+                value={ccOwed}
+                currency={currency}
+              />
+              <StatCell
+                label={t('accounts.bankcard.creditAvailable')}
+                value={ccAvailable as number}
+                currency={currency}
+              />
+            </div>
+          ) : (
+            <div className="mt-auto">
+              <div className="text-[9px] uppercase tracking-[0.15em] text-white/75">
+                {t('accounts.bankcard.currentOwed')}
+              </div>
+              <Amount
+                value={ccOwed}
+                currency={currency}
+                showCurrency
+                bold
+                className="mt-0.5 block text-[18px] leading-tight drop-shadow text-white"
+              />
+            </div>
+          )
         ) : hasStats ? (
           <div className="mt-auto grid grid-cols-3 gap-1 rounded-md bg-black/15 px-2 py-1.5 backdrop-blur-[1px]">
             <StatCell
@@ -583,7 +826,6 @@ const VALUATION_TYPES: { value: string }[] = [
   { value: 'social_fund' },
   { value: 'loan' }
 ]
-const LIABILITY_TYPES = new Set(['credit_card', 'loan'])
 
 // 账户类型 → 品牌 SVG 图标路径。SVG 已从 BeeCount (mobile) `assets/icons/*.svg`
 // 拷到 `web/public/icons/account/`，公共资源目录直接通过 URL 访问即可（不用
@@ -645,6 +887,123 @@ function accountTypeLabel(tt: (k: string) => string, value?: string | null): str
   return translated
 }
 
+// ── 多币种聚合 ────────────────────────────────────────────────────────────
+// 铁律:资产统计绝不跨币种相加($1000 不是 ¥1000)。所有汇总先按币种切分再各算各
+// 的:单币种(绝大多数)维持单一 hero + 饼图;多币种则每币种一张卡 + 各自饼图。
+// 没有汇率基建、也不做换算 —— 宁可不给单一总额,也不给一个错的合并数字。
+
+/** 一种币种的聚合结果:净值汇总 + 该币种内按类型分组(组里带饼图所需 subtotal)。 */
+export type CurrencyBucket = {
+  currency: string
+  summary: AssetSummary
+  groups: AssetGroup[]
+}
+
+// 类型展示顺序:可交易在前、估值在后,跟编辑弹窗里的分组顺序一致。
+const ACCOUNT_ORDER: string[] = [
+  ...TRADABLE_TYPES.map((x) => x.value),
+  ...VALUATION_TYPES.map((x) => x.value)
+]
+
+/** 按账户类型分组。每组小计再按币种拆:同一类型若混多币种(只会出现在底部跨币种
+ *  列表),各币种独立累计、不相加。单币种入参时每组只有 1 条 subtotal。 */
+export function computeTypeGroups(rows: ReadAccount[], t: (k: string) => string): AssetGroup[] {
+  const buckets: Record<string, ReadAccount[]> = {}
+  for (const row of rows) {
+    const key = row.account_type || 'other'
+    buckets[key] = buckets[key] || []
+    buckets[key].push(row)
+  }
+  return ACCOUNT_ORDER.filter((type) => (buckets[type] || []).length > 0).map((type) => {
+    const groupRows = (buckets[type] || []).slice().sort((a, b) => a.name.localeCompare(b.name))
+    const isLiability = LIABILITY_TYPES.has(type)
+    // 小计带符号累加(与 computeCurrencySummary 同口径)——溢缴的卡会抵销欠款。
+    // 展示"共欠"时由渲染处对组合计取 abs,绝不逐账户 abs(否则 +10w 卡 + −20w 贷
+    // 会显示成欠 30w)。
+    const byCur = new Map<string, number>()
+    for (const r of groupRows) {
+      const cur = (r.currency || 'CNY').toUpperCase()
+      byCur.set(cur, (byCur.get(cur) ?? 0) + accountBalance(r))
+    }
+    return {
+      type,
+      label: accountTypeLabel(t, type),
+      color: TYPE_COLORS[type] || '#94a3b8',
+      isLiability,
+      rows: groupRows,
+      subtotals: [...byCur.entries()].map(([currency, value]) => ({ currency, value }))
+    }
+  })
+}
+
+/**
+ * 多币种时:每种币种一张卡 —— 顶部币种 badge + 净值,中间资产/负债,底部该币种
+ * 自己的构成饼图。金额全部带该币种符号,绝不跟其它币种混。
+ */
+export function CurrencyAssetCard({ entry }: { entry: CurrencyBucket }) {
+  const t = useT()
+  const { currency, summary, groups } = entry
+  return (
+    <div className="flex flex-col overflow-hidden rounded-2xl border border-border/50 bg-card/60">
+      <div className="flex items-center justify-between gap-2 border-b border-border/40 px-4 py-3">
+        <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-semibold tracking-wide text-primary">
+          {currency}
+        </span>
+        <div className="min-w-0 text-right">
+          <div className="text-[9px] uppercase tracking-[0.2em] text-muted-foreground">
+            {t('accounts.netWorth')}
+          </div>
+          <Amount
+            value={summary.netWorth}
+            currency={currency}
+            showCurrency
+            size="2xl"
+            bold
+            tone={summary.netWorth >= 0 ? 'positive' : 'negative'}
+            className="block"
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2 px-4 py-3">
+        <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-2.5 py-1.5">
+          <div className="text-[9px] uppercase tracking-wider text-emerald-600/80 dark:text-emerald-400/80">
+            {t('accounts.assets')}
+          </div>
+          <Amount
+            value={summary.assetTotal}
+            currency={currency}
+            showCurrency
+            size="md"
+            bold
+            tone="positive"
+            className="mt-0.5 block"
+          />
+        </div>
+        <div className="rounded-lg border border-rose-500/25 bg-rose-500/5 px-2.5 py-1.5">
+          <div className="text-[9px] uppercase tracking-wider text-rose-600/80 dark:text-rose-400/80">
+            {t('accounts.liabilities')}
+          </div>
+          <Amount
+            value={Math.abs(summary.liabilityTotal)}
+            currency={currency}
+            showCurrency
+            size="md"
+            bold
+            tone="negative"
+            className="mt-0.5 block"
+          />
+        </div>
+      </div>
+      <AssetsCompositionMini
+        groups={groups}
+        currency={currency}
+        showCurrency
+        embedded
+      />
+    </div>
+  )
+}
+
 type AccountsPanelProps = {
   form: AccountForm
   rows: ReadAccount[]
@@ -656,6 +1015,12 @@ type AccountsPanelProps = {
   onEdit: (row: ReadAccount) => void
   onDelete?: (row: ReadAccount) => void
   onClickAccount?: (row: ReadAccount) => void
+  /** true 时跳过多币种「每币种一张卡」网格区(用于折算汇总视图);缺省 false,
+   *  其它调用方零影响。详见 MobileStyleAssets。 */
+  hideCurrencyCards?: boolean
+  /** 账户隐藏(issue #240):底部「已隐藏」分区每张卡的快捷「恢复」按钮回调。
+   *  不传则该按钮不渲染(调用方尚未接线时零影响)。 */
+  onRestore?: (row: ReadAccount) => void
 }
 
 export function AccountsPanel({
@@ -668,59 +1033,40 @@ export function AccountsPanel({
   onReset,
   onEdit,
   onDelete,
-  onClickAccount
+  onClickAccount,
+  hideCurrencyCards = false,
+  onRestore
 }: AccountsPanelProps) {
   const t = useT()
   const [open, setOpen] = useState(false)
 
-  const summary = useMemo(() => {
-    let assetTotal = 0
-    let liabilityTotal = 0
-    for (const row of rows) {
-      // 优先用 server 聚合后的 balance（含所有交易）；老接口 / 无 tx 则回退到
-      // initialBalance。负债类 balance 通常是负数，用绝对值统计总欠款。
-      const stats = row as ReadAccount & AccountStats
-      const raw =
-        typeof stats.balance === 'number' && stats.balance !== null
-          ? stats.balance
-          : row.initial_balance ?? 0
-      const bal = Math.abs(raw)
-      if (LIABILITY_TYPES.has(row.account_type || '')) liabilityTotal += bal
-      else assetTotal += bal
-    }
-    return { assetTotal, liabilityTotal, netWorth: assetTotal - liabilityTotal }
-  }, [rows])
+  // 账户隐藏(issue #240):净资产 hero / 资产构成饼图按 D1 用全量 rows 计算
+  // (隐藏不改「钱在哪」);只有「底部分组列表」拆成在用/已隐藏两部分展示。
+  const visibleRows = useMemo(() => rows.filter((row) => !row.hidden), [rows])
+  const hiddenRows = useMemo(() => rows.filter((row) => row.hidden), [rows])
 
-  // 按类型分组 + 排序（日常类型在前，估值在后，跟 mobile 的 group 顺序一致）
-  const grouped = useMemo(() => {
-    const order: string[] = [
-      ...TRADABLE_TYPES.map((x) => x.value),
-      ...VALUATION_TYPES.map((x) => x.value)
-    ]
-    const buckets: Record<string, ReadAccount[]> = {}
-    for (const row of rows) {
-      const key = row.account_type || 'other'
-      buckets[key] = buckets[key] || []
-      buckets[key].push(row)
-    }
-    return order
-      .filter((type) => (buckets[type] || []).length > 0)
-      .map((type) => ({
-        type,
-        label: accountTypeLabel(t, type),
-        color: TYPE_COLORS[type] || '#94a3b8',
-        isLiability: LIABILITY_TYPES.has(type),
-        rows: (buckets[type] || []).sort((a, b) => a.name.localeCompare(b.name)),
-        subtotal: (buckets[type] || []).reduce((s, r) => {
-          const stats = r as ReadAccount & AccountStats
-          const raw =
-            typeof stats.balance === 'number' && stats.balance !== null
-              ? stats.balance
-              : r.initial_balance ?? 0
-          return s + Math.abs(raw)
-        }, 0)
+  // 按币种切分后再聚合 —— 资产统计绝不跨币种相加(见 computeCurrencySummary)。
+  // 单币种(绝大多数场景)→ currencyBuckets 只有 1 条,顶部展示完全维持原样。
+  // 用全量 rows(含隐藏)算,对齐 D1:隐藏账户仍计入净资产/资产构成。
+  const currencyBuckets = useMemo<CurrencyBucket[]>(() => {
+    return [...splitByCurrency(rows).entries()]
+      .map(([currency, curRows]) => ({
+        currency,
+        summary: computeCurrencySummary(curRows),
+        groups: computeTypeGroups(curRows, t)
       }))
+      // 体量大的币种排前面(资产 + |负债|)
+      .sort(
+        (a, b) =>
+          b.summary.assetTotal +
+          Math.abs(b.summary.liabilityTotal) -
+          (a.summary.assetTotal + Math.abs(a.summary.liabilityTotal))
+      )
   }, [rows, t])
+
+  // 底部列表:跨币种按类型分组(每组小计按币种拆,见 computeTypeGroups)。
+  // 只用在用账户 —— 隐藏账户退场到底部「已隐藏」分区(HiddenAccountsSection)。
+  const listGroups = useMemo(() => computeTypeGroups(visibleRows, t), [visibleRows, t])
 
   // 顶部"新建账户"按钮 —— rows 空时也要显示,否则首次使用没法建账户。
   // 复用现有 dialog,form 重置成 defaults 让 dialog 进入 create 模式。
@@ -758,8 +1104,9 @@ export function AccountsPanel({
         </>
       ) : (
         <MobileStyleAssets
-          groups={grouped}
-          summary={summary}
+          byCurrency={currencyBuckets}
+          listGroups={listGroups}
+          hiddenRows={hiddenRows}
           canManage={canManage}
           onEdit={(row) => {
             onEdit(row)
@@ -768,6 +1115,8 @@ export function AccountsPanel({
           onDelete={onDelete}
           onClickAccount={onClickAccount}
           onCreate={handleOpenCreate}
+          hideCurrencyCards={hideCurrencyCards}
+          onRestore={onRestore}
         />
       )}
 
@@ -944,6 +1293,36 @@ export function AccountsPanel({
                 onChange={(e) => onFormChange({ ...form, note: e.target.value })}
               />
             </div>
+
+            {/* 账户隐藏(issue #240):只在编辑已有账户时提供切换 —— 新建账户
+                隐藏没有产品意义(对齐 mobile:入口在账户编辑页)。切换保存后经
+                写端点反向生成同步变更,App 端正常 pull 收敛。 */}
+            {form.editingId ? (
+              <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+                <div className="min-w-0 pr-3">
+                  <p className="text-sm font-medium">{t('accounts.hidden.toggleLabel')}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {t('accounts.hidden.toggleHint')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.hidden}
+                  aria-label={t('accounts.hidden.toggleLabel') as string}
+                  onClick={() => onFormChange({ ...form, hidden: !form.hidden })}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
+                    form.hidden ? 'bg-primary' : 'bg-muted-foreground/30'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                      form.hidden ? 'translate-x-[18px]' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
             <Button

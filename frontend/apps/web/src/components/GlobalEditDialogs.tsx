@@ -8,13 +8,15 @@ import {
   fetchWorkspaceTags,
   updateCategory,
   updateTransaction,
-  uploadCategoryIcon,
+  uploadAttachment,
   type WorkspaceAccount,
   type WorkspaceCategory,
   type WorkspaceTag,
 } from '@beecount/api-client'
 import { useT, useToast } from '@beecount/ui'
 import {
+  resolveCurrencyFields,
+  loadRatesToBase,
   CategoriesPanel,
   categoryDefaults,
   TransactionsPanel,
@@ -60,6 +62,25 @@ export function GlobalEditDialogs() {
   const [editTxCategories, setEditTxCategories] = useState<WorkspaceCategory[]>([])
   const [editTxTags, setEditTxTags] = useState<WorkspaceTag[]>([])
   const [refsLoading, setRefsLoading] = useState(false)
+  // v30 多币种:编辑交易时币种弹窗展示各币种对账本主币种的汇率。
+  const editTxBase = (
+    ledgers.find((l) => l.ledger_id === editTxLedgerId)?.currency || 'CNY'
+  )
+    .trim()
+    .toUpperCase()
+  const [editTxRates, setEditTxRates] = useState<Record<string, number>>({})
+  useEffect(() => {
+    if (!token || !editTxOpen) return
+    let cancelled = false
+    loadRatesToBase(token, editTxBase)
+      .then((m) => {
+        if (!cancelled) setEditTxRates(m)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [token, editTxOpen, editTxBase])
 
   // 分类编辑相关
   const [editCatOpen, setEditCatOpen] = useState(false)
@@ -119,8 +140,11 @@ export function GlobalEditDialogs() {
         editingOwnerUserId: tx.created_by_user_id || '',
         tx_type: tx.tx_type,
         amount: String(tx.amount),
-        currency_code: tx.currency_code ?? null,
         happened_at: tx.happened_at,
+        // v30 多币种:回显该笔币种 + 原币种(提交时币种未变不发字段,金额
+        // 变更折算由 server L14 隐含汇率联动,防快照漂移)
+        currency: (tx.currency_code || '').toUpperCase(),
+        original_currency: (tx.currency_code || '').toUpperCase(),
         note: tx.note || '',
         category_name: tx.category_name || '',
         category_kind: (tx.category_kind as TxForm['category_kind']) || 'expense',
@@ -135,6 +159,8 @@ export function GlobalEditDialogs() {
                 .map((s) => s.trim())
                 .filter((s) => s.length > 0),
         attachments: Array.isArray(tx.attachments) ? tx.attachments : [],
+        exclude_from_stats: Boolean(tx.exclude_from_stats),
+        exclude_from_budget: Boolean(tx.exclude_from_budget),
       })
       // 等 refs 拉完再打开 dialog,确保 category/account/tag 下拉有数据
       await loadRefsForLedger(ledgerId)
@@ -207,6 +233,40 @@ export function GlobalEditDialogs() {
       }
     }
 
+    // v30 多币种:共享 helper(override 口径/编辑防漂移/改回本位币),与
+    // TransactionsPage 提交完全同一实现。
+    const ledgerBase = (
+      ledgers.find((l) => l.ledger_id === ledgerId)?.currency || 'CNY'
+    )
+      .trim()
+      .toUpperCase()
+    const accountCurrencyOfForm = editTxAccounts
+      .find((a) => (a.name || '').trim() === editTxForm.account_name.trim())
+      ?.currency?.toUpperCase()
+    const effCurrency = (
+      editTxForm.currency ||
+      (editTxForm.tx_type !== 'transfer' ? accountCurrencyOfForm : '') ||
+      ledgerBase
+    ).toUpperCase()
+    let currencyFields: { currency_code?: string; native_amount?: number } = {}
+    if (editTxForm.tx_type !== 'transfer') {
+      try {
+        const resolved = await resolveCurrencyFields({
+          token,
+          ledgerBase,
+          currency: effCurrency,
+          amount: amountNum,
+          originalCurrency: editTxForm.editingId
+            ? editTxForm.original_currency
+            : undefined
+        })
+        if (resolved) currencyFields = resolved
+      } catch {
+        notifyError(new Error(t('transactions.error.rateMissing')))
+        return false
+      }
+    }
+
     const payload = {
       tx_type: editTxForm.tx_type,
       amount: amountNum,
@@ -232,7 +292,12 @@ export function GlobalEditDialogs() {
           : null,
       tags: editTxForm.tags.filter((s) => s.length > 0),
       attachments: editTxForm.attachments,
-      currency_code: editTxForm.currency_code,
+      // §三 标记按 type 条件落库:转账两者都置 false;收入只允许 stats;支出两者都允许。
+      exclude_from_stats:
+        editTxForm.tx_type === 'transfer' ? false : editTxForm.exclude_from_stats,
+      exclude_from_budget:
+        editTxForm.tx_type === 'expense' ? editTxForm.exclude_from_budget : false,
+      ...currencyFields
     }
 
     try {
@@ -349,12 +414,19 @@ export function GlobalEditDialogs() {
     <>
       <TransactionsPanel
       dialogOnlyMode
+      baseCurrency={editTxBase}
+      currencyRates={editTxRates}
       form={editTxForm}
       rows={[]}
       total={0}
       page={1}
       pageSize={20}
-      accounts={editTxAccounts}
+      accounts={editTxAccounts.filter((a) => {
+        // 币种优先联动:账户下拉只显示「表单所选币种(默认=账本主币种)」的
+        // 账户,防止选出币种与账户不一致的组合(与 TransactionsPage 同规则)
+        const wanted = (editTxForm.currency || editTxBase).toUpperCase()
+        return ((a.currency || 'CNY').trim().toUpperCase()) === wanted
+      })}
       categories={editTxCategories}
       tags={editTxTags}
       ledgerOptions={ledgerOptions}
@@ -390,8 +462,10 @@ export function GlobalEditDialogs() {
       onEdit={() => undefined}
       onDelete={() => undefined}
       onUploadIcon={async (file) => {
+        const ledgerId = editCatLedgerId.trim()
+        if (!ledgerId) return null
         try {
-          const out = await uploadCategoryIcon(token, { file })
+          const out = await uploadAttachment(token, { ledger_id: ledgerId, file })
           return { fileId: out.file_id, sha256: out.sha256 }
         } catch (err) {
           notifyError(err)

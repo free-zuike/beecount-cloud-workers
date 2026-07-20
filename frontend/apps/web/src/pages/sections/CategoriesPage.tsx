@@ -7,7 +7,7 @@ import {
   fetchWorkspaceTags,
   fetchWorkspaceTransactions,
   updateCategory,
-  uploadCategoryIcon,
+  uploadAttachment,
   type ReadCategory,
   type WorkspaceCategory,
   type WorkspaceTag,
@@ -187,6 +187,7 @@ export function CategoriesPage() {
         onSave={onSave}
         onReset={() => setForm(categoryDefaults())}
         onEdit={enterEdit}
+        onRowClick={(row) => dispatchOpenDetailCategory(row, { defaultScope: 'all' })}
         onDelete={(row) => {
           // 跟 mobile + AccountsPage 对齐:有关联交易 / 子分类 → 拒删,要求
           // 用户先迁移这些数据。比"允许删除并 orphan 子分类/交易"更严格。
@@ -228,7 +229,7 @@ export function CategoriesPage() {
             return null
           }
           try {
-            const out = await uploadCategoryIcon(token, { file })
+            const out = await uploadAttachment(token, { ledger_id: activeLedgerId, file })
             return { fileId: out.file_id, sha256: out.sha256 }
           } catch (err) {
             notifyError(err)

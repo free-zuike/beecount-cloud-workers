@@ -25,13 +25,15 @@ export async function patchProfileMe(
     income_is_red?: boolean
     /** 主题色 hex,例如 `#FF9800`。 */
     theme_primary_color?: string
-    /** 外观偏好(header_decoration_style / compact_amount / show_transaction_time)。 */
+    /** 外观偏好(header_skin / compact_amount / show_transaction_time)。 */
     appearance?: ProfileAppearance
     /** AI 配置整体替换 —— **整体**替换语义,server 直接覆盖。调用方必须先读
      *  当前 profile.ai_config,merge 后整体推,否则 mobile-only 字段
      *  (custom_prompt / strategy / bill_extraction_enabled / use_vision)
      *  会被默认值覆盖。见 lib/aiConfigMerge.ts。 */
     ai_config?: AIConfig | Record<string, any>
+    /** 主币种(本位币),资产折算目标。与 mobile prefs `baseCurrency` 同步。 */
+    primary_currency?: string
   }
 ): Promise<ProfileMe> {
   const profile = await authedPatch<ProfileMe>('/profile/me', token, payload)

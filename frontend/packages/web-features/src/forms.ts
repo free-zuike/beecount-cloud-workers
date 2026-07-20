@@ -5,7 +5,6 @@ export type TxForm = {
   editingOwnerUserId: string
   tx_type: 'expense' | 'income' | 'transfer'
   amount: string
-  currency_code: string | null
   happened_at: string
   note: string
   category_name: string
@@ -15,6 +14,16 @@ export type TxForm = {
   to_account_name: string
   tags: string[]
   attachments: AttachmentRef[]
+  /** 交易币种(v30 多币种):'' = 跟随账户/账本本位币;显式值 = 用户手选。
+   *  选了币种后账户下拉按该币种过滤(币种优先联动)。 */
+  currency: string
+  /** 编辑模式:该笔原币种(''=本位币)。提交时币种未变 → 不发字段,金额
+   *  变化由 server 按隐含汇率联动(防快照漂移);仅前端用,不进 payload。 */
+  original_currency: string
+  /** 不计入收支统计(income/expense 显示开关,transfer 隐藏)。 */
+  exclude_from_stats: boolean
+  /** 不计入预算用量(仅 expense 显示开关)。 */
+  exclude_from_budget: boolean
 }
 
 export type AccountForm = {
@@ -36,6 +45,9 @@ export type AccountForm = {
   bank_name: string
   /** 卡号后四位,bank_card / credit_card 元信息。 */
   card_last_four: string
+  /** 账户隐藏(issue #240)。只在编辑已有账户时通过「隐藏/恢复」切换修改;
+   *  新建默认 false。 */
+  hidden: boolean
 }
 
 export type CategoryForm = {
@@ -85,7 +97,6 @@ export const txDefaults = (): TxForm => ({
   editingOwnerUserId: '',
   tx_type: 'expense',
   amount: '',
-  currency_code: null,
   happened_at: new Date().toISOString(),
   note: '',
   category_name: '',
@@ -94,7 +105,11 @@ export const txDefaults = (): TxForm => ({
   from_account_name: '',
   to_account_name: '',
   tags: [],
-  attachments: []
+  attachments: [],
+  currency: '',
+  original_currency: '',
+  exclude_from_stats: false,
+  exclude_from_budget: false
 })
 
 export const accountDefaults = (): AccountForm => ({
@@ -110,6 +125,7 @@ export const accountDefaults = (): AccountForm => ({
   payment_due_day: '',
   bank_name: '',
   card_last_four: '',
+  hidden: false,
 })
 
 export const categoryDefaults = (): CategoryForm => ({

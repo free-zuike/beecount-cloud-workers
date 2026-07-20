@@ -34,10 +34,8 @@ export type BackupRemoteUpdatePayload = Partial<{
 
 export type BackupRemoteTestResponse = {
   ok: boolean
-  backend_type?: string
-  message: string
-  error?: string | null
-  listing?: string[] | null
+  error: string | null
+  listing: string[] | null
 }
 
 export type BackupSchedule = {

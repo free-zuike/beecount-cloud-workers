@@ -24,6 +24,8 @@ import {
   Sparkles,
   Sun,
   Tag,
+  UserPlus,
+  Users,
   Wallet,
 } from 'lucide-react'
 
@@ -40,6 +42,11 @@ import {
 } from '@beecount/api-client'
 import { dispatchOpenAsk } from '../lib/askDialogEvents'
 import { dispatchOpenParseTxImage, dispatchOpenParseTxText } from '../lib/parseTxEvents'
+import {
+  dispatchOpenSharedJoin,
+  dispatchOpenSharedManage,
+} from '../lib/sharedLedgerEvents'
+import { currentMonthRange, yearRange } from '@beecount/web-features'
 import { useLocale, useT, useTheme, useToast } from '@beecount/ui'
 import { VoiceInputButton } from './cmdk-ai/VoiceInputButton'
 
@@ -81,6 +88,8 @@ const VAL_SEARCH_IN_LIST = '__action__search-in-list'
 const VAL_ASK_AI = '__action__ask-ai'
 const VAL_AI_BILLING_TEXT = '__action__ai-billing-text'
 const VAL_AI_BILLING_IMAGE = '__action__ai-billing-image'
+const VAL_SHARED_LEDGER_JOIN = '__action__shared-ledger-join'
+const VAL_SHARED_LEDGER_MANAGE = '__action__shared-ledger-manage'
 
 /**
  * 全局命令面板 — Cmd+K (Mac) / Ctrl+K (其他) 触发。
@@ -100,7 +109,7 @@ export function CommandPalette({ open, onClose, onOpenAnnualReport }: CommandPal
   const t = useT()
   const navigate = useNavigate()
   const { token, logout, profileMe, isAdmin } = useAuth()
-  const { ledgers, activeLedgerId, setActiveLedgerId } = useLedgers()
+  const { ledgers, activeLedgerId, currentLedger, setActiveLedgerId } = useLedgers()
   const { resolved, setMode } = useTheme()
   const { locale } = useLocale()
   const toast = useToast()
@@ -184,14 +193,14 @@ export function CommandPalette({ open, onClose, onOpenAnnualReport }: CommandPal
       }
       onClose()
       const now = new Date()
-      const dateFromDate =
-        range === 'month'
-          ? new Date(now.getFullYear(), now.getMonth(), 1)
-          : new Date(now.getFullYear(), 0, 1)
-      const dateToDate =
-        range === 'month'
-          ? new Date(now.getFullYear(), now.getMonth() + 1, 1)
-          : new Date(now.getFullYear() + 1, 0, 1)
+      const msd = Math.max(1, Math.min(28, currentLedger?.month_start_day ?? 1))
+      const monthRange = currentMonthRange(msd, now)
+      // 「今年」= 12 个记账周期;1月里还没到起始日时仍属上一年度周期
+      const effYear =
+        now < new Date(now.getFullYear(), 0, msd) ? now.getFullYear() - 1 : now.getFullYear()
+      const yRange = yearRange(effYear, msd)
+      const dateFromDate = range === 'month' ? monthRange.start : yRange.start
+      const dateToDate = range === 'month' ? monthRange.end : yRange.end
       try {
         await downloadWorkspaceTransactionsCsv(token, {
           ledgerId: activeLedgerId,
@@ -204,7 +213,7 @@ export function CommandPalette({ open, onClose, onOpenAnnualReport }: CommandPal
         toast.error(localizeError(err, t))
       }
     },
-    [activeLedgerId, locale, onClose, t, toast, token],
+    [activeLedgerId, currentLedger, locale, onClose, t, toast, token],
   )
 
   // 「点击交易结果」— 跳到交易页 + 打开详情弹窗(从详情可二次进编辑)
@@ -225,7 +234,12 @@ export function CommandPalette({ open, onClose, onOpenAnnualReport }: CommandPal
       if (window.location.pathname !== '/app/accounts') {
         navigate('/app/accounts')
       }
-      setTimeout(() => dispatchOpenDetailAccount(account), 50)
+      // CommandPalette 跳的目标是 /app/accounts 这种一级页面,跟从页面直接
+      // 点卡片的入口语义一致 → 默认跨账本。
+      setTimeout(
+        () => dispatchOpenDetailAccount(account, { defaultScope: 'all' }),
+        50,
+      )
     },
     [navigate, onClose],
   )
@@ -236,7 +250,10 @@ export function CommandPalette({ open, onClose, onOpenAnnualReport }: CommandPal
       if (window.location.pathname !== '/app/tags') {
         navigate('/app/tags')
       }
-      setTimeout(() => dispatchOpenDetailTag(tag), 50)
+      setTimeout(
+        () => dispatchOpenDetailTag(tag, { defaultScope: 'all' }),
+        50,
+      )
     },
     [navigate, onClose],
   )
@@ -247,7 +264,10 @@ export function CommandPalette({ open, onClose, onOpenAnnualReport }: CommandPal
       if (window.location.pathname !== '/app/categories') {
         navigate('/app/categories')
       }
-      setTimeout(() => dispatchOpenDetailCategory(cat), 50)
+      setTimeout(
+        () => dispatchOpenDetailCategory(cat, { defaultScope: 'all' }),
+        50,
+      )
     },
     [navigate, onClose],
   )
@@ -553,6 +573,35 @@ export function CommandPalette({ open, onClose, onOpenAnnualReport }: CommandPal
               }
               onSelect={() => {
                 setMode(resolved === 'dark' ? 'light' : 'dark')
+                onClose()
+              }}
+            />
+            {/* §7 共享账本快捷指令 — 任何 ledger 都可进入"管理成员",
+                单人账本 Owner 通过它生成邀请码,邀请他人加入。 */}
+            {(() => {
+              const cur = ledgers.find((l) => l.ledger_id === activeLedgerId)
+              return cur ? (
+                <Item
+                  value={VAL_SHARED_LEDGER_MANAGE}
+                  icon={<Users className="h-4 w-4 text-primary" />}
+                  label={t('sharedLedger.cmdkManage')}
+                  onSelect={() => {
+                    dispatchOpenSharedManage({
+                      ledgerId: cur.ledger_id,
+                      ledgerName: cur.ledger_name,
+                      isOwner: cur.role === 'owner',
+                    })
+                    onClose()
+                  }}
+                />
+              ) : null
+            })()}
+            <Item
+              value={VAL_SHARED_LEDGER_JOIN}
+              icon={<UserPlus className="h-4 w-4 text-primary" />}
+              label={t('sharedLedger.cmdkJoin')}
+              onSelect={() => {
+                dispatchOpenSharedJoin()
                 onClose()
               }}
             />

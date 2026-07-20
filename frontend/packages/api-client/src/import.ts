@@ -13,6 +13,8 @@ import { ApiError, extractApiError } from './errors'
 export type ImportSourceFormat = 'beecount' | 'alipay' | 'wechat' | 'generic'
 
 export type ImportFieldMapping = {
+  /** v30 多币种:币种列(可选,值须像 ISO code)。 */
+  currency?: string | null
   tx_type: string | null
   amount: string | null
   happened_at: string | null
@@ -28,6 +30,12 @@ export type ImportFieldMapping = {
   datetime_format: string | null
   strip_currency_symbols: boolean
   expense_is_negative: boolean
+  /**
+   * 客户端本地时区相对 UTC 的分钟偏移(东为正,UTC+8 = 480)。CSV 里的时间是
+   * 用户本地墙钟,后端据此换算成 UTC 存储,避免被当作 UTC 整体偏移(issue #314)。
+   * 由 api-client 在 preview 时自动注入 -new Date().getTimezoneOffset(),UI 无需关心。
+   */
+  tz_offset_minutes?: number | null
 }
 
 export type ImportEntityDiff = {
@@ -120,6 +128,9 @@ export async function uploadImport(
   const form = new FormData()
   form.append('file', options.file)
   if (options.targetLedgerId) form.append('target_ledger_id', options.targetLedgerId)
+  // CSV/Excel 里的时间是用户本地墙钟,带上浏览器时区偏移(东为正,UTC+8 = 480),
+  // 让后端从上传起就正确换算成 UTC,sample/preview/execute 全程一致(issue #314)。
+  form.append('tz_offset_minutes', String(-new Date().getTimezoneOffset()))
   const response = await fetch(`${API_BASE}/import/upload`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
@@ -144,7 +155,15 @@ export async function previewImport(
   options: PreviewImportOptions,
 ): Promise<ImportSummary> {
   const body: Record<string, unknown> = {}
-  if (options.mapping) body.mapping = options.mapping
+  if (options.mapping) {
+    // CSV 里的时间是用户本地墙钟,带上浏览器时区偏移(东为正,UTC+8 = 480),
+    // 让后端正确换算成 UTC,避免导入后整体偏移(issue #314)。
+    body.mapping = {
+      ...options.mapping,
+      tz_offset_minutes:
+        options.mapping.tz_offset_minutes ?? -new Date().getTimezoneOffset(),
+    }
+  }
   if (options.targetLedgerId !== undefined) body.target_ledger_id = options.targetLedgerId
   if (options.dedupStrategy !== undefined) body.dedup_strategy = options.dedupStrategy
   if (options.autoTagNames !== undefined) body.auto_tag_names = options.autoTagNames

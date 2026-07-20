@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo } from 'react'
 import {
   Bar,
   CartesianGrid,
@@ -10,7 +10,9 @@ import {
   XAxis,
   YAxis
 } from 'recharts'
-import { Card, CardContent, CardHeader, CardTitle, useT } from '@beecount/ui'
+import { Card, CardContent, CardHeader, CardTitle, useLocale, useT } from '@beecount/ui'
+
+import { formatCompactTick } from '../../i18n/format'
 
 interface SeriesItem {
   bucket: string
@@ -23,10 +25,22 @@ interface Props {
   data: SeriesItem[]
 }
 
+// 固定取最近 N 个月。原来有 6 / 12 / 24 期切换,但 server.series 通常只
+// 返当年数据,切到 24 期没新内容,反而让用户疑惑"按钮没用",直接拿掉。
+// 12 是"完整年度"的天然窗口,看得到季节性又不拥挤。
 const TREND_WINDOW = 12
 
+/**
+ * 月度收支走势 — 最近 12 期柱图,叠加净额折线,直观看出某个月是赚到了还是
+ * 入不敷出。
+ *
+ * 数据源是后端已经聚合好的 `analyticsData.series`(YYYY-MM bucket),前端只
+ * 切片 + 计算 balance(不依赖 server.balance 字段,保险用 income-expense 算)。
+ */
 export function MonthlyTrendBars({ data }: Props) {
   const t = useT()
+  const { locale } = useLocale()
+  const chinese = locale.startsWith('zh')
 
   const slice = useMemo(() => {
     const tail = data.slice(-TREND_WINDOW)
@@ -39,27 +53,25 @@ export function MonthlyTrendBars({ data }: Props) {
   const fmt = (v: number) =>
     v.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })
 
+  // 12 期 x 轴 label 直接用月份末位(MM),完整 bucket 由 tooltip 提供
   const xTickFormatter = (bucket: string): string => {
     const parts = bucket.split('-')
     if (parts.length >= 2) return parts.slice(1).join('-')
     return bucket
   }
 
-  // 始终渲染图表容器（不条件隐藏），让 ResponsiveContainer 始终能测量到父容器。
-  // 用 hidden class 隐藏空态文本。
   return (
     <Card className="bc-panel overflow-hidden">
       <CardHeader>
         <CardTitle className="text-base">{t('home.trendBars.title')}</CardTitle>
       </CardHeader>
       <CardContent>
-        {slice.length === 0 && (
+        {slice.length === 0 ? (
           <div className="flex h-48 items-center justify-center text-xs text-muted-foreground">
             {t('home.trendBars.empty')}
           </div>
-        )}
-        <div className={slice.length === 0 ? 'hidden' : ''} style={{ height: slice.length > 0 ? '14rem' : 0 }}>
-          {slice.length > 0 && (
+        ) : (
+          <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={slice} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
@@ -73,7 +85,9 @@ export function MonthlyTrendBars({ data }: Props) {
                 <YAxis
                   tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11 }}
                   stroke="hsl(var(--border))"
-                  tickFormatter={(v) => (Math.abs(v) >= 10000 ? `${(v / 10000).toFixed(1)}${t('home.trendBars.10kUnit')}` : String(v))}
+                  tickFormatter={(v) =>
+                    formatCompactTick(v, { chinese, wanUnit: t('common.unit.10k') })
+                  }
                 />
                 <Tooltip
                   contentStyle={{
@@ -108,8 +122,18 @@ export function MonthlyTrendBars({ data }: Props) {
                           : v
                   }
                 />
-                <Bar dataKey="income" fill="rgb(var(--income-rgb))" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="expense" fill="rgb(var(--expense-rgb))" radius={[4, 4, 0, 0]} />
+                {/* income / expense 柱子用 token 跟随用户配色偏好。balance 折线
+                    用 primary 色 — 跟主题色绑定,亮暗模式都看得清。 */}
+                <Bar
+                  dataKey="income"
+                  fill="rgb(var(--income-rgb))"
+                  radius={[4, 4, 0, 0]}
+                />
+                <Bar
+                  dataKey="expense"
+                  fill="rgb(var(--expense-rgb))"
+                  radius={[4, 4, 0, 0]}
+                />
                 <Line
                   type="monotone"
                   dataKey="balance"
@@ -120,8 +144,8 @@ export function MonthlyTrendBars({ data }: Props) {
                 />
               </ComposedChart>
             </ResponsiveContainer>
-          )}
-        </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   )

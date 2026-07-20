@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { AttachmentRef, WorkspaceTag, WorkspaceTransaction } from '@beecount/api-client'
+import { resolveApiUrl, type AttachmentRef, type WorkspaceTag, type WorkspaceTransaction } from '@beecount/api-client'
 import {
   Button,
   Dialog,
@@ -95,7 +95,24 @@ export function TransactionDetailDialog({
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}
+                {tx.currency_code && tx.native_amount != null && tx.native_amount !== tx.amount ? (
+                  <span className="ml-2 align-middle text-sm font-medium text-muted-foreground">
+                    {tx.currency_code}
+                  </span>
+                ) : null}
               </span>
+              {/* 交易级多币种:外币交易显示折账本本位币快照(记账时汇率) */}
+              {tx.currency_code && tx.native_amount != null && tx.native_amount !== tx.amount ? (
+                <span
+                  className="text-sm tabular-nums text-muted-foreground"
+                  title={t('transactions.convertedToBase')}
+                >
+                  ≈ {tx.native_amount.toLocaleString('zh-CN', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </span>
+              ) : null}
               <span className="text-xs text-muted-foreground">
                 <Calendar className="mr-1 inline h-3 w-3" />
                 {formatDateTime(tx.happened_at)}
@@ -149,7 +166,30 @@ export function TransactionDetailDialog({
                 <DetailRow
                   icon={<User className="h-4 w-4" />}
                   label={t('detail.transaction.createdBy')}
-                  value={tx.created_by_display_name || tx.created_by_email}
+                  value={
+                    <UserBadge
+                      displayName={tx.created_by_display_name}
+                      email={tx.created_by_email}
+                      avatarUrl={tx.created_by_avatar_url}
+                    />
+                  }
+                />
+              ) : null}
+              {/* §7 共享账本:tx 被他人编辑过(last_edited_by_user_id 不等于
+                  creator)就额外显示一行。同一人创建并编辑则不冗余显示。 */}
+              {tx.last_edited_by_email &&
+              tx.last_edited_by_user_id &&
+              tx.last_edited_by_user_id !== tx.created_by_user_id ? (
+                <DetailRow
+                  icon={<Edit3 className="h-4 w-4" />}
+                  label={t('detail.transaction.lastEditedBy')}
+                  value={
+                    <UserBadge
+                      displayName={tx.last_edited_by_display_name}
+                      email={tx.last_edited_by_email}
+                      avatarUrl={tx.last_edited_by_avatar_url}
+                    />
+                  }
                 />
               ) : null}
             </div>
@@ -171,6 +211,42 @@ export function TransactionDetailDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/**
+ * 共享账本 tx 创建人 / 最后编辑人 — 头像 + 名字,hover 显示邮箱。
+ * 头像 fallback 到首字母色块,跟 SharedLedgerStatsDialog 风格一致。
+ */
+function UserBadge({
+  displayName,
+  email,
+  avatarUrl,
+}: {
+  displayName: string | null | undefined
+  email: string | null | undefined
+  avatarUrl: string | null | undefined
+}) {
+  const name = displayName || email?.split('@')[0] || ''
+  const resolved = resolveApiUrl(avatarUrl)
+  return (
+    <span
+      className="inline-flex items-center gap-1.5"
+      title={email || undefined}
+    >
+      {resolved ? (
+        <img
+          src={resolved}
+          alt={name}
+          className="h-5 w-5 rounded-full object-cover"
+        />
+      ) : (
+        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary/20 text-[10px] font-semibold text-primary">
+          {(name[0] || '?').toUpperCase()}
+        </span>
+      )}
+      <span className="text-sm">{name}</span>
+    </span>
   )
 }
 

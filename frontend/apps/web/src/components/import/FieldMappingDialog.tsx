@@ -42,6 +42,7 @@ const OPTIONAL_FIELDS: Array<keyof ImportFieldMapping> = [
   'account_name',
   'from_account_name',
   'to_account_name',
+  'currency',
   'note',
 ]
 

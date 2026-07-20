@@ -28,6 +28,7 @@ import type {
   WorkspaceCategory,
 } from '@beecount/api-client'
 
+import { CurrencySelectorTrigger } from '../components/CurrencySelector'
 import { CategoryPickerDialog } from '../components/CategoryPickerDialog'
 import { CategoryIcon } from '../components/CategoryIcon'
 import { TagPickerDialog } from '../components/TagPickerDialog'
@@ -37,6 +38,10 @@ import type { TxForm } from '../forms'
 
 type TransactionsPanelProps = {
   form: TxForm
+  /** 账本本位币(大写 ISO)。币种下拉默认值;选=本位币时 form.currency 存 ''。 */
+  baseCurrency?: string
+  /** v30 多币种:各币种对 baseCurrency 的汇率(1 quote ≈ x base),透传币种选择弹窗展示。 */
+  currencyRates?: Record<string, number>
   rows: ReadTransaction[]
   total: number
   page: number
@@ -82,6 +87,12 @@ type TransactionsPanelProps = {
   selectionMode?: boolean
   selectedIds?: Set<string>
   onToggleSelect?: (row: ReadTransaction, event: React.MouseEvent) => void
+  /** §7 共享账本:开启后 tx 列表行末显示"谁记的"chip。 */
+  showCreator?: boolean
+  /** §7 共享账本:当前 caller user_id,自己创建+编辑的 tx 不显示 chip。 */
+  currentUserId?: string | null
+  /** 备注显示方式,透传到 TransactionList。默认 'category'。 */
+  noteDisplayMode?: 'category' | 'note'
 }
 
 type AttachmentCarouselCellProps = {
@@ -224,6 +235,8 @@ function AttachmentCarouselCell({
 
 export function TransactionsPanel({
   form,
+  baseCurrency = 'CNY',
+  currencyRates,
   rows,
   total,
   page,
@@ -255,7 +268,10 @@ export function TransactionsPanel({
   dialogOnlyMode,
   selectionMode = false,
   selectedIds,
-  onToggleSelect
+  onToggleSelect,
+  showCreator = false,
+  currentUserId,
+  noteDisplayMode = 'category'
 }: TransactionsPanelProps) {
   const t = useT()
   const open = dialogOpen
@@ -267,11 +283,26 @@ export function TransactionsPanel({
   const textDangerActionClass =
     'text-sm text-destructive underline-offset-4 hover:text-destructive/90 hover:underline disabled:pointer-events-none disabled:text-muted-foreground disabled:no-underline'
 
-  const accountOptions = accounts
-    .map((row) => row.name.trim())
-    .filter((name) => name.length > 0)
-    .filter((name, index, self) => self.indexOf(name) === index)
-    .sort((a, b) => a.localeCompare(b))
+  const dedupSortNames = (names: string[]) =>
+    names
+      .filter((name) => name.length > 0)
+      .filter((name, index, self) => self.indexOf(name) === index)
+      .sort((a, b) => a.localeCompare(b))
+  // 账户隐藏(issue #240):记账/转账选择器排除隐藏账户 —— 不能再往它记新账。
+  const hiddenAccountNames = new Set(
+    accounts.filter((row) => row.hidden).map((row) => row.name.trim())
+  )
+  const accountOptions = dedupSortNames(accounts.map((row) => row.name.trim()).filter((name) => !hiddenAccountNames.has(name)))
+  // E1 唯一例外:编辑一笔本就挂在某隐藏账户上的历史交易时,选择器钉住显示该
+  // 隐藏账户(带「已隐藏」灰标),让用户可原样保存;其它隐藏账户仍不出现。
+  // 一旦改选走其它选项,该隐藏名字就不会再被钉回来(下次渲染 currentValue 已变)。
+  const accountOptionsWithPinned = (currentValue: string) => {
+    const trimmed = currentValue.trim()
+    if (trimmed && hiddenAccountNames.has(trimmed)) {
+      return dedupSortNames([...accountOptions, trimmed])
+    }
+    return accountOptions
+  }
   const categoryOptions = categories
     .filter((row) => row.kind === form.tx_type)
     .map((row) => row.name.trim())
@@ -314,12 +345,18 @@ export function TransactionsPanel({
 
   const applyTxType = (nextType: TxForm['tx_type']) => {
     if (nextType === 'transfer') {
+      // 转账两个标记都隐藏 → 清掉,避免残留脏值。
+      // currency 一并清空:转账不支持跨币种且币种控件隐藏,不清会把转出/
+      // 转入账户下拉锁死在之前手选的外币过滤里(审查发现)。
       onFormChange({
         ...form,
         tx_type: nextType,
         account_name: '',
+        currency: '',
         category_name: '',
-        category_kind: 'transfer'
+        category_kind: 'transfer',
+        exclude_from_stats: false,
+        exclude_from_budget: false
       })
       return
     }
@@ -330,7 +367,9 @@ export function TransactionsPanel({
       category_kind: nextType,
       category_name: keepCategory,
       from_account_name: '',
-      to_account_name: ''
+      to_account_name: '',
+      // 不计入预算仅 expense 显示;切到 income 时清掉
+      exclude_from_budget: nextType === 'expense' ? form.exclude_from_budget : false
     })
   }
 
@@ -348,6 +387,9 @@ export function TransactionsPanel({
             categories={categories}
             iconPreviewUrlByFileId={iconPreviewUrlByFileId}
             variant="default"
+            showCreator={showCreator}
+            currentUserId={currentUserId}
+            noteDisplayMode={noteDisplayMode}
             canManage={canWrite}
             onEdit={(row) => {
               onEdit(row)
@@ -413,6 +455,26 @@ export function TransactionsPanel({
                 value={form.amount}
                 onChange={(e) => onFormChange({ ...form, amount: e.target.value })}
               />
+              {/* v30 多币种:币种另起一行,全宽显示币种全名+国旗(挨金额太窄会截断);
+                  选非本位币 → 账户下拉按币种过滤 + 已选账户清空(币种优先联动,
+                  transfer 不支持)。 */}
+              {form.tx_type !== 'transfer' ? (
+                <CurrencySelectorTrigger
+                  value={form.currency || baseCurrency}
+                  onChange={(code) =>
+                    onFormChange({
+                      ...form,
+                      currency:
+                        code.toUpperCase() === baseCurrency.toUpperCase()
+                          ? ''
+                          : code,
+                      account_name: ''
+                    })
+                  }
+                  ratesToBase={currencyRates}
+                  rateBase={baseCurrency}
+                />
+              ) : null}
             </div>
             <div className="space-y-1">
               <Label>{t('transactions.table.time')}</Label>
@@ -478,9 +540,14 @@ export function TransactionsPanel({
                       <SelectValue placeholder={t('transactions.placeholder.fromAccountName')} />
                     </SelectTrigger>
                     <SelectContent>
-                      {accountOptions.map((name) => (
+                      {accountOptionsWithPinned(form.from_account_name).map((name) => (
                         <SelectItem key={name} value={name}>
                           {name}
+                          {hiddenAccountNames.has(name) ? (
+                            <span className="ml-1 text-xs text-muted-foreground">
+                              {t('accounts.hidden.optionSuffix')}
+                            </span>
+                          ) : null}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -497,9 +564,14 @@ export function TransactionsPanel({
                       <SelectValue placeholder={t('transactions.placeholder.toAccountName')} />
                     </SelectTrigger>
                     <SelectContent>
-                      {accountOptions.map((name) => (
+                      {accountOptionsWithPinned(form.to_account_name).map((name) => (
                         <SelectItem key={name} value={name}>
                           {name}
+                          {hiddenAccountNames.has(name) ? (
+                            <span className="ml-1 text-xs text-muted-foreground">
+                              {t('accounts.hidden.optionSuffix')}
+                            </span>
+                          ) : null}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -508,19 +580,34 @@ export function TransactionsPanel({
               </>
             ) : (
               <div className="space-y-1">
-                <Label>{t('accounts.title')}</Label>
+                <Label>{t('transactions.table.account')}</Label>
                 <Select
-                  value={form.account_name || undefined}
+                  // Radix SelectItem 不允许 value=""(undefined-state 由 placeholder
+                  // 渲染),所以用 sentinel "__none__" 表示"不选账户"。和 form 的
+                  // 真实空串状态在 value 和 onValueChange 两处来回翻译。
+                  value={form.account_name ? form.account_name : '__none__'}
                   disabled={dictionariesLoading}
-                  onValueChange={(value) => onFormChange({ ...form, account_name: value })}
+                  onValueChange={(value) =>
+                    onFormChange({ ...form, account_name: value === '__none__' ? '' : value })
+                  }
                 >
                   <SelectTrigger>
                     <SelectValue placeholder={t('transactions.placeholder.accountName')} />
                   </SelectTrigger>
                   <SelectContent>
-                    {accountOptions.map((name) => (
+                    <SelectItem value="__none__">
+                      <span className="text-muted-foreground">
+                        {t('transactions.placeholder.noAccount')}
+                      </span>
+                    </SelectItem>
+                    {accountOptionsWithPinned(form.account_name).map((name) => (
                       <SelectItem key={name} value={name}>
                         {name}
+                        {hiddenAccountNames.has(name) ? (
+                          <span className="ml-1 text-xs text-muted-foreground">
+                            {t('accounts.hidden.optionSuffix')}
+                          </span>
+                        ) : null}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -579,6 +666,55 @@ export function TransactionsPanel({
                 onChange={(e) => onFormChange({ ...form, note: e.target.value })}
               />
             </div>
+            {/* §三 标记开关 — 按当前 type 条件显示:
+                  不计入收支:income / expense(转账本就不进收支,隐藏)
+                  不计入预算:仅 expense(预算只统计支出) */}
+            {form.tx_type !== 'transfer' ? (
+              <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/20 px-3 py-2 md:col-span-2">
+                <p className="text-sm font-medium">{t('txFlagExcludeFromStats')}</p>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.exclude_from_stats}
+                  aria-label={t('txFlagExcludeFromStats') as string}
+                  onClick={() =>
+                    onFormChange({ ...form, exclude_from_stats: !form.exclude_from_stats })
+                  }
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
+                    form.exclude_from_stats ? 'bg-primary' : 'bg-muted-foreground/30'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                      form.exclude_from_stats ? 'translate-x-[18px]' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
+              </div>
+            ) : null}
+            {form.tx_type === 'expense' ? (
+              <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/20 px-3 py-2 md:col-span-2">
+                <p className="text-sm font-medium">{t('txFlagExcludeFromBudget')}</p>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.exclude_from_budget}
+                  aria-label={t('txFlagExcludeFromBudget') as string}
+                  onClick={() =>
+                    onFormChange({ ...form, exclude_from_budget: !form.exclude_from_budget })
+                  }
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
+                    form.exclude_from_budget ? 'bg-primary' : 'bg-muted-foreground/30'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                      form.exclude_from_budget ? 'translate-x-[18px]' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
+              </div>
+            ) : null}
           </div>
           </div>
           <DialogFooter className="shrink-0 border-t border-border/60 bg-card px-6 py-4">

@@ -68,6 +68,7 @@ type FieldSpec = {
 // 内部能识别(参考 rclone source: backend/s3/s3.go 的 providers map)。
 const S3_PROVIDERS: Array<{ value: string; label: string }> = [
   { value: 'AWS', label: 'AWS' },
+  { value: 'Cloudflare', label: 'Cloudflare R2' },
   { value: 'Alibaba', label: '阿里云 OSS' },
   { value: 'Tencent', label: '腾讯云 COS' },
   { value: 'Backblaze', label: 'Backblaze B2 (S3 API)' },
@@ -79,14 +80,6 @@ const S3_PROVIDERS: Array<{ value: string; label: string }> = [
 ]
 
 const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
-  r2: [
-    {
-      key: 'root_path',
-      label: 'Root Path (主路径)',
-      placeholder: 'beecount / 留空',
-      hint: 'R2 存储桶中的路径前缀，留空使用默认值 beecount/',
-    },
-  ],
   s3: [
     {
       key: 'provider',
@@ -102,12 +95,6 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
       label: 'Bucket',
       placeholder: 'my-backup-bucket',
       hint: '存储桶名称。备份文件会落到 <bucket>/<timestamp>.tar.gz。R2 / S3 必填。',
-    },
-    {
-      key: 'root_path',
-      label: 'Root Path (主路径)',
-      placeholder: 'beecount / 留空',
-      hint: '所有上传的根路径。头像会上传到 <root>/avatars/，附件会传到 <root>/attachments/。留空则不上报到根目录。',
     },
     {
       key: 'region',
@@ -176,8 +163,7 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
 }
 
 const BACKEND_LABELS: Record<string, string> = {
-  r2: 'Cloudflare R2 (Workers 绑定)',
-  s3: 'S3 兼容(AWS / Aliyun OSS / MinIO ...)',
+  s3: 'S3 兼容(AWS / Cloudflare R2 / Aliyun OSS / MinIO ...)',
   b2: 'Backblaze B2',
   drive: 'Google Drive',
   onedrive: 'OneDrive',

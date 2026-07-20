@@ -7,6 +7,8 @@ import { Amount } from '@beecount/web-features'
 interface Props {
   accounts: WorkspaceAccount[]
   currency?: string
+  /** 点击某行 → 打开账户详情弹窗。不传时整行不可点。 */
+  onSelectAccount?: (account: WorkspaceAccount) => void
 }
 
 /**
@@ -41,12 +43,13 @@ const TYPE_COLORS: Record<string, string> = {
   other: '#64748b'
 }
 
-export function HomeTopAccounts({ accounts, currency = 'CNY' }: Props) {
+export function HomeTopAccounts({ accounts, currency = 'CNY', onSelectAccount }: Props) {
   const t = useT()
   const top = useMemo(() => {
     const withStats = accounts
       .filter((a) => !EXCLUDE_TYPES.has(a.account_type || ''))
       .map((a) => ({
+        raw: a,
         id: a.id,
         name: a.name,
         type: a.account_type || 'other',
@@ -78,7 +81,15 @@ export function HomeTopAccounts({ accounts, currency = 'CNY' }: Props) {
               const iconUrl = TYPE_ICON_URL[a.type] || TYPE_ICON_URL.other
               const color = TYPE_COLORS[a.type] || '#64748b'
               return (
-                <li key={a.id || `${a.name}-${i}`} className="flex items-center gap-3">
+                <li
+                  key={a.id || `${a.name}-${i}`}
+                  className={`flex items-center gap-3 rounded-md ${
+                    onSelectAccount
+                      ? '-mx-2 cursor-pointer px-2 py-1 transition-colors hover:bg-muted/40'
+                      : ''
+                  }`}
+                  onClick={() => onSelectAccount?.(a.raw)}
+                >
                   <span
                     className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md"
                     style={{ background: `${color}18`, border: `1px solid ${color}40` }}

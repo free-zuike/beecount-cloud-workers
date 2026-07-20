@@ -13,6 +13,10 @@ import {
 import { TransactionList } from '@beecount/web-features'
 import { Banknote, Calendar as CalendarIcon, CreditCard } from 'lucide-react'
 
+import { useAuth } from '../../context/AuthContext'
+import type { DetailScope } from '../../lib/txDialogEvents'
+import { DetailScopeToggle } from './DetailScopeToggle'
+
 type AccountWithStats = ReadAccount & {
   tx_count?: number | null
   income_total?: number | null
@@ -22,6 +26,8 @@ type AccountWithStats = ReadAccount & {
 
 interface Props {
   account: AccountWithStats | null
+  scope: DetailScope
+  onScopeChange: (next: DetailScope) => void
   transactions: WorkspaceTransaction[]
   total: number
   offset: number
@@ -36,6 +42,8 @@ interface Props {
 /** 点账户卡片弹出的详情:顶部账户名 + 当前余额/累计收入/累计支出 + 交易列表(无限滚动加载)。 */
 export function AccountDetailDialog({
   account,
+  scope,
+  onScopeChange,
   transactions,
   total,
   offset,
@@ -47,15 +55,23 @@ export function AccountDetailDialog({
   resolveAttachmentPreviewUrl,
 }: Props) {
   const t = useT()
+  const { profileMe } = useAuth()
+  const noteDisplayMode = profileMe?.appearance?.note_display_mode ?? 'category'
   return (
     <Dialog open={Boolean(account)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="border-b border-border/60 px-6 py-4">
+        <DialogHeader className="flex flex-row items-center justify-between gap-3 border-b border-border/60 px-6 py-4">
           <DialogTitle className="truncate">{account?.name || ''}</DialogTitle>
+          <DetailScopeToggle value={scope} onChange={onScopeChange} className="shrink-0" />
         </DialogHeader>
         {account ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            {/* 统计:优先 server 返回的 balance/income/expense,缺失时兜底 initial_balance */}
+            {/* 统计:优先 server 返回的 balance/income/expense,缺失时兜底 initial_balance.
+                注意:这里的统计来自 props 上的 account 实体,本身是按上层 scope
+                取的(GlobalEntityDialogs / AccountsPage 通过 fetchWorkspaceAccounts
+                的 ledgerId 参数控制)。弹窗顶部 scope 切换只影响交易列表过滤,
+                上面这块 KPI 沿用打开时的快照,不跟随 scope 实时切换 —
+                跟 mobile 端 account_detail_page 行为一致。 */}
             <AccountStatsHeader account={account} t={t} />
 
             {/* 信用卡 / 银行卡专属信息:bank_name / 卡号末 4 / 信用额度 /
@@ -75,6 +91,8 @@ export function AccountDetailDialog({
                 onPreviewAttachment={onPreviewAttachment as never}
                 resolveAttachmentPreviewUrl={resolveAttachmentPreviewUrl as never}
                 emptyTitle={t('transactions.empty.forAccount.title')}
+                showLedger={scope === 'all'}
+                noteDisplayMode={noteDisplayMode}
               />
             </div>
           </div>
@@ -95,6 +113,24 @@ function AccountStatsHeader({
   const balance = hasServerStats ? account.balance! : account.initial_balance ?? 0
   const fmt = (v: number) =>
     v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+  // 信用卡按负债展示:只显当前欠款(= -balance,余额为负=欠款),不显示
+  // 累计收入/支出(信用卡入账是还款/退款,非收入);额度/可用/账单在下方
+  // AccountCardInfo。对齐 mobile account_detail_page。
+  if ((account.account_type || '') === 'credit_card') {
+    const owed = Math.max(0, -balance)
+    return (
+      <div className="border-b border-border/60 bg-muted/20 px-6 py-4 text-center">
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          {t('accounts.bankcard.currentOwed')}
+        </div>
+        <div className="mt-0.5 font-mono text-lg font-bold tabular-nums text-expense">
+          {fmt(owed)}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="grid grid-cols-3 gap-3 border-b border-border/60 bg-muted/20 px-6 py-4 text-center">
       <div>
@@ -159,13 +195,20 @@ function AccountCardInfo({
   const billingDay = isCreditCard ? account.billing_day : null
   const paymentDueDay = isCreditCard ? account.payment_due_day : null
 
-  // 信用卡已用额度 = 累计支出 - 累计收入(还款)。剩余额度 = limit - used。
+  // 信用卡已用额度 = -balance(余额为负表示欠款),剩余额度 = limit - used。
   // 这是粗略估算 — 没考虑账单周期,只看终身累计。但作为"大致还能刷多少"
   // 的信号已经够用,后续要精确版本应该按 billing_day 分账期算。
+  //
+  // 为什么用 balance 而不是 expense_total - income_total:后者会漏掉"储蓄卡
+  // 转账到信用卡还款"这种 transfer-in 操作 —— 转账既不是 expense 也不是
+  // income,只在 backend 的 balance 计算里被加回去(workspace.py 的
+  // transfer_to bucket)。balance 已经统一包含初始余额 + 全部 income /
+  // expense / transfer-in / transfer-out,跟 mobile 端
+  // `getCreditCardUsedAmount` (balance < 0 ? -balance : 0) 完全一致。
+  // 修复 issue #26:储蓄卡转账到信用卡额度没恢复。
+  const balance = account.balance ?? account.initial_balance ?? 0
   const used =
-    typeof creditLimit === 'number'
-      ? Math.max(0, (account.expense_total ?? 0) - (account.income_total ?? 0))
-      : null
+    typeof creditLimit === 'number' ? Math.max(0, -balance) : null
   const remaining =
     typeof creditLimit === 'number' && used !== null
       ? Math.max(0, creditLimit - used)

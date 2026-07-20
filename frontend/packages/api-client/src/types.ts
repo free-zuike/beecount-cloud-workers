@@ -34,12 +34,14 @@ export type TwoFARegenerateResponse = {
 }
 
 export type ProfileAppearance = {
-  /** 月显示装饰风格:'icons' | 'particles' | 'honeycomb' | … */
-  header_decoration_style?: string
+  /** 顶部皮肤 id:'none' | 'aurora' | 'mountains' | … 详见 mobile kHeaderSkins */
+  header_skin?: string
   /** 紧凑金额显示(万/亿) */
   compact_amount?: boolean
   /** 交易行是否显示时间 */
   show_transaction_time?: boolean
+  /** 明细行第一行显示方式:'category'(默认,分类+备注括号) | 'note'(备注优先) */
+  note_display_mode?: 'category' | 'note'
 }
 
 /**
@@ -102,6 +104,8 @@ export type ProfileMe = {
    *  API key 存在这里面,只读展示时要脱敏。shape 由 mobile 的 snapshotForSync
    *  定义,这里用 Record 宽松接收,避免 web 跟 mobile 的实现耦合。 */
   ai_config?: Record<string, any> | null
+  /** 主币种(本位币),资产折算目标。mobile prefs `baseCurrency` 同步而来。 */
+  primary_currency?: string | null
 }
 
 export type WriteCommitMeta = {
@@ -128,17 +132,20 @@ export type LedgerCreatePayload = {
   ledger_id?: string | null
   ledger_name: string
   currency?: string | null
+  month_start_day?: number | null
 }
 
 export type LedgerMetaPayload = {
   ledger_name?: string | null
   currency?: string | null
+  month_start_day?: number | null
 }
 
 export type ReadLedger = {
   ledger_id: string
   ledger_name: string
   currency: string
+  month_start_day?: number
   transaction_count: number
   income_total: number
   expense_total: number
@@ -159,8 +166,6 @@ export type ReadTransaction = {
   tx_index: number
   tx_type: 'expense' | 'income' | 'transfer'
   amount: number
-  currency_code?: string | null
-  native_amount?: number | null
   happened_at: string
   note: string | null
   category_name: string | null
@@ -176,6 +181,14 @@ export type ReadTransaction = {
   tags_list: string[]
   tag_ids?: string[]
   attachments: AttachmentRef[] | null
+  /** 不计入收支统计(仍计入账户余额/净资产)。历史交易默认 false。 */
+  exclude_from_stats?: boolean
+  /** 不计入预算用量(仅 expense 有意义)。历史交易默认 false。 */
+  exclude_from_budget?: boolean
+  /** 交易原币种(ISO)。历史交易可能为 null,视作账本本位币。 */
+  currency_code?: string | null
+  /** 折账本本位币的金额快照(记账时汇率,保存即定)。null 时 fallback 用 amount。 */
+  native_amount?: number | null
   last_change_id: number
   ledger_id?: string | null
   ledger_name?: string | null
@@ -184,6 +197,13 @@ export type ReadTransaction = {
   created_by_display_name?: string | null
   created_by_avatar_url?: string | null
   created_by_avatar_version?: number | null
+  // §7 共享账本 — server projection 的 last_edited_by_user_id 加上 user 信息回填,
+  // tx 列表显示"创建 / 编辑"双角色。
+  last_edited_by_user_id?: string | null
+  last_edited_by_email?: string | null
+  last_edited_by_display_name?: string | null
+  last_edited_by_avatar_url?: string | null
+  last_edited_by_avatar_version?: number | null
 }
 
 export type ReadAccount = {
@@ -209,6 +229,10 @@ export type ReadAccount = {
   bank_name?: string | null
   /** 卡号后四位,bank_card / credit_card。 */
   card_last_four?: string | null
+  /** 账户隐藏(issue #240):true = 已隐藏 —— 记账/转账选择器不再出现,主列表
+   *  退场收进「已隐藏」分区;但仍计入净资产/资产/收支(D1,服务端不做统计过滤)。
+   *  缺省 false(旧接口未提供该字段时视为未隐藏)。 */
+  hidden?: boolean
 }
 
 export type ReadCategory = {
@@ -418,26 +442,48 @@ export type AdminHealth = {
   time: string
 }
 
-export type AdminIntegrityIssueSample = {
-  sync_id: string
-  label: string
+// ────────── 数据清理(替代旧 IntegrityScan)──────────
+
+export type DataCleanupOrphanType =
+  | 'tx_missing_category'
+  | 'tx_missing_account'
+  | 'tx_missing_from_account'
+  | 'tx_missing_to_account'
+  | 'budget_missing_category'
+  | 'sync_change_missing_entity'
+  | 'attachment_no_ref'
+  | 'attachment_file_missing'
+  | 'disk_file_no_ref'
+  | 'tx_ref_broken_attachment'
+
+export type DataCleanupRecord = {
+  type: DataCleanupOrphanType | string
+  title: string
+  subtitle: string
+  user_id?: string | null
+  row_id?: string | null
+  sync_id?: string | null
+  file_path?: string | null
+  size_bytes?: number | null
   extra?: Record<string, unknown> | null
 }
 
-export type AdminIntegrityIssue = {
-  issue_type: string
-  ledger_id: string
-  ledger_name: string
-  owner_email: string | null
-  count: number
-  samples: AdminIntegrityIssueSample[]
+export type DataCleanupScanReport = {
+  db_orphans: DataCleanupRecord[]
+  file_orphans: DataCleanupRecord[]
+  sync_orphans: DataCleanupRecord[]
+  total_count: number
+  total_size_bytes: number
 }
 
-export type AdminIntegrityScan = {
-  scanned_at: string
-  ledgers_total: number
-  issues_total: number
-  issues: AdminIntegrityIssue[]
+export type DataCleanupFailure = {
+  record_key: string
+  error: string
+}
+
+export type DataCleanupResult = {
+  success_count: number
+  failures: DataCleanupFailure[]
 }
 
 export type AdminSyncErrorItem = {
@@ -498,9 +544,11 @@ export type AdminBackupRestoreResponse = {
 export type TxPayload = {
   tx_type: 'expense' | 'income' | 'transfer'
   amount: number
-  currency_code?: string | null
-  native_amount?: number | null
   happened_at: string
+  /** 交易级多币种(0018):原币种;不传 = 账本本位币(不产生字段)。 */
+  currency_code?: string | null
+  /** 折账本本位币的金额快照(前端按 server 汇率算好传入)。 */
+  native_amount?: number | null
   note?: string | null
   category_name?: string | null
   category_kind?: 'expense' | 'income' | 'transfer' | null
@@ -514,6 +562,10 @@ export type TxPayload = {
   tags?: string | string[] | null
   tag_ids?: string[] | null
   attachments?: AttachmentRef[] | null
+  /** 不计入收支统计(income/expense 可填,transfer 无意义)。 */
+  exclude_from_stats?: boolean | null
+  /** 不计入预算用量(仅 expense 有意义)。 */
+  exclude_from_budget?: boolean | null
 }
 
 export type BudgetCreatePayload = {
@@ -545,6 +597,9 @@ export type AccountPayload = {
   payment_due_day?: number | null
   bank_name?: string | null
   card_last_four?: string | null
+  /** 账户隐藏(issue #240)。create 缺省 false;update 不传 = 不改(服务端
+   *  merge 缺键保留,见 snapshot_mutator._apply_account_optional_fields)。 */
+  hidden?: boolean | null
 }
 
 export type CategoryPayload = {
@@ -605,4 +660,85 @@ export type AttachmentExistsItem = {
 
 export type AttachmentBatchExistsResponse = {
   items: AttachmentExistsItem[]
+}
+
+// === 共享账本 Editor 视角资源 ===
+// 对应 server src/routers/shared_resources.py — Editor 进共享账本后通过
+// /ledgers/{external_id}/shared-resources 拉一次 Owner 的 user-global 资源
+// 快照,前端缓存到独立 state(Map<ledgerId, SharedResourcesBundle>),
+// picker / tile / icon lookup 在共享账本场景下走这套数据,不污染用户
+// 自己的 user-global state。effacing mobile 端 SharedLedger{Categories,
+// Accounts,Tags} 镜像表的思路。
+export type SharedCategoryItem = {
+  sync_id: string
+  name: string | null
+  kind: string | null
+  icon: string | null
+  icon_type: string | null
+  icon_cloud_file_id: string | null
+  icon_cloud_sha256: string | null
+  sort_order: number | null
+  level: number | null
+  parent_name: string | null
+  // 二级分类父子关系的稳定 FK(parent 的 sync_id)。client 优先用它建父子链,
+  // parent_name 是显示 / 兜底。
+  parent_sync_id: string | null
+}
+
+export type SharedAccountItem = {
+  sync_id: string
+  name: string | null
+  account_type: string | null
+  currency: string | null
+  initial_balance: number | null
+  note: string | null
+  credit_limit: number | null
+  billing_day: number | null
+  payment_due_day: number | null
+  bank_name: string | null
+  card_last_four: string | null
+}
+
+export type SharedTagItem = {
+  sync_id: string
+  name: string | null
+  color: string | null
+}
+
+export type SharedResourcesBundle = {
+  owner_user_id: string
+  categories: SharedCategoryItem[]
+  accounts: SharedAccountItem[]
+  tags: SharedTagItem[]
+}
+
+export type ExchangeRatesResponse = {
+  base: string
+  rate_date: string
+  source: string
+  fetched_at: string
+  stale: boolean
+  /** 方向:1 base = x quote(展示折算前需取倒数,与 App 同规则)。 */
+  rates: Record<string, string>
+}
+
+export type ExchangeRateOverride = {
+  sync_id: string
+  base_currency: string
+  quote_currency: string
+  /** 方向:1 quote = rate base。 */
+  rate: string
+  updated_at: string
+}
+
+export type NetWorthHistorySeriesItem = {
+  bucket: string
+  net_worth: number
+  assets: number
+  liabilities: number
+}
+
+export type NetWorthHistory = {
+  series: NetWorthHistorySeriesItem[]
+  multi_currency: boolean
 }

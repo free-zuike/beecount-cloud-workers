@@ -92,19 +92,43 @@ export function onOpenDetailTx(
   return () => window.removeEventListener(DETAIL_TX_EVENT, wrapped)
 }
 
+/**
+ * Account/Category/Tag 详情弹窗的"账本作用域"开关。
+ * - 'all'    : 跨账本聚合(默认从一级页面 资产/分类/标签 进入)
+ * - 'current': 当前账本(从首页图表 / Top 卡片等场景进入)
+ * 弹窗 UI 顶部有 segmented toggle 让用户切换,这里只是"打开时的默认值"。
+ */
+export type DetailScope = 'all' | 'current'
+
+export type DetailOpenOptions = {
+  defaultScope?: DetailScope
+}
+
 // ========== Account ==========
 const DETAIL_ACCOUNT_EVENT = 'bee:open-detail-account'
 
-export function dispatchOpenDetailAccount(account: WorkspaceAccount) {
-  window.dispatchEvent(new CustomEvent(DETAIL_ACCOUNT_EVENT, { detail: account }))
+type AccountDetailPayload = {
+  account: WorkspaceAccount
+  defaultScope: DetailScope
+}
+
+export function dispatchOpenDetailAccount(
+  account: WorkspaceAccount,
+  options?: DetailOpenOptions,
+) {
+  const payload: AccountDetailPayload = {
+    account,
+    defaultScope: options?.defaultScope ?? 'current',
+  }
+  window.dispatchEvent(new CustomEvent(DETAIL_ACCOUNT_EVENT, { detail: payload }))
 }
 
 export function onOpenDetailAccount(
-  handler: (account: WorkspaceAccount) => void,
+  handler: (account: WorkspaceAccount, defaultScope: DetailScope) => void,
 ): () => void {
   const wrapped = (e: Event) => {
-    const detail = (e as CustomEvent<WorkspaceAccount>).detail
-    if (detail) handler(detail)
+    const detail = (e as CustomEvent<AccountDetailPayload>).detail
+    if (detail?.account) handler(detail.account, detail.defaultScope)
   }
   window.addEventListener(DETAIL_ACCOUNT_EVENT, wrapped)
   return () => window.removeEventListener(DETAIL_ACCOUNT_EVENT, wrapped)
@@ -113,16 +137,28 @@ export function onOpenDetailAccount(
 // ========== Tag ==========
 const DETAIL_TAG_EVENT = 'bee:open-detail-tag'
 
-export function dispatchOpenDetailTag(tag: WorkspaceTag) {
-  window.dispatchEvent(new CustomEvent(DETAIL_TAG_EVENT, { detail: tag }))
+type TagDetailPayload = {
+  tag: WorkspaceTag
+  defaultScope: DetailScope
+}
+
+export function dispatchOpenDetailTag(
+  tag: WorkspaceTag,
+  options?: DetailOpenOptions,
+) {
+  const payload: TagDetailPayload = {
+    tag,
+    defaultScope: options?.defaultScope ?? 'current',
+  }
+  window.dispatchEvent(new CustomEvent(DETAIL_TAG_EVENT, { detail: payload }))
 }
 
 export function onOpenDetailTag(
-  handler: (tag: WorkspaceTag) => void,
+  handler: (tag: WorkspaceTag, defaultScope: DetailScope) => void,
 ): () => void {
   const wrapped = (e: Event) => {
-    const detail = (e as CustomEvent<WorkspaceTag>).detail
-    if (detail) handler(detail)
+    const detail = (e as CustomEvent<TagDetailPayload>).detail
+    if (detail?.tag) handler(detail.tag, detail.defaultScope)
   }
   window.addEventListener(DETAIL_TAG_EVENT, wrapped)
   return () => window.removeEventListener(DETAIL_TAG_EVENT, wrapped)
@@ -132,9 +168,21 @@ export function onOpenDetailTag(
 const DETAIL_CATEGORY_EVENT = 'bee:open-detail-category'
 const EDIT_CATEGORY_EVENT = 'bee:open-edit-category'
 
-export function dispatchOpenDetailCategory(category: WorkspaceCategory) {
+type CategoryDetailPayload = {
+  category: WorkspaceCategory
+  defaultScope: DetailScope
+}
+
+export function dispatchOpenDetailCategory(
+  category: WorkspaceCategory,
+  options?: DetailOpenOptions,
+) {
+  const payload: CategoryDetailPayload = {
+    category,
+    defaultScope: options?.defaultScope ?? 'current',
+  }
   window.dispatchEvent(
-    new CustomEvent(DETAIL_CATEGORY_EVENT, { detail: category }),
+    new CustomEvent(DETAIL_CATEGORY_EVENT, { detail: payload }),
   )
 }
 
@@ -145,11 +193,11 @@ export function dispatchOpenEditCategory(category: WorkspaceCategory) {
 }
 
 export function onOpenDetailCategory(
-  handler: (category: WorkspaceCategory) => void,
+  handler: (category: WorkspaceCategory, defaultScope: DetailScope) => void,
 ): () => void {
   const wrapped = (e: Event) => {
-    const detail = (e as CustomEvent<WorkspaceCategory>).detail
-    if (detail) handler(detail)
+    const detail = (e as CustomEvent<CategoryDetailPayload>).detail
+    if (detail?.category) handler(detail.category, detail.defaultScope)
   }
   window.addEventListener(DETAIL_CATEGORY_EVENT, wrapped)
   return () => window.removeEventListener(DETAIL_CATEGORY_EVENT, wrapped)

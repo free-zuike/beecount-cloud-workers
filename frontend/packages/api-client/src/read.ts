@@ -3,6 +3,7 @@ import { extractApiError } from './errors'
 import type {
   AnalyticsMetric,
   AnalyticsScope,
+  NetWorthHistory,
   ReadAccount,
   ReadBudget,
   ReadCategory,
@@ -10,6 +11,7 @@ import type {
   ReadLedgerDetail,
   ReadTag,
   ReadTransaction,
+  SharedResourcesBundle,
   WorkspaceAccount,
   WorkspaceAnalytics,
   WorkspaceCategory,
@@ -67,6 +69,60 @@ export async function fetchReadBudgets(token: string, ledgerId: string): Promise
   return authedGet<ReadBudget[]>(`/read/ledgers/${encodeURIComponent(ledgerId)}/budgets`, token)
 }
 
+export type ReadBudgetUsageItem = {
+  budget_id: string
+  used: number
+}
+
+export type ReadBudgetUsage = {
+  items: ReadBudgetUsageItem[]
+}
+
+/**
+ * 后端 SQL 聚合每个 budget 当周期已用金额。分类预算的 used 含子分类支出。
+ * 取代旧的"循环 fetch transactions + 前端 reduce"路径(N 次 HTTP + 1000 条
+ * limit 隐患)。详见后端 list_budgets_usage。
+ */
+export async function fetchReadBudgetUsage(
+  token: string,
+  ledgerId: string,
+): Promise<ReadBudgetUsage> {
+  return authedGet<ReadBudgetUsage>(
+    `/read/ledgers/${encodeURIComponent(ledgerId)}/budgets/usage`,
+    token,
+  )
+}
+
+/**
+ * 单账本统计 — server 直接返回 transaction_count + attachment_count + budget_count 等。
+ * 用于:删除账本确认弹窗(让用户清楚知道删了什么)、mobile 深度同步差异检测。
+ */
+export type ReadLedgerStats = {
+  transaction_count: number
+  transaction_total: number
+  attachment_count: number
+  attachment_total: number
+  category_attachment_total: number
+  budget_count: number
+  budget_total: number
+  account_count: number
+  account_total: number
+  category_count: number
+  category_total: number
+  tag_count: number
+  tag_total: number
+}
+
+export async function fetchReadLedgerStats(
+  token: string,
+  ledgerId: string,
+): Promise<ReadLedgerStats> {
+  return authedGet<ReadLedgerStats>(
+    `/read/ledgers/${encodeURIComponent(ledgerId)}/stats`,
+    token,
+  )
+}
+
 export async function fetchWorkspaceTransactions(
   token: string,
   options?: {
@@ -101,12 +157,13 @@ export async function fetchWorkspaceTransactions(
   if (options?.tagSyncId) query.set('tag_sync_id', options.tagSyncId)
   if (options?.categorySyncId) query.set('category_sync_id', options.categorySyncId)
   if (options?.accountSyncId) query.set('account_sync_id', options.accountSyncId)
-  if (options?.amountMin !== undefined) query.set('amount_min', String(options.amountMin))
-  if (options?.amountMax !== undefined) query.set('amount_max', String(options.amountMax))
+  if (typeof options?.amountMin === 'number') query.set('amount_min', `${options.amountMin}`)
+  if (typeof options?.amountMax === 'number') query.set('amount_max', `${options.amountMax}`)
   if (options?.dateFrom) query.set('date_from', options.dateFrom)
   if (options?.dateTo) query.set('date_to', options.dateTo)
+  if (typeof options?.limit === 'number') query.set('limit', `${options.limit}`)
+  if (typeof options?.offset === 'number') query.set('offset', `${options.offset}`)
   const suffix = query.toString() ? `?${query.toString()}` : ''
-  console.log('[API_DEBUG] fetchWorkspaceTransactions URL:', `/read/workspace/transactions${suffix}`)
   const response = await authedGet<WorkspaceTransactionPage | WorkspaceTransaction[]>(
     `/read/workspace/transactions${suffix}`,
     token
@@ -177,6 +234,27 @@ export async function fetchWorkspaceTags(
   return authedGet<WorkspaceTag[]>(`/read/workspace/tags${suffix}`, token)
 }
 
+/**
+ * 拉共享账本的 Owner user-global 资源快照(categories/accounts/tags)。
+ *
+ * 用法:Editor 进入共享账本后,前端 lazy 调一次落到独立的
+ * `sharedLedgerResources` state(Map<ledgerId, SharedResourcesBundle>);
+ * picker / tx tile icon lookup / tag color 在共享账本场景下走这套数据,
+ * 不污染用户自己的 user-global state。
+ *
+ * server endpoint: GET /api/v1/ledgers/{ledgerId}/shared-resources
+ * 详见 .docs/shared-ledger/01-product-design.md §7 + 04-server-details.md §3.3
+ */
+export async function fetchSharedResources(
+  token: string,
+  ledgerId: string
+): Promise<SharedResourcesBundle> {
+  return authedGet<SharedResourcesBundle>(
+    `/ledgers/${encodeURIComponent(ledgerId)}/shared-resources`,
+    token
+  )
+}
+
 export async function fetchWorkspaceLedgerCounts(
   token: string,
   options?: { ledgerId?: string; userId?: string }
@@ -186,7 +264,7 @@ export async function fetchWorkspaceLedgerCounts(
   if (options?.userId) query.set('user_id', options.userId)
   const suffix = query.toString() ? `?${query.toString()}` : ''
   return authedGet<WorkspaceLedgerCounts>(
-    `/read/summary/workspace/ledger-counts${suffix}`,
+    `/read/workspace/ledger-counts${suffix}`,
     token
   )
 }
@@ -200,6 +278,7 @@ export async function fetchWorkspaceAnalytics(
     ledgerId?: string
     userId?: string
     tzOffsetMinutes?: number
+    naturalMonth?: boolean
   }
 ): Promise<WorkspaceAnalytics> {
   const query = new URLSearchParams()
@@ -209,8 +288,22 @@ export async function fetchWorkspaceAnalytics(
   if (options?.ledgerId) query.set('ledger_id', options.ledgerId)
   if (options?.userId) query.set('user_id', options.userId)
   if (typeof options?.tzOffsetMinutes === 'number') query.set('tz_offset_minutes', `${options.tzOffsetMinutes}`)
+  if (options?.naturalMonth) query.set('natural_month', 'true')
   const suffix = query.toString() ? `?${query.toString()}` : ''
   return authedGet<WorkspaceAnalytics>(`/read/workspace/analytics${suffix}`, token)
+}
+
+export async function fetchNetWorthHistory(
+  token: string,
+  options?: { scope?: AnalyticsScope; ledgerId?: string; userId?: string; tzOffsetMinutes?: number }
+): Promise<NetWorthHistory> {
+  const query = new URLSearchParams()
+  if (options?.scope) query.set('scope', options.scope)
+  if (options?.ledgerId) query.set('ledger_id', options.ledgerId)
+  if (options?.userId) query.set('user_id', options.userId)
+  if (typeof options?.tzOffsetMinutes === 'number') query.set('tz_offset_minutes', `${options.tzOffsetMinutes}`)
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  return authedGet<NetWorthHistory>(`/read/workspace/net-worth-history${suffix}`, token)
 }
 
 // ============================================================================

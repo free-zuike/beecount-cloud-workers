@@ -5,11 +5,11 @@ import {
   ChevronDown,
   Loader2,
   Moon,
+  MoonStar,
   Palette,
   Pencil,
   Sun,
   Sunrise,
-  Sunset,
   X,
   type LucideIcon,
 } from 'lucide-react'
@@ -42,9 +42,17 @@ import { patchProfileMe, uploadProfileAvatar } from '@beecount/api-client'
 import { useAuth } from '../../context/AuthContext'
 import { localizeError } from '../../i18n/errors'
 import { TwoFactorAuthInline } from './TwoFactorAuthSection'
+import { SettingsExchangeRatesSection } from './SettingsExchangeRatesSection'
 
 const AVATAR_MAX_BYTES = 4 * 1024 * 1024 // 4 MB,跟 server 限制一致
 const DISPLAY_NAME_MAX = 60
+
+// 主币种候选列表 —— 跟 mobile prefs `baseCurrency` 常见取值对齐。当前值不在列表时
+// 会在下方动态补进去,保证旧值也能正常展示 / 选中。
+const PRIMARY_CURRENCY_OPTIONS = [
+  'CNY', 'USD', 'EUR', 'JPY', 'HKD', 'GBP', 'KRW', 'SGD',
+  'AUD', 'CAD', 'TWD', 'THB', 'MYR', 'RUB', 'INR', 'CHF',
+]
 
 /** 按本地时段返回欢迎语 i18n key + 配图 —— 5-11 / 11-13 / 13-18 / 18-23 /
  *  23-5。icon 用 lucide-react,不同时段 vibe 不同。 */
@@ -57,7 +65,7 @@ function pickGreeting(): { key: string; icon: LucideIcon; tone: string } {
   if (h >= 13 && h < 18)
     return { key: 'profile.greeting.afternoon', icon: Sun, tone: 'text-orange-500' }
   if (h >= 18 && h < 23)
-    return { key: 'profile.greeting.evening', icon: Sunset, tone: 'text-rose-500' }
+    return { key: 'profile.greeting.evening', icon: MoonStar, tone: 'text-violet-500' }
   return { key: 'profile.greeting.night', icon: Moon, tone: 'text-indigo-400' }
 }
 
@@ -187,9 +195,10 @@ export function SettingsProfileAppearanceSection() {
   // 单字段传过去会丢掉其它字段)。 :这里需要先合并出"完整的下一个 appearance"
   // 再发 patch,而不是只发改动的那个 key。
   const appearance = profileMe?.appearance ?? {}
-  const headerDecorationStyle = appearance.header_decoration_style ?? 'icons'
+  const headerSkin = appearance.header_skin ?? 'none'
   const compactAmount = appearance.compact_amount ?? false
   const showTransactionTime = appearance.show_transaction_time ?? false
+  const noteDisplayMode = appearance.note_display_mode ?? 'category'
   const [appearanceSaving, setAppearanceSaving] = useState(false)
 
   const saveAppearance = async (
@@ -199,12 +208,9 @@ export function SettingsProfileAppearanceSection() {
     setAppearanceSaving(true)
     try {
       await patchProfileMe(token, {
-        appearance: {
-          header_decoration_style: headerDecorationStyle,
-          compact_amount: compactAmount,
-          show_transaction_time: showTransactionTime,
-          ...patch,
-        },
+        // 整体替换语义:把 server 现有 appearance 全量带上再 patch,否则会清掉
+        // mobile 设的 header_skin 等本页未直接管理的字段。
+        appearance: { ...appearance, ...patch },
       })
       await refreshProfile()
       toast.success(t('profile.sync.appearanceSaved'))
@@ -212,6 +218,30 @@ export function SettingsProfileAppearanceSection() {
       toast.error(localizeError(err, t))
     } finally {
       setAppearanceSaving(false)
+    }
+  }
+
+  // 主币种(本位币)—— 资产折算目标,跟 mobile prefs `baseCurrency` 同步。
+  const primaryCurrency = profileMe?.primary_currency || ''
+  const [primaryCurrencySaving, setPrimaryCurrencySaving] = useState(false)
+  // 候选列表 ∪ 当前值(旧值可能不在内置列表,补进去保证可选中)
+  const currencyOptions = useMemo(() => {
+    const set = [...PRIMARY_CURRENCY_OPTIONS]
+    if (primaryCurrency && !set.includes(primaryCurrency)) set.unshift(primaryCurrency)
+    return set
+  }, [primaryCurrency])
+
+  const handlePrimaryCurrencyChange = async (code: string) => {
+    if (primaryCurrencySaving || code === primaryCurrency) return
+    setPrimaryCurrencySaving(true)
+    try {
+      await patchProfileMe(token, { primary_currency: code })
+      await refreshProfile()
+      toast.success(t('notice.profileUpdated'))
+    } catch (err) {
+      toast.error(localizeError(err, t))
+    } finally {
+      setPrimaryCurrencySaving(false)
     }
   }
 
@@ -260,7 +290,7 @@ export function SettingsProfileAppearanceSection() {
               />
               <div className="min-w-0 flex-1">
                 {/* 欢迎语图标 + 文案 + display name 同一行 —— icon 按时段切
-                    (Sunrise / Sun / Sunset / Moon),配色 amber/orange/rose/indigo;
+                    (Sunrise / Sun / MoonStar / Moon),配色 amber/orange/violet/indigo;
                     名字 hover 出 ✏️,点击进入 inline edit。 */}
                 {nameEditing ? (
                   <div className="flex items-center gap-1.5">
@@ -417,17 +447,16 @@ export function SettingsProfileAppearanceSection() {
           </div>
 
           <div className="grid gap-2 sm:grid-cols-3">
-            {/* 月装饰风格 —— Select 4 选项,跟 mobile 端 headerDecorationStyle
-                provider 注释里列出的可选值对齐(none / icons / particles /
-                honeycomb)。改完整体 PATCH 整个 appearance dict。 */}
+            {/* 皮肤 —— 跟 mobile 端 headerSkin(kHeaderSkins)对齐:none + 渐变 /
+                场景 / 图案皮肤。改完整体 PATCH 整个 appearance dict。 */}
             <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                {t('profile.sync.headerDecoration')}
+                {t('profile.sync.headerSkin')}
               </p>
               <Select
-                value={headerDecorationStyle}
+                value={headerSkin}
                 onValueChange={(value) =>
-                  void saveAppearance({ header_decoration_style: value })
+                  void saveAppearance({ header_skin: value })
                 }
                 disabled={appearanceSaving}
               >
@@ -435,10 +464,20 @@ export function SettingsProfileAppearanceSection() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">{t('profile.sync.headerDecoration.none')}</SelectItem>
-                  <SelectItem value="icons">{t('profile.sync.headerDecoration.icons')}</SelectItem>
-                  <SelectItem value="particles">{t('profile.sync.headerDecoration.particles')}</SelectItem>
-                  <SelectItem value="honeycomb">{t('profile.sync.headerDecoration.honeycomb')}</SelectItem>
+                  <SelectItem value="none">{t('profile.sync.headerSkin.none')}</SelectItem>
+                  <SelectItem value="aurora">{t('profile.sync.headerSkin.aurora')}</SelectItem>
+                  <SelectItem value="mountains">{t('profile.sync.headerSkin.mountains')}</SelectItem>
+                  <SelectItem value="bokeh">{t('profile.sync.headerSkin.bokeh')}</SelectItem>
+                  <SelectItem value="waves">{t('profile.sync.headerSkin.waves')}</SelectItem>
+                  <SelectItem value="sunset">{t('profile.sync.headerSkin.sunset')}</SelectItem>
+                  <SelectItem value="clouds">{t('profile.sync.headerSkin.clouds')}</SelectItem>
+                  <SelectItem value="skyline">{t('profile.sync.headerSkin.skyline')}</SelectItem>
+                  <SelectItem value="honeycomb">{t('profile.sync.headerSkin.honeycomb')}</SelectItem>
+                  <SelectItem value="starry">{t('profile.sync.headerSkin.starry')}</SelectItem>
+                  <SelectItem value="stripes">{t('profile.sync.headerSkin.stripes')}</SelectItem>
+                  <SelectItem value="sakura">{t('profile.sync.headerSkin.sakura')}</SelectItem>
+                  <SelectItem value="meteor">{t('profile.sync.headerSkin.meteor')}</SelectItem>
+                  <SelectItem value="memphis">{t('profile.sync.headerSkin.memphis')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -460,6 +499,27 @@ export function SettingsProfileAppearanceSection() {
                 <SelectContent>
                   <SelectItem value="full">{t('profile.sync.compactAmount.full')}</SelectItem>
                   <SelectItem value="compact">{t('profile.sync.compactAmount.compact')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {/* 备注显示方式:下拉 — category(分类优先) / note(备注优先) */}
+            <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                {t('profile.sync.noteDisplay')}
+              </p>
+              <Select
+                value={noteDisplayMode}
+                onValueChange={(value) =>
+                  void saveAppearance({ note_display_mode: value as 'category' | 'note' })
+                }
+                disabled={appearanceSaving}
+              >
+                <SelectTrigger className="mt-1 h-8 border-0 bg-transparent px-0 text-sm font-medium shadow-none focus:ring-0">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="category">{t('profile.sync.noteDisplay.category')}</SelectItem>
+                  <SelectItem value="note">{t('profile.sync.noteDisplay.note')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -489,8 +549,45 @@ export function SettingsProfileAppearanceSection() {
               </button>
             </div>
           </div>
+
+          {/* 主币种(本位币)—— 资产折算目标,与 mobile prefs baseCurrency 同步。
+              空值时占位显示「未设置」;旧值不在内置列表会被 currencyOptions 补上。 */}
+          <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{t('settings.primaryCurrency')}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t('settings.primaryCurrency.hint')}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {primaryCurrencySaving ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                ) : null}
+                <Select
+                  value={primaryCurrency}
+                  onValueChange={(value) => void handlePrimaryCurrencyChange(value)}
+                  disabled={primaryCurrencySaving}
+                >
+                  <SelectTrigger className="h-8 w-[140px] text-sm">
+                    <SelectValue placeholder={t('settings.primaryCurrency.unset')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {currencyOptions.map((code) => (
+                      <SelectItem key={code} value={code}>
+                        {code} · {t(`currency.${code}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
         </CardContent>
       </Card>
+
+      {/* 汇率管理小节 —— 主币种未设置时内部渲染空态、不发请求 */}
+      <SettingsExchangeRatesSection />
     </div>
   )
 }

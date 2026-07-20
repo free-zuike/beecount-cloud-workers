@@ -6,7 +6,11 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    dependencies:
+      country-flag-icons:
+        specifier: ^1.6.20
+        version: 1.6.20
 
   apps/web:
     dependencies:
@@ -128,6 +132,9 @@ importers:
       '@beecount/ui':
         specifier: workspace:*
         version: link:../ui
+      country-flag-icons:
+        specifier: ^1.5.13
+        version: 1.6.20
       framer-motion:
         specifier: ^12.38.0
         version: 12.38.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -1004,6 +1011,9 @@ packages:
   cookie@1.1.1:
     resolution: {integrity: sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==}
     engines: {node: '>=18'}
+
+  country-flag-icons@1.6.20:
+    resolution: {integrity: sha512-py8JiEKzjhYw6HPJ0L7SxLgCYim36UPRTZX43/kqGueUCZLSvnrqAiwW8HtQibur7mdkFQUkjOgdK+o/9FBtaw==}
 
   cssesc@3.0.0:
     resolution: {integrity: sha512-/Tb/JcjK111nNScGob5MNtsntNM1aCNUDipB/TkwZFhyDrrE47SOx/18wF2bbjgc3ZzCSKW1T5nt5EbFoAz/Vg==}
@@ -2486,6 +2496,8 @@ snapshots:
   commander@4.1.1: {}
 
   cookie@1.1.1: {}
+
+  country-flag-icons@1.6.20: {}
 
   cssesc@3.0.0: {}
 

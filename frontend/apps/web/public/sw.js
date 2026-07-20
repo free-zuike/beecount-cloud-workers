@@ -20,6 +20,9 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_VERSION).then((cache) => cache.addAll(PRECACHE).catch(() => undefined))
   )
+  // 不再默认 skipWaiting —— 改由前端检测到 waiting 后,通过 postMessage 主动
+  // 触发 (UI 上有「检测到新版本」banner)。这样用户在编辑表单时不会被强制
+  // reload 丢数据。开发模式下可以配置直接 skip,生产留给 UI 决定。
 })
 
 self.addEventListener('activate', (event) => {
@@ -50,6 +53,7 @@ self.addEventListener('fetch', (event) => {
 
   // Share Target 接收 (POST /share-receive) —— 把 FormData 拆成多个 Response
   // 存到独立 cache,然后 303 跳到 SPA 路由 /app/share-incoming 由前端继续处理。
+  // 必须用独立 cache (SHARE_CACHE),版本升级时不被 activate 清掉。
   if (
     req.method === 'POST' &&
     url.pathname === '/share-receive' &&
@@ -122,6 +126,8 @@ async function handleShareReceive(request) {
     }
 
     // files:支持多个文件,逐个序列化到 cache (key = /share-target/file-<i>)
+    // X-File-Name / X-File-Type header 携带原始文件名,前端读出来给 ImportPage
+    // 或 AI 提取流。
     const files = formData.getAll('files')
     let fileIndex = 0
     for (const file of files) {
@@ -149,6 +155,8 @@ async function handleShareReceive(request) {
 
     return Response.redirect('/app/share-incoming', 303)
   } catch (err) {
+    // 失败也要给个回退,不然浏览器会停在 about:blank
+    // eslint-disable-next-line no-console
     console.warn('[sw] share-receive failed', err)
     return Response.redirect('/app/transactions?share-error=1', 303)
   }

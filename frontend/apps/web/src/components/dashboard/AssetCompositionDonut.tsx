@@ -1,6 +1,8 @@
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 import type { WorkspaceAccount } from '@beecount/api-client'
-import { Card, CardContent, CardHeader, CardTitle, useT } from '@beecount/ui'
+import { Card, CardContent, CardHeader, CardTitle, useLocale, useT } from '@beecount/ui'
+
+import { formatCompactTick } from '../../i18n/format'
 
 interface Props {
   accounts: WorkspaceAccount[]
@@ -24,6 +26,11 @@ const TYPE_META: Record<string, { color: string; group: 'asset' | 'liability' }>
 
 export function AssetCompositionDonut({ accounts }: Props) {
   const t = useT()
+  const { locale } = useLocale()
+  const chinese = locale.startsWith('zh')
+  // 按类型**带符号**累加(与 assetAggregation 的负债符号口径一致:欠款为负、
+  // 溢缴为正,透支资产为负),饼图分段才对类型合计取 abs 当体量 —— 绝不逐账户
+  // abs,否则同类型内正负互抵的账户会被虚增。
   const totals = new Map<string, number>()
   for (const a of accounts) {
     const key = a.account_type || 'other'
@@ -33,25 +40,37 @@ export function AssetCompositionDonut({ accounts }: Props) {
     const raw = typeof a.balance === 'number' && a.balance !== null
       ? a.balance
       : a.initial_balance ?? 0
-    const amount = Math.abs(raw)
-    totals.set(key, (totals.get(key) || 0) + amount)
+    totals.set(key, (totals.get(key) || 0) + raw)
   }
-  const data = Array.from(totals.entries())
-    .map(([type, value]) => ({
+  const allRows = Array.from(totals.entries())
+    .map(([type, signed]) => ({
       type,
-      value,
+      signed,
+      value: Math.abs(signed),
       label: TYPE_META[type] ? t(`accountType.${type}` as never) : type,
       color: TYPE_META[type]?.color || '#94a3b8',
       group: TYPE_META[type]?.group || 'asset'
     }))
-    .filter((d) => d.value > 0)
+  // 「资产构成」扇区/图例只含资产类:负债(信用卡/贷款)不进饼图,只在中心脚注体现。
+  // 与 App 端 asset_composition_chart 一致(资产构成 = 纯资产,不含负债)。
+  const data = allRows
+    // 只含「正余额」资产:负债(信用卡/贷款)与透支为负的资产都不进扇区/图例。
+    .filter((d) => d.signed > 0 && d.group === 'asset')
     .sort((a, b) => b.value - a.value)
+  // 百分比分母用「展示项之和」而非带符号的 totalAsset —— 否则有透支资产(signed<0)时
+  // totalAsset 被负值压低,会让单项百分比虚高甚至 >100%。
+  const shownAssetTotal = data.reduce((s, d) => s + d.value, 0)
 
-  const totalAsset = data.filter((d) => d.group === 'asset').reduce((s, d) => s + d.value, 0)
-  const totalLiability = data.filter((d) => d.group === 'liability').reduce((s, d) => s + d.value, 0)
+  // 中心数字与 App 口径一致:总资产 = 资产类带符号合计;负债脚注 = |负债类带符号合计|。
+  const totalAsset = allRows.filter((d) => d.group === 'asset').reduce((s, d) => s + d.signed, 0)
+  const totalLiability = Math.abs(
+    allRows.filter((d) => d.group === 'liability').reduce((s, d) => s + d.signed, 0)
+  )
 
   const fmt = (v: number) =>
     v.toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+  // 图例金额用压缩格式(如 128.5万),避免大额撑破固定宽列;精确值在 hover 扇区的 Tooltip。
+  const compact = (v: number) => formatCompactTick(v, { chinese, wanUnit: t('common.unit.10k') })
 
   return (
     <Card className="bc-panel overflow-hidden">
@@ -103,8 +122,8 @@ export function AssetCompositionDonut({ accounts }: Props) {
             </div>
             <ul className="space-y-1.5">
               {data.map((d) => {
-                const total = totalAsset + totalLiability
-                const pct = total > 0 ? (d.value / total) * 100 : 0
+                // 分母用展示项之和(见上方 shownAssetTotal 注释),保证各项百分比合计 = 100%。
+                const pct = shownAssetTotal > 0 ? (d.value / shownAssetTotal) * 100 : 0
                 return (
                   <li key={d.type} className="flex items-center gap-2 text-sm">
                     <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: d.color }} />
@@ -112,7 +131,7 @@ export function AssetCompositionDonut({ accounts }: Props) {
                     <span className="font-mono tabular-nums text-xs text-muted-foreground">
                       {pct.toFixed(1)}%
                     </span>
-                    <span className="w-20 text-right font-mono tabular-nums">{fmt(d.value)}</span>
+                    <span className="w-20 text-right font-mono tabular-nums">{compact(d.value)}</span>
                   </li>
                 )
               })}

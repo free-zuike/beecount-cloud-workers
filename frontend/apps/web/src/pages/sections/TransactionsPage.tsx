@@ -16,6 +16,8 @@ import { useSyncRefresh } from '../../context/SyncSocketContext'
 // SettingsProfileAppearanceSection 现仅被 SettingsProfilePage 使用。
 import { useAuth } from '../../context/AuthContext'
 import { useLedgers } from '../../context/LedgersContext'
+import { useSharedLedgerResources } from '../../context/SharedLedgerResourcesContext'
+import { bundleToReadResources } from '../../lib/shared-ledger-mappers'
 
 import { CheckSquare, Download, SlidersHorizontal } from 'lucide-react'
 
@@ -79,6 +81,8 @@ import {
 } from '@beecount/api-client'
 
 import {
+  resolveCurrencyFields,
+  loadRatesToBase,
   CategoryPickerDialog,
   ConfirmDialog,
   TagPickerDialog,
@@ -93,6 +97,7 @@ import { useAttachmentCache } from '../../context/AttachmentCacheContext'
 import { BatchDeleteDialog } from '../../components/tx-batch/BatchDeleteDialog'
 import { SelectionToolbar } from '../../components/tx-batch/SelectionToolbar'
 import { localizeError } from '../../i18n/errors'
+import { consumePendingShareText } from '../../lib/pwa-intake'
 import { dispatchOpenDetailTx } from '../../lib/txDialogEvents'
 // AppLayout 已搬到 AppShell。
 import type { AppSection } from '../../state/router'
@@ -478,16 +483,63 @@ export function TransactionsPage() {
     const hit = ledgers.find((ledger) => ledger.ledger_id === (txWriteLedgerId || activeLedgerId))
     return (hit?.currency || 'CNY').trim().toUpperCase()
   }, [ledgers, txWriteLedgerId, activeLedgerId])
+  // v30 多币种:币种选择弹窗展示各币种对账本主币种的汇率(弹窗开时拉,5min 缓存)。
+  const [txCurrencyRates, setTxCurrencyRates] = useState<Record<string, number>>({})
+  useEffect(() => {
+    if (!token || !txDialogOpen) return
+    let cancelled = false
+    loadRatesToBase(token, txWriteLedgerCurrency)
+      .then((m) => {
+        if (!cancelled) setTxCurrencyRates(m)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [token, txDialogOpen, txWriteLedgerCurrency])
+  // §7 共享账本:当前编辑/查看的账本若是共享账本(Editor 视角),走独立
+  // SharedLedgerResources state(Owner 的 user-global 资源镜像),否则走
+  // 用户自己的 user-global 字典。逻辑对齐 mobile picker filter。
+  const txContextLedgerId = txWriteLedgerId || activeLedgerId
+  const txContextLedger = useMemo(
+    () => ledgers.find((l) => l.ledger_id === txContextLedgerId) || null,
+    [ledgers, txContextLedgerId],
+  )
+  const txIsSharedEditor = Boolean(
+    txContextLedger?.is_shared && txContextLedger.role !== 'owner',
+  )
+  const { bundle: sharedBundle } = useSharedLedgerResources(
+    txIsSharedEditor ? txContextLedgerId : null,
+  )
+  const sharedAsRead = useMemo(
+    () => bundleToReadResources(sharedBundle),
+    [sharedBundle],
+  )
+
+  // v30 多币种(币种优先联动):账户下拉按表单所选币种过滤(默认=账本本位币,
+  // 与旧行为一致;选了 JPY → 只显示 JPY 账户)。
+  const txFormCurrency = (txForm.currency || txWriteLedgerCurrency).toUpperCase()
   const txWriteAccounts = useMemo(() => {
-    return txDictionaryAccounts.filter((row) => {
+    const source =
+      txIsSharedEditor && sharedBundle ? sharedAsRead.accounts : txDictionaryAccounts
+    return source.filter((row) => {
       const currency = (row.currency || 'CNY').trim().toUpperCase()
-      if (currency !== txWriteLedgerCurrency) return false
+      if (currency !== txFormCurrency) return false
       if (VALUATION_ACCOUNT_TYPES.has(row.account_type || '')) return false
       return true
     })
-  }, [txDictionaryAccounts, txWriteLedgerCurrency, VALUATION_ACCOUNT_TYPES])
-  const txWriteCategories = txDictionaryCategories
-  const txWriteTags = txDictionaryTags
+  }, [
+    txDictionaryAccounts,
+    txFormCurrency,
+    VALUATION_ACCOUNT_TYPES,
+    txIsSharedEditor,
+    sharedBundle,
+    sharedAsRead.accounts,
+  ])
+  const txWriteCategories =
+    txIsSharedEditor && sharedBundle ? sharedAsRead.categories : txDictionaryCategories
+  const txWriteTags =
+    txIsSharedEditor && sharedBundle ? sharedAsRead.tags : txDictionaryTags
   const txFilterAccountOptions = useMemo(
     () =>
       [...new Set(accounts.map((row) => (row.name || '').trim()).filter((value) => value.length > 0))].sort((a, b) =>
@@ -804,6 +856,56 @@ export function TransactionsPage() {
     }
     window.localStorage.setItem(txFilterPersistKey, JSON.stringify(payload))
   }, [route.section, txFilterPersistKey, listQuery, txFilterApplied])
+
+  // PWA shortcut / share target / file handler 触发的 URL action 消费:
+  //   action=quick-add  → 自动弹「新建交易」对话框,且若 pwa-intake 单例里
+  //                       有 share target 投递的文本(标题/正文/URL),按
+  //                       「标题 - 正文 url」拼成 note 预填(≤60 字符截断)
+  //   range=today       → 把日期筛选预设为今天(「今日账单」shortcut)
+  // 消费后一次性 strip URL 参数,避免刷新或下次 effect 重触发。canWriteTx
+  // 还没就绪(ledger 还在加载)时 quick-add 留着不消费,deps 变化时再次跑
+  // 直到 ledger 加载完 —— 这样用户不会因为时序差就丢掉 shortcut intent。
+  useEffect(() => {
+    if (route.section !== 'transactions') return
+    const action = searchParams.get('action')
+    const range = searchParams.get('range')
+    if (!action && !range) return
+
+    const consumed: string[] = []
+
+    if (action === 'quick-add' && canWriteTx) {
+      // 优先消费 share target 投递的文本,拼成 note 预填(≤60 chr 截断,
+      // 避免长 URL 撑爆 textarea)
+      const shareText = consumePendingShareText()
+      if (shareText) {
+        const composed = [shareText.title, shareText.text, shareText.url]
+          .map((s) => (s || '').trim())
+          .filter(Boolean)
+          .join(' ')
+          .slice(0, 60)
+        if (composed) {
+          setTxForm((prev) => ({ ...prev, note: composed }))
+        }
+      }
+      setTxDialogOpen(true)
+      consumed.push('action')
+    }
+
+    if (range === 'today') {
+      const now = new Date()
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+      setTxFilterApplied((prev) => ({ ...prev, dateFrom: todayStr, dateTo: todayStr }))
+      setTxFilterDraft((prev) => ({ ...prev, dateFrom: todayStr, dateTo: todayStr }))
+      consumed.push('range')
+    }
+
+    if (consumed.length === 0) return
+
+    const next = new URLSearchParams(searchParams)
+    consumed.forEach((k) => next.delete(k))
+    next.delete('source')
+    setSearchParams(next, { replace: true })
+  }, [route.section, searchParams, canWriteTx, setSearchParams])
 
   // 列表类 section / admin / 设备 / 健康 页的数据加载。合并了"filter 变化
   // 刷新" + "切账本刷新" 两条触发路径 —— 原来分两个 useEffect 都调同一个
@@ -1329,6 +1431,28 @@ export function TransactionsPage() {
         .map((value) => tagByName.get(value.trim().toLowerCase()))
         .filter((value): value is string => Boolean(value))
 
+      // v30 多币种:共享 helper(手动 override > 自动源;编辑模式币种未变
+      // 返回 null 不发字段 —— 金额变化由 server L14 按隐含汇率联动,避免
+      // 「只改备注被今日汇率重算」的快照漂移;改回本位币显式发 base+amount)。
+      // 拉不到汇率阻断保存(绝不静默 1:1,与 App L8 一致)。transfer 不带。
+      let currencyFields: { currency_code?: string; native_amount?: number } = {}
+      const submitAmount = Number(txForm.amount || 0)
+      if (!isTransfer) {
+        try {
+          const resolved = await resolveCurrencyFields({
+            token,
+            ledgerBase: txWriteLedgerCurrency,
+            currency: txFormCurrency,
+            amount: submitAmount,
+            originalCurrency: txForm.editingId ? txForm.original_currency : undefined
+          })
+          if (resolved) currencyFields = resolved
+        } catch {
+          setErrorNotice(t('transactions.error.rateMissing'))
+          return false
+        }
+      }
+
       const payload = {
         tx_type: txForm.tx_type,
         amount: Number(txForm.amount || 0),
@@ -1346,7 +1470,10 @@ export function TransactionsPage() {
         tags: txForm.tags.length > 0 ? txForm.tags : null,
         tag_ids: txTagIds.length > 0 ? txTagIds : null,
         attachments: txForm.attachments.length > 0 ? txForm.attachments : null,
-        currency_code: txForm.currency_code,
+        // §三 标记按 type 条件落库:转账两者都 false;收入只允许 stats;支出两者都允许。
+        exclude_from_stats: isTransfer ? false : txForm.exclude_from_stats,
+        exclude_from_budget: txForm.tx_type === 'expense' ? txForm.exclude_from_budget : false,
+        ...currencyFields
       }
       // eslint-disable-next-line no-console
       console.info('[tx-save] request', {
@@ -1584,11 +1711,14 @@ export function TransactionsPage() {
     [transactions, selectedTxIds],
   )
   // 已选合计金额:支出 - 收入(转账中性,不计入展示)。
+  // 跨账户合计属账本维度 → 折本位币口径:native_amount ?? amount(多币种账本
+  // 裸加原币会错;单币种 native===amount 结果不变)。
   const selectedTotalAmount = useMemo(() => {
     let sum = 0
     for (const t of selectedTxList) {
-      if (t.tx_type === 'expense') sum -= Number(t.amount) || 0
-      else if (t.tx_type === 'income') sum += Number(t.amount) || 0
+      const amt = Number(t.native_amount ?? t.amount) || 0
+      if (t.tx_type === 'expense') sum -= amt
+      else if (t.tx_type === 'income') sum += amt
     }
     return sum
   }, [selectedTxList])
@@ -1789,6 +1919,9 @@ export function TransactionsPage() {
                 />
               ) : null}
               <TransactionsPanel
+                baseCurrency={txWriteLedgerCurrency}
+                currencyRates={txCurrencyRates}
+                noteDisplayMode={profileMe?.appearance?.note_display_mode ?? 'category'}
                 selectionMode={selectionMode}
                 selectedIds={selectedTxIds}
                 onToggleSelect={handleToggleSelect}
@@ -1810,6 +1943,12 @@ export function TransactionsPage() {
                   setTxPage(1)
                 }}
                 canWrite={Boolean(canWriteTx)}
+                // §7 共享账本:tx 列表当前 ledger 若是共享账本,每行尾巴
+                // 显示"XX 创建 · YY 编辑"chip(server 已注入 created_by_* +
+                // last_edited_by_* 字段)。currentUserId 用来过滤"全是自己"
+                // 的 tx 不显示 chip。
+                showCreator={Boolean(txContextLedger?.is_shared)}
+                currentUserId={profileMe?.user_id || null}
                 dictionariesLoading={txDictionaryLoading}
                 onFormChange={setTxForm}
                 dialogOpen={txDialogOpen}
@@ -1837,7 +1976,6 @@ export function TransactionsPage() {
                     editingOwnerUserId: tx.created_by_user_id || '',
                     tx_type: tx.tx_type,
                     amount: String(tx.amount),
-                    currency_code: tx.currency_code ?? null,
                     happened_at: tx.happened_at,
                     note: tx.note || '',
                     category_name: tx.category_name || '',
@@ -1845,6 +1983,12 @@ export function TransactionsPage() {
                     account_name: tx.account_name || '',
                     from_account_name: tx.from_account_name || '',
                     to_account_name: tx.to_account_name || '',
+                    currency: (tx.currency_code || '').toUpperCase() === txWriteLedgerCurrency
+                      ? ''
+                      : (tx.currency_code || '').toUpperCase(),
+                    original_currency: (tx.currency_code || '').toUpperCase() === txWriteLedgerCurrency
+                      ? ''
+                      : (tx.currency_code || '').toUpperCase(),
                     tags:
                       tx.tags_list && tx.tags_list.length > 0
                         ? tx.tags_list
@@ -1852,7 +1996,9 @@ export function TransactionsPage() {
                             .split(',')
                             .map((value) => value.trim())
                             .filter((value) => value.length > 0),
-                    attachments: normalizeAttachmentRefs(tx.attachments)
+                    attachments: normalizeAttachmentRefs(tx.attachments),
+                    exclude_from_stats: Boolean(tx.exclude_from_stats),
+                    exclude_from_budget: Boolean(tx.exclude_from_budget)
                   })
                 }}
                 onDelete={(row) =>

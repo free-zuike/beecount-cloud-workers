@@ -230,8 +230,7 @@ export function AdminBackupPage() {
       if (res.ok) {
         notifySuccess(t('backup.remote.notice.testOk'))
       } else {
-        const errorMsg = res.error || res.message || t('backup.remote.notice.testFail')
-        notifyError(new Error(errorMsg))
+        notifyError(new Error(res.error || t('backup.remote.notice.testFail')))
       }
       await loadAll()
     } catch (err) {

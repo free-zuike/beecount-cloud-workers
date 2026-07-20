@@ -68,10 +68,8 @@ export function AttachmentCacheProvider({ children }: { children: ReactNode }) {
     (fileId: string) => {
       const normalized = fileId.trim()
       if (!normalized) return
+      if (previewMapRef.current[normalized] !== undefined) return
       if (inflightRef.current.has(normalized)) return
-      const cached = previewMapRef.current[normalized]
-      // 已有有效 blob URL，跳过；空串或 undefined 则继续下载
-      if (cached && cached !== '') return
       inflightRef.current.add(normalized)
       void (async () => {
         try {

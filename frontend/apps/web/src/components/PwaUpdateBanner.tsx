@@ -5,6 +5,20 @@ import { Button, useT } from '@beecount/ui'
 
 import { acceptServiceWorkerUpdate, SW_UPDATE_EVENT } from '../lib/pwa-sw-update'
 
+/**
+ * 检测到 SW 新版本可用时的顶部 banner —— 替代以前 SW skipWaiting 直接静默
+ * reload 的体验。
+ *
+ * 显示规则:
+ *   - 监听 window 上的 SW_UPDATE_EVENT,首次触发显示
+ *   - 用户点「立即更新」→ acceptServiceWorkerUpdate → SW skipWaiting + reload
+ *   - 用户点 X → 本次会话内不再显示(sessionStorage 标记),下次进来若仍有
+ *     waiting 还会再弹,直到用户接受
+ *
+ * 位置:渲染在 AppShell 内部 outlet 上方,fixed 在顶端;Login 页面不显示
+ * (login 没有 token,SW 升级跟登录无关,先让用户看到表单)。
+ */
+
 const DISMISS_KEY = 'beecount.pwa.update-dismissed'
 
 export function PwaUpdateBanner() {
@@ -32,6 +46,8 @@ export function PwaUpdateBanner() {
           className="h-7 px-3"
           onClick={() => {
             acceptServiceWorkerUpdate()
+            // 这里不直接 setVisible(false) —— SW 会触发 controllerchange,
+            // pwa-sw-update.ts 自动 location.reload(),整个页面会换新版
           }}
         >
           {t('pwa.update.apply')}

@@ -157,7 +157,9 @@ export function TagsPage() {
           }
           setPendingDelete({ id: row.id, name: row.name })
         }}
-        onClickTag={(row) => dispatchOpenDetailTag(row as WorkspaceTag)}
+        onClickTag={(row) =>
+          dispatchOpenDetailTag(row as WorkspaceTag, { defaultScope: 'all' })
+        }
       />
       {/* TagDetailDialog 已迁到 GlobalEntityDialogs */}
       <ConfirmDialog

@@ -117,7 +117,7 @@ export async function login(email: string, password: string): Promise<LoginRespo
       platform: 'web',
       app_version: info.app_version,
       os_version: info.os_version,
-      device_model: info.device_model,
+      device_model: info.device_model
     })
   })
   if (!res.ok) {

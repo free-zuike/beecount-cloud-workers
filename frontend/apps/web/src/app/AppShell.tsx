@@ -13,18 +13,20 @@ import {
 import { usePrimaryColor } from '@beecount/ui'
 import type { AppSection } from '@beecount/web-features'
 
-import { PwaUpdateBanner } from '../components/PwaUpdateBanner'
-
 import { AboutDialog } from '../components/AboutDialog'
+import { PwaInstallBanner } from '../components/PwaInstallBanner'
+import { PwaUpdateBanner } from '../components/PwaUpdateBanner'
 import { GlobalAskDialog } from '../components/cmdk-ai/GlobalAskDialog'
 import { GlobalParseTxDialog } from '../components/cmdk-ai/GlobalParseTxDialog'
 import { GlobalEditDialogs } from '../components/GlobalEditDialogs'
+import { GlobalSharedLedgerDialogs } from '../components/GlobalSharedLedgerDialogs'
 import { GlobalEntityDialogs } from '../components/GlobalEntityDialogs'
 import { LogsDialog } from '../components/LogsDialog'
 import { MobileBottomNav } from '../components/MobileBottomNav'
 import { AttachmentCacheProvider, useAttachmentCache } from '../context/AttachmentCacheContext'
 import { AuthProvider } from '../context/AuthContext'
 import { LedgersProvider } from '../context/LedgersContext'
+import { SharedLedgerResourcesProvider } from '../context/SharedLedgerResourcesContext'
 import { PageDataCacheProvider } from '../context/PageDataCacheContext'
 import { SyncSocketProvider, useSyncEvent } from '../context/SyncSocketContext'
 import { AppLayout } from '../layout/AppLayout'
@@ -203,6 +205,7 @@ export function AppShell({ token, onLogout }: Props) {
         <SyncSocketProvider>
         <PageDataCacheProvider>
         <AttachmentCacheProvider>
+        <SharedLedgerResourcesProvider>
         <CategoryIconPrefetcher token={token} />
         <AppShellSyncReactor
           refreshLedgers={refreshLedgers}
@@ -228,10 +231,13 @@ export function AppShell({ token, onLogout }: Props) {
           <LogsDialog token={token} open={logsOpen} onOpenChange={setLogsOpen} />
           <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
           <PwaUpdateBanner />
+          <PwaInstallBanner />
           <GlobalEntityDialogs />
           <GlobalEditDialogs />
           <GlobalAskDialog />
           <GlobalParseTxDialog />
+          <GlobalSharedLedgerDialogs />
+        </SharedLedgerResourcesProvider>
         </AttachmentCacheProvider>
         </PageDataCacheProvider>
         </SyncSocketProvider>
@@ -319,6 +325,13 @@ function AppShellSyncReactor({
     void refreshLedgers()
   })
   useSyncEvent('sync_change_batch', () => {
+    void refreshLedgers()
+  })
+  // §7 共享账本:member_change(joined/role_changed/removed)可能改动用户的
+  // 可见 ledger 集合(被加入新共享账本 / 被踢)。刷一次列表让 sidebar 立即
+  // 反映。SharedLedgerResources cache 单独由 SharedLedgerResourcesProvider
+  // 监听同一事件做 per-ledger invalidate。
+  useSyncEvent('member_change', () => {
     void refreshLedgers()
   })
 
