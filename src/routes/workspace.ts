@@ -1080,9 +1080,11 @@ workspaceRouter.post('/ledgers/:id/invites', zValidator('json', InviteSchema), a
 
   return c.json({
     code: inviteCode,
+    formatted_code: inviteCode,
     expires_at: expiresAt,
+    created_at: nowUtc(),
     target_role: req.target_role,
-    share_link: `/invite/${inviteCode}`,
+    share_url: `/invite/${inviteCode}`,
   });
 });
 
@@ -1130,11 +1132,12 @@ workspaceRouter.get('/ledgers/:id/invites', async (c) => {
   const result = invites.results.map((inv) => ({
       id: inv.id,
       code: inv.code,
+      formatted_code: inv.code,
       target_role: inv.target_role,
-      invited_by: inv.invited_by,
+      invited_by_user_id: inv.invited_by,
       expires_at: inv.expires_at,
       created_at: inv.created_at,
-      share_link: `/invite/${inv.code}`,
+      share_url: `/invite/${inv.code}`,
     }));
 
   return c.json(result);
