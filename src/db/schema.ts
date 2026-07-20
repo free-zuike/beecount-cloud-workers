@@ -212,6 +212,22 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_members_user_id ON ledger_members(user_id)').run();
 
     await db.prepare(`
+      CREATE TABLE IF NOT EXISTS ledger_invites (
+        id TEXT PRIMARY KEY,
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        code TEXT UNIQUE NOT NULL,
+        target_role TEXT DEFAULT 'editor' NOT NULL,
+        invited_by TEXT NOT NULL REFERENCES users(id),
+        expires_at TEXT NOT NULL,
+        used_at TEXT,
+        used_by TEXT REFERENCES users(id),
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
+
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_invites_code ON ledger_invites(code)').run();
+
+    await db.prepare(`
       CREATE TABLE IF NOT EXISTS sync_changes (
         change_id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
