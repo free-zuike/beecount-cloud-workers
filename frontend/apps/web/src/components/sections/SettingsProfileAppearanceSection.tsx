@@ -196,6 +196,13 @@ export function SettingsProfileAppearanceSection() {
   // 再发 patch,而不是只发改动的那个 key。
   const appearance = profileMe?.appearance ?? {}
   const headerSkin = appearance.header_skin ?? 'none'
+  // web 端已知的皮肤枚举（含 mobile 同名值）
+  const KNOWN_SKINS = [
+    'none', 'aurora', 'mountains', 'bokeh', 'waves', 'sunset', 'clouds',
+    'skyline', 'honeycomb', 'starry', 'stripes', 'sakura', 'meteor', 'memphis',
+    // mobile 端 header_decoration_style 的值
+    'icons',
+  ]
   const compactAmount = appearance.compact_amount ?? false
   const showTransactionTime = appearance.show_transaction_time ?? false
   const noteDisplayMode = appearance.note_display_mode ?? 'category'
@@ -478,6 +485,10 @@ export function SettingsProfileAppearanceSection() {
                   <SelectItem value="sakura">{t('profile.sync.headerSkin.sakura')}</SelectItem>
                   <SelectItem value="meteor">{t('profile.sync.headerSkin.meteor')}</SelectItem>
                   <SelectItem value="memphis">{t('profile.sync.headerSkin.memphis')}</SelectItem>
+                  <SelectItem value="icons">{t('profile.sync.headerSkin.icons')}</SelectItem>
+                  {!KNOWN_SKINS.includes(headerSkin) && (
+                    <SelectItem value={headerSkin}>{headerSkin}</SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             </div>

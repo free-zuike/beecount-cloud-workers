@@ -926,6 +926,7 @@ const en = {
   'profile.sync.headerSkin.sakura': 'Sakura',
   'profile.sync.headerSkin.meteor': 'Meteor',
   'profile.sync.headerSkin.memphis': 'Memphis',
+  'profile.sync.headerSkin.icons': 'Icons',
   'profile.sync.compactAmount': 'Balance display',
   'profile.sync.compactAmount.full': 'Full amount',
   'profile.sync.compactAmount.compact': 'Compact',

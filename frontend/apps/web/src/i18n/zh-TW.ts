@@ -927,6 +927,7 @@ const zhTW = {
   'profile.sync.headerSkin.sakura': '櫻花',
   'profile.sync.headerSkin.meteor': '流星',
   'profile.sync.headerSkin.memphis': '孟菲斯',
+  'profile.sync.headerSkin.icons': '圖標',
   'profile.sync.compactAmount': '餘額顯示格式',
   'profile.sync.compactAmount.full': '完整金額',
   'profile.sync.compactAmount.compact': '簡潔顯示',

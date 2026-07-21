@@ -499,6 +499,7 @@ const zhCN = {
   'profile.sync.headerSkin.sakura': '樱花',
   'profile.sync.headerSkin.meteor': '流星',
   'profile.sync.headerSkin.memphis': '孟菲斯',
+  'profile.sync.headerSkin.icons': '图标',
   'profile.sync.compactAmount': '余额显示格式',
   'profile.sync.compactAmount.full': '完整金额',
   'profile.sync.compactAmount.compact': '简洁显示',
