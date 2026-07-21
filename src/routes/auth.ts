@@ -298,10 +298,8 @@ authRouter.post('/login', zValidator('json', z.object({
   const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
   const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web');
 
-  // 清理已撤销和过期的旧 token
-  await db.prepare(
-    "DELETE FROM refresh_tokens WHERE user_id = ? AND (revoked_at IS NOT NULL OR expires_at < datetime('now'))"
-  ).bind(user.id).run();
+  // 不在 login 时清理旧 token — 与原版 Python 对齐：原版不做 token 清理
+  // 旧 token 自然过期（30天），避免轮转期间 token 丢失
 
   // 返回符合蜜蜂记账 APP 期望的格式
   return c.json({
@@ -344,15 +342,22 @@ authRouter.post('/refresh', zValidator('json', z.object({
       return c.json({ error: 'Account disabled' }, 403);
     }
 
-    // 与原版对齐：检查设备是否已被撤销
+    // 与原版对齐：检查设备状态 + 更新 last_seen_at
+    const clientIp = c.req.header('CF-Connecting-IP') || 'unknown';
     if (deviceId) {
-      const revokedDevice = await db
-        .prepare('SELECT id FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NOT NULL')
+      const device = await db
+        .prepare('SELECT id, revoked_at FROM devices WHERE id = ? AND user_id = ?')
         .bind(deviceId, userId)
-        .first();
-      if (revokedDevice) {
-        return c.json({ error: 'Device revoked' }, 401);
+        .first<{ id: string; revoked_at: string | null }>();
+      if (device) {
+        if (device.revoked_at) {
+          return c.json({ error: 'Device revoked' }, 401);
+        }
+        // 与原版对齐：refresh 时更新 device.last_seen_at 和 last_ip
+        await db.prepare('UPDATE devices SET last_seen_at = ?, last_ip = ? WHERE id = ?')
+          .bind(nowUtc(), clientIp, deviceId).run();
       }
+      // 设备不存在时不报错（与原版对齐：原版对 None 设备会创建，但我们不在此处 upsert 以避免冲突）
     }
 
     const isApp = clientType !== 'web';
@@ -363,10 +368,8 @@ authRouter.post('/refresh', zValidator('json', z.object({
 
     await revokeRefreshToken(refreshToken, db);
 
-    // 清理已撤销和过期的旧 token（防止无限堆积）
-    await db.prepare(
-      "DELETE FROM refresh_tokens WHERE user_id = ? AND (revoked_at IS NOT NULL OR expires_at < datetime('now'))"
-    ).bind(userId).run();
+    // 不在 refresh 时清理旧 token — 与原版 Python 对齐：原版仅在 login 时清理
+    // 过早清理可能导致客户端尚未保存新 token 时旧 token 被删除
 
     return c.json({
       requires_2fa: false,
@@ -383,10 +386,25 @@ authRouter.post('/refresh', zValidator('json', z.object({
   }
 });
 
-// Get current user (Web UI 使用)
+// Get current user (Web UI 使用) — 直接验证 token，因为 authMiddleware 跳过 auth 路由
 authRouter.get('/me', async (c) => {
   const db = c.env.DB;
-  const userId = c.get('userId');
+  const jwtSecret = c.env.JWT_SECRET;
+
+  // 从 Authorization header 获取 userId
+  let userId = c.get('userId');
+  if (!userId) {
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    const token = authHeader.slice(7);
+    const result = await validateAccessToken(token, jwtSecret);
+    if (!result || !('userId' in result)) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    userId = result.userId;
+  }
   
   const user = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string, email: string }>();
   
