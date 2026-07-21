@@ -337,6 +337,10 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   const { code, method, device_id, device_name, platform, client_type: clientType } = body;
   const serverNow = nowUtc();
 
+  if (!challenge_token) {
+    return c.json({ error: 'Missing challenge token.' }, 400);
+  }
+
   // 验证 challenge_token 签名（防止伪造）
   const challengeResult = await validateAccessToken(challenge_token, jwtSecret);
   if (!challengeResult || !('userId' in challengeResult)) {

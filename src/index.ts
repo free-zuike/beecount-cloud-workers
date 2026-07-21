@@ -58,7 +58,8 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 app.use('*', async (c, next) => {
   const corsOrigins = c.env.CORS_ORIGINS ? c.env.CORS_ORIGINS.split(',') : [];
-  return cors({ origin: corsOrigins.length > 0 ? corsOrigins : c.req.header('origin') || false })(c, next);
+  const origin = corsOrigins.length > 0 ? corsOrigins : (c.req.header('origin') || undefined);
+  return cors({ origin })(c, next);
 });
 
 let initialized = false;

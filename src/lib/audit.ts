@@ -3,7 +3,8 @@ export type AuditAction =
   | 'sync_push' | 'backup' | 'restore' | 'clear_data'
   | 'batch_create' | 'batch_delete'
   | 'init_defaults' | 'invite' | 'join' | 'remove_member' | 'update_meta'
-  | 'revoke_invite' | 'preview_invite' | 'transfer_owner';
+  | 'revoke_invite' | 'preview_invite' | 'transfer_owner'
+  | 'backup_remote_reveal';
 
 interface AuditLogParams {
   db: D1Database;
