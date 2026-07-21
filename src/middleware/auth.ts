@@ -18,6 +18,7 @@ export const authMiddleware = async (c: any, next: Next) => {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) {
+      console.log(`[AUTH-MW] Invalid token format: parts=${parts.length}`);
       return c.json({ error: 'Unauthorized' }, 401);
     }
   } catch {
@@ -30,9 +31,11 @@ export const authMiddleware = async (c: any, next: Next) => {
 
   const validationResult = await validateAccessToken(token, c.env.JWT_SECRET);
   if (!validationResult) {
+    console.log(`[AUTH-MW] Token rejected for ${path}: validation failed`);
     return c.json({ error: 'Unauthorized' }, 401);
   }
   if ('expired' in validationResult && validationResult.expired) {
+    console.log(`[AUTH-MW] Token expired for ${path}`);
     return c.json({ error: 'Token expired' }, 401);
   }
   if (!('userId' in validationResult)) {

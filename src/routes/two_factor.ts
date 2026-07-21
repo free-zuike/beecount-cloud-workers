@@ -324,6 +324,7 @@ twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (
 
 twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c) => {
   const clientIp = c.req.header('CF-Connecting-IP') || 'unknown';
+  console.log(`[2FA-VERIFY] called from ${clientIp}`);
   if (isRateLimited('2fa-verify', clientIp, 60, 5)) {
     return c.json({ error: 'Too many requests. Try again later.' }, 429);
   }

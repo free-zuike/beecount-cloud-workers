@@ -327,13 +327,19 @@ authRouter.post('/refresh', zValidator('json', z.object({
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
 
+  // 调试日志：追踪 refresh 请求
+  const tokenPrefix = refreshToken.substring(0, 8);
+  console.log(`[REFRESH] token=${tokenPrefix}...`);
+
   try {
     const decoded = await decodeRefreshToken(refreshToken, db);
     if (!decoded.valid) {
+      console.log(`[REFRESH] FAILED: ${decoded.reason}`);
       return c.json({ error: decoded.reason }, 401);
     }
 
     const { userId, deviceId, clientType } = decoded;
+    console.log(`[REFRESH] OK: user=${userId} device=${deviceId} client=${clientType}`);
 
     // 与原版对齐：检查用户是否被禁用
     const user = await db.prepare('SELECT id, email, is_admin, is_enabled FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string; is_admin: number; is_enabled: number }>();
@@ -379,7 +385,7 @@ authRouter.post('/refresh', zValidator('json', z.object({
       access_token: accessToken,
       refresh_token: newRefreshToken.token,
       expires_in: 3600,
-      device_id: deviceId,
+      device_id: deviceId || 'unknown',
       scopes: tokenScopes,
     });
   } catch (error) {
