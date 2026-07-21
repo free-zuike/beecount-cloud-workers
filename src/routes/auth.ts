@@ -298,8 +298,10 @@ authRouter.post('/login', zValidator('json', z.object({
   const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
   const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web');
 
-  // 不在 login 时清理旧 token — 与原版 Python 对齐：原版不做 token 清理
-  // 旧 token 自然过期（30天），避免轮转期间 token 丢失
+  // 清理该设备的旧 token（过期 + 已撤销），防止 token 无限堆积
+  await db.prepare(
+    "DELETE FROM refresh_tokens WHERE user_id = ? AND device_id = ? AND (revoked_at IS NOT NULL OR expires_at < datetime('now'))"
+  ).bind(user.id, resolvedDeviceId).run();
 
   // 返回符合蜜蜂记账 APP 期望的格式
   return c.json({

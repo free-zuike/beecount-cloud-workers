@@ -168,20 +168,36 @@ export async function decodeRefreshToken(
   try {
     const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
     const now = new Date().toISOString();
-    
-    const result = await db.prepare(`
+    const gracePeriodMs = 60 * 1000; // 60秒宽限期：最近被撤销的 token 仍可使用
+    const graceCutoff = new Date(Date.now() - gracePeriodMs).toISOString();
+
+    // 优先查找未撤销的 token
+    let result = await db.prepare(`
       SELECT user_id, device_id, expires_at, client_type
-      FROM refresh_tokens 
+      FROM refresh_tokens
       WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?
     `).bind(tokenHash, now).first<{ user_id: string; device_id: string; expires_at: string; client_type: string | null }>();
-    
+
+    // 宽限期兜底：如果 token 刚被撤销（60秒内）且未过期，仍然接受
+    // 防止客户端旋转 token 后网络异常导致旧 token 被撤销但新 token 未保存
+    if (!result) {
+      const graceResult = await db.prepare(`
+        SELECT user_id, device_id, expires_at, client_type
+        FROM refresh_tokens
+        WHERE token_hash = ? AND revoked_at IS NOT NULL AND revoked_at > ? AND expires_at > ?
+      `).bind(tokenHash, graceCutoff, now).first<{ user_id: string; device_id: string; expires_at: string; client_type: string | null }>();
+      if (graceResult) {
+        result = graceResult;
+      }
+    }
+
     if (!result) {
       return { valid: false, reason: 'Refresh token expired or not found' };
     }
-    
-    return { 
-      valid: true, 
-      userId: result.user_id, 
+
+    return {
+      valid: true,
+      userId: result.user_id,
       deviceId: result.device_id,
       clientType: result.client_type || 'app'
     };

@@ -448,6 +448,11 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   // 创建 DB-backed refresh token
   const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web');
 
+  // 清理该设备的旧 token（过期 + 已撤销），防止无限堆积
+  await db.prepare(
+    "DELETE FROM refresh_tokens WHERE user_id = ? AND device_id = ? AND (revoked_at IS NOT NULL OR expires_at < datetime('now'))"
+  ).bind(user.id, resolvedDeviceId).run();
+
   return c.json({
     requires_2fa: false,
     user: { id: user.id, email: user.email, is_admin: Boolean((user as any).is_admin) },
