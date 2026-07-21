@@ -57,9 +57,8 @@ type Variables = {
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 app.use('*', async (c, next) => {
-  const corsOrigins = c.env.CORS_ORIGINS ? c.env.CORS_ORIGINS.split(',') : [];
-  const origin = corsOrigins.length > 0 ? corsOrigins : (c.req.header('origin') || undefined);
-  return cors({ origin })(c, next);
+  const corsOrigins = c.env.CORS_ORIGINS ? c.env.CORS_ORIGINS.split(',') : ['*'];
+  return cors({ origin: corsOrigins })(c, next);
 });
 
 let initialized = false;
