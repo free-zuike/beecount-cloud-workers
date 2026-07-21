@@ -252,9 +252,11 @@ twoFactorRouter.post('/setup', async (c) => {
 
   const secret = generateTotpSecret();
 
+  // 与原版对齐：加密存储 TOTP secret
+  const encryptedSecret = await encryptTotpSecret(secret, jwtSecret);
   await db
     .prepare('UPDATE users SET totp_secret_encrypted = ?, totp_enabled = 0, totp_enabled_at = NULL WHERE id = ?')
-    .bind(secret, userId)
+    .bind(encryptedSecret, userId)
     .run();
 
   const qrUri = buildOtpauthUri(secret, user.email);
@@ -400,27 +402,46 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
     return c.json({ error: 'Invalid 2FA code.' }, 401);
   }
 
-  // 创建/更新设备
+  // 生成真正的签名 JWT access token（设备 upsert 前需要，冲突时提前返回）
+  const isApp = clientType !== 'web';
+  const tokenScopes = isApp ? ['app:write'] : ['web:read', 'web:write', 'ops:write'];
+  const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
+
+  // 创建/更新设备 — 与原版 _upsert_device 对齐：处理跨用户 device_id 冲突
   const resolvedDeviceId = device_id || randomUUID();
   const existingDevice = await db
-    .prepare('SELECT id FROM devices WHERE id = ? AND user_id = ?')
-    .bind(resolvedDeviceId, user.id)
-    .first();
+    .prepare('SELECT id, user_id FROM devices WHERE id = ?')
+    .bind(resolvedDeviceId)
+    .first<{ id: string; user_id: string }>();
 
-  if (!existingDevice) {
+  if (existingDevice) {
+    if (existingDevice.user_id !== user.id) {
+      // 跨用户冲突：生成新 device_id 避免覆盖
+      const newDeviceId = randomUUID();
+      await db
+        .prepare('INSERT INTO devices (id, user_id, name, platform, last_ip, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(newDeviceId, user.id, device_name || 'Unknown Device', platform || 'unknown', c.req.header('CF-Connecting-IP'), serverNow)
+        .run();
+      const newRefreshToken = await createRefreshToken(user.id, newDeviceId, db, isApp ? 'app' : 'web');
+      return c.json({
+        requires_2fa: false,
+        user: { id: user.id, email: user.email, is_admin: Boolean((user as any).is_admin) },
+        access_token: accessToken,
+        refresh_token: newRefreshToken.token,
+        expires_in: 3600,
+        device_id: newDeviceId,
+        scopes: tokenScopes,
+      });
+    }
+    // 同一用户：更新设备信息
+    await db.prepare('UPDATE devices SET last_seen_at = ?, name = COALESCE(?, name), platform = COALESCE(?, platform) WHERE id = ?')
+      .bind(serverNow, device_name, platform, resolvedDeviceId).run();
+  } else {
     await db
       .prepare('INSERT INTO devices (id, user_id, name, platform, last_ip, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)')
       .bind(resolvedDeviceId, user.id, device_name || 'Unknown Device', platform || 'unknown', c.req.header('CF-Connecting-IP'), serverNow)
       .run();
-  } else {
-    await db.prepare('UPDATE devices SET last_seen_at = ?, name = COALESCE(?, name), platform = COALESCE(?, platform) WHERE id = ?')
-      .bind(serverNow, device_name, platform, resolvedDeviceId).run();
   }
-
-  // 生成真正的签名 JWT access token
-  const isApp = clientType !== 'web';
-  const tokenScopes = isApp ? ['app:write'] : ['web:read', 'web:write', 'ops:write'];
-  const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
 
   // 创建 DB-backed refresh token
   const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web');

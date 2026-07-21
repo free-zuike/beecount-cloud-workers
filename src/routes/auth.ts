@@ -334,6 +334,27 @@ authRouter.post('/refresh', zValidator('json', z.object({
     }
 
     const { userId, deviceId, clientType } = decoded;
+
+    // 与原版对齐：检查用户是否被禁用
+    const user = await db.prepare('SELECT id, email, is_admin, is_enabled FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string; is_admin: number; is_enabled: number }>();
+    if (!user) {
+      return c.json({ error: 'User not found' }, 401);
+    }
+    if (!user.is_enabled) {
+      return c.json({ error: 'Account disabled' }, 403);
+    }
+
+    // 与原版对齐：检查设备是否已被撤销
+    if (deviceId) {
+      const revokedDevice = await db
+        .prepare('SELECT id FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NOT NULL')
+        .bind(deviceId, userId)
+        .first();
+      if (revokedDevice) {
+        return c.json({ error: 'Device revoked' }, 401);
+      }
+    }
+
     const isApp = clientType !== 'web';
     const tokenScopes = isApp ? ['app:write'] : ['web:read', 'web:write', 'ops:write'];
 
@@ -347,11 +368,9 @@ authRouter.post('/refresh', zValidator('json', z.object({
       "DELETE FROM refresh_tokens WHERE user_id = ? AND (revoked_at IS NOT NULL OR expires_at < datetime('now'))"
     ).bind(userId).run();
 
-    const user = await db.prepare('SELECT id, email, is_admin FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string; is_admin: number }>();
-
     return c.json({
       requires_2fa: false,
-      user: { id: userId, email: user?.email || null, is_admin: Boolean(user?.is_admin) },
+      user: { id: userId, email: user.email || null, is_admin: Boolean(user.is_admin) },
       access_token: accessToken,
       refresh_token: newRefreshToken.token,
       expires_in: 3600,
