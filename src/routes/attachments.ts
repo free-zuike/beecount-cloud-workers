@@ -302,6 +302,16 @@ const handleUpload = async (c: any) => {
             return c.json({ error: `File too large (max ${MAX_UPLOAD_BYTES / 1024 / 1024}MB)` }, 413);
         }
 
+        // MIME 类型白名单检查
+        const ALLOWED_MIME_TYPES = new Set([
+            'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+            'application/pdf', 'text/csv', 'application/json', 'text/plain',
+        ]);
+        const fileMimeType = (file.type || '').toLowerCase();
+        if (fileMimeType && !ALLOWED_MIME_TYPES.has(fileMimeType)) {
+            return c.json({ error: `File type not allowed: ${fileMimeType}` }, 415);
+        }
+
         if (!ledgerExternalId) {
             return c.json({ error: 'ledger_id is required' }, 400);
         }
@@ -503,6 +513,13 @@ attachmentsRouter.get('/:id', async (c) => {
     const db = c.env.DB;
     const fileId = c.req.param('id');
 
+    // 速率限制
+    const { isRateLimited } = await import('../lib/rate-limit');
+    const clientIp = c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
+    if (isRateLimited('attachment-download', clientIp, 60, 60)) {
+        return c.json({ error: 'Rate limit exceeded' }, 429);
+    }
+
     const s3 = new S3Service(db, c.env);
 
     const row = await db
@@ -511,9 +528,10 @@ attachmentsRouter.get('/:id', async (c) => {
                     a.ledger_id, l.external_id as ledger_external_id
              FROM attachment_files a
              LEFT JOIN ledgers l ON a.ledger_id = l.id
-             WHERE a.id = ? AND (a.user_id = ? OR (l.user_id = ?))`
+             LEFT JOIN ledger_members lm ON l.id = lm.ledger_id
+             WHERE a.id = ? AND (a.user_id = ? OR l.user_id = ? OR lm.user_id = ?)`
         )
-        .bind(fileId, userId, userId)
+        .bind(fileId, userId, userId, userId)
         .first<{
             id: string;
             sha256: string;

@@ -3,6 +3,9 @@
  * 
  * 使用滑动窗口算法：在指定时间窗口内，每个 (action + IP) 组合限制最大请求数。
  * 仅在内存中存储，Worker 重启后重置（与原版行为一致）。
+ *
+ * ⚠️ 已知限制：内存 Map 在多 Worker 实例间不共享，限流仅在单实例内有效。
+ * 生产环境应配置 wrangler.toml 中 single_worker: true 或使用 D1/KV 做分布式限流。
  */
 
 type RateBucket = { timestamps: number[] };

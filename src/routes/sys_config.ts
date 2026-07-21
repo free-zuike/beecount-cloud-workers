@@ -11,7 +11,28 @@ type Bindings = {
     S3_CDN_DOMAIN?: string;
 };
 
-const sysConfig = new Hono<{ Bindings: Bindings }>();
+type Variables = {
+    userId: string;
+};
+
+const sysConfig = new Hono<{ Bindings: Bindings; Variables: Variables }>();
+
+// Admin-only middleware: all sys-config endpoints require admin
+sysConfig.use('/*', async (c, next) => {
+    const userId = c.get('userId');
+    const db = c.env.DB;
+
+    const user = await db
+        .prepare('SELECT is_admin FROM users WHERE id = ?')
+        .bind(userId)
+        .first<{ is_admin: number }>();
+
+    if (!user || !user.is_admin) {
+        return c.json({ error: 'Admin required' }, 403);
+    }
+
+    await next();
+});
 
 // ===================== S3 配置管理端点 =====================
 

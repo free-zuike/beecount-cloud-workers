@@ -10,16 +10,20 @@ const setupRouter = new Hono<{ Bindings: Bindings }>();
 
 setupRouter.post('/', async (c) => {
   const db = c.env.DB;
-  
+
   try {
+    const existing = await db
+      .prepare('SELECT setup_completed FROM system_settings WHERE id = ?')
+      .bind('default')
+      .first<{ setup_completed: number }>();
+
+    if (existing?.setup_completed === 1) {
+      return c.json({ error: 'Setup already completed' }, 403);
+    }
+
     const body = await c.req.json();
     const { timezone_offset, cloud_config, admin_mode, admin_email, admin_password } = body;
-    
-    const existing = await db
-      .prepare('SELECT id FROM system_settings WHERE id = ?')
-      .bind('default')
-      .first();
-    
+
     const serverNow = new Date().toISOString();
     
     const cloudConfigJson = cloud_config ? JSON.stringify(cloud_config) : null;
@@ -103,8 +107,7 @@ setupRouter.post('/', async (c) => {
     console.error('[Setup] Error saving settings:', error);
     return c.json({
       success: false,
-      error: '保存设置失败',
-      details: error instanceof Error ? error.message : String(error)
+      error: '保存设置失败'
     }, 500);
   }
 });

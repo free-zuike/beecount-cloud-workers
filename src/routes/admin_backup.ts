@@ -33,6 +33,7 @@ import { randomUUID } from 'crypto';
 import { getFirstEnabledS3Config } from './sys_config';
 import { signS3Request } from '../lib/s3';
 import { performBackup, calculateNextRun } from '../services/backup-executor';
+import { insertAuditLog } from '../lib/audit';
 
 // ===========================
 // WebDAV 连通性测试
@@ -703,6 +704,12 @@ backupRouter.get('/remotes/:id/reveal', async (c) => {
   if (!remote) {
     return c.json({ error: 'Remote not found' }, 404);
   }
+
+  const userId = c.get('userId');
+  await insertAuditLog({
+    db, userId, action: 'backup_remote_reveal', entityType: 'backup_remote',
+    details: { remote_id: remoteId, remote_name: remote.name, backend_type: remote.backend_type },
+  });
 
   return c.json({
     id: String(remote.id),

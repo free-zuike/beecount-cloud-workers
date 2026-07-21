@@ -57,8 +57,8 @@ type Variables = {
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 app.use('*', async (c, next) => {
-  const corsOrigins = c.env.CORS_ORIGINS ? c.env.CORS_ORIGINS.split(',') : ['*'];
-  return cors({ origin: corsOrigins })(c, next);
+  const corsOrigins = c.env.CORS_ORIGINS ? c.env.CORS_ORIGINS.split(',') : [];
+  return cors({ origin: corsOrigins.length > 0 ? corsOrigins : c.req.header('origin') || false })(c, next);
 });
 
 let initialized = false;
@@ -84,6 +84,14 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
   const userId = c.req.param('userId');
   const db = c.env.DB;
   const r2 = c.env.R2;
+
+  // 速率限制
+  const { isRateLimited } = await import('./lib/rate-limit');
+  const clientIp = c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
+  if (isRateLimited('avatar-download', clientIp, 60, 60)) {
+    return c.json({ error: 'Rate limit exceeded' }, 429);
+  }
+
   if (!r2) return c.json({ error: 'Storage not configured' }, 500);
 
   const profile = await db.prepare('SELECT avatar_file_id, avatar_version FROM user_profiles WHERE user_id = ?').bind(userId).first<{ avatar_file_id: string; avatar_version: number }>();

@@ -199,6 +199,7 @@ type Bindings = {
   JWT_SECRET: string;
   BEECOUNT_DO: DurableObjectNamespace;
   R2?: R2Bucket;
+  NODE_ENV?: string;
 };
 
 type Variables = {
@@ -835,7 +836,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     // Zod 验证错误返回详细信息
     if (error?.name === 'ZodError' || error?.issues) {
       console.error('[SYNC] /sync/push validation error:', JSON.stringify(error.issues || error));
-      return c.json({ error: 'Validation failed', details: error.issues || error.message }, 400);
+      return c.json({ error: 'Validation failed' }, 400);
     }
     console.error('[SYNC] /sync/push error - BEGIN ====================================');
     console.error('[SYNC] error:', error);
@@ -852,10 +853,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     console.error('[SYNC] /sync/push error - END ======================================');
     console.log(`[SYNC] ===== ${CODE_VERSION} ERROR =====`);
     
-    return c.json({ 
-      error: 'Internal server error',
-      message: error instanceof Error ? error.message : String(error)
-    }, 500);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
@@ -864,6 +862,9 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 // ---------------------------------------------------------------------------
 
 syncRouter.get('/debug', async (c) => {
+  if (c.env.NODE_ENV !== 'development') {
+    return c.json({ error: 'Not found' }, 404);
+  }
   let userId: string;
   try {
     userId = c.get('userId');
@@ -911,6 +912,9 @@ syncRouter.get('/debug', async (c) => {
 // ---------------------------------------------------------------------------
 
 syncRouter.get('/debug/change/:changeId', async (c) => {
+  if (c.env.NODE_ENV !== 'development') {
+    return c.json({ error: 'Not found' }, 404);
+  }
   let userId: string;
   try {
     userId = c.get('userId');
@@ -1120,7 +1124,7 @@ syncRouter.get('/pull', async (c) => {
       console.error('[SYNC] Error stack:', error.stack);
     }
     console.error('[SYNC] /sync/pull error - END ======================================');
-    return c.json({ error: 'Internal server error', message: error instanceof Error ? error.message : String(error) }, 500);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 

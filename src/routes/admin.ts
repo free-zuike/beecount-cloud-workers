@@ -502,6 +502,12 @@ adminRouter.delete('/users/:id', async (c) => {
     }
   }
 
+  // 撤销该用户的所有 refresh tokens（防止已删除用户的 token 仍可使用）
+  await db
+    .prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL')
+    .bind(nowUtc(), userId)
+    .run();
+
   // 物理删除（CASCADE 会删除关联数据）
   await db.prepare('DELETE FROM users WHERE id = ?').bind(userId).run();
 
@@ -611,7 +617,7 @@ adminRouter.get('/devices/online', async (c) => {
 // 修改用户密码
 adminRouter.post('/users/:id/password', zValidator('json', z.object({
   admin_password: z.string(),
-  new_password: z.string().min(6)
+  new_password: z.string().min(8)
 })), async (c) => {
   const db = c.env.DB;
   const userId = c.req.param('id');

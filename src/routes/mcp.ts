@@ -567,6 +567,22 @@ mcpRouter.post('/tools/call', async (c) => {
     return c.json({ error: `Unknown tool: ${toolName}` }, 400);
   }
 
+  const WRITE_TOOLS = ['create_transaction', 'update_transaction', 'delete_transaction'];
+  if (WRITE_TOOLS.includes(toolName)) {
+    const patScopes = c.get('patScopes') as string[] | undefined;
+    if (!patScopes || !patScopes.includes('mcp:write')) {
+      return c.json({
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ error: 'PAT token lacks mcp:write scope required for write operations' }),
+          },
+        ],
+        isError: true,
+      }, 403);
+    }
+  }
+
   try {
     let result: unknown;
 

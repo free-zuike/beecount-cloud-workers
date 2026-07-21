@@ -214,6 +214,7 @@ interface LedgerStats {
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
+  NODE_ENV?: string;
 };
 
 type Variables = {
@@ -513,8 +514,9 @@ readRouter.get('/workspace/transactions', async (c) => {
     bindings.push(txSyncId);
   }
   if (tagSyncId) {
-    query += ' AND tag_sync_ids_json LIKE ?';
-    bindings.push(`%"${tagSyncId}"%`);
+    query += ' AND tag_sync_ids_json LIKE ? ESCAPE ?';
+    const escapedTag = tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_');
+    bindings.push(`%"${escapedTag}"%`, '\\');
   }
   if (accountName) {
     query += ' AND account_name = ?';
@@ -1412,8 +1414,11 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
 // 调试端点 - 查看数据库原始数据
 // ---------------------------------------------------------------------------
 
-/** 调试端点 - 查看所有账本 */
+/** 调试端点 - 查看所有账本（仅开发环境可用） */
 readRouter.get('/debug/ledgers', async (c) => {
+  if (c.env.NODE_ENV !== 'development') {
+    return c.json({ error: 'Not found' }, 404);
+  }
   const userId = c.get('userId');
   const db = c.env.DB;
 
@@ -1443,8 +1448,11 @@ readRouter.get('/debug/ledgers', async (c) => {
   return c.json({ ledgers: results });
 });
 
-/** 调试端点 - 查看所有交易 */
+/** 调试端点 - 查看所有交易（仅开发环境可用） */
 readRouter.get('/debug/transactions', async (c) => {
+  if (c.env.NODE_ENV !== 'development') {
+    return c.json({ error: 'Not found' }, 404);
+  }
   const userId = c.get('userId');
   const db = c.env.DB;
 
@@ -1528,8 +1536,11 @@ readRouter.get('/exchange-rates', async (c) => {
   }
 });
 
-/** 调试端点 - 查看所有同步变更 */
+/** 调试端点 - 查看所有同步变更（仅开发环境可用） */
 readRouter.get('/debug/sync-changes', async (c) => {
+  if (c.env.NODE_ENV !== 'development') {
+    return c.json({ error: 'Not found' }, 404);
+  }
   const userId = c.get('userId');
   const db = c.env.DB;
 

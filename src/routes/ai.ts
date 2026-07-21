@@ -512,7 +512,21 @@ aiRouter.post('/parse-tx-image', zValidator('json', AiParseTxImageSchema), async
   if (req.image_id) {
     imageContent = await downloadImageAsBase64(req.image_id, db);
   } else if (req.image_url) {
+    // SSRF 防护：仅允许 https URL，拒绝私有 IP
     try {
+      const parsedUrl = new URL(req.image_url);
+      if (parsedUrl.protocol !== 'https:') {
+        return c.json({ error: 'Only HTTPS URLs are allowed for image_url' }, 400);
+      }
+      const hostname = parsedUrl.hostname;
+      if (
+        hostname === '127.0.0.1' || hostname === 'localhost' ||
+        hostname.startsWith('10.') || hostname.startsWith('192.168.') ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
+        /^0\./.test(hostname) || hostname === '::1' || hostname === '0.0.0.0'
+      ) {
+        return c.json({ error: 'Private/internal URLs are not allowed' }, 400);
+      }
       const imgResponse = await fetch(req.image_url);
       if (imgResponse.ok) {
         const imgBuffer = await imgResponse.arrayBuffer();
@@ -856,6 +870,20 @@ aiRouter.post('/speech-to-text', zValidator('json', AiSpeechToTextSchema), async
       }
       audioBlob = new Blob([bytes], { type: 'audio/webm' });
     } else {
+      // SSRF 防护：仅允许 https URL，拒绝私有 IP
+      const parsedUrl = new URL(req.audio_url!);
+      if (parsedUrl.protocol !== 'https:') {
+        return c.json({ error: 'Only HTTPS URLs are allowed for audio_url' }, 400);
+      }
+      const hostname = parsedUrl.hostname;
+      if (
+        hostname === '127.0.0.1' || hostname === 'localhost' ||
+        hostname.startsWith('10.') || hostname.startsWith('192.168.') ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
+        /^0\./.test(hostname) || hostname === '::1' || hostname === '0.0.0.0'
+      ) {
+        return c.json({ error: 'Private/internal URLs are not allowed' }, 400);
+      }
       const audioResponse = await fetch(req.audio_url!);
       if (!audioResponse.ok) {
         return c.json({ error: `Failed to fetch audio: ${audioResponse.status}` }, 400);

@@ -159,7 +159,7 @@ const authRouter = new Hono<{ Bindings: Bindings; Variables: { userId: string } 
 // Register
 authRouter.post('/register', zValidator('json', z.object({
   email: z.string().email(),
-  password: z.string().min(6),
+  password: z.string().min(8),
   device_id: z.string().optional(),
   device_name: z.string().optional().default('Unknown Device'),
   platform: z.string().optional().default('unknown'),

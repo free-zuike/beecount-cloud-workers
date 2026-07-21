@@ -57,9 +57,10 @@ function parseTagsList(csv: string | null): string[] {
 const INVITE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 function generateInviteCode(): string {
+  const rand = crypto.getRandomValues(new Uint8Array(6));
   let code = '';
   for (let i = 0; i < 6; i++) {
-    code += INVITE_CHARS[Math.floor(Math.random() * INVITE_CHARS.length)];
+    code += INVITE_CHARS[rand[i] % INVITE_CHARS.length];
   }
   return code;
 }
@@ -204,8 +205,9 @@ workspaceRouter.get('/transactions.csv', async (c) => {
     params.push(categorySyncId);
   }
   if (tagSyncId) {
-    txQuery += ' AND tag_sync_ids_json LIKE ?';
-    params.push(`%"${tagSyncId}"%`);
+    txQuery += ' AND tag_sync_ids_json LIKE ? ESCAPE ?';
+    const escapedTag = tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_');
+    params.push(`%"${escapedTag}"%`, '\\');
   }
   if (amountMin !== null && Number.isFinite(amountMin)) {
     txQuery += ' AND amount >= ?';
@@ -325,8 +327,9 @@ workspaceRouter.get('/transactions', async (c) => {
 
   // 按 tag_sync_id 精确过滤（原版对齐）
   if (tagSyncId) {
-    txQuery += ` AND tag_sync_ids_json LIKE ?`;
-    txParams.push(`%"${tagSyncId}"%`);
+    txQuery += ` AND tag_sync_ids_json LIKE ? ESCAPE ?`;
+    const escapedTag = tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_');
+    txParams.push(`%"${escapedTag}"%`, '\\');
   }
 
   // 按 category_sync_id 精确过滤（原版对齐）
