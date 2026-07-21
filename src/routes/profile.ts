@@ -26,16 +26,11 @@ function nowUtc(): string {
 }
 
 /**
- * 将 mobile 端 (Kotlin) appearance 字段名归一化为 web 端期望的格式。
- * 后端对 appearance_json 做纯 JSON 透传，不做字段名转换，
- * 而 mobile 端使用的字段名与 web 端不同，需要在存储/读取时统一。
+ * 将 mobile 端 (Kotlin) camelCase 外观字段名归一化为 snake_case。
+ * 注意：header_decoration_style（mobile）和 header_skin（web）是独立字段，
+ * 不做互映射，各自保留。
  */
 const APPEARANCE_KEY_MAP: Record<string, string> = {
-  // mobile 用 header_decoration_style，web 用 header_skin
-  header_decoration_style: 'header_skin',
-  headerDecorationStyle: 'header_skin',
-  headerSkin: 'header_skin',
-  // mobile 用 camelCase 的也需要归一化
   compactAmount: 'compact_amount',
   showTransactionTime: 'show_transaction_time',
   noteDisplayMode: 'note_display_mode',
