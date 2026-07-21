@@ -28,9 +28,11 @@ function nowUtc(): string {
 /**
  * 将 mobile 端 (Kotlin) camelCase 外观字段名归一化为 snake_case。
  * 注意：header_decoration_style（mobile）和 header_skin（web）是独立字段，
- * 不做互映射，各自保留。
+ * 不做互映射。但 mobile 可能用 camelCase 发送，需要归一化为 snake_case。
  */
 const APPEARANCE_KEY_MAP: Record<string, string> = {
+  headerDecorationStyle: 'header_decoration_style',
+  headerSkin: 'header_skin',
   compactAmount: 'compact_amount',
   showTransactionTime: 'show_transaction_time',
   noteDisplayMode: 'note_display_mode',
