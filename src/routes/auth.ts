@@ -350,6 +350,7 @@ authRouter.post('/refresh', zValidator('json', z.object({
     const user = await db.prepare('SELECT id, email, is_admin FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string; is_admin: number }>();
 
     return c.json({
+      requires_2fa: false,
       user: { id: userId, email: user?.email || null, is_admin: Boolean(user?.is_admin) },
       access_token: accessToken,
       refresh_token: newRefreshToken.token,
