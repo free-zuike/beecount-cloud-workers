@@ -285,7 +285,7 @@ workspaceRouter.get('/transactions', async (c) => {
   // 查询用户可见账本（含共享账本，与原版 _visible_workspace_ledgers 对齐）
   let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
     LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-    WHERE l.user_id = ? OR lm.user_id = ?`;
+    WHERE (l.user_id = ? OR lm.user_id = ?)`;
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
@@ -426,7 +426,7 @@ workspaceRouter.get('/accounts', async (c) => {
   // 含共享账本
   let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
     LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-    WHERE l.user_id = ? OR lm.user_id = ?`;
+    WHERE (l.user_id = ? OR lm.user_id = ?)`;
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
@@ -528,7 +528,7 @@ workspaceRouter.get('/categories', async (c) => {
   // 含共享账本
   let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
     LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-    WHERE l.user_id = ? OR lm.user_id = ?`;
+    WHERE (l.user_id = ? OR lm.user_id = ?)`;
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
@@ -617,7 +617,7 @@ workspaceRouter.get('/tags', async (c) => {
   // 含共享账本
   let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
     LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-    WHERE l.user_id = ? OR lm.user_id = ?`;
+    WHERE (l.user_id = ? OR lm.user_id = ?)`;
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
@@ -720,7 +720,7 @@ workspaceRouter.get('/budgets', async (c) => {
   // 含共享账本
   let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
     LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-    WHERE l.user_id = ? OR lm.user_id = ?`;
+    WHERE (l.user_id = ? OR lm.user_id = ?)`;
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
@@ -785,7 +785,7 @@ workspaceRouter.get('/ledger-counts', async (c) => {
   // 含共享账本
   let ledgerQuery = `SELECT DISTINCT l.id FROM ledgers l
     LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-    WHERE l.user_id = ? OR lm.user_id = ?`;
+    WHERE (l.user_id = ? OR lm.user_id = ?)`;
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
@@ -841,7 +841,7 @@ workspaceRouter.get('/analytics', async (c) => {
   // 含共享账本
   let ledgerQuery = `SELECT DISTINCT l.id FROM ledgers l
     LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-    WHERE l.user_id = ? OR lm.user_id = ?`;
+    WHERE (l.user_id = ? OR lm.user_id = ?)`;
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
@@ -1754,7 +1754,7 @@ workspaceRouter.get('/net-worth-history', async (c) => {
   const ledgers = await db
     .prepare(`SELECT DISTINCT l.id, l.external_id, l.currency FROM ledgers l
       LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-      WHERE l.user_id = ? OR lm.user_id = ?`)
+      WHERE (l.user_id = ? OR lm.user_id = ?)`)
     .bind(userId, userId, userId)
     .all<{ id: string; external_id: string; currency: string }>();
 
