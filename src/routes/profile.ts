@@ -25,30 +25,7 @@ function nowUtc(): string {
   return new Date().toISOString();
 }
 
-/**
- * 将 mobile 端 (Kotlin) camelCase 外观字段名归一化为 snake_case。
- * 注意：header_decoration_style（mobile）和 header_skin（web）是独立字段，
- * 不做互映射。但 mobile 可能用 camelCase 发送，需要归一化为 snake_case。
- */
-const APPEARANCE_KEY_MAP: Record<string, string> = {
-  headerDecorationStyle: 'header_decoration_style',
-  headerSkin: 'header_skin',
-  compactAmount: 'compact_amount',
-  showTransactionTime: 'show_transaction_time',
-  noteDisplayMode: 'note_display_mode',
-};
-
-function normalizeAppearance(appearance: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(appearance)) {
-    const normalized = APPEARANCE_KEY_MAP[key] ?? key;
-    // 如果 snake_case key 已经存在（比如同时传了两种格式），优先用已有的
-    if (!(normalized in out)) {
-      out[normalized] = value;
-    }
-  }
-  return out;
-}
+// appearance 做纯 JSON 透传，与原版 Python _dump_appearance_json / _parse_appearance_json 对齐
 
 const ProfilePatchSchema = z.object({
   display_name: z.string().nullable().optional(),
@@ -74,7 +51,7 @@ profileRouter.get('/me', async (c) => {
     avatar_version: profile?.avatar_version || 0,
     income_is_red: profile?.income_is_red != null ? Boolean(profile.income_is_red) : null,
     theme_primary_color: profile?.theme_primary_color,
-    appearance: profile?.appearance_json ? normalizeAppearance(JSON.parse(profile.appearance_json)) : null,
+    appearance: profile?.appearance_json ? JSON.parse(profile.appearance_json) : null,
     ai_config: profile?.ai_config_json ? JSON.parse(profile.ai_config_json) : null,
     primary_currency: profile?.primary_currency || null,
   });
@@ -99,7 +76,7 @@ profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => 
   if (body.display_name !== undefined) { updates.push('display_name = ?'); values.push(body.display_name); }
   if (body.income_is_red !== undefined) { updates.push('income_is_red = ?'); values.push(body.income_is_red ? 1 : 0); }
   if (body.theme_primary_color !== undefined) { updates.push('theme_primary_color = ?'); values.push(body.theme_primary_color); }
-  if (body.appearance !== undefined) { updates.push('appearance_json = ?'); values.push(body.appearance ? JSON.stringify(normalizeAppearance(body.appearance as Record<string, unknown>)) : null); }
+  if (body.appearance !== undefined) { updates.push('appearance_json = ?'); values.push(body.appearance ? JSON.stringify(body.appearance) : null); }
   if (body.ai_config !== undefined) { updates.push('ai_config_json = ?'); values.push(body.ai_config ? JSON.stringify(body.ai_config) : null); }
   if (body.primary_currency !== undefined) { updates.push('primary_currency = ?'); values.push(body.primary_currency?.toUpperCase() || null); }
 
@@ -138,7 +115,7 @@ profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => 
     avatar_version: updated?.avatar_version || 0,
     income_is_red: updated?.income_is_red != null ? Boolean(updated.income_is_red) : null,
     theme_primary_color: updated?.theme_primary_color,
-    appearance: updated?.appearance_json ? normalizeAppearance(JSON.parse(updated.appearance_json)) : null,
+    appearance: updated?.appearance_json ? JSON.parse(updated.appearance_json) : null,
     ai_config: updated?.ai_config_json ? JSON.parse(updated.ai_config_json) : null,
     primary_currency: updated?.primary_currency || null,
   });

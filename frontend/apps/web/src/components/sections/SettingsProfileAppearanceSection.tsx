@@ -201,30 +201,18 @@ export function SettingsProfileAppearanceSection() {
   const noteDisplayMode = appearance.note_display_mode ?? 'category'
   const [appearanceSaving, setAppearanceSaving] = useState(false)
 
-  // 乐观更新: Select 点击后立即反映新值,不等网络往返
-  const [localHeaderSkin, setLocalHeaderSkin] = useState(headerSkin)
-  useEffect(() => { setLocalHeaderSkin(headerSkin) }, [headerSkin])
-
   const saveAppearance = async (
     patch: Partial<NonNullable<typeof profileMe>['appearance']>,
   ) => {
     if (appearanceSaving) return
     setAppearanceSaving(true)
     try {
-      // 乐观更新:立即同步到 UI
-      if (patch.header_skin !== undefined) setLocalHeaderSkin(patch.header_skin as string)
-      const updated = await patchProfileMe(token, {
+      await patchProfileMe(token, {
         appearance: { ...appearance, ...patch },
       })
-      // 直接用返回值更新,不再额外 refreshProfile
-      applyIncomeColorScheme(updated.income_is_red ?? true)
-      applyServerPrimaryColor(updated.theme_primary_color)
-      // refreshProfile 更新全局 profileMe(含 avatar 等其他字段)
-      void refreshProfile()
+      await refreshProfile()
       toast.success(t('profile.sync.appearanceSaved'))
     } catch (err) {
-      // 回滚乐观更新
-      setLocalHeaderSkin(headerSkin)
       toast.error(localizeError(err, t))
     } finally {
       setAppearanceSaving(false)
@@ -464,7 +452,7 @@ export function SettingsProfileAppearanceSection() {
                 {t('profile.sync.headerSkin')}
               </p>
               <Select
-                value={localHeaderSkin}
+                value={headerSkin}
                 onValueChange={(value) =>
                   void saveAppearance({ header_skin: value })
                 }
