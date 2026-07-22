@@ -8,7 +8,7 @@ import { uploadToS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
-import { createMinimalSqliteFile } from '../lib/sqlite-writer';
+import { exportToSqliteWithSchema } from '../lib/sqlite-export';
 
 // ===========================
 // WebDAV 工具函数
@@ -348,12 +348,11 @@ export async function performBackup(
       data: new TextEncoder().encode(JSON.stringify(meta, null, 2)),
     });
 
-    // 2. db.sqlite3（创建最小化但有效的 SQLite 文件）
-    console.log('[Backup] Creating db.sqlite3...');
+    // 2. db.sqlite3（使用 sql.js 创建包含完整数据的 SQLite 文件）
+    console.log('[Backup] Creating db.sqlite3 with sql.js...');
     try {
-      // 创建包含 schema 的 SQLite 文件
-      console.log('[Backup] Calling createMinimalSqliteFile...');
-      const sqliteData = createMinimalSqliteFile();
+      // 使用 sql.js 创建包含 schema 和数据的 SQLite 文件
+      const sqliteData = await exportToSqliteWithSchema(db, tables);
       console.log(`[Backup] sqliteData length: ${sqliteData.length}`);
       
       // 验证 SQLite 文件头
@@ -370,22 +369,33 @@ export async function performBackup(
     } catch (err) {
       console.error(`[Backup] Failed to create db.sqlite3: ${(err as Error).message}`);
       console.error(`[Backup] Stack: ${(err as Error).stack}`);
+      
+      // 回退：使用最小化 SQLite 文件 + db.json
+      console.log('[Backup] Falling back to minimal SQLite + db.json');
+      try {
+        const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
+        const minimalSqlite = createMinimalSqliteFile();
+        tarEntries.push({
+          name: 'db.sqlite3',
+          data: minimalSqlite,
+        });
+      } catch (fallbackErr) {
+        console.error(`[Backup] Fallback also failed: ${(fallbackErr as Error).message}`);
+      }
+      
+      // 始终包含 db.json 用于数据恢复
+      const dbExport = {
+        backup_time: new Date().toISOString(),
+        version: '1.0',
+        schema_version: 1,
+        user_id: userId,
+        tables,
+      };
+      tarEntries.push({
+        name: 'db.json',
+        data: new TextEncoder().encode(JSON.stringify(dbExport, null, 2)),
+      });
     }
-    
-    // 3. db.json（完整数据导出，用于恢复）
-    console.log('[Backup] Creating db.json...');
-    const dbExport = {
-      backup_time: new Date().toISOString(),
-      version: '1.0',
-      schema_version: 1,
-      user_id: userId,
-      tables,
-    };
-    tarEntries.push({
-      name: 'db.json',
-      data: new TextEncoder().encode(JSON.stringify(dbExport, null, 2)),
-    });
-    console.log(`[Backup] db.json created: ${JSON.stringify(dbExport).length} bytes`);
 
     // 3. 附件文件
     for (const [key, value] of attachments) {
