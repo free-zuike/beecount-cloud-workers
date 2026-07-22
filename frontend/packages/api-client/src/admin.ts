@@ -102,8 +102,7 @@ export async function fetchAdminOverview(token: string): Promise<AdminOverview> 
 }
 
 export async function fetchAdminHealth(token: string): Promise<AdminHealth> {
-  const tzOffset = -new Date().getTimezoneOffset()
-  return authedGet<AdminHealth>(`/admin/health?tz_offset_minutes=${tzOffset}`, token)
+  return authedGet<AdminHealth>('/admin/health', token)
 }
 
 export async function fetchDataCleanupScan(
