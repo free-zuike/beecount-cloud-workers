@@ -87,7 +87,7 @@ export async function processBackupSchedule(
     const runId = (runInsertResult as any).lastRowId;
 
     try {
-      const backupResult = await performBackup(db, runId, ledger.id, remoteConfig, shouldEncrypt, r2);
+      const backupResult = await performBackup(db, runId, schedule.user_id, ledger.id, remoteConfig, shouldEncrypt, r2);
       const finishedAt = new Date().toISOString();
 
       if (backupResult.success) {

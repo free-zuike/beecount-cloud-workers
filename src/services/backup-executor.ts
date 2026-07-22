@@ -196,40 +196,102 @@ async function getEncryptionPassword(
   return null;
 }
 
-async function fetchLedgerChanges(
+interface LedgerSnapshot {
+  ledger: { external_id: string; name: string | null; currency: string; month_start_day: number };
+  snapshot: {
+    items: unknown[];
+    accounts: unknown[];
+    categories: unknown[];
+    tags: unknown[];
+    budgets: unknown[];
+  };
+  attachments: { id: string; sha256: string; file_name: string | null; size_bytes: number; mime_type: string | null; storage_path: string }[];
+}
+
+/**
+ * 从 projection 表构建完整账本快照（复用 /sync/full 的查询模式）
+ */
+async function buildLedgerSnapshot(
   db: D1Database,
+  userId: string,
   ledgerId: string
-): Promise<{ entity_type: string; entity_sync_id: string; payload_json: string }[]> {
-  const result = await db
-    .prepare('SELECT entity_type, entity_sync_id, payload_json FROM sync_changes WHERE ledger_id = ?')
-    .bind(ledgerId)
-    .all();
-  return (result.results || []) as { entity_type: string; entity_sync_id: string; payload_json: string }[];
+): Promise<LedgerSnapshot | null> {
+  // 1. 查 ledgers 表获取元数据（支持 owner + ledger_members fallback）
+  let ledger = await db
+    .prepare('SELECT id, external_id, name, currency, month_start_day FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerId)
+    .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number }>();
+
+  if (!ledger) {
+    ledger = await db
+      .prepare(`SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
+                FROM ledgers l JOIN ledger_members lm ON l.id = lm.ledger_id
+                WHERE lm.user_id = ? AND l.external_id = ?`)
+      .bind(userId, ledgerId)
+      .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number }>();
+  }
+
+  if (!ledger) {
+    console.log(`[Backup] Ledger not found: ${ledgerId}`);
+    return null;
+  }
+
+  // 2. 并行查 5 个 projection 表 + attachment_files
+  const [txs, accounts, categories, tags, budgets, attachments] = await Promise.all([
+    db.prepare('SELECT * FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id).all(),
+    db.prepare('SELECT * FROM read_account_projection WHERE user_id = ?').bind(userId).all(),
+    db.prepare('SELECT * FROM read_category_projection WHERE user_id = ?').bind(userId).all(),
+    db.prepare('SELECT * FROM read_tag_projection WHERE user_id = ?').bind(userId).all(),
+    db.prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?').bind(ledger.id).all(),
+    db.prepare('SELECT id, sha256, file_name, size_bytes, mime_type, storage_path FROM attachment_files WHERE ledger_id = ?').bind(ledger.id).all(),
+  ]);
+
+  return {
+    ledger: {
+      external_id: ledger.external_id,
+      name: ledger.name,
+      currency: ledger.currency,
+      month_start_day: ledger.month_start_day,
+    },
+    snapshot: {
+      items: txs.results || [],
+      accounts: accounts.results || [],
+      categories: categories.results || [],
+      tags: tags.results || [],
+      budgets: budgets.results || [],
+    },
+    attachments: (attachments.results || []) as LedgerSnapshot['attachments'],
+  };
 }
 
 export async function performBackup(
   db: D1Database,
   runId: number,
+  userId: string,
   ledgerId: string,
   remoteConfig: Record<string, string>,
   shouldEncrypt?: boolean,
   r2?: R2Bucket
 ): Promise<BackupResult> {
   try {
-    console.log(`[Backup] Starting backup for ledger: ${ledgerId}`);
+    console.log(`[Backup] Starting backup for ledger: ${ledgerId}, user: ${userId}`);
 
-    const changes = await fetchLedgerChanges(db, ledgerId);
-    console.log(`[Backup] Found ${changes.length} changes to backup`);
+    const snapshot = await buildLedgerSnapshot(db, userId, ledgerId);
+    if (!snapshot) {
+      return { success: false, message: `Ledger not found: ${ledgerId}` };
+    }
+
+    const txCount = snapshot.snapshot.items.length;
+    const catCount = snapshot.snapshot.categories.length;
+    const tagCount = snapshot.snapshot.tags.length;
+    console.log(`[Backup] Snapshot built: ${txCount} transactions, ${catCount} categories, ${tagCount} tags, ${snapshot.attachments.length} attachments`);
 
     const backupData = {
-      ledger_id: ledgerId,
       backup_time: new Date().toISOString(),
-      version: '1.0',
-      changes: changes.map(c => ({
-        entity_type: c.entity_type,
-        entity_sync_id: c.entity_sync_id,
-        payload: JSON.parse(c.payload_json)
-      }))
+      version: '2.0',
+      ledger: snapshot.ledger,
+      snapshot: snapshot.snapshot,
+      attachments: snapshot.attachments,
     };
 
     let backupContent = JSON.stringify(backupData, null, 2);

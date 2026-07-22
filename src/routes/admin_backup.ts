@@ -1378,7 +1378,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
   const runId = runInsertResult.meta.last_row_id as number;
 
-  const backupResult = await performBackup(db, runId, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2);
+  const backupResult = await performBackup(db, runId, schedule.user_id, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2);
   
   const finishedAt = new Date().toISOString();
   
