@@ -196,80 +196,57 @@ async function getEncryptionPassword(
   return null;
 }
 
-interface LedgerSnapshot {
-  ledger: { external_id: string; name: string | null; currency: string; month_start_day: number };
-  snapshot: {
-    items: unknown[];
-    accounts: unknown[];
-    categories: unknown[];
-    tags: unknown[];
-    budgets: unknown[];
-  };
-  attachments: { id: string; sha256: string; file_name: string | null; size_bytes: number; mime_type: string | null; storage_path: string }[];
-}
+/**
+ * 需要备份的用户数据表（排除运维类表，与原版 db_snapshot.py DEFAULT_EXCLUDED_TABLES 对齐）
+ * 排除：backup_runs, backup_run_targets, sync_push_idempotency, audit_logs, refresh_tokens, mcp_call_logs
+ * 保留：PAT 表（用户 LLM 配置依赖）, backup_remotes/schedules（配置保留）, 所有用户数据表
+ */
+const BACKUP_TABLES = [
+  'users',
+  'user_profiles',
+  'devices',
+  'ledgers',
+  'ledger_members',
+  'ledger_invites',
+  'sync_changes',
+  'sync_cursors',
+  'read_tx_projection',
+  'read_account_projection',
+  'read_category_projection',
+  'read_tag_projection',
+  'read_budget_projection',
+  'attachment_files',
+  'personal_access_tokens',
+  'backup_remotes',
+  'backup_schedules',
+  'backup_schedule_remotes',
+  'system_settings',
+  'recovery_codes',
+  'exchange_rate_overrides',
+  'backup_snapshots',
+  'backup_restores',
+];
+
+/** D1 每次查询最多返回的行数 */
+const D1_BATCH_SIZE = 1000;
 
 /**
- * 从 projection 表构建完整账本快照（复用 /sync/full 的查询模式）
+ * 导出单张表的所有数据（分批查询，处理 D1 行数限制）
  */
-async function buildLedgerSnapshot(
-  db: D1Database,
-  userId: string,
-  ledgerId: string
-): Promise<LedgerSnapshot | null> {
-  // 1. 查 ledgers 表获取元数据（支持 owner + ledger_members fallback）
-  // 先按 internal_id 查，再按 external_id 查（backup_schedules 存的是 internal_id）
-  let ledger = await db
-    .prepare('SELECT id, external_id, name, currency, month_start_day FROM ledgers WHERE user_id = ? AND id = ?')
-    .bind(userId, ledgerId)
-    .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number }>();
-
-  if (!ledger) {
-    ledger = await db
-      .prepare('SELECT id, external_id, name, currency, month_start_day FROM ledgers WHERE user_id = ? AND external_id = ?')
-      .bind(userId, ledgerId)
-      .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number }>();
+async function exportTable(db: D1Database, tableName: string): Promise<unknown[]> {
+  const allRows: unknown[] = [];
+  let offset = 0;
+  while (true) {
+    const result = await db
+      .prepare(`SELECT * FROM ${tableName} LIMIT ? OFFSET ?`)
+      .bind(D1_BATCH_SIZE, offset)
+      .all();
+    const rows = result.results || [];
+    allRows.push(...rows);
+    if (rows.length < D1_BATCH_SIZE) break;
+    offset += D1_BATCH_SIZE;
   }
-
-  if (!ledger) {
-    ledger = await db
-      .prepare(`SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
-                FROM ledgers l JOIN ledger_members lm ON l.id = lm.ledger_id
-                WHERE lm.user_id = ? AND l.external_id = ?`)
-      .bind(userId, ledgerId)
-      .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number }>();
-  }
-
-  if (!ledger) {
-    console.log(`[Backup] Ledger not found: ${ledgerId}`);
-    return null;
-  }
-
-  // 2. 并行查 5 个 projection 表 + attachment_files
-  const [txs, accounts, categories, tags, budgets, attachments] = await Promise.all([
-    db.prepare('SELECT * FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id).all(),
-    db.prepare('SELECT * FROM read_account_projection WHERE user_id = ?').bind(userId).all(),
-    db.prepare('SELECT * FROM read_category_projection WHERE user_id = ?').bind(userId).all(),
-    db.prepare('SELECT * FROM read_tag_projection WHERE user_id = ?').bind(userId).all(),
-    db.prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?').bind(ledger.id).all(),
-    db.prepare('SELECT id, sha256, file_name, size_bytes, mime_type, storage_path FROM attachment_files WHERE ledger_id = ?').bind(ledger.id).all(),
-  ]);
-
-  return {
-    ledger: {
-      external_id: ledger.external_id,
-      name: ledger.name,
-      currency: ledger.currency,
-      month_start_day: ledger.month_start_day,
-    },
-    snapshot: {
-      items: txs.results || [],
-      accounts: accounts.results || [],
-      categories: categories.results || [],
-      tags: tags.results || [],
-      budgets: budgets.results || [],
-    },
-    attachments: (attachments.results || []) as LedgerSnapshot['attachments'],
-  };
+  return allRows;
 }
 
 export async function performBackup(
@@ -282,24 +259,32 @@ export async function performBackup(
   r2?: R2Bucket
 ): Promise<BackupResult> {
   try {
-    console.log(`[Backup] Starting backup for ledger: ${ledgerId}, user: ${userId}`);
+    console.log(`[Backup] Starting full database backup, user: ${userId}`);
 
-    const snapshot = await buildLedgerSnapshot(db, userId, ledgerId);
-    if (!snapshot) {
-      return { success: false, message: `Ledger not found: ${ledgerId}` };
+    // 导出所有用户数据表
+    const tables: Record<string, unknown[]> = {};
+    for (const tableName of BACKUP_TABLES) {
+      try {
+        const rows = await exportTable(db, tableName);
+        if (rows.length > 0) {
+          tables[tableName] = rows;
+          console.log(`[Backup] ${tableName}: ${rows.length} rows`);
+        }
+      } catch (err) {
+        // 表可能不存在（老版本 DB 还没跑过 migration），跳过
+        console.log(`[Backup] Skipping ${tableName}: ${(err as Error).message}`);
+      }
     }
 
-    const txCount = snapshot.snapshot.items.length;
-    const catCount = snapshot.snapshot.categories.length;
-    const tagCount = snapshot.snapshot.tags.length;
-    console.log(`[Backup] Snapshot built: ${txCount} transactions, ${catCount} categories, ${tagCount} tags, ${snapshot.attachments.length} attachments`);
+    const totalRows = Object.values(tables).reduce((sum, rows) => sum + rows.length, 0);
+    console.log(`[Backup] Total: ${Object.keys(tables).length} tables, ${totalRows} rows`);
 
     const backupData = {
       backup_time: new Date().toISOString(),
-      version: '2.0',
-      ledger: snapshot.ledger,
-      snapshot: snapshot.snapshot,
-      attachments: snapshot.attachments,
+      version: '1.0',
+      schema_version: 1,
+      user_id: userId,
+      tables,
     };
 
     let backupContent = JSON.stringify(backupData, null, 2);
@@ -346,7 +331,7 @@ export async function performBackup(
       }
 
       const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `${basePrefix}backups/${ledgerId}/${timestamp}_backup.json`;
+      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.json`;
 
       console.log(`[Backup] Uploading to S3 key: ${backupKey}`);
 
@@ -390,7 +375,7 @@ export async function performBackup(
         basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
       }
 
-      const backupKey = `${basePrefix}backups/${ledgerId}/${timestamp}_backup.json`;
+      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.json`;
 
       console.log(`[Backup] Uploading to WebDAV: ${backupKey}`);
 
@@ -433,7 +418,7 @@ export async function performBackup(
       }
 
       const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `${basePrefix}backups/${ledgerId}/${timestamp}_backup.json`;
+      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.json`;
       await r2.put(backupKey, backupContent, { httpMetadata: { contentType: 'application/json' } });
       return {
         success: true,
@@ -459,7 +444,7 @@ export async function performBackup(
       }
 
       const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `${basePrefix}backups/${ledgerId}/${timestamp}_backup.json`;
+      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.json`;
 
       console.log(`[Backup] Uploading to FTP: ${backupKey}`);
 
@@ -493,7 +478,7 @@ export async function performBackup(
       }
 
       const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `${basePrefix}backups/${ledgerId}/${timestamp}_backup.json`;
+      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.json`;
 
       console.log(`[Backup] Uploading to SFTP: ${backupKey}`);
 
