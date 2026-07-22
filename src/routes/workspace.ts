@@ -1340,6 +1340,75 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
 });
 
 // ===========================================================================
+// POST /workspace/invites/:code/accept - 前端加入共享账本（别名）
+// ===========================================================================
+
+workspaceRouter.post('/invites/:code/accept', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const inviteCode = c.req.param('code');
+
+  const invite = await db
+    .prepare(
+      `SELECT li.id, li.ledger_id, li.code, li.target_role, li.expires_at, li.used_at, li.invited_by,
+              l.external_id, l.name as ledger_name, l.user_id as owner_user_id
+       FROM ledger_invites li
+       JOIN ledgers l ON li.ledger_id = l.id
+       WHERE li.code = ?`
+    )
+    .bind(inviteCode)
+    .first<{
+      id: string;
+      ledger_id: string;
+      code: string;
+      target_role: string;
+      expires_at: string;
+      used_at: string | null;
+      invited_by: string;
+      external_id: string;
+      ledger_name: string | null;
+      owner_user_id: string;
+    }>();
+
+  if (!invite) {
+    return c.json({ error: 'Invalid invite code' }, 404);
+  }
+  if (invite.used_at) {
+    return c.json({ error: 'Invite has already been used' }, 410);
+  }
+  if (new Date(invite.expires_at) < new Date()) {
+    return c.json({ error: 'Invite code has expired' }, 410);
+  }
+  if (invite.owner_user_id === userId) {
+    return c.json({ error: 'Cannot join your own ledger' }, 400);
+  }
+
+  const existingMember = await db
+    .prepare('SELECT id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .bind(invite.ledger_id, userId)
+    .first();
+
+  if (existingMember) {
+    return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, role: invite.target_role });
+  }
+
+  await db
+    .prepare('INSERT INTO ledger_members (ledger_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)')
+    .bind(invite.ledger_id, userId, invite.target_role, nowUtc())
+    .run();
+
+  await db.prepare('UPDATE ledger_invites SET used_at = ?, used_by = ? WHERE id = ?')
+    .bind(nowUtc(), userId, invite.id)
+    .run();
+
+  return c.json({
+    ledger_id: invite.external_id,
+    ledger_name: invite.ledger_name,
+    role: invite.target_role,
+  });
+});
+
+// ===========================================================================
 // GET /workspace/ledgers/:id/members - 列出成员
 // ===========================================================================
 
