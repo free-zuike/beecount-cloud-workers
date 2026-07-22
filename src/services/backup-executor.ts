@@ -217,10 +217,18 @@ async function buildLedgerSnapshot(
   ledgerId: string
 ): Promise<LedgerSnapshot | null> {
   // 1. 查 ledgers 表获取元数据（支持 owner + ledger_members fallback）
+  // 先按 internal_id 查，再按 external_id 查（backup_schedules 存的是 internal_id）
   let ledger = await db
-    .prepare('SELECT id, external_id, name, currency, month_start_day FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .prepare('SELECT id, external_id, name, currency, month_start_day FROM ledgers WHERE user_id = ? AND id = ?')
     .bind(userId, ledgerId)
     .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number }>();
+
+  if (!ledger) {
+    ledger = await db
+      .prepare('SELECT id, external_id, name, currency, month_start_day FROM ledgers WHERE user_id = ? AND external_id = ?')
+      .bind(userId, ledgerId)
+      .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number }>();
+  }
 
   if (!ledger) {
     ledger = await db
