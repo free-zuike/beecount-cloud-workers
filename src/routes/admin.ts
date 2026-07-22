@@ -78,22 +78,7 @@ interface AdminOverviewOut {
   tags_total: number;
 }
 
-/** 管理员设备输出 */
-interface AdminDeviceOut {
-  id: string;
-  name: string;
-  platform: string;
-  app_version: string | null;
-  os_version: string | null;
-  device_model: string | null;
-  last_ip: string | null;
-  created_at: string;
-  last_seen_at: string;
-  is_online: boolean;
-  user_id: string;
-  user_email: string;
-}
-
+// ---------------------------------------------------------------------------
 // ===========================
 // 路由定义
 // ===========================
@@ -499,20 +484,41 @@ adminRouter.delete('/users/:id', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// GET /admin/devices - 列出所有设备
+// GET /admin/devices - 列出所有设备（支持原版 deduped/sessions 视图）
 // ---------------------------------------------------------------------------
 
 /**
- * 获取所有设备列表
- *
- * 功能说明：
- * - 返回所有未撤销的设备
- * - 包含关联的用户信息
+ * 获取设备列表 — 与原版 devices.py 对齐
+ * - view=deduped（默认）：按设备属性分组去重，每组返回最近活跃的 + session_count
+ * - view=sessions：返回所有原始设备记录
+ * - active_within_days：只返回指定天数内活跃的设备（默认 30 天）
  */
 adminRouter.get('/devices', async (c) => {
   const db = c.env.DB;
-  const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
-  const offset = parseInt(c.req.query('offset') ?? '0', 10);
+  const view = c.req.query('view') ?? 'deduped';
+  const activeWithinDays = parseInt(c.req.query('active_within_days') ?? '30', 10);
+
+  let whereClause = 'd.revoked_at IS NULL';
+  const bindParams: (string | number)[] = [];
+
+  if (activeWithinDays > 0) {
+    const cutoff = new Date(Date.now() - activeWithinDays * 24 * 60 * 60 * 1000).toISOString();
+    whereClause += ' AND d.last_seen_at >= ?';
+    bindParams.push(cutoff);
+  }
+
+  // 支持前端已有的筛选参数
+  const userId = c.req.query('user_id');
+  if (userId) {
+    whereClause += ' AND d.user_id = ?';
+    bindParams.push(userId);
+  }
+  const onlineOnly = c.req.query('online_only') === 'true';
+  if (onlineOnly) {
+    const onlineThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    whereClause += ' AND d.last_seen_at > ?';
+    bindParams.push(onlineThreshold);
+  }
 
   const rows = await db
     .prepare(
@@ -521,11 +527,10 @@ adminRouter.get('/devices', async (c) => {
               u.id as user_id, u.email as user_email
        FROM devices d
        JOIN users u ON d.user_id = u.id
-       WHERE d.revoked_at IS NULL
-       ORDER BY d.last_seen_at DESC
-       LIMIT ? OFFSET ?`
+       WHERE ${whereClause}
+       ORDER BY d.last_seen_at DESC`
     )
-    .bind(limit, offset)
+    .bind(...bindParams)
     .all<{
       id: string;
       name: string;
@@ -540,24 +545,63 @@ adminRouter.get('/devices', async (c) => {
       user_email: string;
     }>();
 
-  // 判断在线状态（5 分钟内有活动视为在线）
   const onlineThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
 
-  const items: AdminDeviceOut[] = rows.results.map((row) => ({
-    id: row.id,
-    name: row.name,
-    platform: row.platform,
-    app_version: row.app_version,
-    os_version: row.os_version,
-    device_model: row.device_model,
-    last_ip: row.last_ip,
-    created_at: row.created_at,
-    last_seen_at: row.last_seen_at,
-    is_online: row.last_seen_at > onlineThreshold,
-    user_id: row.user_id,
-    user_email: row.user_email,
-  }));
+  if (view === 'sessions') {
+    const items = rows.results.map((row) => ({
+      id: row.id,
+      name: row.name,
+      platform: row.platform,
+      app_version: row.app_version,
+      os_version: row.os_version,
+      device_model: row.device_model,
+      last_ip: row.last_ip,
+      created_at: row.created_at,
+      last_seen_at: row.last_seen_at,
+      is_online: row.last_seen_at > onlineThreshold,
+      user_id: row.user_id,
+      user_email: row.user_email,
+      session_count: 1,
+    }));
+    return c.json({ total: items.length, items });
+  }
 
+  // deduped 视图 — 按 (user_id, name, platform, device_model, os_version, app_version) 分组
+  const norm = (v: string | null) => (v || '').trim().toLowerCase() || '__empty__';
+  const groups = new Map<string, typeof rows.results>();
+  for (const row of rows.results) {
+    const key = [row.user_id, row.name, row.platform, row.device_model, row.os_version, row.app_version].map(norm).join('|');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(row);
+  }
+
+  const items: Array<{
+    id: string; name: string; platform: string; app_version: string | null;
+    os_version: string | null; device_model: string | null; last_ip: string | null;
+    created_at: string; last_seen_at: string; is_online: boolean;
+    user_id: string; user_email: string; session_count: number;
+  }> = [];
+
+  for (const bucket of groups.values()) {
+    const primary = bucket[0]; // 已按 last_seen_at DESC 排序
+    items.push({
+      id: primary.id,
+      name: primary.name,
+      platform: primary.platform,
+      app_version: primary.app_version,
+      os_version: primary.os_version,
+      device_model: primary.device_model,
+      last_ip: primary.last_ip,
+      created_at: primary.created_at,
+      last_seen_at: primary.last_seen_at,
+      is_online: primary.last_seen_at > onlineThreshold,
+      user_id: primary.user_id,
+      user_email: primary.user_email,
+      session_count: bucket.length,
+    });
+  }
+
+  items.sort((a, b) => b.last_seen_at.localeCompare(a.last_seen_at));
   return c.json({ total: items.length, items });
 });
 
@@ -588,10 +632,10 @@ adminRouter.get('/devices/online', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// DELETE /admin/devices/:id - 撤销单个设备
+// POST /admin/devices/:id/revoke - 撤销设备（与原版 POST /{device_id}/revoke 对齐）
 // ---------------------------------------------------------------------------
 
-adminRouter.delete('/devices/:id', async (c) => {
+adminRouter.post('/devices/:id/revoke', async (c) => {
   const db = c.env.DB;
   const deviceId = c.req.param('id');
   const now = new Date().toISOString();
@@ -602,48 +646,11 @@ adminRouter.delete('/devices/:id', async (c) => {
   }
 
   await db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ?').bind(now, deviceId).run();
-  // 同时撤销该设备的所有 refresh token
   await db.prepare(
     "UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL"
   ).bind(now, deviceId).run();
 
   return c.json({ ok: true, device_id: deviceId });
-});
-
-// ---------------------------------------------------------------------------
-// POST /admin/devices/cleanup - 清理重复/旧设备（保留每个用户最近活跃的设备）
-// ---------------------------------------------------------------------------
-
-adminRouter.post('/devices/cleanup', async (c) => {
-  const db = c.env.DB;
-  const now = new Date().toISOString();
-  const body = await c.req.json<{ keep_per_user?: number }>().catch(() => ({}));
-  const keepPerUser = body.keep_per_user ?? 1;
-
-  // 查找所有用户
-  const users = await db.prepare('SELECT DISTINCT user_id FROM devices WHERE revoked_at IS NULL').all<{ user_id: string }>();
-
-  let revoked = 0;
-  for (const { user_id } of users.results) {
-    // 按 last_seen_at 降序取设备，跳过前 N 个（保留），其余标记撤销
-    const devices = await db
-      .prepare(
-        `SELECT id FROM devices WHERE user_id = ? AND revoked_at IS NULL ORDER BY last_seen_at DESC`
-      )
-      .bind(user_id)
-      .all<{ id: string }>();
-
-    const toRevoke = devices.results.slice(keepPerUser);
-    for (const d of toRevoke) {
-      await db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ?').bind(now, d.id).run();
-      await db.prepare(
-        "UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL"
-      ).bind(now, d.id).run();
-      revoked++;
-    }
-  }
-
-  return c.json({ ok: true, revoked_devices: revoked, keep_per_user: keepPerUser });
 });
 
 // ---------------------------------------------------------------------------
