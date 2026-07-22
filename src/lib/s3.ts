@@ -159,7 +159,8 @@ export async function uploadToS3(
   secretKey: string,
   region: string,
   key: string,
-  content: string
+  content: string | Uint8Array,
+  contentType: string = 'application/json'
 ): Promise<{ ok: boolean; message: string; etag?: string }> {
   try {
     const { url, headers } = await signS3Request(
@@ -172,12 +173,14 @@ export async function uploadToS3(
       'PUT'
     );
 
+    const contentLength = typeof content === 'string' ? content.length : content.length;
+
     const response = await fetch(url, {
       method: 'PUT',
       headers: {
         ...headers,
-        'Content-Type': 'application/json',
-        'Content-Length': String(content.length)
+        'Content-Type': contentType,
+        'Content-Length': String(contentLength)
       },
       body: content
     });
