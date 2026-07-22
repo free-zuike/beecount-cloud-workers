@@ -449,9 +449,13 @@ workspaceRouter.get('/accounts', async (c) => {
   let acctQuery = `SELECT * FROM read_account_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`;
   const acctParams: string[] = [...ledgerInternalIds];
 
+  // 默认按当前用户过滤，防止看到其他用户的数据
   if (filterUserId) {
     acctQuery += ' AND user_id = ?';
     acctParams.push(filterUserId);
+  } else {
+    acctQuery += ' AND user_id = ?';
+    acctParams.push(userId);
   }
 
   if (q) {
@@ -554,6 +558,9 @@ workspaceRouter.get('/categories', async (c) => {
   if (filterUserId) {
     catQuery += ' AND user_id = ?';
     catParams.push(filterUserId);
+  } else {
+    catQuery += ' AND user_id = ?';
+    catParams.push(userId);
   }
 
   if (q) {
@@ -643,6 +650,9 @@ workspaceRouter.get('/tags', async (c) => {
   if (filterUserId) {
     tagQuery += ' AND user_id = ?';
     tagParams.push(filterUserId);
+  } else {
+    tagQuery += ' AND user_id = ?';
+    tagParams.push(userId);
   }
 
   if (q) {
