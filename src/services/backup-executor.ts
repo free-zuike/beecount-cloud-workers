@@ -433,7 +433,10 @@ export async function performBackup(
         console.log(`[Backup] Using default prefix: ${basePrefix}`);
       }
 
-      const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+      // 使用本地时间（UTC+8）生成时间戳
+      const now = new Date();
+      const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
+      const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.tar.gz`;
 
       console.log(`[Backup] Uploading to S3 key: ${backupKey}`);
@@ -521,7 +524,10 @@ export async function performBackup(
         basePrefix = DEFAULT_PREFIX + '/';
       }
 
-      const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+      // 使用本地时间（UTC+8）生成时间戳
+      const now = new Date();
+      const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
+      const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.tar.gz`;
       await r2.put(backupKey, backupBytes, { httpMetadata: { contentType: 'application/gzip' } });
       return {
@@ -547,7 +553,10 @@ export async function performBackup(
         basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
       }
 
-      const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+      // 使用本地时间（UTC+8）生成时间戳
+      const now = new Date();
+      const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
+      const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.tar.gz`;
 
       console.log(`[Backup] Uploading to FTP: ${backupKey}`);
@@ -580,7 +589,10 @@ export async function performBackup(
         basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
       }
 
-      const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+      // 使用本地时间（UTC+8）生成时间戳
+      const now = new Date();
+      const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
+      const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.tar.gz`;
 
       console.log(`[Backup] Uploading to SFTP: ${backupKey}`);
