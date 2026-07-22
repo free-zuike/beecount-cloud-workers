@@ -107,7 +107,7 @@ import twoFactorRouter from './two_factor';
 function nowUtc(): string { return new Date().toISOString(); }
 
 /** 设备 upsert — 处理跨用户 device_id 冲突（与原版 _upsert_device 对齐） */
-async function upsertDevice(
+export async function upsertDevice(
   db: D1Database,
   userId: string,
   deviceId: string,
