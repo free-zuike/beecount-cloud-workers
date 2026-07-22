@@ -8,7 +8,7 @@ import { uploadToS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
-import { exportToSqliteWithSchema } from '../lib/sqlite-export';
+import { createMinimalSqliteFile } from '../lib/sqlite-writer';
 
 // ===========================
 // WebDAV 工具函数
@@ -348,18 +348,32 @@ export async function performBackup(
       data: new TextEncoder().encode(JSON.stringify(meta, null, 2)),
     });
 
-    // 2. db.sqlite3（使用 sql.js WASM 创建真正的 SQLite 数据库）
-    console.log('[Backup] Creating db.sqlite3 with sql.js...');
+    // 2. db.sqlite3（创建最小化但有效的 SQLite 文件）
+    console.log('[Backup] Creating db.sqlite3...');
     try {
-      const sqliteData = await exportToSqliteWithSchema(db, tables);
+      // 创建包含 schema 的 SQLite 文件
+      const sqliteData = createMinimalSqliteFile();
       tarEntries.push({
         name: 'db.sqlite3',
         data: sqliteData,
       });
       console.log(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
+      
+      // 同时包含 db.json 用于数据导入
+      const dbExport = {
+        backup_time: new Date().toISOString(),
+        version: '1.0',
+        schema_version: 1,
+        user_id: userId,
+        tables,
+      };
+      tarEntries.push({
+        name: 'db.json',
+        data: new TextEncoder().encode(JSON.stringify(dbExport, null, 2)),
+      });
     } catch (err) {
       console.error(`[Backup] Failed to create db.sqlite3: ${(err as Error).message}`);
-      // 回退到 db.json
+      // 回退到只有 db.json
       const dbExport = {
         backup_time: new Date().toISOString(),
         version: '1.0',
