@@ -140,29 +140,8 @@ adminRouter.get('/health', async (c) => {
   try {
     await db.prepare('SELECT 1').first();
     
-    // 优先使用前端传来的时区偏移，其次用 DB 存储的
-    const clientTzOffset = parseInt(c.req.query('tz_offset_minutes') ?? 'NaN', 10);
-    let timezoneOffset = Number.isFinite(clientTzOffset) ? clientTzOffset : 0;
-    
-    if (!Number.isFinite(clientTzOffset)) {
-      try {
-        const settings = await db.prepare('SELECT timezone_offset FROM system_settings WHERE id = ?').bind('default').first<{ timezone_offset: number }>();
-        if (settings && settings.timezone_offset !== null) {
-          timezoneOffset = settings.timezone_offset > 1000 
-            ? Math.floor(settings.timezone_offset / 60) 
-            : settings.timezone_offset;
-        }
-      } catch {}
-    }
-    
-    const now = new Date();
-    // 计算本地时间（UTC + timezoneOffset minutes）
-    const localMs = now.getTime() + timezoneOffset * 60 * 1000;
-    const localDate = new Date(localMs);
-    // 输出不带Z后缀的本地时间字符串，前端 new Date() 会当作本地时间解析，不会二次转换时区
-    const pad2 = (n: number) => String(n).padStart(2, '0');
-    const pad3 = (n: number) => String(n).padStart(3, '0');
-    const localTimeStr = `${localDate.getUTCFullYear()}-${pad2(localDate.getUTCMonth() + 1)}-${pad2(localDate.getUTCDate())}T${pad2(localDate.getUTCHours())}:${pad2(localDate.getUTCMinutes())}:${pad2(localDate.getUTCSeconds())}.${pad3(localDate.getUTCMilliseconds())}`;
+    // 直接返回 UTC 时间，前端 formatIsoDateTime 用 new Date().getHours() 自动转本地时间
+    // 不做任何时区偏移计算，避免 DB 中 timezone_offset 值不准确导致时间错误
     
     // 查询在线用户数（5分钟内有活动视为在线）
     let onlineCount = 0;
@@ -181,8 +160,7 @@ adminRouter.get('/health', async (c) => {
       status: 'ok',
       db: 'connected',
       online_ws_users: onlineCount,
-      time: localTimeStr,
-      timezone_offset: timezoneOffset,
+      time: new Date().toISOString(),
     });
   } catch (error) {
     return c.json({
