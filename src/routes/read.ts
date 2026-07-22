@@ -1269,13 +1269,25 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets', async (c) => {
   const db = c.env.DB;
   const ledgerExternalId = c.req.param('ledgerExternalId');
 
-  const ledger = await db
+  // 支持共享账本：先查 owner 账本，再查成员账本
+  let ledger = await db
     .prepare(
       `SELECT l.id, l.external_id, l.name FROM ledgers l
        WHERE l.user_id = ? AND l.external_id = ?`
     )
     .bind(userId, ledgerExternalId)
     .first<{ id: string; external_id: string; name: string | null }>();
+
+  if (!ledger) {
+    ledger = await db
+      .prepare(
+        `SELECT l.id, l.external_id, l.name FROM ledgers l
+         JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
+         WHERE l.external_id = ?`
+      )
+      .bind(userId, ledgerExternalId)
+      .first<{ id: string; external_id: string; name: string | null }>();
+  }
 
   if (!ledger) {
     return c.json({ error: 'Ledger not found' }, 404);
@@ -1349,10 +1361,17 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
   const db = c.env.DB;
   const ledgerExtId = c.req.param('ledgerExternalId');
 
-  const ledger = await db
+  // 支持共享账本
+  let ledger = await db
     .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
     .bind(userId, ledgerExtId)
     .first<{ id: string; external_id: string }>();
+  if (!ledger) {
+    ledger = await db
+      .prepare('SELECT l.id, l.external_id FROM ledgers l JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ? WHERE l.external_id = ?')
+      .bind(userId, ledgerExtId)
+      .first<{ id: string; external_id: string }>();
+  }
   if (!ledger) return c.json({ error: 'Ledger not found' }, 404);
 
   const now = new Date();
