@@ -1072,29 +1072,9 @@ adminRouter.get('/integrity/scan', async (c) => {
 
 adminRouter.get('/data-cleanup/scan', async (c) => {
   const db = c.env.DB;
-
-  const dbOrphans: unknown[] = [];
-  const fileOrphans: unknown[] = [];
-  const syncOrphans: unknown[] = [];
-
-  // 查找没有对应 sync_changes 的 projection 记录
-  const orphanTx = await db.prepare(`
-    SELECT p.sync_id, p.ledger_id FROM read_tx_projection p
-    LEFT JOIN sync_changes c ON p.sync_id = c.entity_sync_id AND c.entity_type = 'transaction'
-    WHERE c.change_id IS NULL LIMIT 100
-  `).all();
-
-  for (const row of orphanTx.results) {
-    syncOrphans.push({ type: 'transaction', sync_id: (row as any).sync_id, ledger_id: (row as any).ledger_id });
-  }
-
-  return c.json({
-    db_orphans: dbOrphans,
-    file_orphans: fileOrphans,
-    sync_orphans: syncOrphans,
-    total_count: syncOrphans.length,
-    total_size_bytes: 0,
-  });
+  const { scanAll } = await import('../services/data-cleanup/scanner');
+  const report = await scanAll(db);
+  return c.json(report);
 });
 
 // ---------------------------------------------------------------------------
@@ -1103,27 +1083,10 @@ adminRouter.get('/data-cleanup/scan', async (c) => {
 
 adminRouter.post('/data-cleanup/clean', async (c) => {
   const db = c.env.DB;
-  const userId = c.get('userId');
   const body = await c.req.json().catch(() => ({ records: [] }));
-  const records = (body.records || []) as Array<{ type: string; sync_id?: string; row_id?: string; file_path?: string }>;
-
-  let successCount = 0;
-  const failures: Array<{ record_key: string; error: string }> = [];
-
-  for (const record of records) {
-    try {
-      if (record.sync_id && record.type === 'transaction') {
-        await db.prepare('DELETE FROM read_tx_projection WHERE sync_id = ?').bind(record.sync_id).run();
-        successCount++;
-      } else {
-        failures.push({ record_key: record.sync_id || record.row_id || 'unknown', error: 'Unsupported cleanup type' });
-      }
-    } catch (err) {
-      failures.push({ record_key: record.sync_id || 'unknown', error: (err as Error).message });
-    }
-  }
-
-  return c.json({ success_count: successCount, failures });
+  const { clean } = await import('../services/data-cleanup/cleaner');
+  const result = await clean(db, body.records || []);
+  return c.json(result);
 });
 
 // ---------------------------------------------------------------------------
