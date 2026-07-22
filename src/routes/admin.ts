@@ -140,22 +140,22 @@ adminRouter.get('/health', async (c) => {
   try {
     await db.prepare('SELECT 1').first();
     
-    // 获取系统设置的时区（可能是分钟或秒，需要兼容旧数据）
-    let timezoneOffset = 0;
-    try {
-      const settings = await db.prepare('SELECT timezone_offset FROM system_settings WHERE id = ?').bind('default').first<{ timezone_offset: number }>();
-      if (settings && settings.timezone_offset !== null) {
-        // 如果值大于 1000，认为是秒（旧数据），转换为分钟
-        timezoneOffset = settings.timezone_offset > 1000 
-          ? Math.floor(settings.timezone_offset / 60) 
-          : settings.timezone_offset;
-      }
-    } catch {}
+    // 优先使用前端传来的时区偏移，其次用 DB 存储的
+    const clientTzOffset = parseInt(c.req.query('tz_offset_minutes') ?? 'NaN', 10);
+    let timezoneOffset = Number.isFinite(clientTzOffset) ? clientTzOffset : 0;
     
-    // 根据设置的时区调整时间：
-    // 获取当前UTC时间，然后根据存储的时区偏移（分钟）计算目标时间
+    if (!Number.isFinite(clientTzOffset)) {
+      try {
+        const settings = await db.prepare('SELECT timezone_offset FROM system_settings WHERE id = ?').bind('default').first<{ timezone_offset: number }>();
+        if (settings && settings.timezone_offset !== null) {
+          timezoneOffset = settings.timezone_offset > 1000 
+            ? Math.floor(settings.timezone_offset / 60) 
+            : settings.timezone_offset;
+        }
+      } catch {}
+    }
+    
     const now = new Date();
-    // 计算UTC时间加上时区偏移（分钟）后的时间
     const localTime = new Date(now.getTime() + timezoneOffset * 60 * 1000);
     
     // 查询在线用户数（5分钟内有活动视为在线）
