@@ -352,7 +352,9 @@ export async function performBackup(
     console.log('[Backup] Creating db.sqlite3...');
     try {
       // 创建包含 schema 的 SQLite 文件
+      console.log('[Backup] Calling createMinimalSqliteFile...');
       const sqliteData = createMinimalSqliteFile();
+      console.log(`[Backup] sqliteData length: ${sqliteData.length}`);
       tarEntries.push({
         name: 'db.sqlite3',
         data: sqliteData,

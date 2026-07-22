@@ -393,14 +393,20 @@ function createSqliteMasterPage(schemas: string[]): Uint8Array {
   page[8 + 1] = (cellOffset >> 8) & 0xFF;
   page[8 + 2] = cellOffset & 0xFF;
   
-  // 2. 所有表的 schema 记录
+  // 2. 所有表的 schema 记录 (只保存表名简化的 schema)
   for (let i = 0; i < schemas.length; i++) {
-    const record = buildSchemaRecord(i + 2, schemas[i]);
+    // 使用简化的 schema 以节省空间
+    const tableName = getTableNameFromSql(schemas[i]);
+    const simplifiedSql = `CREATE TABLE "${tableName}" (${getColumnsFromSql(schemas[i])})`;
+    const record = buildSchemaRecord(i + 2, simplifiedSql);
     cellOffset -= record.length;
+    if (cellOffset < 100) break; // 页头空间不够，停止
     page.set(new Uint8Array(record), cellOffset);
     const ptrOffset = 8 + 3 + i * 2;
-    page[ptrOffset] = (cellOffset >> 8) & 0xFF;
-    page[ptrOffset + 1] = cellOffset & 0xFF;
+    if (ptrOffset + 1 < 100) {
+      page[ptrOffset] = (cellOffset >> 8) & 0xFF;
+      page[ptrOffset + 1] = cellOffset & 0xFF;
+    }
   }
   
   return page;
@@ -457,6 +463,37 @@ function buildSchemaRecord(rowid: number, sql: string): number[] {
 function getTableNameFromSql(sql: string): string {
   const match = sql.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)["`]?/i);
   return match ? match[1] : 'unknown';
+}
+
+/**
+ * 从 CREATE TABLE 语句中提取简化的列定义
+ */
+function getColumnsFromSql(sql: string): string {
+  // 提取括号内的列定义
+  const match = sql.match(/\(([\s\S]+)\)/);
+  if (!match) return '';
+  
+  const columnsDef = match[1];
+  const columns: string[] = [];
+  
+  // 简单解析列定义
+  const lines = columnsDef.split(',').map(l => l.trim());
+  for (const line of lines) {
+    // 跳过 PRIMARY KEY, UNIQUE 约束
+    if (line.toUpperCase().includes('PRIMARY KEY') || 
+        line.toUpperCase().includes('UNIQUE(') ||
+        line.toUpperCase().startsWith('CONSTRAINT')) {
+      continue;
+    }
+    
+    // 提取列名
+    const colMatch = line.match(/["`]?(\w+)["`]?\s+(\w+)/);
+    if (colMatch) {
+      columns.push(`"${colMatch[1]}" ${colMatch[2]}`);
+    }
+  }
+  
+  return columns.join(', ');
 }
 
 /**
