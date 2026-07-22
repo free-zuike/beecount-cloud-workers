@@ -355,39 +355,37 @@ export async function performBackup(
       console.log('[Backup] Calling createMinimalSqliteFile...');
       const sqliteData = createMinimalSqliteFile();
       console.log(`[Backup] sqliteData length: ${sqliteData.length}`);
-      tarEntries.push({
-        name: 'db.sqlite3',
-        data: sqliteData,
-      });
-      console.log(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
       
-      // 同时包含 db.json 用于数据导入
-      const dbExport = {
-        backup_time: new Date().toISOString(),
-        version: '1.0',
-        schema_version: 1,
-        user_id: userId,
-        tables,
-      };
-      tarEntries.push({
-        name: 'db.json',
-        data: new TextEncoder().encode(JSON.stringify(dbExport, null, 2)),
-      });
+      // 验证 SQLite 文件头
+      const header = new TextDecoder().decode(sqliteData.slice(0, 16));
+      if (header.startsWith('SQLite format 3')) {
+        tarEntries.push({
+          name: 'db.sqlite3',
+          data: sqliteData,
+        });
+        console.log(`[Backup] db.sqlite3 created successfully: ${sqliteData.length} bytes`);
+      } else {
+        throw new Error('Invalid SQLite file header');
+      }
     } catch (err) {
       console.error(`[Backup] Failed to create db.sqlite3: ${(err as Error).message}`);
-      // 回退到只有 db.json
-      const dbExport = {
-        backup_time: new Date().toISOString(),
-        version: '1.0',
-        schema_version: 1,
-        user_id: userId,
-        tables,
-      };
-      tarEntries.push({
-        name: 'db.json',
-        data: new TextEncoder().encode(JSON.stringify(dbExport, null, 2)),
-      });
+      console.error(`[Backup] Stack: ${(err as Error).stack}`);
     }
+    
+    // 3. db.json（完整数据导出，用于恢复）
+    console.log('[Backup] Creating db.json...');
+    const dbExport = {
+      backup_time: new Date().toISOString(),
+      version: '1.0',
+      schema_version: 1,
+      user_id: userId,
+      tables,
+    };
+    tarEntries.push({
+      name: 'db.json',
+      data: new TextEncoder().encode(JSON.stringify(dbExport, null, 2)),
+    });
+    console.log(`[Backup] db.json created: ${JSON.stringify(dbExport).length} bytes`);
 
     // 3. 附件文件
     for (const [key, value] of attachments) {
@@ -531,13 +529,21 @@ export async function performBackup(
       const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
       const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.tar.gz`;
-      await r2.put(backupKey, backupBytes, { httpMetadata: { contentType: 'application/gzip' } });
-      return {
-        success: true,
-        message: 'Backup uploaded to R2',
-        backupSize,
-        backupPath: backupKey
-      };
+      
+      console.log(`[Backup] Uploading to R2: ${backupKey} (${backupSize} bytes)`);
+      try {
+        await r2.put(backupKey, backupBytes, { httpMetadata: { contentType: 'application/gzip' } });
+        console.log(`[Backup] R2 upload successful: ${backupKey}`);
+        return {
+          success: true,
+          message: 'Backup uploaded to R2',
+          backupSize,
+          backupPath: backupKey
+        };
+      } catch (r2Err) {
+        console.error(`[Backup] R2 upload failed: ${(r2Err as Error).message}`);
+        return { success: false, message: `R2 upload failed: ${(r2Err as Error).message}` };
+      }
     } else if (remoteConfig.backend_type === 'ftp') {
       const ftpHost = remoteConfig.host || remoteConfig.hostname;
       const ftpPort = parseInt(remoteConfig.port || '21', 10);

@@ -1,11 +1,36 @@
 import { performBackup, calculateNextRun } from './backup-executor';
 
+/**
+ * 清理超时的 pending 状态备份记录
+ * 如果备份卡在 pending 状态超过 5 分钟，标记为 failed
+ */
+async function cleanupStalePendingBackups(db: D1Database): Promise<void> {
+  try {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const result = await db
+      .prepare(
+        `UPDATE backup_runs SET status = 'failed', error_message = 'Backup timed out (page refresh or connection lost)'
+         WHERE status = 'pending' AND started_at < ?`
+      )
+      .bind(fiveMinutesAgo)
+      .run();
+    if (result.meta.changes > 0) {
+      console.log(`[CRON] Cleaned up ${result.meta.changes} stale pending backups`);
+    }
+  } catch (err) {
+    console.error('[CRON] Failed to cleanup stale pending backups:', err);
+  }
+}
+
 export async function processBackupSchedule(
   db: D1Database,
   schedule: any,
   beeCountDO?: DurableObjectNamespace,
   r2?: R2Bucket
 ) {
+  // 清理超时的 pending 备份
+  await cleanupStalePendingBackups(db);
+
   console.log(`[CRON] Processing schedule ${schedule.id}: ${schedule.name}`);
 
   // Use BeeCount DO for distributed locking
