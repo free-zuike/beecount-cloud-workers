@@ -124,8 +124,20 @@ export async function upsertDevice(
   // 检查 device_id 是否被其他用户占用
   const existingAny = await db.prepare('SELECT id, user_id FROM devices WHERE id = ?').bind(targetId).first<{ id: string; user_id: string }>();
   if (existingAny && existingAny.user_id !== userId) {
-    console.log(`[AUTH] device_id cross-user collision id=${targetId} prev_user=${existingAny.user_id} new_user=${userId} -> minting new device_id`);
-    targetId = randomUUID();
+    console.log(`[AUTH] device_id cross-user collision id=${targetId} prev_user=${existingAny.user_id} new_user=${userId}`);
+    // Web 端切换账号时 localStorage 的 device_id 属于另一用户
+    // 查找当前用户最近活跃的同平台设备复用，避免重复创建
+    const reuseDevice = await db
+      .prepare('SELECT id FROM devices WHERE user_id = ? AND platform = ? AND revoked_at IS NULL ORDER BY last_seen_at DESC LIMIT 1')
+      .bind(userId, platform)
+      .first<{ id: string }>();
+    if (reuseDevice) {
+      targetId = reuseDevice.id;
+      console.log(`[AUTH] reusing existing device ${targetId} for user ${userId}`);
+    } else {
+      targetId = randomUUID();
+      console.log(`[AUTH] minting new device_id ${targetId}`);
+    }
   }
 
   const existingDevice = await db.prepare('SELECT id, revoked_at FROM devices WHERE id = ? AND user_id = ?').bind(targetId, userId).first<{ id: string; revoked_at: string | null }>();
