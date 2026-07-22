@@ -160,9 +160,24 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
     { key: 'remote', label: 'Target remote', placeholder: 'other-remote:path' },
   ],
   local: [],
+  r2: [
+    {
+      key: 'bucket',
+      label: 'Bucket',
+      placeholder: 'my-backup-bucket',
+      hint: 'R2 存储桶名称。使用 Worker binding 直连，无需配置密钥。',
+    },
+    {
+      key: 'root_path',
+      label: 'Root Path',
+      placeholder: 'beecount',
+      hint: '备份文件存放的根目录，默认 beecount。',
+    },
+  ],
 }
 
 const BACKEND_LABELS: Record<string, string> = {
+  r2: 'Cloudflare R2 (Worker 直连)',
   s3: 'S3 兼容(AWS / Cloudflare R2 / Aliyun OSS / MinIO ...)',
   b2: 'Backblaze B2',
   drive: 'Google Drive',

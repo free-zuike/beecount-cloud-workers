@@ -520,18 +520,16 @@ adminRouter.get('/devices', async (c) => {
     bindParams.push(onlineThreshold);
   }
 
-  const rows = await db
-    .prepare(
-      `SELECT d.id, d.name, d.platform, d.app_version, d.os_version, d.device_model,
-              d.last_ip, d.created_at, d.last_seen_at,
-              u.id as user_id, u.email as user_email
-       FROM devices d
-       JOIN users u ON d.user_id = u.id
-       WHERE ${whereClause}
-       ORDER BY d.last_seen_at DESC`
-    )
-    .bind(...bindParams)
-    .all<{
+  const stmt = db.prepare(
+    `SELECT d.id, d.name, d.platform, d.app_version, d.os_version, d.device_model,
+            d.last_ip, d.created_at, d.last_seen_at,
+            u.id as user_id, u.email as user_email
+     FROM devices d
+     JOIN users u ON d.user_id = u.id
+     WHERE ${whereClause}
+     ORDER BY d.last_seen_at DESC`
+  );
+  const rows = await (bindParams.length > 0 ? stmt.bind(...bindParams) : stmt).all<{
       id: string;
       name: string;
       platform: string;
