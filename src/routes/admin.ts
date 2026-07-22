@@ -1081,7 +1081,7 @@ adminRouter.get('/data-cleanup/scan', async (c) => {
   const orphanTx = await db.prepare(`
     SELECT p.sync_id, p.ledger_id FROM read_tx_projection p
     LEFT JOIN sync_changes c ON p.sync_id = c.entity_sync_id AND c.entity_type = 'transaction'
-    WHERE c.id IS NULL LIMIT 100
+    WHERE c.change_id IS NULL LIMIT 100
   `).all();
 
   for (const row of orphanTx.results) {
