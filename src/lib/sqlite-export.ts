@@ -3,19 +3,7 @@
  * 使用 sql.js WASM 在 Cloudflare Workers 上创建 db.sqlite3
  */
 // @ts-ignore - sql.js 类型声明
-let sqlJsModule: any = null;
-
-async function getSqlJs() {
-  if (!sqlJsModule) {
-    try {
-      sqlJsModule = await import('sql.js');
-    } catch (e) {
-      console.error('[SQLite] Failed to load sql.js:', e);
-      throw e;
-    }
-  }
-  return sqlJsModule;
-}
+import initSqlJs from 'sql.js';
 
 /**
  * 将 D1 数据库导出为 SQLite 文件的 Uint8Array
@@ -26,8 +14,7 @@ export async function exportToSqlite(
   tables: Record<string, unknown[]>
 ): Promise<Uint8Array> {
   // 初始化 sql.js
-  const sqlJs = await getSqlJs();
-  const SQL = await sqlJs.default();
+  const SQL = await initSqlJs();
 
   // 创建内存中的 SQLite 数据库
   const sqliteDb = new SQL.Database();
@@ -84,8 +71,7 @@ export async function exportToSqliteWithSchema(
   db: D1Database,
   tables: Record<string, unknown[]>
 ): Promise<Uint8Array> {
-  const sqlJs = await getSqlJs();
-  const SQL = await sqlJs.default();
+  const SQL = await initSqlJs();
   const sqliteDb = new SQL.Database();
 
   // 创建与原版对齐的表结构
