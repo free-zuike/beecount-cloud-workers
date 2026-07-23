@@ -8,7 +8,24 @@ import { uploadToS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
-import { exportToSqliteWithSchema } from '../lib/sqlite-export';
+
+/**
+ * 使用 D1 dump() 方法导出 SQLite 文件
+ * 参考: https://developers.cloudflare.com/d1/worker-api/d1-database/#dump
+ * 注意: 此 API 仅适用于 alpha 版本的数据库
+ */
+async function dumpD1Database(db: D1Database): Promise<Uint8Array | null> {
+  try {
+    console.log('[Backup] Attempting D1 dump()...');
+    const dump = await db.dump();
+    console.log(`[Backup] D1 dump successful: ${dump.byteLength} bytes`);
+    return new Uint8Array(dump);
+  } catch (err) {
+    console.error(`[Backup] D1 dump() failed: ${(err as Error).message}`);
+    console.log('[Backup] Note: dump() only works on alpha databases');
+    return null;
+  }
+}
 
 // ===========================
 // WebDAV 工具函数
@@ -348,30 +365,22 @@ export async function performBackup(
       data: new TextEncoder().encode(JSON.stringify(meta, null, 2)),
     });
 
-    // 2. db.sqlite3（使用 sql.js 创建包含完整数据的 SQLite 文件）
-    console.log('[Backup] Creating db.sqlite3 with sql.js...');
-    try {
-      // 使用 sql.js 创建包含 schema 和数据的 SQLite 文件
-      const sqliteData = await exportToSqliteWithSchema(db, tables);
-      console.log(`[Backup] sqliteData length: ${sqliteData.length}`);
-      
-      // 验证 SQLite 文件头
-      const header = new TextDecoder().decode(sqliteData.slice(0, 16));
-      if (header.startsWith('SQLite format 3')) {
-        tarEntries.push({
-          name: 'db.sqlite3',
-          data: sqliteData,
-        });
-        console.log(`[Backup] db.sqlite3 created successfully: ${sqliteData.length} bytes`);
-      } else {
-        throw new Error('Invalid SQLite file header');
-      }
-    } catch (err) {
-      console.error(`[Backup] Failed to create db.sqlite3: ${(err as Error).message}`);
-      console.error(`[Backup] Stack: ${(err as Error).stack}`);
-      
-      // 回退：使用最小化 SQLite 文件 + db.json
-      console.log('[Backup] Falling back to minimal SQLite + db.json');
+    // 2. db.sqlite3（使用 D1 dump() 或回退到最小化 SQLite）
+    console.log('[Backup] Creating db.sqlite3...');
+    
+    // 尝试使用 D1 dump() 方法（仅适用于 alpha 数据库）
+    const dumpData = await dumpD1Database(db);
+    
+    if (dumpData && dumpData.length > 100) {
+      // dump() 成功，使用导出的 SQLite 文件
+      tarEntries.push({
+        name: 'db.sqlite3',
+        data: dumpData,
+      });
+      console.log(`[Backup] db.sqlite3 created via D1 dump(): ${dumpData.length} bytes`);
+    } else {
+      // dump() 失败，使用最小化 SQLite 文件
+      console.log('[Backup] D1 dump() failed, using minimal SQLite file');
       try {
         const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
         const minimalSqlite = createMinimalSqliteFile();
@@ -379,8 +388,9 @@ export async function performBackup(
           name: 'db.sqlite3',
           data: minimalSqlite,
         });
-      } catch (fallbackErr) {
-        console.error(`[Backup] Fallback also failed: ${(fallbackErr as Error).message}`);
+        console.log(`[Backup] db.sqlite3 created (minimal): ${minimalSqlite.length} bytes`);
+      } catch (err) {
+        console.error(`[Backup] Failed to create minimal SQLite: ${(err as Error).message}`);
       }
       
       // 始终包含 db.json 用于数据恢复
@@ -395,6 +405,7 @@ export async function performBackup(
         name: 'db.json',
         data: new TextEncoder().encode(JSON.stringify(dbExport, null, 2)),
       });
+      console.log(`[Backup] db.json created: ${JSON.stringify(dbExport).length} bytes`);
     }
 
     // 3. 附件文件
