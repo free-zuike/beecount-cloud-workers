@@ -20,6 +20,7 @@ async function exportD1ViaApi(
 ): Promise<string | null> {
   try {
     console.log('[Backup] Exporting D1 via REST API...');
+    console.log(`[Backup] Account: ${accountId}, Database: ${databaseId}`);
     
     // 启动导出任务
     const exportUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/export`;
@@ -34,7 +35,7 @@ async function exportD1ViaApi(
     
     const startResult = await startResponse.json() as any;
     if (!startResult.success || !startResult.result?.at_bookmark) {
-      console.error('[Backup] Export start failed:', startResult.errors);
+      console.error('[Backup] Export start failed:', JSON.stringify(startResult.errors));
       return null;
     }
     
@@ -43,8 +44,8 @@ async function exportD1ViaApi(
     
     // 轮询等待导出完成
     let signedUrl = null;
-    for (let i = 0; i < 30; i++) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+    for (let i = 0; i < 60; i++) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       const pollResponse = await fetch(exportUrl, {
         method: 'POST',
@@ -58,15 +59,17 @@ async function exportD1ViaApi(
       const pollResult = await pollResponse.json() as any;
       if (pollResult.success && pollResult.result?.signed_url) {
         signedUrl = pollResult.result.signed_url;
-        console.log(`[Backup] Export ready, URL obtained`);
+        console.log(`[Backup] Export ready after ${i + 1} attempts`);
         break;
       }
       
-      console.log(`[Backup] Waiting for export... (${i + 1}/30)`);
+      if (i % 10 === 0) {
+        console.log(`[Backup] Waiting for export... (${i + 1}/60)`);
+      }
     }
     
     if (!signedUrl) {
-      console.error('[Backup] Export timed out');
+      console.error('[Backup] Export timed out after 120 seconds');
       return null;
     }
     
@@ -85,20 +88,6 @@ async function exportD1ViaApi(
     console.error(`[Backup] D1 API export failed: ${(err as Error).message}`);
     return null;
   }
-}
-
-/**
- * 将 SQL 转换为 SQLite 文件
- * 使用简化的转换方式
- */
-function sqlToSqlite(sql: string): Uint8Array {
-  // 创建最小化 SQLite 文件结构
-  // SQL 导出包含 CREATE TABLE 和 INSERT 语句
-  // 我们需要解析这些语句并创建 SQLite 文件
-  
-  // 对于现在，返回一个包含 SQL 的文本文件
-  // 用户可以用 sqlite3 命令行工具导入
-  return new TextEncoder().encode(sql);
 }
 
 // ===========================
@@ -311,7 +300,7 @@ const BACKUP_TABLES = [
   'personal_access_tokens',
   'backup_remotes',
   'backup_schedules',
-  'backup_schedule_remotes',
+  // 'backup_schedule_remotes', // 表可能不存在，跳过
   'system_settings',
   'recovery_codes',
   'exchange_rate_overrides',
@@ -442,10 +431,11 @@ export async function performBackup(
     // 2. 数据库导出
     console.log('[Backup] Creating database export...');
     
-    // 尝试使用 D1 REST API 导出（需要配置环境变量）
-    const accountId = remoteConfig.account_id || (remoteConfig as any).CLOUDFLARE_ACCOUNT_ID;
-    const databaseId = remoteConfig.database_id || '15d7d97d-0ba1-4a72-963f-a1b649b48042';
-    const apiToken = remoteConfig.api_token || (remoteConfig as any).CLOUDFLARE_API_TOKEN;
+    // 使用 D1 REST API 导出（需要配置环境变量）
+    // Account ID 从日志中获取: 3f762871bd2e6a373f70d3b3a8e5dc88
+    const accountId = (remoteConfig as any).CLOUDFLARE_ACCOUNT_ID || '3f762871bd2e6a373f70d3b3a8e5dc88';
+    const databaseId = '15d7d97d-0ba1-4a72-963f-a1b649b48042';
+    const apiToken = (remoteConfig as any).CLOUDFLARE_API_TOKEN;
     
     if (accountId && databaseId && apiToken) {
       const sqlExport = await exportD1ViaApi(accountId, databaseId, apiToken);
