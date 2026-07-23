@@ -107,43 +107,54 @@ export async function processBackupSchedule(
     }
 
     const startedAt = new Date().toISOString();
-    const runInsertResult = await db.prepare('INSERT INTO backup_runs (schedule_id, user_id, ledger_id, remote_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(schedule.id, schedule.user_id, ledger.id, remoteId, 'pending', startedAt).run();
-    const runId = (runInsertResult as any).lastRowId;
+    
+    // 插入备份记录
+    let runId: number | null = null;
+    try {
+      const runInsertResult = await db.prepare('INSERT INTO backup_runs (schedule_id, user_id, ledger_id, remote_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(schedule.id, schedule.user_id, ledger.id, remoteId, 'pending', startedAt).run();
+      runId = (runInsertResult as any).lastRowId;
+      console.log(`[CRON] Created backup run: id=${runId}`);
+    } catch (insertErr) {
+      console.error(`[CRON] Failed to insert backup_runs: ${(insertErr as Error).message}`);
+      return;
+    }
 
     try {
-      console.log(`[CRON] Starting backup for schedule ${schedule.id}...`);
-      const backupResult = await performBackup(db, runId, schedule.user_id, ledger.id, remoteConfig, shouldEncrypt, r2);
+      console.log(`[CRON] Starting backup for schedule ${schedule.id}, run ${runId}...`);
+      const backupResult = await performBackup(db, runId!, schedule.user_id, ledger.id, remoteConfig, shouldEncrypt, r2);
       const finishedAt = new Date().toISOString();
 
       console.log(`[CRON] Backup result: success=${backupResult.success}, size=${backupResult.backupSize}, path=${backupResult.backupPath}`);
 
-      if (backupResult.success) {
-        try {
-          await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ? WHERE id = ?')
-            .bind('completed', finishedAt, backupResult.backupSize, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath, runId).run();
-          console.log(`[CRON] Backup status updated to completed for run ${runId}`);
-        } catch (dbErr) {
-          console.error(`[CRON] Failed to update backup_runs status: ${(dbErr as Error).message}`);
-          // 即使状态更新失败，备份已经成功上传到 R2
-        }
-      } else {
-        try {
-          await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?')
-            .bind('failed', finishedAt, backupResult.message, runId).run();
-          console.log(`[CRON] Backup status updated to failed for run ${runId}`);
-        } catch (dbErr) {
-          console.error(`[CRON] Failed to update backup_runs status: ${(dbErr as Error).message}`);
-        }
-        console.log(`[CRON] Backup failed for schedule ${schedule.id}:`, backupResult.message);
+      // 更新备份状态
+      const updateSql = backupResult.success
+        ? 'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ? WHERE id = ?'
+        : 'UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?';
+      
+      const updateParams = backupResult.success
+        ? ['completed', finishedAt, backupResult.backupSize, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath, runId]
+        : ['failed', finishedAt, backupResult.message, runId];
+
+      console.log(`[CRON] Updating backup_runs: id=${runId}, status=${backupResult.success ? 'completed' : 'failed'}`);
+      
+      try {
+        await db.prepare(updateSql).bind(...updateParams).run();
+        console.log(`[CRON] Backup status updated successfully for run ${runId}`);
+      } catch (dbErr) {
+        console.error(`[CRON] Failed to update backup_runs status: ${(dbErr as Error).message}`);
+        console.error(`[CRON] Update SQL: ${updateSql}`);
+        console.error(`[CRON] Update params: ${JSON.stringify(updateParams)}`);
       }
 
+      // 更新调度状态
       try {
         const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
         await db.prepare('UPDATE backup_schedules SET last_run_at = ?, last_run_status = ?, next_run_at = ?, updated_at = ? WHERE id = ?')
           .bind(startedAt, backupResult.success ? 'completed' : 'failed', nextRun, startedAt, schedule.id).run();
-      } catch (dbErr) {
-        console.error(`[CRON] Failed to update backup_schedules: ${(dbErr as Error).message}`);
+        console.log(`[CRON] Schedule status updated for schedule ${schedule.id}`);
+      } catch (schedErr) {
+        console.error(`[CRON] Failed to update backup_schedules: ${(schedErr as Error).message}`);
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
