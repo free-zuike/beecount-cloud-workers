@@ -1,28 +1,142 @@
 /**
- * 最小化 SQLite 文件写入器
- * 不依赖 WASM，直接构建 SQLite 二进制格式
- * 只创建 schema，数据通过 INSERT 语句在原版恢复时导入
+ * SQLite 文件写入器
+ * 创建包含 schema 和数据的 SQLite 文件
+ * 与原版 BeeCount-Cloud 备份格式兼容
  */
 
 const PAGE_SIZE = 4096;
 
 /**
- * SQLite 文件头 (100 bytes)
+ * 编码 SQLite 变长整数
  */
-function createFileHeader(): Uint8Array {
+function encodeVarint(value: number): number[] {
+  if (value <= 0x7F) return [value];
+  const result: number[] = [];
+  let v = value;
+  while (v > 0x7F) {
+    result.push((v & 0x7F) | 0x80);
+    v >>= 7;
+  }
+  result.push(v & 0x7F);
+  return result;
+}
+
+/**
+ * 编码文本为 SQLite 格式
+ */
+function encodeText(text: string | null): number[] {
+  if (text === null || text === undefined) return [0]; // NULL
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length === 0) return [1]; // empty text
+  if (bytes.length <= 127) return [bytes.length + 13, ...bytes];
+  // 长文本: type = 252 + length bytes
+  const lenBytes = encodeVarint(bytes.length);
+  return [252, ...lenBytes, ...bytes];
+}
+
+/**
+ * 编码整数为 SQLite 格式
+ */
+function encodeInteger(value: number | null): number[] {
+  if (value === null || value === undefined) return [0]; // NULL
+  if (value === 0) return [8]; // 0
+  if (value === 1) return [9]; // 1
+  if (value === -1) return [10]; // -1
+  if (value >= -128 && value <= 127) return [11, value & 0xFF];
+  if (value >= -32768 && value <= 32767) return [12, (value >> 8) & 0xFF, value & 0xFF];
+  if (value >= -8388608 && value <= 8388607) return [13, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF];
+  if (value >= -2147483648 && value <= 2147483647) return [14, (value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF];
+  // 作为浮点数
+  return encodeFloat(value);
+}
+
+/**
+ * 编码浮点数为 SQLite 格式
+ */
+function encodeFloat(value: number): number[] {
+  const buffer = new ArrayBuffer(8);
+  new DataView(buffer).setFloat64(0, value, false);
+  const bytes = new Uint8Array(buffer);
+  return [7, ...bytes];
+}
+
+/**
+ * 构建记录 payload
+ */
+function buildRecordPayload(columns: string[], values: any[]): number[] {
+  const payload: number[] = [];
+  
+  // 计算 serial types
+  const serialTypes: number[] = [];
+  for (let i = 0; i < columns.length; i++) {
+    const val = values[i];
+    if (val === null || val === undefined) {
+      serialTypes.push(0);
+    } else if (typeof val === 'number') {
+      if (Number.isInteger(val)) {
+        serialTypes.push(...encodeInteger(val).slice(0, 1)); // 只取 serial type
+      } else {
+        serialTypes.push(7); // float64
+      }
+    } else if (typeof val === 'boolean') {
+      serialTypes.push(8); // integer 0 or 1
+    } else {
+      const str = String(val);
+      const bytes = new TextEncoder().encode(str);
+      if (bytes.length <= 127) {
+        serialTypes.push(bytes.length + 13);
+      } else {
+        serialTypes.push(252);
+      }
+    }
+  }
+  
+  // Header size varint
+  const headerSize = 1 + serialTypes.length;
+  payload.push(...encodeVarint(headerSize));
+  payload.push(...serialTypes);
+  
+  // Column values
+  for (let i = 0; i < columns.length; i++) {
+    const val = values[i];
+    if (val === null || val === undefined) {
+      // NULL - no bytes
+    } else if (typeof val === 'number') {
+      if (Number.isInteger(val)) {
+        payload.push(...encodeInteger(val).slice(1)); // skip serial type byte
+      } else {
+        const buffer = new ArrayBuffer(8);
+        new DataView(buffer).setFloat64(0, val, false);
+        payload.push(...new Uint8Array(buffer));
+      }
+    } else if (typeof val === 'boolean') {
+      payload.push(val ? 1 : 0);
+    } else {
+      const bytes = new TextEncoder().encode(String(val));
+      payload.push(...bytes);
+    }
+  }
+  
+  return payload;
+}
+
+/**
+ * 创建 SQLite 文件头
+ */
+function createFileHeader(tableCount: number, totalPages: number): Uint8Array {
   const header = new Uint8Array(PAGE_SIZE);
   
-  // Magic string: "SQLite format 3\000"
+  // Magic: "SQLite format 3\0"
   const magic = new TextEncoder().encode('SQLite format 3\0');
   header.set(magic, 0);
   
-  // Page size: 4096 = 0x1000
+  // Page size: 4096
   header[16] = 0x10;
   header[17] = 0x00;
   
   // File format versions
-  header[18] = 1; // write version
-  header[19] = 1; // read version
+  header[18] = 1; // write
+  header[19] = 1; // read
   
   // Reserved space
   header[20] = 0;
@@ -32,22 +146,22 @@ function createFileHeader(): Uint8Array {
   header[22] = 32;
   header[23] = 32;
   
-  // Database size in pages (2 pages: header + schema)
-  header[28] = 0;
-  header[29] = 0;
-  header[30] = 0;
-  header[31] = 2;
+  // Database size in pages
+  header[28] = (totalPages >> 24) & 0xFF;
+  header[29] = (totalPages >> 16) & 0xFF;
+  header[30] = (totalPages >> 8) & 0xFF;
+  header[31] = totalPages & 0xFF;
   
-  // Schema format number: 4
+  // Schema format: 4
   header[47] = 4;
   
-  // Text encoding: 1 (UTF-8)
+  // Text encoding: UTF-8
   header[59] = 1;
   
   // Version valid for: 1
   header[95] = 1;
   
-  // SQLite version: 3.35.4 = 0x00033504
+  // SQLite version: 3.35.4
   header[96] = 0x00;
   header[97] = 0x03;
   header[98] = 0x35;
@@ -57,355 +171,59 @@ function createFileHeader(): Uint8Array {
 }
 
 /**
- * 构建 sqlite_master 表的 schema 记录
+ * 创建 sqlite_master 表页
  */
-function buildSqliteMasterSchema(): string {
-  return `CREATE TABLE sqlite_master(
-    type TEXT,
-    name TEXT,
-    tbl_name TEXT,
-    rootpage INTEGER,
-    sql TEXT
-  )`;
-}
-
-/**
- * 构建用户表的 schema SQL
- */
-function buildUserTableSchema(): string {
-  return `CREATE TABLE users (
-    id TEXT PRIMARY KEY,
-    email TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    is_admin INTEGER DEFAULT 0 NOT NULL,
-    is_enabled INTEGER DEFAULT 1 NOT NULL,
-    created_at TEXT NOT NULL,
-    totp_secret_encrypted TEXT,
-    totp_enabled INTEGER DEFAULT 0 NOT NULL,
-    totp_enabled_at TEXT
-  )`;
-}
-
-/**
- * 构建 userProfile 表的 schema SQL
- */
-function buildUserProfileTableSchema(): string {
-  return `CREATE TABLE user_profiles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT UNIQUE NOT NULL,
-    display_name TEXT,
-    avatar_file_id TEXT,
-    avatar_version INTEGER DEFAULT 0,
-    income_is_red INTEGER DEFAULT 1,
-    theme_primary_color TEXT,
-    appearance_json TEXT,
-    ai_config_json TEXT,
-    updated_at TEXT NOT NULL,
-    primary_currency TEXT DEFAULT 'CNY'
-  )`;
-}
-
-/**
- * 构建设备表的 schema SQL
- */
-function buildDeviceTableSchema(): string {
-  return `CREATE TABLE devices (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    name TEXT DEFAULT 'Unknown Device',
-    platform TEXT DEFAULT 'unknown',
-    app_version TEXT,
-    os_version TEXT,
-    device_model TEXT,
-    last_ip TEXT,
-    last_seen_at TEXT NOT NULL,
-    revoked_at TEXT,
-    created_at TEXT NOT NULL
-  )`;
-}
-
-/**
- * 构建账本表的 schema SQL
- */
-function buildLedgerTableSchema(): string {
-  return `CREATE TABLE ledgers (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    external_id TEXT NOT NULL,
-    name TEXT,
-    currency TEXT DEFAULT 'CNY' NOT NULL,
-    role TEXT DEFAULT 'owner' NOT NULL,
-    is_shared INTEGER DEFAULT 0 NOT NULL,
-    invite_code TEXT,
-    invite_expires_at TEXT,
-    created_at TEXT NOT NULL,
-    month_start_day INTEGER DEFAULT 1
-  )`;
-}
-
-/**
- * 构建账本成员表的 schema SQL
- */
-function buildLedgerMemberTableSchema(): string {
-  return `CREATE TABLE ledger_members (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ledger_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    role TEXT DEFAULT 'editor' NOT NULL,
-    joined_at TEXT NOT NULL,
-    UNIQUE(ledger_id, user_id)
-  )`;
-}
-
-/**
- * 构建账本邀请表的 schema SQL
- */
-function buildLedgerInviteTableSchema(): string {
-  return `CREATE TABLE ledger_invites (
-    id TEXT PRIMARY KEY,
-    ledger_id TEXT NOT NULL,
-    code TEXT NOT NULL,
-    target_role TEXT DEFAULT 'editor' NOT NULL,
-    invited_by TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    used_at TEXT,
-    used_by TEXT,
-    created_at TEXT NOT NULL
-  )`;
-}
-
-/**
- * 构建同步变更表的 schema SQL
- */
-function buildSyncChangeTableSchema(): string {
-  return `CREATE TABLE sync_changes (
-    change_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    ledger_id TEXT,
-    entity_type TEXT NOT NULL,
-    entity_sync_id TEXT NOT NULL,
-    action TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    updated_by_device_id TEXT,
-    updated_by_user_id TEXT,
-    scope TEXT DEFAULT 'ledger'
-  )`;
-}
-
-/**
- * 构建同步游标表的 schema SQL
- */
-function buildSyncCursorTableSchema(): string {
-  return `CREATE TABLE sync_cursors (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    device_id TEXT NOT NULL,
-    ledger_external_id TEXT NOT NULL,
-    last_cursor INTEGER DEFAULT 0 NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(user_id, device_id, ledger_external_id)
-  )`;
-}
-
-/**
- * 构建附件文件表的 schema SQL
- */
-function buildAttachmentFileTableSchema(): string {
-  return `CREATE TABLE attachment_files (
-    id TEXT PRIMARY KEY,
-    ledger_id TEXT,
-    user_id TEXT NOT NULL,
-    sha256 TEXT NOT NULL,
-    size_bytes INTEGER DEFAULT 0,
-    mime_type TEXT,
-    file_name TEXT,
-    storage_path TEXT NOT NULL,
-    attachment_kind TEXT DEFAULT 'transaction' NOT NULL,
-    created_at TEXT NOT NULL
-  )`;
-}
-
-/**
- * 构建 PAT 表的 schema SQL
- */
-function buildPATTableSchema(): string {
-  return `CREATE TABLE personal_access_tokens (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    token_hash TEXT UNIQUE NOT NULL,
-    prefix TEXT NOT NULL,
-    scopes_json TEXT DEFAULT '[]' NOT NULL,
-    expires_at TEXT,
-    last_used_at TEXT,
-    last_used_ip TEXT,
-    revoked_at TEXT,
-    created_at TEXT NOT NULL
-  )`;
-}
-
-/**
- * 构建备份远端表的 schema SQL
- */
-function buildBackupRemoteTableSchema(): string {
-  return `CREATE TABLE backup_remotes (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    backend_type TEXT NOT NULL,
-    config_summary TEXT NOT NULL,
-    encrypted INTEGER DEFAULT 0 NOT NULL,
-    last_test_at TEXT,
-    last_test_ok INTEGER,
-    last_test_error TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`;
-}
-
-/**
- * 构建备份调度表的 schema SQL
- */
-function buildBackupScheduleTableSchema(): string {
-  return `CREATE TABLE backup_schedules (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    cron_expr TEXT NOT NULL,
-    remote_ids TEXT,
-    retention_days INTEGER DEFAULT 30,
-    include_attachments INTEGER DEFAULT 1 NOT NULL,
-    enabled INTEGER DEFAULT 1 NOT NULL,
-    timezone_offset INTEGER DEFAULT 0,
-    next_run_at TEXT,
-    last_run_at TEXT,
-    last_run_status TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`;
-}
-
-/**
- * 构建系统设置表的 schema SQL
- */
-function buildSystemSettingTableSchema(): string {
-  return `CREATE TABLE system_settings (
-    id TEXT PRIMARY KEY,
-    timezone_offset INTEGER DEFAULT 0,
-    cloud_config_json TEXT,
-    setup_completed INTEGER DEFAULT 0 NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`;
-}
-
-/**
- * 构建恢复码表的 schema SQL
- */
-function buildRecoveryCodeTableSchema(): string {
-  return `CREATE TABLE recovery_codes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    code_hash TEXT NOT NULL,
-    used_at TEXT,
-    created_at TEXT NOT NULL
-  )`;
-}
-
-/**
- * 构建所有表的 schema
- */
-function buildAllSchemas(): string[] {
-  return [
-    buildSqliteMasterSchema(),
-    buildUserTableSchema(),
-    buildUserProfileTableSchema(),
-    buildDeviceTableSchema(),
-    buildLedgerTableSchema(),
-    buildLedgerMemberTableSchema(),
-    buildLedgerInviteTableSchema(),
-    buildSyncChangeTableSchema(),
-    buildSyncCursorTableSchema(),
-    buildAttachmentFileTableSchema(),
-    buildPATTableSchema(),
-    buildBackupRemoteTableSchema(),
-    buildBackupScheduleTableSchema(),
-    buildSystemSettingTableSchema(),
-    buildRecoveryCodeTableSchema(),
-  ];
-}
-
-/**
- * 编码 SQLite 变长整数 (varint)
- */
-function encodeVarint(value: number): number[] {
-  const result: number[] = [];
-  while (value > 0x7F) {
-    result.push((value & 0x7F) | 0x80);
-    value >>= 7;
-  }
-  result.push(value & 0x7F);
-  return result;
-}
-
-/**
- * 编码文本内容为 SQLite 格式
- */
-function encodeText(text: string): number[] {
-  const bytes = new TextEncoder().encode(text);
-  const serialType = bytes.length <= 127 ? bytes.length + 13 : 255;
-  return [serialType, ...bytes];
-}
-
-/**
- * 创建 sqlite_master 表的第一页
- */
-function createSqliteMasterPage(schemas: string[]): Uint8Array {
+function createMasterPage(tables: { name: string; sql: string }[]): Uint8Array {
   const page = new Uint8Array(PAGE_SIZE);
   
-  // 页头: 0x0D = leaf table b-tree page
+  // Leaf table b-tree page
   page[0] = 0x0D;
   
-  // 第一个自由块偏移量: 0
-  page[1] = 0;
-  page[2] = 0;
-  
-  // 单元格数量
-  const cellCount = schemas.length + 1; // +1 for sqlite_master itself
+  // Cell count
+  const cellCount = tables.length + 1;
   page[3] = (cellCount >> 8) & 0xFF;
   page[4] = cellCount & 0xFF;
   
-  // 单元格内容起始位置
+  // Content start
   const contentStart = PAGE_SIZE - 100;
   page[5] = (contentStart >> 8) & 0xFF;
   page[6] = contentStart & 0xFF;
   
-  // 预留空间
-  page[7] = 0;
-  
-  // 单元格指针数组 (从页尾向前)
+  // Build cells from bottom up
   let cellOffset = contentStart;
+  const cellPointers: number[] = [];
   
-  // 1. sqlite_master 自身记录
-  const masterRecord = buildSqliteMasterRecord();
-  cellOffset -= masterRecord.length;
-  page.set(new Uint8Array(masterRecord), cellOffset);
-  page[8 + 1] = (cellOffset >> 8) & 0xFF;
-  page[8 + 2] = cellOffset & 0xFF;
+  // sqlite_master record (rowid=1)
+  const masterPayload = buildRecordPayload(
+    ['type', 'name', 'tbl_name', 'rootpage', 'sql'],
+    ['table', 'sqlite_master', 'sqlite_master', 1, 'CREATE TABLE sqlite_master(type TEXT, name TEXT, tbl_name TEXT, rootpage INTEGER, sql TEXT)']
+  );
+  const masterCell = [...encodeVarint(1), ...masterPayload];
+  cellOffset -= masterCell.length;
+  page.set(new Uint8Array(masterCell), cellOffset);
+  cellPointers.unshift(cellOffset);
   
-  // 2. 所有表的 schema 记录 (只保存表名简化的 schema)
-  for (let i = 0; i < schemas.length; i++) {
-    // 使用简化的 schema 以节省空间
-    const tableName = getTableNameFromSql(schemas[i]);
-    const simplifiedSql = `CREATE TABLE "${tableName}" (${getColumnsFromSql(schemas[i])})`;
-    const record = buildSchemaRecord(i + 2, simplifiedSql);
-    cellOffset -= record.length;
-    if (cellOffset < 100) break; // 页头空间不够，停止
-    page.set(new Uint8Array(record), cellOffset);
-    const ptrOffset = 8 + 3 + i * 2;
+  // Table schema records
+  for (let i = 0; i < tables.length; i++) {
+    const table = tables[i];
+    const rootpage = i + 2;
+    const payload = buildRecordPayload(
+      ['type', 'name', 'tbl_name', 'rootpage', 'sql'],
+      ['table', table.name, table.name, rootpage, table.sql]
+    );
+    const cell = [...encodeVarint(rootpage), ...payload];
+    cellOffset -= cell.length;
+    if (cellOffset < 100) break;
+    page.set(new Uint8Array(cell), cellOffset);
+    cellPointers.unshift(cellOffset);
+  }
+  
+  // Write cell pointers
+  for (let i = 0; i < cellPointers.length && i < cellCount; i++) {
+    const ptrOffset = 8 + (i + 1) * 2;
     if (ptrOffset + 1 < 100) {
-      page[ptrOffset] = (cellOffset >> 8) & 0xFF;
-      page[ptrOffset + 1] = cellOffset & 0xFF;
+      page[ptrOffset] = (cellPointers[i] >> 8) & 0xFF;
+      page[ptrOffset + 1] = cellPointers[i] & 0xFF;
     }
   }
   
@@ -413,142 +231,140 @@ function createSqliteMasterPage(schemas: string[]): Uint8Array {
 }
 
 /**
- * 构建 sqlite_master 自身的记录
+ * 创建数据表页
  */
-function buildSqliteMasterRecord(): number[] {
-  const record: number[] = [];
+function createDataTablePage(tableName: string, columns: string[], rows: any[][]): Uint8Array {
+  const page = new Uint8Array(PAGE_SIZE);
   
-  // Rowid
-  record.push(1); // rowid = 1
+  // Leaf table b-tree page
+  page[0] = 0x0D;
   
-  // Payload header
-  const columns = ['type', 'name', 'tbl_name', 'rootpage', 'sql'];
-  record.push(...encodeVarint(columns.length * 2)); // serial types header
+  // Cell count
+  const cellCount = rows.length;
+  page[3] = (cellCount >> 8) & 0xFF;
+  page[4] = cellCount & 0xFF;
   
-  // Column values
-  record.push(...encodeText('table'));
-  record.push(...encodeText('sqlite_master'));
-  record.push(...encodeText('sqlite_master'));
-  record.push(...encodeVarint(1)); // rootpage = 1
-  record.push(...encodeText(buildSqliteMasterSchema()));
+  // Content start
+  const contentStart = PAGE_SIZE - 100;
+  page[5] = (contentStart >> 8) & 0xFF;
+  page[6] = contentStart & 0xFF;
   
-  return record;
-}
-
-/**
- * 构建表 schema 记录
- */
-function buildSchemaRecord(rowid: number, sql: string): number[] {
-  const record: number[] = [];
+  // Build cells from bottom up
+  let cellOffset = contentStart;
+  const cellPointers: number[] = [];
   
-  // Rowid
-  record.push(...encodeVarint(rowid));
-  
-  // Payload header
-  record.push(...encodeVarint(10)); // 5 columns * 2
-  
-  // Column values
-  record.push(...encodeText('table'));
-  record.push(...encodeText(getTableNameFromSql(sql)));
-  record.push(...encodeText(getTableNameFromSql(sql)));
-  record.push(...encodeVarint(rowid)); // rootpage
-  record.push(...encodeText(sql));
-  
-  return record;
-}
-
-/**
- * 从 CREATE TABLE 语句中提取表名
- */
-function getTableNameFromSql(sql: string): string {
-  const match = sql.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)["`]?/i);
-  return match ? match[1] : 'unknown';
-}
-
-/**
- * 从 CREATE TABLE 语句中提取简化的列定义
- */
-function getColumnsFromSql(sql: string): string {
-  // 提取括号内的列定义
-  const match = sql.match(/\(([\s\S]+)\)/);
-  if (!match) return '';
-  
-  const columnsDef = match[1];
-  const columns: string[] = [];
-  
-  // 简单解析列定义
-  const lines = columnsDef.split(',').map(l => l.trim());
-  for (const line of lines) {
-    // 跳过 PRIMARY KEY, UNIQUE 约束
-    if (line.toUpperCase().includes('PRIMARY KEY') || 
-        line.toUpperCase().includes('UNIQUE(') ||
-        line.toUpperCase().startsWith('CONSTRAINT')) {
-      continue;
-    }
+  for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+    const row = rows[rowIdx];
+    const rowid = rowIdx + 1;
     
-    // 提取列名
-    const colMatch = line.match(/["`]?(\w+)["`]?\s+(\w+)/);
-    if (colMatch) {
-      columns.push(`"${colMatch[1]}" ${colMatch[2]}`);
+    const payload = buildRecordPayload(columns, row);
+    const cell = [...encodeVarint(rowid), ...payload];
+    
+    cellOffset -= cell.length;
+    if (cellOffset < 100) break;
+    page.set(new Uint8Array(cell), cellOffset);
+    cellPointers.unshift(cellOffset);
+  }
+  
+  // Write cell pointers
+  for (let i = 0; i < cellPointers.length; i++) {
+    const ptrOffset = 8 + (i + 1) * 2;
+    if (ptrOffset + 1 < 100) {
+      page[ptrOffset] = (cellPointers[i] >> 8) & 0xFF;
+      page[ptrOffset + 1] = cellPointers[i] & 0xFF;
     }
   }
   
-  return columns.join(', ');
+  return page;
 }
 
 /**
- * 创建最小化但有效的 SQLite 文件
- * 只包含 schema，不包含数据
- * 数据通过原版恢复流程导入
+ * 创建包含 schema 和数据的 SQLite 文件
  */
-export function createMinimalSqliteFile(): Uint8Array {
-  const schemas = buildAllSchemas();
-  
-  // 创建文件头
-  const header = createFileHeader();
-  
-  // 创建 sqlite_master 页
-  const masterPage = createSqliteMasterPage(schemas);
-  
-  // 合并为完整的 SQLite 文件 (2 页)
-  const file = new Uint8Array(PAGE_SIZE * 2);
-  file.set(header, 0);
-  file.set(masterPage, PAGE_SIZE);
-  
-  return file;
-}
-
-/**
- * 创建包含数据的 SQLite 文件
- * 使用简化的 B-tree 格式
- */
-export function createSqliteFileWithData(
+export function createSqliteWithData(
   tables: Record<string, unknown[]>
 ): Uint8Array {
-  // 先创建包含 schema 的文件
-  const baseFile = createMinimalSqliteFile();
+  // 1. 构建表 schema
+  const tableSchemas: { name: string; sql: string }[] = [];
+  const tableData: { name: string; columns: string[]; rows: any[][] }[] = [];
   
-  // 计算需要的额外页面
-  let totalDataPages = 0;
   for (const [tableName, rows] of Object.entries(tables)) {
     if (!rows || rows.length === 0) continue;
-    // 估算每行数据大小
-    const avgRowSize = JSON.stringify(rows[0] || {}).length;
-    const totalPages = Math.ceil((rows.length * avgRowSize) / PAGE_SIZE);
-    totalDataPages += totalPages;
+    
+    const firstRow = rows[0] as Record<string, unknown>;
+    const columns = Object.keys(firstRow);
+    
+    // 创建 CREATE TABLE 语句
+    const colDefs = columns.map(col => {
+      const val = firstRow[col];
+      let sqlType = 'TEXT';
+      if (typeof val === 'number') {
+        sqlType = Number.isInteger(val) ? 'INTEGER' : 'REAL';
+      } else if (typeof val === 'boolean') {
+        sqlType = 'INTEGER';
+      }
+      return `"${col}" ${sqlType}`;
+    }).join(', ');
+    
+    const sql = `CREATE TABLE "${tableName}" (${colDefs})`;
+    tableSchemas.push({ name: tableName, sql });
+    
+    // 提取行数据
+    const rowData = rows.map(row => {
+      const record = row as Record<string, unknown>;
+      return columns.map(col => record[col]);
+    });
+    
+    tableData.push({ name: tableName, columns, rows: rowData });
   }
   
-  // 扩展文件
-  const fileSize = (2 + totalDataPages) * PAGE_SIZE;
-  const file = new Uint8Array(fileSize);
-  file.set(baseFile, 0);
+  // 2. 计算总页数
+  // Page 1: header + sqlite_master
+  // Page 2+: data pages
+  let dataPages = 0;
+  for (const table of tableData) {
+    // 估算每个表需要的页数
+    const avgRowSize = table.rows.length > 0 
+      ? JSON.stringify(table.rows[0]).length 
+      : 100;
+    const estimatedSize = table.rows.length * avgRowSize;
+    const pages = Math.max(1, Math.ceil(estimatedSize / (PAGE_SIZE - 200)));
+    dataPages += pages;
+  }
   
-  // 更新文件头中的数据库大小
-  const totalPages = 2 + totalDataPages;
-  file[28] = (totalPages >> 24) & 0xFF;
-  file[29] = (totalPages >> 16) & 0xFF;
-  file[30] = (totalPages >> 8) & 0xFF;
-  file[31] = totalPages & 0xFF;
+  const totalPages = 1 + dataPages; // 1 for header page
+  
+  // 3. 创建文件
+  const fileSize = totalPages * PAGE_SIZE;
+  const file = new Uint8Array(fileSize);
+  
+  // 写入文件头
+  const header = createFileHeader(tableSchemas.length, totalPages);
+  file.set(header, 0);
+  
+  // 写入 sqlite_master 页
+  const masterPage = createMasterPage(tableSchemas);
+  file.set(masterPage, PAGE_SIZE);
+  
+  // 写入数据页
+  let pageNum = 2;
+  for (const table of tableData) {
+    if (table.rows.length === 0) continue;
+    
+    const dataPage = createDataTablePage(table.name, table.columns, table.rows);
+    file.set(dataPage, pageNum * PAGE_SIZE);
+    pageNum++;
+  }
   
   return file;
+}
+
+/**
+ * 创建最小化 SQLite 文件（仅 schema）
+ */
+export function createMinimalSqliteFile(): Uint8Array {
+  const tables = {
+    'sqlite_master': [{ sql: 'CREATE TABLE sqlite_master(type TEXT, name TEXT, tbl_name TEXT, rootpage INTEGER, sql TEXT)' }],
+  };
+  return createSqliteWithData(tables);
 }

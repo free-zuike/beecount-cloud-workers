@@ -8,6 +8,7 @@ import { uploadToS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
+import { createSqliteWithData } from '../lib/sqlite-writer';
 
 // ===========================
 // WebDAV 工具函数
@@ -347,23 +348,32 @@ export async function performBackup(
       data: new TextEncoder().encode(JSON.stringify(meta, null, 2)),
     });
 
-    // 2. 数据库导出
-    console.log('[Backup] Creating database export...');
-    
-    // 创建最小化 SQLite 文件（包含 schema）
+    // 2. 数据库导出 - 创建包含数据的 SQLite 文件
+    console.log('[Backup] Creating db.sqlite3 with data...');
     try {
-      const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
-      const minimalSqlite = createMinimalSqliteFile();
+      const sqliteData = createSqliteWithData(tables);
       tarEntries.push({
         name: 'db.sqlite3',
-        data: minimalSqlite,
+        data: sqliteData,
       });
-      console.log(`[Backup] db.sqlite3 created (minimal): ${minimalSqlite.length} bytes`);
+      console.log(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
     } catch (err) {
-      console.error(`[Backup] Failed to create minimal SQLite: ${(err as Error).message}`);
+      console.error(`[Backup] Failed to create SQLite: ${(err as Error).message}`);
+      
+      // 回退到最小化 SQLite
+      try {
+        const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
+        const minimalSqlite = createMinimalSqliteFile();
+        tarEntries.push({
+          name: 'db.sqlite3',
+          data: minimalSqlite,
+        });
+      } catch (e) {
+        console.error(`[Backup] Fallback also failed: ${(e as Error).message}`);
+      }
     }
     
-    // 始终包含 db.json 用于数据恢复
+    // 始终包含 db.json 作为备份
     const dbExport = {
       backup_time: new Date().toISOString(),
       version: '1.0',
