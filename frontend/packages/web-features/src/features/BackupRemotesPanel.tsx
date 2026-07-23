@@ -162,16 +162,10 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
   local: [],
   r2: [
     {
-      key: 'bucket',
-      label: 'Bucket',
-      placeholder: 'my-backup-bucket',
-      hint: 'R2 存储桶名称。使用 Worker binding 直连，无需配置密钥。',
-    },
-    {
       key: 'root_path',
       label: 'Root Path',
       placeholder: 'beecount',
-      hint: '备份文件存放的根目录，默认 beecount。',
+      hint: '备份文件存放的根目录，默认 beecount。使用 Worker 绑定的 R2 bucket，无需配置 bucket 和密钥。',
     },
   ],
 }
