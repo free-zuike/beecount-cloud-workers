@@ -120,7 +120,7 @@ export async function processBackupSchedule(
     let runId: number | null = null;
     try {
       const runInsertResult = await db.prepare('INSERT INTO backup_runs (schedule_id, user_id, ledger_id, remote_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(schedule.id, schedule.user_id, ledger.id, remoteId, 'pending', startedAt).run();
+        .bind(schedule.id, schedule.user_id, ledger.id, remoteId, 'running', startedAt).run();
       // D1 可能不返回 lastRowId，尝试从 meta 获取
       runId = (runInsertResult as any).lastRowId || (runInsertResult as any).meta?.last_row_id;
       if (!runId) {

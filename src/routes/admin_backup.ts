@@ -1629,7 +1629,7 @@ backupRouter.post('/run-now', zValidator('json', RunNowSchema), async (c) => {
     .prepare(
       `INSERT INTO backup_runs
        (schedule_id, ledger_id, remote_id, status, started_at)
-       VALUES (NULL, ?, ?, 'pending', ?)`
+       VALUES (NULL, ?, ?, 'running', ?)`
     )
     .bind(ledger.id, req.remote_id ?? null, serverNow)
     .run();
@@ -1640,10 +1640,10 @@ backupRouter.post('/run-now', zValidator('json', RunNowSchema), async (c) => {
     id: runId,
     ledger_id: req.ledger_id,
     remote_id: req.remote_id,
-    status: 'pending',
+    status: 'running',
     started_at: serverNow,
-    message: 'Backup scheduled. Use /admin/backup/runs to check status.',
-  }, 202);
+    message: 'Backup started.',
+  }, 200);
 });
 
 /**
