@@ -293,17 +293,18 @@ export function createSqliteWithData(
   for (const [tableName, rows] of Object.entries(tables)) {
     if (!rows || rows.length === 0) continue;
     
-    const firstRow = rows[0] as Record<string, unknown>;
-    if (!firstRow) {
-      console.warn(`[SQLite] Skipping table ${tableName}: first row is undefined`);
-      continue;
-    }
-    const columns = Object.keys(firstRow);
-    
-    if (columns.length === 0) {
-      console.warn(`[SQLite] Skipping table ${tableName}: no columns found`);
-      continue;
-    }
+    try {
+      const firstRow = rows[0] as Record<string, unknown>;
+      if (!firstRow || typeof firstRow !== 'object') {
+        console.warn(`[SQLite] Skipping table ${tableName}: first row is not an object`);
+        continue;
+      }
+      const columns = Object.keys(firstRow);
+      
+      if (columns.length === 0) {
+        console.warn(`[SQLite] Skipping table ${tableName}: no columns found`);
+        continue;
+      }
     
     // 创建 CREATE TABLE 语句
     const colDefs = columns.map(col => {
@@ -321,12 +322,19 @@ export function createSqliteWithData(
     tableSchemas.push({ name: tableName, sql });
     
     // 提取行数据
-    const rowData = rows.map(row => {
+    const rowData = rows.map((row, idx) => {
       const record = row as Record<string, unknown>;
+      if (!record || typeof record !== 'object') {
+        console.warn(`[SQLite] Row ${idx} in table ${tableName} is not an object`);
+        return columns.map(() => null);
+      }
       return columns.map(col => record[col]);
     });
     
     tableData.push({ name: tableName, columns, rows: rowData });
+    } catch (err) {
+      console.error(`[SQLite] Error processing table ${tableName}: ${(err as Error).message}`);
+    }
   }
   
   // 2. 计算总页数
