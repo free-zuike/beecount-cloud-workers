@@ -967,6 +967,8 @@ const zhCN = {
   'backup.schedule.field.targetsHint': '同一份备份会并发推到所有勾选的远端。每个远端各自走自己的 retention 算法。',
   'backup.schedule.field.includeAttachments': '包含附件',
   'backup.schedule.field.enabled': '启用',
+  'backup.schedule.field.timezone': '时区',
+  'backup.schedule.field.timezoneHint': 'cron 表达式中的时间将按此时区执行。',
   'backup.schedule.delete.title': '删除任务',
   'backup.schedule.delete.confirm': '确认删除任务「{name}」?已生成的备份历史保留。',
   'backup.schedule.notice.created': '任务已创建',

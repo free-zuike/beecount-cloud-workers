@@ -49,6 +49,7 @@ export type BackupSchedule = {
   last_run_at: string | null
   last_run_status: string | null
   remote_ids: number[]
+  timezone_offset?: number
   created_at: string
 }
 
@@ -59,6 +60,7 @@ export type BackupSchedulePayload = {
   include_attachments: boolean
   enabled: boolean
   remote_ids: number[]
+  timezone_offset?: number
 }
 
 export type BackupRunTarget = {
