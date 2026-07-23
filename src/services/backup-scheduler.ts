@@ -113,7 +113,14 @@ export async function processBackupSchedule(
     try {
       const runInsertResult = await db.prepare('INSERT INTO backup_runs (schedule_id, user_id, ledger_id, remote_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)')
         .bind(schedule.id, schedule.user_id, ledger.id, remoteId, 'pending', startedAt).run();
-      runId = (runInsertResult as any).lastRowId;
+      // D1 可能不返回 lastRowId，尝试从 meta 获取
+      runId = (runInsertResult as any).lastRowId || (runInsertResult as any).meta?.last_row_id;
+      if (!runId) {
+        // 如果获取不到 lastRowId，查询最新的记录
+        const latestRun = await db.prepare('SELECT id FROM backup_runs WHERE schedule_id = ? ORDER BY id DESC LIMIT 1')
+          .bind(schedule.id).first<{ id: number }>();
+        runId = latestRun?.id || null;
+      }
       console.log(`[CRON] Created backup run: id=${runId}`);
     } catch (insertErr) {
       console.error(`[CRON] Failed to insert backup_runs: ${(insertErr as Error).message}`);
