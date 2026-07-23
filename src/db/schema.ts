@@ -371,6 +371,19 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at DESC)').run();
 
     await db.prepare(`
+      CREATE TABLE IF NOT EXISTS backup_run_targets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER REFERENCES backup_runs(id) ON DELETE CASCADE,
+        remote_id INTEGER REFERENCES backup_remotes(id) ON DELETE SET NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        started_at TEXT,
+        finished_at TEXT,
+        bytes_transferred INTEGER,
+        error_message TEXT
+      )
+    `).run();
+
+    await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_restores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
