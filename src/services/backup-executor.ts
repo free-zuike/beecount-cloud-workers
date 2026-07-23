@@ -290,6 +290,30 @@ async function fetchR2Attachments(r2: R2Bucket): Promise<Map<string, Uint8Array>
   return attachments;
 }
 
+/**
+ * 带重试的异步操作
+ */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  delayMs: number = 1000,
+  label: string = 'operation'
+): Promise<T> {
+  let lastError: Error | null = null;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err as Error;
+      console.error(`[Backup] ${label} failed (attempt ${i + 1}/${maxRetries}): ${lastError.message}`);
+      if (i < maxRetries - 1) {
+        await new Promise(resolve => setTimeout(resolve, delayMs * (i + 1)));
+      }
+    }
+  }
+  throw lastError;
+}
+
 export async function performBackup(
   db: D1Database,
   runId: number,
@@ -302,11 +326,16 @@ export async function performBackup(
   try {
     console.log(`[Backup] Starting full database backup, user: ${userId}`);
 
-    // 导出所有用户数据表
+    // 导出所有用户数据表（带重试）
     const tables: Record<string, unknown[]> = {};
     for (const tableName of BACKUP_TABLES) {
       try {
-        const rows = await exportTable(db, tableName);
+        const rows = await withRetry(
+          () => exportTable(db, tableName),
+          3,
+          1000,
+          `export ${tableName}`
+        );
         if (rows.length > 0) {
           tables[tableName] = rows;
           console.log(`[Backup] ${tableName}: ${rows.length} rows`);
@@ -320,11 +349,16 @@ export async function performBackup(
     const totalRows = Object.values(tables).reduce((sum, rows) => sum + rows.length, 0);
     console.log(`[Backup] Total: ${Object.keys(tables).length} tables, ${totalRows} rows`);
 
-    // 获取 R2 附件文件
+    // 获取 R2 附件文件（带重试）
     let attachments = new Map<string, Uint8Array>();
     if (r2) {
       try {
-        attachments = await fetchR2Attachments(r2);
+        attachments = await withRetry(
+          () => fetchR2Attachments(r2),
+          2,
+          2000,
+          'fetch R2 attachments'
+        );
         console.log(`[Backup] R2 attachments included: ${attachments.size} files`);
       } catch (err) {
         console.error(`[Backup] Failed to fetch R2 attachments: ${(err as Error).message}`);
@@ -396,7 +430,12 @@ export async function performBackup(
     }
 
     console.log(`[Backup] Creating tar.gz with ${tarEntries.length} entries`);
-    let backupBytes = await createTarGz(tarEntries);
+    let backupBytes = await withRetry(
+      () => createTarGz(tarEntries),
+      2,
+      1000,
+      'create tar.gz'
+    );
     let encrypted = false;
 
     // 注意：加密功能暂不支持二进制数据，跳过加密
@@ -532,7 +571,12 @@ export async function performBackup(
       
       console.log(`[Backup] Uploading to R2: ${backupKey} (${backupSize} bytes)`);
       try {
-        await r2.put(backupKey, backupBytes, { httpMetadata: { contentType: 'application/gzip' } });
+        await withRetry(
+          () => r2.put(backupKey, backupBytes, { httpMetadata: { contentType: 'application/gzip' } }),
+          3,
+          2000,
+          'R2 upload'
+        );
         console.log(`[Backup] R2 upload successful: ${backupKey}`);
         return {
           success: true,
@@ -541,7 +585,7 @@ export async function performBackup(
           backupPath: backupKey
         };
       } catch (r2Err) {
-        console.error(`[Backup] R2 upload failed: ${(r2Err as Error).message}`);
+        console.error(`[Backup] R2 upload failed after retries: ${(r2Err as Error).message}`);
         return { success: false, message: `R2 upload failed: ${(r2Err as Error).message}` };
       }
     } else if (remoteConfig.backend_type === 'ftp') {
