@@ -259,7 +259,7 @@ async function fetchR2Attachments(r2: R2Bucket): Promise<Map<string, Uint8Array>
   const attachments = new Map<string, Uint8Array>();
   const prefixes = ['attachments/', 'avatars/', 'category-icons/'];
 
-  console.log(`[Backup] Fetching R2 files with prefixes: ${prefixes.join(', ')}`);
+  log(`[Backup] Fetching R2 files with prefixes: ${prefixes.join(', ')}`);
 
   let totalFiles = 0;
   let totalSize = 0;
@@ -278,7 +278,7 @@ async function fetchR2Attachments(r2: R2Bucket): Promise<Map<string, Uint8Array>
             attachments.set(obj.key, new Uint8Array(arrayBuffer));
             totalFiles++;
             totalSize += obj.size;
-            console.log(`[Backup] Fetched: ${obj.key} (${obj.size} bytes)`);
+            log(`[Backup] Fetched: ${obj.key} (${obj.size} bytes)`);
           }
         } catch (err) {
           console.error(`[Backup] Failed to fetch ${obj.key}: ${(err as Error).message}`);
@@ -287,7 +287,7 @@ async function fetchR2Attachments(r2: R2Bucket): Promise<Map<string, Uint8Array>
     } while (cursor);
   }
 
-  console.log(`[Backup] Total R2 files: ${totalFiles} files, ${totalSize} bytes`);
+  log(`[Backup] Total R2 files: ${totalFiles} files, ${totalSize} bytes`);
   return attachments;
 }
 
@@ -362,7 +362,7 @@ export async function performBackup(
           2000,
           'fetch R2 attachments'
         );
-        console.log(`[Backup] R2 attachments included: ${attachments.size} files`);
+        log(`[Backup] R2 attachments included: ${attachments.size} files`);
       } catch (err) {
         console.error(`[Backup] Failed to fetch R2 attachments: ${(err as Error).message}`);
         // 继续备份，附件缺失不阻止数据库备份
@@ -386,14 +386,14 @@ export async function performBackup(
     });
 
     // 2. 数据库导出 - 创建包含数据的 SQLite 文件
-    console.log('[Backup] Creating db.sqlite3 with data...');
+    log('[Backup] Creating db.sqlite3 with data...');
     try {
       const sqliteData = createSqliteWithData(tables);
       tarEntries.push({
         name: 'db.sqlite3',
         data: sqliteData,
       });
-      console.log(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
+      log(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
     } catch (err) {
       console.error(`[Backup] Failed to create SQLite: ${(err as Error).message}`);
       
@@ -422,7 +422,7 @@ export async function performBackup(
       name: 'db.json',
       data: new TextEncoder().encode(JSON.stringify(dbExport, null, 2)),
     });
-    console.log(`[Backup] db.json created: ${JSON.stringify(dbExport).length} bytes`);
+    log(`[Backup] db.json created: ${JSON.stringify(dbExport).length} bytes`);
 
     // 3. 附件文件
     for (const [key, value] of attachments) {
@@ -432,7 +432,7 @@ export async function performBackup(
       });
     }
 
-    console.log(`[Backup] Creating tar.gz with ${tarEntries.length} entries`);
+    log(`[Backup] Creating tar.gz with ${tarEntries.length} entries`);
     let backupBytes = await withRetry(
       () => createTarGz(tarEntries),
       2,
@@ -446,22 +446,22 @@ export async function performBackup(
       const encryptionPassword = remoteConfig.age_passphrase || remoteConfig.encryption_password;
       if (encryptionPassword) {
         try {
-          console.log('[Backup] Encrypting backup with AES-256-GCM...');
+          log('[Backup] Encrypting backup with AES-256-GCM...');
           backupBytes = await encryptData(backupBytes, encryptionPassword);
           encrypted = true;
-          console.log(`[Backup] Backup encrypted: ${backupBytes.length} bytes`);
+          log(`[Backup] Backup encrypted: ${backupBytes.length} bytes`);
         } catch (encryptErr) {
           console.error(`[Backup] Encryption failed: ${(encryptErr as Error).message}`);
           // 加密失败继续上传未加密的备份
         }
       } else {
-        console.log('[Backup] No encryption password found, skipping encryption');
+        log('[Backup] No encryption password found, skipping encryption');
       }
     }
 
     const backupSize = backupBytes.length;
 
-    console.log(`[Backup] Backup content size: ${backupSize} bytes`);
+    log(`[Backup] Backup content size: ${backupSize} bytes`);
 
     if (remoteConfig.backend_type === 's3' || remoteConfig.backend_type === 'b2') {
       // B2 使用 S3 兼容 API
@@ -481,13 +481,13 @@ export async function performBackup(
       if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' &&
           remoteConfig.savePath.trim() !== '' && remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
         basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
-        console.log(`[Backup] Using savePath: ${basePrefix}`);
+        log(`[Backup] Using savePath: ${basePrefix}`);
       } else if (remoteConfig.root_path && typeof remoteConfig.root_path === 'string' && remoteConfig.root_path.trim() !== '') {
         basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
-        console.log(`[Backup] Using root_path: ${basePrefix}`);
+        log(`[Backup] Using root_path: ${basePrefix}`);
       } else {
         basePrefix = DEFAULT_PREFIX + '/';
-        console.log(`[Backup] Using default prefix: ${basePrefix}`);
+        log(`[Backup] Using default prefix: ${basePrefix}`);
       }
 
       // 使用本地时间（UTC+8）生成时间戳
@@ -497,7 +497,7 @@ export async function performBackup(
       const fileExt = encrypted ? '.zip' : '.tar.gz';
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
 
-      console.log(`[Backup] Uploading to S3 key: ${backupKey}`);
+      log(`[Backup] Uploading to S3 key: ${backupKey}`);
 
       const uploadResult = await uploadToS3(
         s3Endpoint,
@@ -514,7 +514,7 @@ export async function performBackup(
         return { success: false, message: uploadResult.message };
       }
 
-      console.log(`[Backup] Upload successful: ${backupKey}`);
+      log(`[Backup] Upload successful: ${backupKey}`);
 
       return {
         success: true,
@@ -542,7 +542,7 @@ export async function performBackup(
 
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.tar.gz`;
 
-      console.log(`[Backup] Uploading to WebDAV: ${backupKey}`);
+      log(`[Backup] Uploading to WebDAV: ${backupKey}`);
 
       const uploadResult = await uploadToWebDav(webdavUrl, webdavUsername, webdavPassword, backupKey, backupBytes);
 
@@ -550,7 +550,7 @@ export async function performBackup(
         return { success: false, message: uploadResult.message };
       }
 
-      console.log(`[Backup] WebDAV upload successful: ${backupKey}`);
+      log(`[Backup] WebDAV upload successful: ${backupKey}`);
 
       return {
         success: true,
@@ -559,7 +559,7 @@ export async function performBackup(
         backupPath: backupKey
       };
     } else if (remoteConfig.backend_type === 'local') {
-      console.log('[Backup] Local backend - skipping upload (simulated)');
+      log('[Backup] Local backend - skipping upload (simulated)');
       return {
         success: true,
         message: 'Backup completed (local storage)',
@@ -589,7 +589,7 @@ export async function performBackup(
       const fileExt = encrypted ? '.zip' : '.tar.gz';
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
       
-      console.log(`[Backup] Uploading to R2: ${backupKey} (${backupSize} bytes)`);
+      log(`[Backup] Uploading to R2: ${backupKey} (${backupSize} bytes)`);
       try {
         await withRetry(
           () => r2.put(backupKey, backupBytes, { httpMetadata: { contentType: 'application/gzip' } }),
@@ -597,7 +597,7 @@ export async function performBackup(
           2000,
           'R2 upload'
         );
-        console.log(`[Backup] R2 upload successful: ${backupKey}`);
+        log(`[Backup] R2 upload successful: ${backupKey}`);
         return {
           success: true,
           message: 'Backup uploaded to R2',
@@ -632,7 +632,7 @@ export async function performBackup(
       const fileExt = encrypted ? '.zip' : '.tar.gz';
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
 
-      console.log(`[Backup] Uploading to FTP: ${backupKey}`);
+      log(`[Backup] Uploading to FTP: ${backupKey}`);
 
       const uploadResult = await ftpClient.upload(backupKey, backupBytes);
 
@@ -669,7 +669,7 @@ export async function performBackup(
       const fileExt = encrypted ? '.zip' : '.tar.gz';
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
 
-      console.log(`[Backup] Uploading to SFTP: ${backupKey}`);
+      log(`[Backup] Uploading to SFTP: ${backupKey}`);
 
       const sftpClient = createSftpClient({ host: sftpHost, port: sftpPort, username: sftpUsername, password: sftpPassword, privateKey: sftpKey });
       const uploadResult = await sftpClient.upload(backupKey, backupBytes);
