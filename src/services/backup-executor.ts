@@ -386,19 +386,34 @@ export async function performBackup(
       data: new TextEncoder().encode(JSON.stringify(meta, null, 2)),
     });
 
-    // 2. 数据库导出 - 创建包含数据的 SQLite 文件
-    console.debug(`[Backup] Creating db.sqlite3 with ${Object.keys(tables).length} tables...`);
+    // 2. 数据库导出 - 使用 D1 dump() 获取完整 SQLite 数据库（等同于原版 VACUUM INTO）
+    console.debug(`[Backup] Exporting db.sqlite3 via D1 dump()...`);
     try {
-      const sqliteData = createSqliteWithData(tables);
+      const stream = db.dump();
+      const reader = stream.getReader();
+      const chunks: Uint8Array[] = [];
+      let totalSize = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        totalSize += value.length;
+      }
+      const sqliteData = new Uint8Array(totalSize);
+      let offset = 0;
+      for (const chunk of chunks) {
+        sqliteData.set(chunk, offset);
+        offset += chunk.length;
+      }
       tarEntries.push({
         name: 'db.sqlite3',
         data: sqliteData,
       });
       console.debug(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
     } catch (err) {
-      console.error(`[Backup] Failed to create SQLite: ${(err as Error).message}`);
+      console.error(`[Backup] D1 dump() failed, falling back to schema-only: ${(err as Error).message}`);
       
-      // 回退到最小化 SQLite
+      // 回退到最小化 SQLite（仅 schema）
       try {
         const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
         const minimalSqlite = createMinimalSqliteFile();
@@ -406,6 +421,7 @@ export async function performBackup(
           name: 'db.sqlite3',
           data: minimalSqlite,
         });
+        console.debug(`[Backup] Fallback db.sqlite3 (schema-only): ${minimalSqlite.length} bytes`);
       } catch (e) {
         console.error(`[Backup] Fallback also failed: ${(e as Error).message}`);
       }
