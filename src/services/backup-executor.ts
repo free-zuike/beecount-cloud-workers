@@ -390,21 +390,10 @@ export async function performBackup(
     console.debug(`[Backup] Exporting db.sqlite3 via D1 dump()...`);
     try {
       const stream = db.dump();
-      const reader = stream.getReader();
-      const chunks: Uint8Array[] = [];
-      let totalSize = 0;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        totalSize += value.length;
-      }
-      const sqliteData = new Uint8Array(totalSize);
-      let offset = 0;
-      for (const chunk of chunks) {
-        sqliteData.set(chunk, offset);
-        offset += chunk.length;
-      }
+      // dump() 返回的流用 Response 消费（Workers 兼容性）
+      const response = new Response(stream);
+      const buffer = await response.arrayBuffer();
+      const sqliteData = new Uint8Array(buffer);
       tarEntries.push({
         name: 'db.sqlite3',
         data: sqliteData,
