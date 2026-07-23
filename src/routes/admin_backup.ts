@@ -329,7 +329,8 @@ backupRouter.use('/*', async (c, next) => {
 // ---------------------------------------------------------------------------
 
 /**
- * 获取 rclone 配置信息
+ * 下载 rclone.conf 文件
+ * 生成标准的 rclone 配置文件格式
  */
 backupRouter.get('/rclone-config', async (c) => {
   const db = c.env.DB;
@@ -339,31 +340,48 @@ backupRouter.get('/rclone-config', async (c) => {
       .prepare('SELECT id, name, backend_type, config_summary FROM backup_remotes')
       .all();
     
-    const configs = (remotes.results || []).map((row: any) => {
+    let configContent = '# BeeCount Cloud rclone configuration\n';
+    configContent += '# Auto-generated - do not edit manually\n\n';
+    
+    for (const row of (remotes.results || [])) {
       let config: Record<string, string> = {};
       try {
         config = JSON.parse(row.config_summary || '{}');
+        // 移除内部字段
+        delete config._secrets;
       } catch {}
       
-      return {
-        id: String(row.id),
-        name: row.name,
-        backend_type: row.backend_type,
-        config: config,
-      };
-    });
+      configContent += `[${row.name}]\n`;
+      configContent += `type = ${row.backend_type}\n`;
+      
+      // 根据 backend_type 生成配置
+      if (row.backend_type === 's3') {
+        if (config.endpoint) configContent += `endpoint = ${config.endpoint}\n`;
+        if (config.access_key_id) configContent += `access_key_id = ${config.access_key_id}\n`;
+        if (config.secret_access_key) configContent += `secret_access_key = ${config.secret_access_key}\n`;
+        if (config.region) configContent += `region = ${config.region}\n`;
+        if (config.bucket) configContent += `bucket = ${config.bucket}\n`;
+        configContent += `provider = Cloudflare\n`;
+      } else if (row.backend_type === 'r2') {
+        if (config.endpoint) configContent += `endpoint = ${config.endpoint}\n`;
+        if (config.access_key_id) configContent += `access_key_id = ${config.access_key_id}\n`;
+        if (config.secret_access_key) configContent += `secret_access_key = ${config.secret_access_key}\n`;
+        configContent += `region = auto\n`;
+        configContent += `provider = Cloudflare\n`;
+      }
+      
+      configContent += '\n';
+    }
     
-    return c.json({
-      remotes: configs,
-      has_remote: configs.length > 0,
+    return new Response(configContent, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="rclone.conf"',
+      },
     });
   } catch (error) {
     console.error('[rclone-config] Error:', error);
-    return c.json({
-      remotes: [],
-      has_remote: false,
-      error: String(error),
-    });
+    return c.text('# Error generating rclone config\n', 500);
   }
 });
 
