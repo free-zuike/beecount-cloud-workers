@@ -10,21 +10,95 @@ import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
 
 /**
- * 使用 D1 dump() 方法导出 SQLite 文件
- * 参考: https://developers.cloudflare.com/d1/worker-api/d1-database/#dump
- * 注意: 此 API 仅适用于 alpha 版本的数据库
+ * 使用 D1 REST API 导出数据库为 SQL
+ * 参考: https://developers.cloudflare.com/d1/best-practices/import-export-data/
  */
-async function dumpD1Database(db: D1Database): Promise<Uint8Array | null> {
+async function exportD1ViaApi(
+  accountId: string,
+  databaseId: string,
+  apiToken: string
+): Promise<string | null> {
   try {
-    console.log('[Backup] Attempting D1 dump()...');
-    const dump = await db.dump();
-    console.log(`[Backup] D1 dump successful: ${dump.byteLength} bytes`);
-    return new Uint8Array(dump);
+    console.log('[Backup] Exporting D1 via REST API...');
+    
+    // 启动导出任务
+    const exportUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/export`;
+    const startResponse = await fetch(exportUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiToken}`,
+      },
+      body: JSON.stringify({ output_format: 'polling' }),
+    });
+    
+    const startResult = await startResponse.json() as any;
+    if (!startResult.success || !startResult.result?.at_bookmark) {
+      console.error('[Backup] Export start failed:', startResult.errors);
+      return null;
+    }
+    
+    const bookmark = startResult.result.at_bookmark;
+    console.log(`[Backup] Export started, bookmark: ${bookmark}`);
+    
+    // 轮询等待导出完成
+    let signedUrl = null;
+    for (let i = 0; i < 30; i++) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      const pollResponse = await fetch(exportUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiToken}`,
+        },
+        body: JSON.stringify({ current_bookmark: bookmark }),
+      });
+      
+      const pollResult = await pollResponse.json() as any;
+      if (pollResult.success && pollResult.result?.signed_url) {
+        signedUrl = pollResult.result.signed_url;
+        console.log(`[Backup] Export ready, URL obtained`);
+        break;
+      }
+      
+      console.log(`[Backup] Waiting for export... (${i + 1}/30)`);
+    }
+    
+    if (!signedUrl) {
+      console.error('[Backup] Export timed out');
+      return null;
+    }
+    
+    // 下载 SQL 导出
+    const downloadResponse = await fetch(signedUrl);
+    if (!downloadResponse.ok) {
+      console.error('[Backup] Download failed:', downloadResponse.status);
+      return null;
+    }
+    
+    const sql = await downloadResponse.text();
+    console.log(`[Backup] SQL export downloaded: ${sql.length} bytes`);
+    return sql;
+    
   } catch (err) {
-    console.error(`[Backup] D1 dump() failed: ${(err as Error).message}`);
-    console.log('[Backup] Note: dump() only works on alpha databases');
+    console.error(`[Backup] D1 API export failed: ${(err as Error).message}`);
     return null;
   }
+}
+
+/**
+ * 将 SQL 转换为 SQLite 文件
+ * 使用简化的转换方式
+ */
+function sqlToSqlite(sql: string): Uint8Array {
+  // 创建最小化 SQLite 文件结构
+  // SQL 导出包含 CREATE TABLE 和 INSERT 语句
+  // 我们需要解析这些语句并创建 SQLite 文件
+  
+  // 对于现在，返回一个包含 SQL 的文本文件
+  // 用户可以用 sqlite3 命令行工具导入
+  return new TextEncoder().encode(sql);
 }
 
 // ===========================
@@ -365,48 +439,53 @@ export async function performBackup(
       data: new TextEncoder().encode(JSON.stringify(meta, null, 2)),
     });
 
-    // 2. db.sqlite3（使用 D1 dump() 或回退到最小化 SQLite）
-    console.log('[Backup] Creating db.sqlite3...');
+    // 2. 数据库导出
+    console.log('[Backup] Creating database export...');
     
-    // 尝试使用 D1 dump() 方法（仅适用于 alpha 数据库）
-    const dumpData = await dumpD1Database(db);
+    // 尝试使用 D1 REST API 导出（需要配置环境变量）
+    const accountId = remoteConfig.account_id || (remoteConfig as any).CLOUDFLARE_ACCOUNT_ID;
+    const databaseId = remoteConfig.database_id || '15d7d97d-0ba1-4a72-963f-a1b649b48042';
+    const apiToken = remoteConfig.api_token || (remoteConfig as any).CLOUDFLARE_API_TOKEN;
     
-    if (dumpData && dumpData.length > 100) {
-      // dump() 成功，使用导出的 SQLite 文件
+    if (accountId && databaseId && apiToken) {
+      const sqlExport = await exportD1ViaApi(accountId, databaseId, apiToken);
+      
+      if (sqlExport) {
+        // SQL 导出成功，包含为 .sql 文件
+        tarEntries.push({
+          name: 'db.sql',
+          data: new TextEncoder().encode(sqlExport),
+        });
+        console.log(`[Backup] db.sql created: ${sqlExport.length} bytes`);
+      }
+    }
+    
+    // 始终包含最小化 SQLite 文件（包含 schema）
+    try {
+      const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
+      const minimalSqlite = createMinimalSqliteFile();
       tarEntries.push({
         name: 'db.sqlite3',
-        data: dumpData,
+        data: minimalSqlite,
       });
-      console.log(`[Backup] db.sqlite3 created via D1 dump(): ${dumpData.length} bytes`);
-    } else {
-      // dump() 失败，使用最小化 SQLite 文件
-      console.log('[Backup] D1 dump() failed, using minimal SQLite file');
-      try {
-        const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
-        const minimalSqlite = createMinimalSqliteFile();
-        tarEntries.push({
-          name: 'db.sqlite3',
-          data: minimalSqlite,
-        });
-        console.log(`[Backup] db.sqlite3 created (minimal): ${minimalSqlite.length} bytes`);
-      } catch (err) {
-        console.error(`[Backup] Failed to create minimal SQLite: ${(err as Error).message}`);
-      }
-      
-      // 始终包含 db.json 用于数据恢复
-      const dbExport = {
-        backup_time: new Date().toISOString(),
-        version: '1.0',
-        schema_version: 1,
-        user_id: userId,
-        tables,
-      };
-      tarEntries.push({
-        name: 'db.json',
-        data: new TextEncoder().encode(JSON.stringify(dbExport, null, 2)),
-      });
-      console.log(`[Backup] db.json created: ${JSON.stringify(dbExport).length} bytes`);
+      console.log(`[Backup] db.sqlite3 created (minimal): ${minimalSqlite.length} bytes`);
+    } catch (err) {
+      console.error(`[Backup] Failed to create minimal SQLite: ${(err as Error).message}`);
     }
+    
+    // 始终包含 db.json 用于数据恢复
+    const dbExport = {
+      backup_time: new Date().toISOString(),
+      version: '1.0',
+      schema_version: 1,
+      user_id: userId,
+      tables,
+    };
+    tarEntries.push({
+      name: 'db.json',
+      data: new TextEncoder().encode(JSON.stringify(dbExport, null, 2)),
+    });
+    console.log(`[Backup] db.json created: ${JSON.stringify(dbExport).length} bytes`);
 
     // 3. 附件文件
     for (const [key, value] of attachments) {
