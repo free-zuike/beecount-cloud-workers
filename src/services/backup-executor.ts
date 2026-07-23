@@ -8,11 +8,6 @@ import { uploadToS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
-import {
-  uploadToGoogleDrive,
-  uploadToOneDrive,
-  uploadToDropbox,
-} from '../lib/oauth2';
 import { createSqliteWithData } from '../lib/sqlite-writer';
 
 // ===========================
@@ -669,110 +664,13 @@ export async function performBackup(
         backupSize,
         backupPath: backupKey
       };
-    } else if (remoteConfig.backend_type === 'drive') {
-      // Google Drive
-      const accessToken = remoteConfig.token?.access_token;
-      const folderId = remoteConfig.root_folder_id || 'root';
-      
-      if (!accessToken) {
-        return { success: false, message: 'Google Drive access token not configured' };
-      }
-      
-      // 使用本地时间（UTC+8）生成时间戳
-      const now = new Date();
-      const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
-      const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `backups/${userId}/${timestamp}_backup.tar.gz`;
-      
-      console.log(`[Backup] Uploading to Google Drive: ${backupKey}`);
-      
-      try {
-        await withRetry(
-          () => uploadToGoogleDrive(accessToken, backupKey, backupBytes, folderId),
-          3,
-          2000,
-          'Google Drive upload'
-        );
-        console.log(`[Backup] Google Drive upload successful: ${backupKey}`);
-        return {
-          success: true,
-          message: 'Backup uploaded to Google Drive',
-          backupSize,
-          backupPath: backupKey
-        };
-      } catch (driveErr) {
-        console.error(`[Backup] Google Drive upload failed: ${(driveErr as Error).message}`);
-        return { success: false, message: `Google Drive upload failed: ${(driveErr as Error).message}` };
-      }
-    } else if (remoteConfig.backend_type === 'onedrive') {
-      // OneDrive
-      const accessToken = remoteConfig.token?.access_token;
-      const folderId = remoteConfig.drive_id || 'root';
-      
-      if (!accessToken) {
-        return { success: false, message: 'OneDrive access token not configured' };
-      }
-      
-      // 使用本地时间（UTC+8）生成时间戳
-      const now = new Date();
-      const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
-      const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `backups/${userId}/${timestamp}_backup.tar.gz`;
-      
-      console.log(`[Backup] Uploading to OneDrive: ${backupKey}`);
-      
-      try {
-        await withRetry(
-          () => uploadToOneDrive(accessToken, backupKey, backupBytes, folderId),
-          3,
-          2000,
-          'OneDrive upload'
-        );
-        console.log(`[Backup] OneDrive upload successful: ${backupKey}`);
-        return {
-          success: true,
-          message: 'Backup uploaded to OneDrive',
-          backupSize,
-          backupPath: backupKey
-        };
-      } catch (onedriveErr) {
-        console.error(`[Backup] OneDrive upload failed: ${(onedriveErr as Error).message}`);
-        return { success: false, message: `OneDrive upload failed: ${(onedriveErr as Error).message}` };
-      }
-    } else if (remoteConfig.backend_type === 'dropbox') {
-      // Dropbox
-      const accessToken = remoteConfig.token?.access_token;
-      
-      if (!accessToken) {
-        return { success: false, message: 'Dropbox access token not configured' };
-      }
-      
-      // 使用本地时间（UTC+8）生成时间戳
-      const now = new Date();
-      const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
-      const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `backups/${userId}/${timestamp}_backup.tar.gz`;
-      
-      console.log(`[Backup] Uploading to Dropbox: ${backupKey}`);
-      
-      try {
-        await withRetry(
-          () => uploadToDropbox(accessToken, backupKey, backupBytes),
-          3,
-          2000,
-          'Dropbox upload'
-        );
-        console.log(`[Backup] Dropbox upload successful: ${backupKey}`);
-        return {
-          success: true,
-          message: 'Backup uploaded to Dropbox',
-          backupSize,
-          backupPath: backupKey
-        };
-      } catch (dropboxErr) {
-        console.error(`[Backup] Dropbox upload failed: ${(dropboxErr as Error).message}`);
-        return { success: false, message: `Dropbox upload failed: ${(dropboxErr as Error).message}` };
-      }
+    } else if (remoteConfig.backend_type === 'drive' || remoteConfig.backend_type === 'onedrive' || remoteConfig.backend_type === 'dropbox') {
+      // OAuth2 后端需要 rclone，当前环境不支持
+      // 用户需要使用 rclone CLI 手动备份
+      return { 
+        success: false, 
+        message: `${remoteConfig.backend_type} backup requires rclone. Please use rclone CLI manually or switch to R2/S3/WebDAV/SFTP/FTP.` 
+      };
     } else {
       return { success: false, message: `Unsupported backend type: ${remoteConfig.backend_type}` };
     }
