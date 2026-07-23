@@ -233,16 +233,11 @@ function createMasterPage(tables: { name: string; sql: string }[]): Uint8Array {
 /**
  * 创建数据表页
  */
-function createDataTablePage(tableName: string, columns: string[], rows: any[][]): Uint8Array {
+function createDataTablePage(tableName: string, columns: string[], rows: any[][], startRow: number = 0): { page: Uint8Array; rowsWritten: number } {
   const page = new Uint8Array(PAGE_SIZE);
   
   // Leaf table b-tree page
   page[0] = 0x0D;
-  
-  // Cell count
-  const cellCount = rows.length;
-  page[3] = (cellCount >> 8) & 0xFF;
-  page[4] = cellCount & 0xFF;
   
   // Content start
   const contentStart = PAGE_SIZE - 100;
@@ -252,19 +247,26 @@ function createDataTablePage(tableName: string, columns: string[], rows: any[][]
   // Build cells from bottom up
   let cellOffset = contentStart;
   const cellPointers: number[] = [];
+  let rowsWritten = 0;
   
-  for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+  for (let rowIdx = startRow; rowIdx < rows.length; rowIdx++) {
     const row = rows[rowIdx];
     const rowid = rowIdx + 1;
     
     const payload = buildRecordPayload(columns, row);
     const cell = [...encodeVarint(rowid), ...payload];
     
+    if (cellOffset - cell.length < 100) break; // Not enough space
     cellOffset -= cell.length;
-    if (cellOffset < 100) break;
     page.set(new Uint8Array(cell), cellOffset);
     cellPointers.unshift(cellOffset);
+    rowsWritten++;
   }
+  
+  // Cell count
+  const cellCount = rowsWritten;
+  page[3] = (cellCount >> 8) & 0xFF;
+  page[4] = cellCount & 0xFF;
   
   // Write cell pointers
   for (let i = 0; i < cellPointers.length; i++) {
@@ -351,9 +353,15 @@ export function createSqliteWithData(
   for (const table of tableData) {
     if (table.rows.length === 0) continue;
     
-    const dataPage = createDataTablePage(table.name, table.columns, table.rows);
-    file.set(dataPage, pageNum * PAGE_SIZE);
-    pageNum++;
+    // 处理多页表格
+    let startRow = 0;
+    while (startRow < table.rows.length) {
+      const { page, rowsWritten } = createDataTablePage(table.name, table.columns, table.rows, startRow);
+      if (rowsWritten === 0) break; // 没有更多行可以写入
+      file.set(page, pageNum * PAGE_SIZE);
+      pageNum++;
+      startRow += rowsWritten;
+    }
   }
   
   return file;
