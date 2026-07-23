@@ -1546,7 +1546,7 @@ backupRouter.get('/runs', async (c) => {
   const rows = await db
     .prepare(
       `SELECT r.id, r.schedule_id, r.status,
-              r.started_at, r.finished_at, r.error_message, r.bytes_total,
+              r.started_at, r.finished_at, r.error_message, r.log_text, r.bytes_total,
               r.backup_filename, s.name as schedule_name
        FROM backup_runs r
        LEFT JOIN backup_schedules s ON r.schedule_id = s.id
@@ -1561,6 +1561,7 @@ backupRouter.get('/runs', async (c) => {
       started_at: string;
       finished_at: string | null;
       error_message: string | null;
+      log_text: string | null;
       bytes_total: number | null;
       backup_filename: string | null;
       schedule_name: string | null;
@@ -1568,19 +1569,37 @@ backupRouter.get('/runs', async (c) => {
 
   const totalRow = await db.prepare('SELECT COUNT(*) as cnt FROM backup_runs').first<{ cnt: number }>();
 
-  const runs = rows.results.map((row) => ({
-    id: String(row.id),
-    schedule_id: row.schedule_id ? String(row.schedule_id) : null,
-    schedule_name: row.schedule_name || null,
-    status: row.status,
-    started_at: row.started_at,
-    finished_at: row.finished_at,
-    backup_filename: row.backup_filename,
-    bytes_total: row.bytes_total,
-    error_message: row.error_message,
-    log_text: null,
-    targets: [],
-  }));
+  // 获取每个 run 的 targets
+  const runs = [];
+  for (const row of rows.results) {
+    let targets: any[] = [];
+    try {
+      const targetRows = await db.prepare(
+        `SELECT t.id, t.remote_id, t.status, t.started_at, t.finished_at, t.bytes_transferred, t.error_message,
+                r.name as remote_name
+         FROM backup_run_targets t
+         LEFT JOIN backup_remotes r ON t.remote_id = r.id
+         WHERE t.run_id = ?`
+      ).bind(row.id).all();
+      targets = targetRows.results || [];
+    } catch (e) {
+      // 表可能不存在
+    }
+    
+    runs.push({
+      id: String(row.id),
+      schedule_id: row.schedule_id ? String(row.schedule_id) : null,
+      schedule_name: row.schedule_name || null,
+      status: row.status,
+      started_at: row.started_at,
+      finished_at: row.finished_at,
+      backup_filename: row.backup_filename,
+      bytes_total: row.bytes_total,
+      error_message: row.error_message,
+      log_text: row.log_text,
+      targets,
+    });
+  }
 
   return c.json({
     total: totalRow?.cnt ?? 0,
