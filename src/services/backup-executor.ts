@@ -351,6 +351,7 @@ export async function performBackup(
 
     const totalRows = Object.values(tables).reduce((sum, rows) => sum + rows.length, 0);
     log(`[Backup] Total: ${Object.keys(tables).length} tables, ${totalRows} rows`);
+    log(`[Backup] Tables keys: ${Object.keys(tables).join(', ')}`);
 
     // 获取 R2 附件文件（带重试）
     let attachments = new Map<string, Uint8Array>();
