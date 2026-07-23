@@ -9,87 +9,6 @@ import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
 
-/**
- * 使用 D1 REST API 导出数据库为 SQL
- * 参考: https://developers.cloudflare.com/d1/best-practices/import-export-data/
- */
-async function exportD1ViaApi(
-  accountId: string,
-  databaseId: string,
-  apiToken: string
-): Promise<string | null> {
-  try {
-    console.log('[Backup] Exporting D1 via REST API...');
-    console.log(`[Backup] Account: ${accountId}, Database: ${databaseId}`);
-    
-    // 启动导出任务
-    const exportUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/export`;
-    const startResponse = await fetch(exportUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiToken}`,
-      },
-      body: JSON.stringify({ output_format: 'polling' }),
-    });
-    
-    const startResult = await startResponse.json() as any;
-    if (!startResult.success || !startResult.result?.at_bookmark) {
-      console.error('[Backup] Export start failed:', JSON.stringify(startResult.errors));
-      return null;
-    }
-    
-    const bookmark = startResult.result.at_bookmark;
-    console.log(`[Backup] Export started, bookmark: ${bookmark}`);
-    
-    // 轮询等待导出完成
-    let signedUrl = null;
-    for (let i = 0; i < 60; i++) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      const pollResponse = await fetch(exportUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiToken}`,
-        },
-        body: JSON.stringify({ current_bookmark: bookmark }),
-      });
-      
-      const pollResult = await pollResponse.json() as any;
-      if (pollResult.success && pollResult.result?.signed_url) {
-        signedUrl = pollResult.result.signed_url;
-        console.log(`[Backup] Export ready after ${i + 1} attempts`);
-        break;
-      }
-      
-      if (i % 10 === 0) {
-        console.log(`[Backup] Waiting for export... (${i + 1}/60)`);
-      }
-    }
-    
-    if (!signedUrl) {
-      console.error('[Backup] Export timed out after 120 seconds');
-      return null;
-    }
-    
-    // 下载 SQL 导出
-    const downloadResponse = await fetch(signedUrl);
-    if (!downloadResponse.ok) {
-      console.error('[Backup] Download failed:', downloadResponse.status);
-      return null;
-    }
-    
-    const sql = await downloadResponse.text();
-    console.log(`[Backup] SQL export downloaded: ${sql.length} bytes`);
-    return sql;
-    
-  } catch (err) {
-    console.error(`[Backup] D1 API export failed: ${(err as Error).message}`);
-    return null;
-  }
-}
-
 // ===========================
 // WebDAV 工具函数
 // ===========================
@@ -431,26 +350,7 @@ export async function performBackup(
     // 2. 数据库导出
     console.log('[Backup] Creating database export...');
     
-    // 使用 D1 REST API 导出（需要配置环境变量）
-    // Account ID 从日志中获取: 3f762871bd2e6a373f70d3b3a8e5dc88
-    const accountId = (remoteConfig as any).CLOUDFLARE_ACCOUNT_ID || '3f762871bd2e6a373f70d3b3a8e5dc88';
-    const databaseId = '15d7d97d-0ba1-4a72-963f-a1b649b48042';
-    const apiToken = (remoteConfig as any).CLOUDFLARE_API_TOKEN;
-    
-    if (accountId && databaseId && apiToken) {
-      const sqlExport = await exportD1ViaApi(accountId, databaseId, apiToken);
-      
-      if (sqlExport) {
-        // SQL 导出成功，包含为 .sql 文件
-        tarEntries.push({
-          name: 'db.sql',
-          data: new TextEncoder().encode(sqlExport),
-        });
-        console.log(`[Backup] db.sql created: ${sqlExport.length} bytes`);
-      }
-    }
-    
-    // 始终包含最小化 SQLite 文件（包含 schema）
+    // 创建最小化 SQLite 文件（包含 schema）
     try {
       const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
       const minimalSqlite = createMinimalSqliteFile();
