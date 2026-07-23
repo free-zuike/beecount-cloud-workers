@@ -22,6 +22,48 @@ async function cleanupStalePendingBackups(db: D1Database): Promise<void> {
   }
 }
 
+/**
+ * 检查 cron 表达式是否匹配当前本地时间
+ * @param cronExpr cron 表达式 (分钟 小时 日 月 周)
+ * @param timezoneOffset 时区偏移 (分钟，UTC+8 = -480)
+ */
+function shouldRunNow(cronExpr: string, timezoneOffset: number): boolean {
+  const parts = cronExpr.trim().split(/\s+/);
+  if (parts.length < 5) return false;
+
+  const minuteStr = parts[0];
+  const hourStr = parts[1];
+
+  // 获取当前本地时间
+  const now = new Date();
+  const localMs = now.getTime() - timezoneOffset * 60000;
+  const localDate = new Date(localMs);
+  const currentMinute = localDate.getUTCHours() * 60 + localDate.getUTCMinutes();
+
+  // 解析 cron 中的分钟和小时
+  let cronMinute = -1;
+  let cronHour = -1;
+
+  if (minuteStr !== '*') {
+    cronMinute = parseInt(minuteStr, 10);
+    if (isNaN(cronMinute)) return false;
+  }
+
+  if (hourStr !== '*') {
+    cronHour = parseInt(hourStr, 10);
+    if (isNaN(cronHour)) return false;
+  }
+
+  // 检查是否匹配
+  const minuteMatch = cronMinute === -1 || cronMinute === localDate.getUTCMinutes();
+  const hourMatch = cronHour === -1 || cronHour === localDate.getUTCHours();
+
+  // 只在整点/整分时触发（秒数为 0）
+  const secondMatch = localDate.getUTCSeconds() < 60; // cron 每 5 分钟触发一次，只要在分钟内即可
+
+  return minuteMatch && hourMatch;
+}
+
 export async function processBackupSchedule(
   db: D1Database,
   schedule: any,
@@ -55,26 +97,30 @@ export async function processBackupSchedule(
   try {
     const timezoneOffset = schedule.timezone_offset || 0;
 
-    if (!schedule.next_run_at) {
-      const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
-      await db.prepare('UPDATE backup_schedules SET next_run_at = ? WHERE id = ?')
-        .bind(nextRun, schedule.id).run();
-      console.log(`[CRON] Set initial next_run_at for schedule ${schedule.id}: ${nextRun}`);
+    // 检查是否到了执行时间（基于本地时间）
+    if (!shouldRunNow(schedule.cron_expr, timezoneOffset)) {
+      console.log(`[CRON] Schedule ${schedule.id} not due yet (cron: ${schedule.cron_expr}, tz: ${timezoneOffset})`);
       return;
     }
 
-    const now = new Date().toISOString();
-    if (now < schedule.next_run_at) {
-      console.log(`[CRON] Schedule ${schedule.id} not due yet. Next run: ${schedule.next_run_at}`);
-      return;
+    // 检查是否刚刚执行过（防止重复触发）
+    const lastRun = schedule.last_run_at;
+    if (lastRun) {
+      const lastRunTime = new Date(lastRun).getTime();
+      const now = Date.now();
+      // 如果上次执行在 5 分钟内，跳过
+      if (now - lastRunTime < 5 * 60 * 1000) {
+        console.log(`[CRON] Schedule ${schedule.id} recently executed, skipping`);
+        return;
+      }
     }
 
     console.log(`[CRON] Executing schedule ${schedule.id}: ${schedule.name}`);
 
-    // 先更新 next_run_at 防止重复触发
-    const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
-    await db.prepare('UPDATE backup_schedules SET next_run_at = ? WHERE id = ?')
-      .bind(nextRun, schedule.id).run();
+    // 更新 last_run_at
+    const now = new Date().toISOString();
+    await db.prepare('UPDATE backup_schedules SET last_run_at = ? WHERE id = ?')
+      .bind(now, schedule.id).run();
 
     const ledger = await db.prepare('SELECT id FROM ledgers WHERE user_id = ? LIMIT 1')
       .bind(schedule.user_id).first<{ id: string }>();
