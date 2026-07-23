@@ -386,33 +386,44 @@ export async function performBackup(
       data: new TextEncoder().encode(JSON.stringify(meta, null, 2)),
     });
 
-    // 2. 数据库导出 - 使用 D1 dump() 获取完整 SQLite 数据库（等同于原版 VACUUM INTO）
-    console.debug(`[Backup] Exporting db.sqlite3 via D1 dump()...`);
+    // 2. 数据库导出 - 优先用 TS writer 写入完整数据，dump() 作为备选
+    console.debug(`[Backup] Creating db.sqlite3 with ${Object.keys(tables).length} tables...`);
     try {
-      const stream = db.dump();
-      // dump() 返回 Promise<ReadableStream>，用 Response 消费
-      const response = new Response(stream);
-      const buffer = await response.arrayBuffer();
-      const sqliteData = new Uint8Array(buffer);
+      const sqliteData = createSqliteWithData(tables);
       tarEntries.push({
         name: 'db.sqlite3',
         data: sqliteData,
       });
       console.debug(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
     } catch (err) {
-      console.error(`[Backup] D1 dump() failed, falling back to schema-only: ${(err as Error).message}`);
+      console.error(`[Backup] TS SQLite writer failed: ${(err as Error).message}`);
       
-      // 回退到最小化 SQLite（仅 schema）
+      // 回退到 D1 dump()
       try {
-        const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
-        const minimalSqlite = createMinimalSqliteFile();
+        console.debug(`[Backup] Trying D1 dump() fallback...`);
+        const stream = await db.dump();
+        const response = new Response(stream);
+        const buffer = await response.arrayBuffer();
+        const sqliteData = new Uint8Array(buffer);
         tarEntries.push({
           name: 'db.sqlite3',
-          data: minimalSqlite,
+          data: sqliteData,
         });
-        console.debug(`[Backup] Fallback db.sqlite3 (schema-only): ${minimalSqlite.length} bytes`);
+        console.debug(`[Backup] db.sqlite3 from dump(): ${sqliteData.length} bytes`);
       } catch (e) {
-        console.error(`[Backup] Fallback also failed: ${(e as Error).message}`);
+        console.error(`[Backup] D1 dump() also failed: ${(e as Error).message}`);
+        // 最终回退到 schema-only
+        try {
+          const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
+          const minimalSqlite = createMinimalSqliteFile();
+          tarEntries.push({
+            name: 'db.sqlite3',
+            data: minimalSqlite,
+          });
+          console.debug(`[Backup] Fallback db.sqlite3 (schema-only): ${minimalSqlite.length} bytes`);
+        } catch (e2) {
+          console.error(`[Backup] All SQLite fallbacks failed: ${(e2 as Error).message}`);
+        }
       }
     }
     
