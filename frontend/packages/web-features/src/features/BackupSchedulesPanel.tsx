@@ -269,9 +269,6 @@ function ScheduleEditForm({
   const [selectedRemoteIds, setSelectedRemoteIds] = useState<number[]>(
     existing?.remote_ids || [],
   )
-  const [timezoneOffset, setTimezoneOffset] = useState(
-    existing?.timezone_offset ?? -(new Date().getTimezoneOffset()),
-  )
   const [submitting, setSubmitting] = useState(false)
 
   const toggleRemote = (id: number) => {
@@ -290,7 +287,6 @@ function ScheduleEditForm({
         include_attachments: includeAttachments,
         enabled,
         remote_ids: selectedRemoteIds,
-        timezone_offset: timezoneOffset,
       }
       let ok = false
       if (existing) {
@@ -343,26 +339,6 @@ function ScheduleEditForm({
           />
           <p className="text-[10px] text-muted-foreground">
             {t('backup.schedule.field.cronHint')}
-          </p>
-        </div>
-        <div className="space-y-1">
-          <Label>{t('backup.schedule.field.timezone')}</Label>
-          <select
-            value={timezoneOffset}
-            onChange={(e) => setTimezoneOffset(Number(e.target.value))}
-            className="w-full rounded-md border border-border/60 bg-background px-2 py-1.5 text-xs"
-          >
-            <option value={0}>UTC+0 (伦敦)</option>
-            <option value={-480}>UTC+8 (北京/上海)</option>
-            <option value={-540}>UTC+9 (东京)</option>
-            <option value={-330}>UTC+5:30 (印度)</option>
-            <option value={-360}>UTC+6 (曼谷)</option>
-            <option value={60}>UTC-1 (巴黎)</option>
-            <option value={300}>UTC-5 (纽约)</option>
-            <option value={480}>UTC-8 (洛杉矶)</option>
-          </select>
-          <p className="text-[10px] text-muted-foreground">
-            {t('backup.schedule.field.timezoneHint')}
           </p>
         </div>
         <div className="space-y-1">
