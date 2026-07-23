@@ -294,7 +294,16 @@ export function createSqliteWithData(
     if (!rows || rows.length === 0) continue;
     
     const firstRow = rows[0] as Record<string, unknown>;
+    if (!firstRow) {
+      console.warn(`[SQLite] Skipping table ${tableName}: first row is undefined`);
+      continue;
+    }
     const columns = Object.keys(firstRow);
+    
+    if (columns.length === 0) {
+      console.warn(`[SQLite] Skipping table ${tableName}: no columns found`);
+      continue;
+    }
     
     // 创建 CREATE TABLE 语句
     const colDefs = columns.map(col => {

@@ -259,7 +259,7 @@ async function fetchR2Attachments(r2: R2Bucket): Promise<Map<string, Uint8Array>
   const attachments = new Map<string, Uint8Array>();
   const prefixes = ['attachments/', 'avatars/', 'category-icons/'];
 
-  log(`[Backup] Fetching R2 files with prefixes: ${prefixes.join(', ')}`);
+  console.log(`[Backup] Fetching R2 files with prefixes: ${prefixes.join(', ')}`);
 
   let totalFiles = 0;
   let totalSize = 0;
@@ -278,7 +278,7 @@ async function fetchR2Attachments(r2: R2Bucket): Promise<Map<string, Uint8Array>
             attachments.set(obj.key, new Uint8Array(arrayBuffer));
             totalFiles++;
             totalSize += obj.size;
-            log(`[Backup] Fetched: ${obj.key} (${obj.size} bytes)`);
+            console.log(`[Backup] Fetched: ${obj.key} (${obj.size} bytes)`);
           }
         } catch (err) {
           console.error(`[Backup] Failed to fetch ${obj.key}: ${(err as Error).message}`);
@@ -287,7 +287,7 @@ async function fetchR2Attachments(r2: R2Bucket): Promise<Map<string, Uint8Array>
     } while (cursor);
   }
 
-  log(`[Backup] Total R2 files: ${totalFiles} files, ${totalSize} bytes`);
+  console.log(`[Backup] Total R2 files: ${totalFiles} files, ${totalSize} bytes`);
   return attachments;
 }
 
