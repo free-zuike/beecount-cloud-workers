@@ -298,7 +298,14 @@ export function createSqliteWithData(
   
   // 使用 for...in 而不是 Object.entries
   const tableNames = Object.keys(tables);
-  console.debug(`[SQLite] Found ${tableNames.length} table names`);
+  console.debug(`[SQLite] Found ${tableNames.length} table names: ${tableNames.join(', ')}`);
+  
+  // 检查第一个表的数据
+  if (tableNames.length > 0) {
+    const firstTableName = tableNames[0];
+    const firstTableData = (tables as any)[firstTableName];
+    console.debug(`[SQLite] First table "${firstTableName}": type=${typeof firstTableData}, isArray=${Array.isArray(firstTableData)}, length=${firstTableData?.length}`);
+  }
   
   for (const tableName of tableNames) {
     const rows = (tables as any)[tableName];
