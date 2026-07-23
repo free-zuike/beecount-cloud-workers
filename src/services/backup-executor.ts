@@ -8,6 +8,7 @@ import { uploadToS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
+import { encryptData } from '../lib/encryption';
 import { createSqliteWithData } from '../lib/sqlite-writer';
 
 // ===========================
@@ -438,9 +439,22 @@ export async function performBackup(
     );
     let encrypted = false;
 
-    // 注意：加密功能暂不支持二进制数据，跳过加密
+    // 加密备份文件
     if (shouldEncrypt) {
-      console.log('[Backup] Encryption skipped for tar.gz format (not supported for binary data)');
+      const encryptionPassword = remoteConfig.age_passphrase || remoteConfig.encryption_password;
+      if (encryptionPassword) {
+        try {
+          console.log('[Backup] Encrypting backup with AES-256-GCM...');
+          backupBytes = await encryptData(backupBytes, encryptionPassword);
+          encrypted = true;
+          console.log(`[Backup] Backup encrypted: ${backupBytes.length} bytes`);
+        } catch (encryptErr) {
+          console.error(`[Backup] Encryption failed: ${(encryptErr as Error).message}`);
+          // 加密失败继续上传未加密的备份
+        }
+      } else {
+        console.log('[Backup] No encryption password found, skipping encryption');
+      }
     }
 
     const backupSize = backupBytes.length;
@@ -478,7 +492,8 @@ export async function performBackup(
       const now = new Date();
       const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
       const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.tar.gz`;
+      const fileExt = encrypted ? '.zip' : '.tar.gz';
+      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
 
       console.log(`[Backup] Uploading to S3 key: ${backupKey}`);
 
@@ -569,7 +584,8 @@ export async function performBackup(
       const now = new Date();
       const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
       const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.tar.gz`;
+      const fileExt = encrypted ? '.zip' : '.tar.gz';
+      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
       
       console.log(`[Backup] Uploading to R2: ${backupKey} (${backupSize} bytes)`);
       try {
@@ -611,7 +627,8 @@ export async function performBackup(
       const now = new Date();
       const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
       const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.tar.gz`;
+      const fileExt = encrypted ? '.zip' : '.tar.gz';
+      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
 
       console.log(`[Backup] Uploading to FTP: ${backupKey}`);
 
@@ -647,7 +664,8 @@ export async function performBackup(
       const now = new Date();
       const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
       const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.tar.gz`;
+      const fileExt = encrypted ? '.zip' : '.tar.gz';
+      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
 
       console.log(`[Backup] Uploading to SFTP: ${backupKey}`);
 

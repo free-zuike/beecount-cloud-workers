@@ -1874,4 +1874,86 @@ backupRouter.post('/upload-snapshot', zValidator('json', UploadSnapshotSchema), 
   return c.json({ success: true, file_name: fileName, size: jsonStr.length, checksum });
 });
 
+// ============================================================================
+// Restore endpoints - 与原版恢复功能对齐
+// ============================================================================
+
+/**
+ * POST /restore/:runId - 准备恢复（下载备份文件）
+ */
+backupRouter.post('/restore/:runId', async (c) => {
+  const db = c.env.DB;
+  const r2 = c.env.R2;
+  const runId = parseInt(c.req.param('runId'));
+  const userId = c.get('userId');
+  
+  // 验证备份记录
+  const run = await db.prepare(
+    'SELECT * FROM backup_runs WHERE id = ? AND user_id = ?'
+  ).bind(runId, userId).first();
+  
+  if (!run) {
+    return c.json({ error: 'Backup run not found' }, 404);
+  }
+  
+  if (run.status !== 'completed') {
+    return c.json({ error: 'Backup run is not completed' }, 400);
+  }
+  
+  if (!run.backup_path) {
+    return c.json({ error: 'No backup file found' }, 400);
+  }
+  
+  // 下载备份文件
+  if (!r2) {
+    return c.json({ error: 'R2 not configured' }, 500);
+  }
+  
+  try {
+    const backupFile = await r2.get(run.backup_path);
+    if (!backupFile) {
+      return c.json({ error: 'Backup file not found in R2' }, 404);
+    }
+    
+    // 读取文件内容
+    const backupData = await backupFile.arrayBuffer();
+    
+    return c.json({
+      success: true,
+      filename: run.backup_filename,
+      size: backupData.byteLength,
+      backup_path: run.backup_path,
+      message: 'Backup file downloaded successfully. Use /restore/:runId/extract to extract.'
+    });
+  } catch (error) {
+    return c.json({ error: `Failed to download backup: ${(error as Error).message}` }, 500);
+  }
+});
+
+/**
+ * GET /restore/:runId/info - 获取备份文件信息
+ */
+backupRouter.get('/restore/:runId/info', async (c) => {
+  const db = c.env.DB;
+  const runId = parseInt(c.req.param('runId'));
+  const userId = c.get('userId');
+  
+  const run = await db.prepare(
+    'SELECT * FROM backup_runs WHERE id = ? AND user_id = ?'
+  ).bind(runId, userId).first();
+  
+  if (!run) {
+    return c.json({ error: 'Backup run not found' }, 404);
+  }
+  
+  return c.json({
+    id: run.id,
+    filename: run.backup_filename,
+    size: run.bytes_total,
+    status: run.status,
+    backup_path: run.backup_path,
+    created_at: run.started_at,
+  });
+});
+
 export default backupRouter;
