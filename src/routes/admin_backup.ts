@@ -343,7 +343,12 @@ backupRouter.get('/rclone-config', async (c) => {
     let configContent = '# BeeCount Cloud rclone configuration\n';
     configContent += '# Auto-generated - do not edit manually\n\n';
     
+    let hasRcloneConfig = false;
+    
     for (const row of (remotes.results || [])) {
+      // R2 使用 Worker 绑定，不使用 rclone，跳过
+      if (row.backend_type === 'r2') continue;
+      
       let config: Record<string, string> = {};
       try {
         config = JSON.parse(row.config_summary || '{}');
@@ -362,15 +367,29 @@ backupRouter.get('/rclone-config', async (c) => {
         if (config.region) configContent += `region = ${config.region}\n`;
         if (config.bucket) configContent += `bucket = ${config.bucket}\n`;
         configContent += `provider = Cloudflare\n`;
-      } else if (row.backend_type === 'r2') {
-        if (config.endpoint) configContent += `endpoint = ${config.endpoint}\n`;
-        if (config.access_key_id) configContent += `access_key_id = ${config.access_key_id}\n`;
-        if (config.secret_access_key) configContent += `secret_access_key = ${config.secret_access_key}\n`;
-        configContent += `region = auto\n`;
-        configContent += `provider = Cloudflare\n`;
+      } else if (row.backend_type === 'ftp') {
+        if (config.host) configContent += `host = ${config.host}\n`;
+        if (config.port) configContent += `port = ${config.port}\n`;
+        if (config.username) configContent += `user = ${config.username}\n`;
+        if (config.password) configContent += `pass = ${config.password}\n`;
+      } else if (row.backend_type === 'sftp') {
+        if (config.host) configContent += `host = ${config.host}\n`;
+        if (config.port) configContent += `port = ${config.port}\n`;
+        if (config.username) configContent += `user = ${config.username}\n`;
+        if (config.password) configContent += `pass = ${config.password}\n`;
+      } else if (row.backend_type === 'webdav') {
+        if (config.url) configContent += `url = ${config.url}\n`;
+        if (config.username) configContent += `user = ${config.username}\n`;
+        if (config.password) configContent += `pass = ${config.password}\n`;
       }
       
       configContent += '\n';
+      hasRcloneConfig = true;
+    }
+    
+    if (!hasRcloneConfig) {
+      configContent += '# No rclone-compatible remotes configured.\n';
+      configContent += '# R2 backups use Worker binding (no rclone needed).\n';
     }
     
     return new Response(configContent, {
