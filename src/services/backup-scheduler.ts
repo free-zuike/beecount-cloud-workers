@@ -112,31 +112,53 @@ export async function processBackupSchedule(
     const runId = (runInsertResult as any).lastRowId;
 
     try {
+      console.log(`[CRON] Starting backup for schedule ${schedule.id}...`);
       const backupResult = await performBackup(db, runId, schedule.user_id, ledger.id, remoteConfig, shouldEncrypt, r2);
       const finishedAt = new Date().toISOString();
 
+      console.log(`[CRON] Backup result: success=${backupResult.success}, size=${backupResult.backupSize}, path=${backupResult.backupPath}`);
+
       if (backupResult.success) {
-        await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ? WHERE id = ?')
-          .bind('completed', finishedAt, backupResult.backupSize, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath, runId).run();
-        console.log(`[CRON] Backup completed for schedule ${schedule.id}`);
+        try {
+          await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ? WHERE id = ?')
+            .bind('completed', finishedAt, backupResult.backupSize, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath, runId).run();
+          console.log(`[CRON] Backup status updated to completed for run ${runId}`);
+        } catch (dbErr) {
+          console.error(`[CRON] Failed to update backup_runs status: ${(dbErr as Error).message}`);
+          // 即使状态更新失败，备份已经成功上传到 R2
+        }
       } else {
-        await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?')
-          .bind('failed', finishedAt, backupResult.message, runId).run();
+        try {
+          await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?')
+            .bind('failed', finishedAt, backupResult.message, runId).run();
+          console.log(`[CRON] Backup status updated to failed for run ${runId}`);
+        } catch (dbErr) {
+          console.error(`[CRON] Failed to update backup_runs status: ${(dbErr as Error).message}`);
+        }
         console.log(`[CRON] Backup failed for schedule ${schedule.id}:`, backupResult.message);
       }
 
-      const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
-      await db.prepare('UPDATE backup_schedules SET last_run_at = ?, last_run_status = ?, next_run_at = ?, updated_at = ? WHERE id = ?')
-        .bind(startedAt, backupResult.success ? 'completed' : 'failed', nextRun, startedAt, schedule.id).run();
+      try {
+        const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
+        await db.prepare('UPDATE backup_schedules SET last_run_at = ?, last_run_status = ?, next_run_at = ?, updated_at = ? WHERE id = ?')
+          .bind(startedAt, backupResult.success ? 'completed' : 'failed', nextRun, startedAt, schedule.id).run();
+      } catch (dbErr) {
+        console.error(`[CRON] Failed to update backup_schedules: ${(dbErr as Error).message}`);
+      }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       const finishedAt = new Date().toISOString();
-      await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?')
-        .bind('failed', finishedAt, errorMsg, runId).run();
-      const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
-      await db.prepare('UPDATE backup_schedules SET last_run_at = ?, last_run_status = ?, next_run_at = ?, updated_at = ? WHERE id = ?')
-        .bind(startedAt, 'failed', nextRun, startedAt, schedule.id).run();
       console.error(`[CRON] Exception during backup for schedule ${schedule.id}:`, error);
+      
+      try {
+        await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?')
+          .bind('failed', finishedAt, errorMsg, runId).run();
+        const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
+        await db.prepare('UPDATE backup_schedules SET last_run_at = ?, last_run_status = ?, next_run_at = ?, updated_at = ? WHERE id = ?')
+          .bind(startedAt, 'failed', nextRun, startedAt, schedule.id).run();
+      } catch (dbErr) {
+        console.error(`[CRON] Failed to update status after error: ${(dbErr as Error).message}`);
+      }
     }
   } finally {
     if (beeCountDO) {
