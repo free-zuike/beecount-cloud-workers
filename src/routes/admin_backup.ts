@@ -367,6 +367,13 @@ backupRouter.get('/rclone-config', async (c) => {
         if (config.region) configContent += `region = ${config.region}\n`;
         if (config.bucket) configContent += `bucket = ${config.bucket}\n`;
         configContent += `provider = Cloudflare\n`;
+      } else if (row.backend_type === 'b2') {
+        // B2 使用 S3 兼容 API
+        configContent += `endpoint = ${config.endpoint || 'https://s3.us-west-004.backblazeb2.com'}\n`;
+        if (config.access_key_id) configContent += `access_key_id = ${config.access_key_id}\n`;
+        if (config.secret_access_key) configContent += `secret_access_key = ${config.secret_access_key}\n`;
+        if (config.bucket) configContent += `bucket = ${config.bucket}\n`;
+        configContent += `provider = Backblaze\n`;
       } else if (row.backend_type === 'ftp') {
         if (config.host) configContent += `host = ${config.host}\n`;
         if (config.port) configContent += `port = ${config.port}\n`;
@@ -810,6 +817,26 @@ backupRouter.post('/remotes/:id/test', async (c) => {
           const result = await testS3Connection(s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, s3Region);
           testResult.ok = result.ok;
           testResult.message = result.message;
+        }
+        break;
+
+      case 'b2':
+        // Backblaze B2 使用 S3 兼容 API
+        const b2Endpoint = config.endpoint || 'https://s3.us-west-004.backblazeb2.com';
+        const b2Bucket = config.bucket;
+        const b2Key = config.key || config.access_key_id;
+        const b2AccountId = config.account || config.secret_access_key;
+        
+        if (!b2Bucket) {
+          testResult.ok = false;
+          testResult.message = 'Bucket name is required';
+        } else if (!b2Key || !b2AccountId) {
+          testResult.ok = false;
+          testResult.message = 'Application Key and Account ID are required';
+        } else {
+          const result = await testS3Connection(b2Endpoint, b2Bucket, b2AccountId, b2Key, 'auto');
+          testResult.ok = result.ok;
+          testResult.message = result.ok ? 'Backblaze B2 accessible' : result.message;
         }
         break;
 
