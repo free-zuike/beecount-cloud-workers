@@ -208,6 +208,8 @@ export function SettingsProfileAppearanceSection() {
     setAppearanceSaving(true)
     try {
       await patchProfileMe(token, {
+        // 整体替换语义:把 server 现有 appearance 全量带上再 patch,否则会清掉
+        // mobile 设的 header_skin 等本页未直接管理的字段。
         appearance: { ...appearance, ...patch },
       })
       await refreshProfile()

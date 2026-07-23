@@ -80,6 +80,14 @@ const S3_PROVIDERS: Array<{ value: string; label: string }> = [
 ]
 
 const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
+  r2: [
+    {
+      key: 'root_path',
+      label: 'Root Path',
+      placeholder: 'beecount',
+      hint: '备份文件存放的根目录，默认 beecount。使用 Worker 绑定的 R2 bucket，无需配置 bucket 和密钥。',
+    },
+  ],
   s3: [
     {
       key: 'provider',
@@ -160,14 +168,6 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
     { key: 'remote', label: 'Target remote', placeholder: 'other-remote:path' },
   ],
   local: [],
-  r2: [
-    {
-      key: 'root_path',
-      label: 'Root Path',
-      placeholder: 'beecount',
-      hint: '备份文件存放的根目录，默认 beecount。使用 Worker 绑定的 R2 bucket，无需配置 bucket 和密钥。',
-    },
-  ],
 }
 
 const BACKEND_LABELS: Record<string, string> = {

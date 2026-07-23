@@ -633,7 +633,6 @@ export type AdminDevice = {
   is_online: boolean
   user_id: string
   user_email: string
-  session_count?: number
 }
 
 export type AdminDeviceList = {

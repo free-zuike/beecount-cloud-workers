@@ -2,7 +2,7 @@
 export const PRIMARY_COLOR_STORAGE_KEY = 'beecount.primary-color'
 
 /** Default matches mobile `BeeTheme.honeyGold` hex. */
-export const DEFAULT_PRIMARY_COLOR = '#10B981'
+export const DEFAULT_PRIMARY_COLOR = '#F59E0B'
 
 /**
  * 预设色板（对齐 mobile `personalize_page.dart` 的常用色，加上几种互补）。

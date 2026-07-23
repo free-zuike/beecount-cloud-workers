@@ -7,8 +7,5 @@
     "build": "pnpm -r --filter ./apps/* build",
     "test": "pnpm -r --filter ./apps/* test",
     "dev": "pnpm -C apps/web dev"
-  },
-  "dependencies": {
-    "country-flag-icons": "^1.6.20"
   }
 }
