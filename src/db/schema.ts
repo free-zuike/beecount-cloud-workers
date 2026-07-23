@@ -356,6 +356,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         remote_id INTEGER REFERENCES backup_remotes(id) ON DELETE SET NULL,
         status TEXT NOT NULL DEFAULT 'pending',
         error_message TEXT,
+        log_text TEXT,
         bytes_total INTEGER,
         backup_filename TEXT,
         backup_path TEXT,

@@ -31,7 +31,15 @@ export async function processBackupSchedule(
   // 清理超时的 pending 备份
   await cleanupStalePendingBackups(db);
 
-  console.log(`[CRON] Processing schedule ${schedule.id}: ${schedule.name}`);
+  // 日志收集
+  const logLines: string[] = [];
+  const logFn = (msg: string) => {
+    const timestamp = new Date().toISOString();
+    logLines.push(`[${timestamp}] ${msg}`);
+    console.log(`[CRON] ${msg}`);
+  };
+
+  logFn(`Processing schedule ${schedule.id}: ${schedule.name}`);
 
   // Use BeeCount DO for distributed locking
   if (beeCountDO) {
@@ -135,13 +143,14 @@ export async function processBackupSchedule(
       console.log(`[CRON] Backup result: success=${backupResult.success}, size=${backupResult.backupSize}, path=${backupResult.backupPath}`);
 
       // 更新备份状态
+      const logText = logLines.join('\n').slice(0, 1024 * 1024); // 最大 1MB
       const updateSql = backupResult.success
-        ? 'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ? WHERE id = ?'
-        : 'UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?';
+        ? 'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, log_text = ? WHERE id = ?'
+        : 'UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ?, log_text = ? WHERE id = ?';
       
       const updateParams = backupResult.success
-        ? ['succeeded', finishedAt, backupResult.backupSize, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath, runId]
-        : ['failed', finishedAt, backupResult.message, runId];
+        ? ['succeeded', finishedAt, backupResult.backupSize, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath, logText, runId]
+        : ['failed', finishedAt, backupResult.message, logText, runId];
 
       console.log(`[CRON] Updating backup_runs: id=${runId}, status=${backupResult.success ? 'succeeded' : 'failed'}`);
       
