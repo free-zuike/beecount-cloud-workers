@@ -389,8 +389,8 @@ export async function performBackup(
     // 2. 数据库导出 - 使用 D1 dump() 获取完整 SQLite 数据库（等同于原版 VACUUM INTO）
     console.debug(`[Backup] Exporting db.sqlite3 via D1 dump()...`);
     try {
-      // dump() 返回 Promise<ReadableStream>，需要 await
-      const stream = await db.dump();
+      const stream = db.dump();
+      // dump() 返回 Promise<ReadableStream>，用 Response 消费
       const response = new Response(stream);
       const buffer = await response.arrayBuffer();
       const sqliteData = new Uint8Array(buffer);
