@@ -137,7 +137,7 @@ export async function processBackupSchedule(
 
     try {
       console.log(`[CRON] Starting backup for schedule ${schedule.id}, run ${runId}...`);
-      const backupResult = await performBackup(db, runId!, schedule.user_id, ledger.id, remoteConfig, shouldEncrypt, r2);
+      const backupResult = await performBackup(db, runId!, schedule.user_id, ledger.id, remoteConfig, shouldEncrypt, r2, logFn);
       const finishedAt = new Date().toISOString();
 
       console.log(`[CRON] Backup result: success=${backupResult.success}, size=${backupResult.backupSize}, path=${backupResult.backupPath}`);

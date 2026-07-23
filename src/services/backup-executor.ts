@@ -322,10 +322,12 @@ export async function performBackup(
   ledgerId: string,
   remoteConfig: Record<string, string>,
   shouldEncrypt?: boolean,
-  r2?: R2Bucket
+  r2?: R2Bucket,
+  logFn?: (msg: string) => void
 ): Promise<BackupResult> {
+  const log = logFn || console.log;
   try {
-    console.log(`[Backup] Starting full database backup, user: ${userId}`);
+    log(`[Backup] Starting full database backup, user: ${userId}`);
 
     // 导出所有用户数据表（带重试）
     const tables: Record<string, unknown[]> = {};
@@ -339,16 +341,16 @@ export async function performBackup(
         );
         if (rows.length > 0) {
           tables[tableName] = rows;
-          console.log(`[Backup] ${tableName}: ${rows.length} rows`);
+          log(`[Backup] ${tableName}: ${rows.length} rows`);
         }
       } catch (err) {
         // 表可能不存在（老版本 DB 还没跑过 migration），跳过
-        console.log(`[Backup] Skipping ${tableName}: ${(err as Error).message}`);
+        log(`[Backup] Skipping ${tableName}: ${(err as Error).message}`);
       }
     }
 
     const totalRows = Object.values(tables).reduce((sum, rows) => sum + rows.length, 0);
-    console.log(`[Backup] Total: ${Object.keys(tables).length} tables, ${totalRows} rows`);
+    log(`[Backup] Total: ${Object.keys(tables).length} tables, ${totalRows} rows`);
 
     // 获取 R2 附件文件（带重试）
     let attachments = new Map<string, Uint8Array>();
