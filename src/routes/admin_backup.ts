@@ -1465,8 +1465,9 @@ backupRouter.get('/runs', async (c) => {
     .prepare(
       `SELECT r.id, r.schedule_id, r.status,
               r.started_at, r.finished_at, r.error_message, r.bytes_total,
-              r.backup_filename
+              r.backup_filename, s.name as schedule_name
        FROM backup_runs r
+       LEFT JOIN backup_schedules s ON r.schedule_id = s.id
        ORDER BY r.started_at DESC
        LIMIT ? OFFSET ?`
     )
@@ -1480,6 +1481,7 @@ backupRouter.get('/runs', async (c) => {
       error_message: string | null;
       bytes_total: number | null;
       backup_filename: string | null;
+      schedule_name: string | null;
     }>();
 
   const totalRow = await db.prepare('SELECT COUNT(*) as cnt FROM backup_runs').first<{ cnt: number }>();
@@ -1487,7 +1489,7 @@ backupRouter.get('/runs', async (c) => {
   const runs = rows.results.map((row) => ({
     id: String(row.id),
     schedule_id: row.schedule_id ? String(row.schedule_id) : null,
-    schedule_name: null,
+    schedule_name: row.schedule_name || null,
     status: row.status,
     started_at: row.started_at,
     finished_at: row.finished_at,
