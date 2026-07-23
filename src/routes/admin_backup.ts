@@ -844,13 +844,29 @@ backupRouter.post('/remotes/:id/test', async (c) => {
           testResult.message = 'R2 bucket not configured in Worker bindings';
         } else {
           try {
-            await c.env.R2.put('__test__', 'ok');
-            await c.env.R2.delete('__test__');
+            // 测试 bucket 是否可访问 - 尝试列出对象
+            const testKey = `__connection_test__/${Date.now()}.txt`;
+            const testContent = 'BeeCount R2 connection test';
+            
+            // 写入测试文件
+            await c.env.R2.put(testKey, testContent, {
+              httpMetadata: { contentType: 'text/plain' }
+            });
+            
+            // 读取测试文件验证
+            const obj = await c.env.R2.get(testKey);
+            if (!obj) {
+              throw new Error('Failed to read back test file');
+            }
+            
+            // 删除测试文件
+            await c.env.R2.delete(testKey);
+            
             testResult.ok = true;
-            testResult.message = 'R2 bucket accessible and writable';
+            testResult.message = `R2 bucket accessible and writable. Test file: ${testKey}`;
           } catch (e) {
             testResult.ok = false;
-            testResult.message = `R2 test failed: ${(e as Error).message}`;
+            testResult.message = `R2 test failed: ${(e as Error).message}. Check bucket name and permissions.`;
           }
         }
         break;
