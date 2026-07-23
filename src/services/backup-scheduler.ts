@@ -107,8 +107,8 @@ export async function processBackupSchedule(
     }
 
     const startedAt = new Date().toISOString();
-    const runInsertResult = await db.prepare('INSERT INTO backup_runs (schedule_id, ledger_id, remote_id, status, started_at) VALUES (?, ?, ?, ?, ?)')
-      .bind(schedule.id, ledger.id, remoteId, 'pending', startedAt).run();
+    const runInsertResult = await db.prepare('INSERT INTO backup_runs (schedule_id, user_id, ledger_id, remote_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(schedule.id, schedule.user_id, ledger.id, remoteId, 'pending', startedAt).run();
     const runId = (runInsertResult as any).lastRowId;
 
     try {
