@@ -1874,4 +1874,105 @@ backupRouter.post('/upload-snapshot', zValidator('json', UploadSnapshotSchema), 
   return c.json({ success: true, file_name: fileName, size: jsonStr.length, checksum });
 });
 
+// ============================================================================
+// OAuth2 endpoints for Google Drive / OneDrive / Dropbox
+// ============================================================================
+
+import {
+  GOOGLE_DRIVE_CONFIG,
+  ONEDRIVE_CONFIG,
+  DROPBOX_CONFIG,
+  generateAuthUrl,
+  exchangeCodeForToken,
+  refreshAccessToken,
+  type OAuth2Config,
+} from '../lib/oauth2';
+
+const OAUTH2_CONFIGS: Record<string, OAuth2Config> = {
+  drive: GOOGLE_DRIVE_CONFIG,
+  onedrive: ONEDRIVE_CONFIG,
+  dropbox: DROPBOX_CONFIG,
+};
+
+/**
+ * GET /oauth2/authorize - 生成 OAuth2 授权 URL
+ */
+backupRouter.get('/oauth2/authorize', async (c) => {
+  const provider = c.req.query('provider');
+  const redirectUri = c.req.query('redirect_uri');
+  
+  if (!provider || !OAUTH2_CONFIGS[provider]) {
+    return c.json({ error: 'Invalid provider' }, 400);
+  }
+  
+  if (!redirectUri) {
+    return c.json({ error: 'redirect_uri is required' }, 400);
+  }
+  
+  const config = OAUTH2_CONFIGS[provider];
+  const state = crypto.randomUUID();
+  
+  const authUrl = generateAuthUrl(config, redirectUri, state);
+  
+  return c.json({ auth_url: authUrl, state });
+});
+
+/**
+ * POST /oauth2/callback - 处理 OAuth2 回调，换取 token
+ */
+backupRouter.post('/oauth2/callback', async (c) => {
+  const { provider, code, redirect_uri } = await c.req.json();
+  
+  if (!provider || !OAUTH2_CONFIGS[provider]) {
+    return c.json({ error: 'Invalid provider' }, 400);
+  }
+  
+  if (!code || !redirect_uri) {
+    return c.json({ error: 'code and redirect_uri are required' }, 400);
+  }
+  
+  const config = OAUTH2_CONFIGS[provider];
+  
+  try {
+    const token = await exchangeCodeForToken(config, code, redirect_uri);
+    return c.json({
+      access_token: token.access_token,
+      refresh_token: token.refresh_token,
+      expires_in: token.expires_in,
+      token_type: token.token_type,
+    });
+  } catch (error) {
+    return c.json({ error: (error as Error).message }, 500);
+  }
+});
+
+/**
+ * POST /oauth2/refresh - 刷新 access token
+ */
+backupRouter.post('/oauth2/refresh', async (c) => {
+  const { provider, refresh_token } = await c.req.json();
+  
+  if (!provider || !OAUTH2_CONFIGS[provider]) {
+    return c.json({ error: 'Invalid provider' }, 400);
+  }
+  
+  if (!refresh_token) {
+    return c.json({ error: 'refresh_token is required' }, 400);
+  }
+  
+  const config = OAUTH2_CONFIGS[provider];
+  
+  try {
+    const token = await refreshAccessToken(config, refresh_token);
+    return c.json({
+      access_token: token.access_token,
+      refresh_token: token.refresh_token || refresh_token,
+      expires_in: token.expires_in,
+      token_type: token.token_type,
+    });
+  } catch (error) {
+    return c.json({ error: (error as Error).message }, 500);
+  }
+});
+
 export default backupRouter;
