@@ -140,10 +140,10 @@ export async function processBackupSchedule(
         : 'UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?';
       
       const updateParams = backupResult.success
-        ? ['completed', finishedAt, backupResult.backupSize, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath, runId]
+        ? ['succeeded', finishedAt, backupResult.backupSize, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath, runId]
         : ['failed', finishedAt, backupResult.message, runId];
 
-      console.log(`[CRON] Updating backup_runs: id=${runId}, status=${backupResult.success ? 'completed' : 'failed'}`);
+      console.log(`[CRON] Updating backup_runs: id=${runId}, status=${backupResult.success ? 'succeeded' : 'failed'}`);
       
       try {
         await db.prepare(updateSql).bind(...updateParams).run();
@@ -158,7 +158,7 @@ export async function processBackupSchedule(
       try {
         const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
         await db.prepare('UPDATE backup_schedules SET last_run_at = ?, last_run_status = ?, next_run_at = ?, updated_at = ? WHERE id = ?')
-          .bind(startedAt, backupResult.success ? 'completed' : 'failed', nextRun, startedAt, schedule.id).run();
+          .bind(startedAt, backupResult.success ? 'succeeded' : 'failed', nextRun, startedAt, schedule.id).run();
         console.log(`[CRON] Schedule status updated for schedule ${schedule.id}`);
       } catch (schedErr) {
         console.error(`[CRON] Failed to update backup_schedules: ${(schedErr as Error).message}`);

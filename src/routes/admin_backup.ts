@@ -1486,7 +1486,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
          SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?
          WHERE id = ?`
       )
-      .bind('completed', finishedAt, backupResult.backupSize, 
+      .bind('succeeded', finishedAt, backupResult.backupSize, 
             backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath, runId)
       .run();
 
@@ -1494,7 +1494,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
       id: runId,
       schedule_id: Number(scheduleId),
       schedule_name: schedule.name,
-      status: 'completed',
+      status: 'succeeded',
       started_at: serverNow,
       finished_at: finishedAt,
       backup_filename: backupResult.backupPath?.split('/').pop() || null,
@@ -1896,7 +1896,7 @@ backupRouter.post('/restore/:runId', async (c) => {
     return c.json({ error: 'Backup run not found' }, 404);
   }
   
-  if (run.status !== 'completed') {
+  if (run.status !== 'succeeded') {
     return c.json({ error: 'Backup run is not completed' }, 400);
   }
   
