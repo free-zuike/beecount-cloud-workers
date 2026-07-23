@@ -138,21 +138,6 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
     { key: 'client_secret', label: 'Client Secret', type: 'password' },
     { key: 'token', label: 'OAuth Token (JSON)', type: 'password' },
   ],
-  drive: [
-    { key: 'client_id', label: 'Client ID' },
-    { key: 'client_secret', label: 'Client Secret', type: 'password' },
-    { key: 'token', label: 'OAuth Token (JSON)', type: 'password' },
-  ],
-  onedrive: [
-    { key: 'client_id', label: 'Client ID' },
-    { key: 'client_secret', label: 'Client Secret', type: 'password' },
-    { key: 'token', label: 'OAuth Token (JSON)', type: 'password' },
-  ],
-  dropbox: [
-    { key: 'client_id', label: 'Client ID' },
-    { key: 'client_secret', label: 'Client Secret', type: 'password' },
-    { key: 'token', label: 'OAuth Token (JSON)', type: 'password' },
-  ],
   webdav: [
     { key: 'url', label: 'URL', placeholder: 'https://example.com/dav' },
     { key: 'vendor', label: 'Vendor', placeholder: 'nextcloud / owncloud / other' },
