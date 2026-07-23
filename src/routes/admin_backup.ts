@@ -1068,8 +1068,23 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
   const serverNow = nowUtc();
   const userId = c.get('userId');
   
-  // 计算首次运行时间（使用用户提供的时区偏移）
-  const nextRunAt = calculateNextRun(req.cron_expr, req.timezone_offset ?? 0);
+  // 获取时区偏移：优先使用请求中的值，否则从系统设置获取
+  let timezoneOffset = req.timezone_offset;
+  if (timezoneOffset === undefined || timezoneOffset === null) {
+    try {
+      const sysSetting = await db.prepare('SELECT timezone_offset FROM system_settings WHERE id = ?')
+        .bind('default').first<{ timezone_offset: number }>();
+      if (sysSetting) {
+        timezoneOffset = sysSetting.timezone_offset;
+        console.log(`[Backup] Using timezone from system_settings: ${timezoneOffset}`);
+      }
+    } catch (e) {
+      // 表可能不存在，忽略
+    }
+  }
+  
+  // 计算首次运行时间（使用时区偏移）
+  const nextRunAt = calculateNextRun(req.cron_expr, timezoneOffset ?? 0);
 
   const remoteIdsJson = req.remote_ids && req.remote_ids.length > 0 ? JSON.stringify(req.remote_ids) : null;
 
@@ -1090,7 +1105,7 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
         req.include_attachments !== false ? 1 : 0,
         req.enabled !== false ? 1 : 0,
         remoteIdsJson,
-        req.timezone_offset ?? 0,
+        timezoneOffset ?? 0,
         nextRunAt,
         serverNow,
         serverNow
