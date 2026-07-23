@@ -675,9 +675,9 @@ export async function performBackup(
 /**
  * 计算下次运行时间
  * Cron 表达式格式: 分钟 小时 日期 月份 星期
- * cronExpr 中的时间是本地时间（由 timezoneOffset 指定）
- * @param cronExpr cron表达式（本地时间）
- * @param timezoneOffset 用户时区偏移（分钟，东八区为-480）
+ * cronExpr 中的时间是 UTC 时间
+ * @param cronExpr cron表达式（UTC时间）
+ * @param timezoneOffset 用户时区偏移（分钟，东八区为-480，仅用于显示）
  */
 export function calculateNextRun(cronExpr: string, timezoneOffset: number = 0): string {
   try {
@@ -696,26 +696,16 @@ export function calculateNextRun(cronExpr: string, timezoneOffset: number = 0): 
     const targetMinute = minuteStr === '*' ? 0 : parseInt(minuteStr, 10);
     const targetHour = hourStr === '*' ? 0 : parseInt(hourStr, 10);
 
-    // cronExpr 中的时间是本地时间，需要转换为 UTC
-    // 本地时间 = UTC + timezoneOffset (timezoneOffset 为负数，如 UTC+8 为 -480)
-    // UTC = 本地时间 - timezoneOffset = 本地时间 + |timezoneOffset|
-    
+    // cron 时间是 UTC，直接使用
     const now = new Date();
     const nowUtcMs = now.getTime();
     
-    // 计算目标时间的 UTC 毫秒数
-    // 先创建一个日期，设置为 cron 中的本地时间
-    const targetLocalDate = new Date();
-    targetLocalDate.setUTCHours(targetHour, targetMinute, 0, 0);
+    // 创建目标时间（UTC）
+    const targetDate = new Date();
+    targetDate.setUTCHours(targetHour, targetMinute, 0, 0);
+    let targetUtcMs = targetDate.getTime();
     
-    // 当前 UTC 时间对应的本地时间
-    const nowLocalMs = nowUtcMs - timezoneOffset * 60000;
-    const nowLocalDate = new Date(nowLocalMs);
-    
-    // 目标本地时间对应的 UTC 时间
-    let targetUtcMs = targetLocalDate.getTime() + timezoneOffset * 60000;
-    
-    // 如果目标 UTC 时间已经过了今天的这个时间，就加一天
+    // 如果目标时间已过，加一天
     if (targetUtcMs <= nowUtcMs) {
       targetUtcMs += 24 * 60 * 60 * 1000;
     }
@@ -723,11 +713,11 @@ export function calculateNextRun(cronExpr: string, timezoneOffset: number = 0): 
     if (dayStr !== '*') {
       const targetDay = parseInt(dayStr, 10);
       if (!isNaN(targetDay) && targetDay > 0 && targetDay <= 31) {
-        const targetDate = new Date(targetUtcMs);
-        if (targetDay < targetDate.getUTCDate()) {
-          targetUtcMs += 31 * 24 * 60 * 60 * 1000; // 加一个月
-        }
         const tempDate = new Date(targetUtcMs);
+        if (targetDay < tempDate.getUTCDate()) {
+          targetUtcMs += 31 * 24 * 60 * 60 * 1000;
+        }
+        tempDate.setTime(targetUtcMs);
         tempDate.setUTCDate(targetDay);
         targetUtcMs = tempDate.getTime();
       }
