@@ -286,8 +286,7 @@ function createDataTablePage(tableName: string, columns: string[], rows: any[][]
 export function createSqliteWithData(
   tables: Record<string, unknown[]>
 ): Uint8Array {
-  console.log(`[SQLite] createSqliteWithData called with ${Object.keys(tables).length} tables`);
-  console.log(`[SQLite] Tables type: ${typeof tables}, isArray: ${Array.isArray(tables)}`);
+  console.debug(`[SQLite] createSqliteWithData called`);
   
   if (!tables || typeof tables !== 'object') {
     throw new Error('tables parameter is not an object');
@@ -297,8 +296,13 @@ export function createSqliteWithData(
   const tableSchemas: { name: string; sql: string }[] = [];
   const tableData: { name: string; columns: string[]; rows: any[][] }[] = [];
   
-  for (const [tableName, rows] of Object.entries(tables)) {
-    if (!rows || rows.length === 0) continue;
+  // 使用 for...in 而不是 Object.entries
+  const tableNames = Object.keys(tables);
+  console.debug(`[SQLite] Found ${tableNames.length} table names`);
+  
+  for (const tableName of tableNames) {
+    const rows = (tables as any)[tableName];
+    if (!rows || !Array.isArray(rows) || rows.length === 0) continue;
     
     try {
       const firstRow = rows[0] as Record<string, unknown>;

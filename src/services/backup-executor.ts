@@ -350,8 +350,8 @@ export async function performBackup(
     }
 
     const totalRows = Object.values(tables).reduce((sum, rows) => sum + rows.length, 0);
-    log(`[Backup] Total: ${Object.keys(tables).length} tables, ${totalRows} rows`);
-    log(`[Backup] Tables keys: ${Object.keys(tables).join(', ')}`);
+    console.debug(`[Backup] Total: ${Object.keys(tables).length} tables, ${totalRows} rows`);
+    console.debug(`[Backup] Tables keys: ${Object.keys(tables).join(', ')}`);
 
     // 获取 R2 附件文件（带重试）
     let attachments = new Map<string, Uint8Array>();
@@ -387,14 +387,14 @@ export async function performBackup(
     });
 
     // 2. 数据库导出 - 创建包含数据的 SQLite 文件
-    log('[Backup] Creating db.sqlite3 with data...');
+    console.debug(`[Backup] Creating db.sqlite3 with ${Object.keys(tables).length} tables...`);
     try {
       const sqliteData = createSqliteWithData(tables);
       tarEntries.push({
         name: 'db.sqlite3',
         data: sqliteData,
       });
-      log(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
+      console.debug(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
     } catch (err) {
       console.error(`[Backup] Failed to create SQLite: ${(err as Error).message}`);
       
