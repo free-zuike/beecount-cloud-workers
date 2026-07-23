@@ -1638,15 +1638,13 @@ backupRouter.post('/run-now', zValidator('json', RunNowSchema), async (c) => {
 
   // WebSocket 广播备份开始状态
   try {
-    const wsManager = (c.env as any).WS_MANAGER;
-    if (wsManager) {
-      await wsManager.broadcastToUser(userId, {
-        type: 'backup_status',
-        status: 'running',
-        runId: runId,
-        started_at: serverNow,
-      });
-    }
+    const { getWsManager } = await import('../lib/ws-manager');
+    await getWsManager().broadcastToUser(userId, {
+      type: 'backup_status',
+      status: 'running',
+      runId: runId,
+      started_at: serverNow,
+    });
   } catch (e) {
     // WebSocket broadcast is non-critical
   }
