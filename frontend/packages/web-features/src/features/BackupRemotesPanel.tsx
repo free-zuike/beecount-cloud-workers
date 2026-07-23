@@ -123,6 +123,31 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
       hint: '存储桶名称,备份文件会落到 <bucket>/<timestamp>.tar.gz。',
     },
   ],
+  gcs: [
+    {
+      key: 'access_key_id',
+      label: 'Access Key (JSON)',
+      hint: 'Google Cloud JSON 密钥文件内容（从 GCP 控制台下载）',
+    },
+    {
+      key: 'secret_access_key',
+      label: 'Secret',
+      type: 'password',
+      hint: '留空（JSON 密钥已包含）',
+    },
+    {
+      key: 'bucket',
+      label: 'Bucket',
+      placeholder: 'my-backup-bucket',
+      hint: 'GCS Bucket 名称',
+    },
+    {
+      key: 'endpoint',
+      label: 'Endpoint',
+      placeholder: 'https://storage.googleapis.com',
+      hint: '默认 https://storage.googleapis.com',
+    },
+  ],
   drive: [
     { key: 'client_id', label: 'Client ID' },
     { key: 'client_secret', label: 'Client Secret', type: 'password' },
@@ -172,8 +197,9 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
 
 const BACKEND_LABELS: Record<string, string> = {
   r2: 'Cloudflare R2 (Worker 直连)',
-  s3: 'S3 兼容(AWS / Cloudflare R2 / Aliyun OSS / MinIO ...)',
+  s3: 'S3 兼容(AWS / Aliyun OSS / MinIO ...)',
   b2: 'Backblaze B2',
+  gcs: 'Google Cloud Storage',
   drive: 'Google Drive',
   onedrive: 'OneDrive',
   dropbox: 'Dropbox',

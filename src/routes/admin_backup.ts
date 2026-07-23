@@ -374,6 +374,13 @@ backupRouter.get('/rclone-config', async (c) => {
         if (config.secret_access_key) configContent += `secret_access_key = ${config.secret_access_key}\n`;
         if (config.bucket) configContent += `bucket = ${config.bucket}\n`;
         configContent += `provider = Backblaze\n`;
+      } else if (row.backend_type === 'gcs') {
+        // Google Cloud Storage 使用 S3 兼容 API
+        configContent += `endpoint = ${config.endpoint || 'https://storage.googleapis.com'}\n`;
+        if (config.access_key_id) configContent += `access_key_id = ${config.access_key_id}\n`;
+        if (config.secret_access_key) configContent += `secret_access_key = ${config.secret_access_key}\n`;
+        if (config.bucket) configContent += `bucket = ${config.bucket}\n`;
+        configContent += `provider = Google\n`;
       } else if (row.backend_type === 'ftp') {
         if (config.host) configContent += `host = ${config.host}\n`;
         if (config.port) configContent += `port = ${config.port}\n`;
@@ -837,6 +844,26 @@ backupRouter.post('/remotes/:id/test', async (c) => {
           const result = await testS3Connection(b2Endpoint, b2Bucket, b2AccountId, b2Key, 'auto');
           testResult.ok = result.ok;
           testResult.message = result.ok ? 'Backblaze B2 accessible' : result.message;
+        }
+        break;
+
+      case 'gcs':
+        // Google Cloud Storage 使用 S3 兼容 API
+        const gcsEndpoint = config.endpoint || 'https://storage.googleapis.com';
+        const gcsBucket = config.bucket;
+        const gcsAccessKey = config.access_key_id;
+        const gcsSecretKey = config.secret_access_key;
+        
+        if (!gcsBucket) {
+          testResult.ok = false;
+          testResult.message = 'Bucket name is required';
+        } else if (!gcsAccessKey || !gcsSecretKey) {
+          testResult.ok = false;
+          testResult.message = 'Access Key (JSON key file) is required';
+        } else {
+          const result = await testS3Connection(gcsEndpoint, gcsBucket, gcsAccessKey, gcsSecretKey, 'auto');
+          testResult.ok = result.ok;
+          testResult.message = result.ok ? 'Google Cloud Storage accessible' : result.message;
         }
         break;
 

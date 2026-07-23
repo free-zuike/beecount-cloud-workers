@@ -447,10 +447,14 @@ export async function performBackup(
 
     console.log(`[Backup] Backup content size: ${backupSize} bytes`);
 
-    if (remoteConfig.backend_type === 's3' || remoteConfig.backend_type === 'b2') {
-      // B2 使用 S3 兼容 API，字段名可能不同
-      const isB2 = remoteConfig.backend_type === 'b2';
-      const s3Endpoint = remoteConfig.endpoint || (isB2 ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
+    if (remoteConfig.backend_type === 's3' || remoteConfig.backend_type === 'b2' || remoteConfig.backend_type === 'gcs') {
+      // B2/GCS 使用 S3 兼容 API
+      const backendType = remoteConfig.backend_type;
+      let defaultEndpoint = 'https://s3.amazonaws.com';
+      if (backendType === 'b2') defaultEndpoint = 'https://s3.us-west-004.backblazeb2.com';
+      else if (backendType === 'gcs') defaultEndpoint = 'https://storage.googleapis.com';
+      
+      const s3Endpoint = remoteConfig.endpoint || defaultEndpoint;
       const s3Bucket = remoteConfig.bucket;
       const s3AccessKey = remoteConfig.access_key_id || remoteConfig.key;
       const s3SecretKey = remoteConfig.secret_access_key || remoteConfig.account;
