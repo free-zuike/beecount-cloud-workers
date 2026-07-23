@@ -1,0 +1,13 @@
+{
+  "name": "beecount-restore",
+  "version": "1.0.0",
+  "description": "BeeCount Cloud 备份恢复工具",
+  "main": "restore.js",
+  "scripts": {
+    "restore": "node restore.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "tar": "^7.0.0"
+  }
+}
