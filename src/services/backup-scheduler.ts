@@ -142,6 +142,26 @@ export async function processBackupSchedule(
 
       console.log(`[CRON] Backup result: success=${backupResult.success}, size=${backupResult.backupSize}, path=${backupResult.backupPath}`);
 
+      // 创建 backup_run_targets 记录
+      if (remoteId) {
+        try {
+          await db.prepare(
+            `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, bytes_transferred)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          ).bind(
+            runId,
+            remoteId,
+            backupResult.success ? 'succeeded' : 'failed',
+            startedAt,
+            finishedAt,
+            backupResult.backupSize || 0
+          ).run();
+          logFn(`Created backup_run_target for remote ${remoteId}`);
+        } catch (targetErr) {
+          console.error(`[CRON] Failed to create backup_run_target: ${(targetErr as Error).message}`);
+        }
+      }
+
       // 更新备份状态
       const logText = logLines.join('\n').slice(0, 1024 * 1024); // 最大 1MB
       const updateSql = backupResult.success

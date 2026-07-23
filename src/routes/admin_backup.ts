@@ -1583,7 +1583,8 @@ backupRouter.get('/runs', async (c) => {
       ).bind(row.id).all();
       targets = targetRows.results || [];
     } catch (e) {
-      // 表可能不存在
+      console.error('[Backup] Failed to query backup_run_targets:', (e as Error).message);
+      // 表可能不存在，返回空数组
     }
     
     runs.push({
