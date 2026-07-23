@@ -138,6 +138,21 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
     { key: 'client_secret', label: 'Client Secret', type: 'password' },
     { key: 'token', label: 'OAuth Token (JSON)', type: 'password' },
   ],
+  drive: [
+    { key: 'client_id', label: 'Client ID' },
+    { key: 'client_secret', label: 'Client Secret', type: 'password' },
+    { key: 'token', label: 'OAuth Token (JSON)', type: 'password' },
+  ],
+  onedrive: [
+    { key: 'client_id', label: 'Client ID' },
+    { key: 'client_secret', label: 'Client Secret', type: 'password' },
+    { key: 'token', label: 'OAuth Token (JSON)', type: 'password' },
+  ],
+  dropbox: [
+    { key: 'client_id', label: 'Client ID' },
+    { key: 'client_secret', label: 'Client Secret', type: 'password' },
+    { key: 'token', label: 'OAuth Token (JSON)', type: 'password' },
+  ],
   webdav: [
     { key: 'url', label: 'URL', placeholder: 'https://example.com/dav' },
     { key: 'vendor', label: 'Vendor', placeholder: 'nextcloud / owncloud / other' },
@@ -172,8 +187,11 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
 
 const BACKEND_LABELS: Record<string, string> = {
   r2: 'Cloudflare R2 (Worker 直连)',
-  s3: 'S3 兼容(AWS / Aliyun OSS / MinIO ...)',
+  s3: 'S3 兼容(AWS / Cloudflare R2 / Aliyun OSS / MinIO ...)',
   b2: 'Backblaze B2',
+  drive: 'Google Drive',
+  onedrive: 'OneDrive',
+  dropbox: 'Dropbox',
   webdav: 'WebDAV (Nextcloud / 自建)',
   sftp: 'SFTP',
   ftp: 'FTP',
