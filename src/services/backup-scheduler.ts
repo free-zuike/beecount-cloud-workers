@@ -1,4 +1,5 @@
 import { performBackup, calculateNextRun } from './backup-executor';
+import { getWsManager } from '../lib/ws-manager';
 
 /**
  * 清理超时的 pending 状态备份记录
@@ -181,6 +182,20 @@ export async function processBackupSchedule(
         console.error(`[CRON] Failed to update backup_runs status: ${(dbErr as Error).message}`);
         console.error(`[CRON] Update SQL: ${updateSql}`);
         console.error(`[CRON] Update params: ${JSON.stringify(updateParams)}`);
+      }
+
+      // WebSocket 广播备份状态
+      try {
+        await getWsManager().broadcastToUser(schedule.user_id, {
+          type: 'backup_status',
+          status: backupResult.success ? 'succeeded' : 'failed',
+          runId: runId,
+          backupSize: backupResult.backupSize,
+          backupPath: backupResult.backupPath,
+        });
+        console.log(`[CRON] Broadcast backup status to user ${schedule.user_id}`);
+      } catch (wsErr) {
+        console.log(`[CRON] WebSocket broadcast failed (non-fatal): ${(wsErr as Error).message}`);
       }
 
       // 更新调度状态
