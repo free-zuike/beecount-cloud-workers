@@ -319,7 +319,7 @@ export function AdminBackupPage() {
     try {
       const result = await prepareRestore(token, restoreRun.id)
       setRestoreStatus(result)
-      setRestoreLive({ phase: 'downloading' })
+      // 不自动设置 downloading — 等用户点「恢复」按钮才触发
     } catch (err) {
       notifyError(err)
     }
