@@ -1,100 +1,103 @@
 /**
- * 通过 Cloudflare REST API 导出 D1 数据库为 SQLite 文件
+ * D1 REST API 分步导出
  * 
- * 只需要 CLOUDFLARE_API_TOKEN 一个 secret
- * account_id 和 database_id 自动从 API 获取
+ * Step 1: startExport() — 启动导出任务，返回 bookmark
+ * Step 2: pollAndDownload(bookmark) — 轮询直到完成并下载
+ * 
+ * 分步设计避免 waitUntil 超时，由 cron 定时检查
  */
-export async function exportD1ViaRestApi(
-  apiToken: string,
-  databaseName: string = 'beecount-cloud',
-): Promise<Uint8Array> {
-  const authHeaders = {
+
+export interface D1ExportState {
+  accountId: string;
+  databaseId: string;
+  bookmark: string;
+  startedAt: string;
+}
+
+function getAuthHeaders(apiToken: string) {
+  return {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${apiToken}`,
   };
+}
 
-  // Step 1: 获取 account_id
-  console.debug('[D1 Export] Fetching account info...');
-  const accountsRes = await fetch('https://api.cloudflare.com/client/v4/accounts', {
-    headers: authHeaders,
-  });
-  if (!accountsRes.ok) {
-    throw new Error(`Failed to fetch accounts: ${accountsRes.status}`);
-  }
+/**
+ * Step 1: 启动导出任务
+ */
+export async function startD1Export(
+  apiToken: string,
+  databaseName: string = 'beecount-cloud',
+): Promise<D1ExportState> {
+  const headers = getAuthHeaders(apiToken);
+
+  // 获取 account_id
+  const accountsRes = await fetch('https://api.cloudflare.com/client/v4/accounts', { headers });
+  if (!accountsRes.ok) throw new Error(`Failed to fetch accounts: ${accountsRes.status}`);
   const accountsData = await accountsRes.json() as any;
   const accountId = accountsData.result?.[0]?.id;
-  if (!accountId) {
-    throw new Error('No Cloudflare account found');
-  }
-  console.debug(`[D1 Export] Account ID: ${accountId}`);
+  if (!accountId) throw new Error('No Cloudflare account found');
 
-  // Step 2: 获取 database_id（按名称查找）
-  console.debug(`[D1 Export] Looking up database "${databaseName}"...`);
-  const dbListRes = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database`,
-    { headers: authHeaders },
-  );
-  if (!dbListRes.ok) {
-    throw new Error(`Failed to list D1 databases: ${dbListRes.status}`);
-  }
+  // 获取 database_id
+  const dbListRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database`, { headers });
+  if (!dbListRes.ok) throw new Error(`Failed to list databases: ${dbListRes.status}`);
   const dbListData = await dbListRes.json() as any;
   const db = dbListData.result?.find((d: any) => d.name === databaseName);
-  if (!db) {
-    const names = dbListData.result?.map((d: any) => d.name) || [];
-    throw new Error(`Database "${databaseName}" not found. Available: ${names.join(', ')}`);
-  }
+  if (!db) throw new Error(`Database "${databaseName}" not found`);
   const databaseId = db.uuid;
-  console.debug(`[D1 Export] Database ID: ${databaseId}`);
 
-  // Step 3: 发起导出任务
+  // 发起导出
   const exportUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/export`;
-  console.debug('[D1 Export] Starting export job...');
   const startRes = await fetch(exportUrl, {
     method: 'POST',
-    headers: authHeaders,
+    headers,
     body: JSON.stringify({ output_format: 'polling' }),
   });
   if (!startRes.ok) {
-    const errBody = await startRes.text().catch(() => 'no body');
-    console.error(`[D1 Export] Start ${startRes.status}: ${errBody}`);
+    const errBody = await startRes.text().catch(() => '');
     throw new Error(`D1 export start failed (${startRes.status}): ${errBody}`);
   }
   const startData = await startRes.json() as any;
-  if (!startData.result?.at_bookmark) {
-    throw new Error('D1 export: missing at_bookmark');
-  }
-  const bookmark = startData.result.at_bookmark;
-  console.debug(`[D1 Export] Job started, bookmark: ${bookmark}`);
+  if (!startData.result?.at_bookmark) throw new Error('D1 export: missing at_bookmark');
 
-  // Step 4: 轮询等待导出完成
-  for (let attempt = 0; attempt < 30; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 2000));
+  return {
+    accountId,
+    databaseId,
+    bookmark: startData.result.at_bookmark,
+    startedAt: new Date().toISOString(),
+  };
+}
 
-    const pollRes = await fetch(exportUrl, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({ current_bookmark: bookmark, output_format: 'polling' }),
-    });
-    if (!pollRes.ok) {
-      const errBody = await pollRes.text().catch(() => 'no body');
-      console.error(`[D1 Export] Poll ${pollRes.status}: ${errBody}`);
-      throw new Error(`D1 export poll failed: ${pollRes.status} - ${errBody}`);
-    }
-    const pollData = await pollRes.json() as any;
+/**
+ * Step 2: 轮询并下载（单次调用，不循环）
+ * 返回 null 表示还在处理中，返回 Uint8Array 表示下载完成
+ */
+export async function pollD1Export(
+  apiToken: string,
+  state: D1ExportState,
+): Promise<Uint8Array | null> {
+  const headers = getAuthHeaders(apiToken);
+  const exportUrl = `https://api.cloudflare.com/client/v4/accounts/${state.accountId}/d1/database/${state.databaseId}/export`;
 
-    if (pollData.result?.signed_url) {
-      console.debug('[D1 Export] Export ready, downloading...');
-      const dumpRes = await fetch(pollData.result.signed_url);
-      if (!dumpRes.ok) {
-        throw new Error(`D1 export download failed: ${dumpRes.status}`);
-      }
-      const buffer = await dumpRes.arrayBuffer();
-      const data = new Uint8Array(buffer);
-      console.debug(`[D1 Export] Downloaded: ${data.length} bytes`);
-      return data;
-    }
-    console.debug(`[D1 Export] Waiting... (${attempt + 1}/30)`);
+  const pollRes = await fetch(exportUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ current_bookmark: state.bookmark, output_format: 'polling' }),
+  });
+
+  if (!pollRes.ok) {
+    const errBody = await pollRes.text().catch(() => '');
+    throw new Error(`D1 export poll failed (${pollRes.status}): ${errBody}`);
   }
 
-  throw new Error('D1 export timed out');
+  const pollData = await pollRes.json() as any;
+  if (pollData.result?.signed_url) {
+    // 导出完成，下载
+    const dumpRes = await fetch(pollData.result.signed_url);
+    if (!dumpRes.ok) throw new Error(`D1 export download failed: ${dumpRes.status}`);
+    const buffer = await dumpRes.arrayBuffer();
+    return new Uint8Array(buffer);
+  }
+
+  // 还在处理中
+  return null;
 }

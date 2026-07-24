@@ -390,23 +390,33 @@ export async function performBackup(
     // 2. 数据库导出 - 优先 REST API（完整数据），回退 TS writer
     let sqliteCreated = false;
     
-    // 方案一: D1 REST API export（等同于 VACUUM INTO，支持所有数据库版本）
+    // 方案一: D1 REST API export（等同于 VACUUM INTO）
+    // 两步模式：先启动 export 存 bookmark，由 cron 轮询下载
     if (env?.CLOUDFLARE_API_TOKEN) {
       try {
-        console.debug(`[Backup] Exporting via D1 REST API...`);
-        const { exportD1ViaRestApi } = await import('../lib/d1-export');
-        const sqliteData = await exportD1ViaRestApi(env.CLOUDFLARE_API_TOKEN);
-        tarEntries.push({
-          name: 'db.sqlite3',
-          data: sqliteData,
-        });
-        console.debug(`[Backup] db.sqlite3 from REST API: ${sqliteData.length} bytes`);
-        sqliteCreated = true;
+        console.debug(`[Backup] Starting D1 REST API export...`);
+        const { startD1Export } = await import('../lib/d1-export');
+        const exportState = await startD1Export(env.CLOUDFLARE_API_TOKEN);
+        
+        // 将 bookmark 存到 backup_runs 表，由 cron 轮询完成下载
+        await db.prepare(
+          `UPDATE backup_runs SET backup_path = ? WHERE id = ?`
+        ).bind(JSON.stringify({ phase: 'exporting', ...exportState }), runId).run();
+        
+        console.debug(`[Backup] D1 export started, bookmark saved. Cron will complete download.`);
+        // 不立即返回 sqliteData，等 cron 轮询下载
+        // 这里直接返回，备份记录标记为 "exporting"
+        return {
+          success: true,
+          message: 'D1 export started, waiting for cron to complete download',
+          backupSize: 0,
+          backupPath: null,
+        };
       } catch (err) {
-        console.error(`[Backup] D1 REST API export failed: ${(err as Error).message}`);
+        console.error(`[Backup] D1 export start failed: ${(err as Error).message}`);
       }
     } else {
-      console.debug(`[Backup] REST API not configured (missing secrets), using TS writer`);
+      console.debug(`[Backup] REST API not configured, using TS writer`);
     }
     
     // 方案二: TS writer（回退）
