@@ -389,10 +389,20 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
         run_id INTEGER REFERENCES backup_runs(id) ON DELETE SET NULL,
         status TEXT NOT NULL DEFAULT 'preparing',
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        finished_at TEXT,
+        extracted_path TEXT,
+        error_message TEXT
       )
     `).run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_restores_user_id ON backup_restores(user_id)').run();
+
+    // 为已存在的数据库添加缺失列
+    for (const col of ['finished_at', 'extracted_path', 'error_message']) {
+      try {
+        await db.prepare(`ALTER TABLE backup_restores ADD COLUMN ${col} TEXT`).run();
+      } catch { /* 列已存在 */ }
+    }
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS attachment_files (
