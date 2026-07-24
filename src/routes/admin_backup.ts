@@ -1876,6 +1876,12 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
     }
   } catch {}
 
+  // 清理该 run 的旧 restore 记录（避免 stuck 在 preparing 状态）
+  try {
+    await db.prepare('DELETE FROM backup_restores WHERE run_id = ? AND user_id = ?')
+      .bind(runId, userId).run();
+  } catch {}
+
   const restore = await db
     .prepare(
       `INSERT INTO backup_restores (user_id, run_id, status, created_at, extracted_path)
@@ -1989,6 +1995,17 @@ backupRouter.get('/restores/:id', async (c) => {
 
   if (!restore) {
     return c.json({ error: 'Restore not found' }, 404);
+  }
+
+  // 如果 restore 还在 preparing 状态（超过 1 分钟），标记为 done
+  if (restore.status === 'preparing') {
+    const createdAt = new Date(restore.created_at).getTime();
+    if (Date.now() - createdAt > 60000) {
+      await db.prepare(`UPDATE backup_restores SET status = 'done', finished_at = datetime('now') WHERE id = ?`)
+        .bind(restore.id).run();
+      restore.status = 'done';
+      restore.finished_at = new Date().toISOString();
+    }
   }
 
   // 返回与原版一致的格式
