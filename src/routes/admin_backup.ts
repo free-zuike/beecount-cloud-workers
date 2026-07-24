@@ -1492,13 +1492,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
   const runId = runInsertResult.meta.last_row_id as number;
 
-  // 广播 running 状态
-  await broadcastViaDO(c.env, schedule.user_id, {
-    type: 'backup_status',
-    scheduleId: schedule.id,
-    status: 'running',
-    runId,
-  });
+  // 原版不广播 running 状态，只在备份完成时广播最终状态
 
   // 同步执行备份（schema-only 很快）
   try {
