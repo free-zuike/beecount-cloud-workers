@@ -1500,7 +1500,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
     try {
       await broadcastViaDO(c.env, schedule.user_id, {
         type: 'backup_progress',
-        phase: 'creating_backup',
+        phase: 'fan_out_start',
         bytesTransferred: 0,
         bytesTotal: 0,
       });
