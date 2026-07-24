@@ -1496,6 +1496,8 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
   // 后台执行备份（模仿原版 threading.Thread）
   c.executionCtx.waitUntil((async () => {
+    // 等待 1 秒，确保前端已收到 running 状态并刷新列表
+    await new Promise(r => setTimeout(r, 1000));
     try {
       const backupResult = await performBackup(db, runId, schedule.user_id, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2);
       const finishedAt = new Date().toISOString();
