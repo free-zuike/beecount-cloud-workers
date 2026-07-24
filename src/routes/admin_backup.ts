@@ -1830,10 +1830,27 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
   const userId = c.get('userId');
   const runId = c.req.param('runId');
 
-  const run = await db
+  // 先尝试精确匹配
+  let run = await db
     .prepare('SELECT * FROM backup_runs WHERE id = ? AND user_id = ?')
     .bind(runId, userId)
     .first();
+
+  // 兼容旧数据：user_id 为 NULL 的记录，通过 schedule 匹配
+  if (!run) {
+    run = await db
+      .prepare(`SELECT r.* FROM backup_runs r 
+                LEFT JOIN backup_schedules s ON r.schedule_id = s.id 
+                WHERE r.id = ? AND (r.user_id = ? OR (r.user_id IS NULL AND s.user_id = ?))`)
+      .bind(runId, userId, userId)
+      .first();
+    
+    // 补充 user_id
+    if (run) {
+      await db.prepare('UPDATE backup_runs SET user_id = ? WHERE id = ? AND user_id IS NULL')
+        .bind(userId, runId).run();
+    }
+  }
 
   if (!run) {
     return c.json({ error: 'Backup run not found' }, 404);
