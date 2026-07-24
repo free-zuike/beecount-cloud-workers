@@ -26,7 +26,8 @@ export async function processBackupSchedule(
   db: D1Database,
   schedule: any,
   beeCountDO?: DurableObjectNamespace,
-  r2?: R2Bucket
+  r2?: R2Bucket,
+  env?: { CLOUDFLARE_ACCOUNT_ID?: string; CLOUDFLARE_API_TOKEN?: string; DATABASE_ID?: string },
 ) {
   // 清理超时的 pending 备份
   await cleanupStalePendingBackups(db);
@@ -137,7 +138,7 @@ export async function processBackupSchedule(
 
     try {
       console.log(`[CRON] Starting backup for schedule ${schedule.id}, run ${runId}...`);
-      const backupResult = await performBackup(db, runId!, schedule.user_id, ledger.id, remoteConfig, shouldEncrypt, r2, logFn);
+      const backupResult = await performBackup(db, runId!, schedule.user_id, ledger.id, remoteConfig, shouldEncrypt, r2, logFn, env);
       const finishedAt = new Date().toISOString();
 
       console.log(`[CRON] Backup result: success=${backupResult.success}, size=${backupResult.backupSize}, path=${backupResult.backupPath}`);

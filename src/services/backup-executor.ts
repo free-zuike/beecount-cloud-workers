@@ -323,7 +323,8 @@ export async function performBackup(
   remoteConfig: Record<string, string>,
   shouldEncrypt?: boolean,
   r2?: R2Bucket,
-  logFn?: (msg: string) => void
+  logFn?: (msg: string) => void,
+  env?: { CLOUDFLARE_ACCOUNT_ID?: string; CLOUDFLARE_API_TOKEN?: string; DATABASE_ID?: string },
 ): Promise<BackupResult> {
   const log = logFn || console.log;
   try {
@@ -386,18 +387,45 @@ export async function performBackup(
       data: new TextEncoder().encode(JSON.stringify(meta, null, 2)),
     });
 
-    // 2. 数据库导出 - 用 TS writer 构建 SQLite 文件（dump() 仅支持 D1 alpha 数据库）
-    console.debug(`[Backup] Creating db.sqlite3 with ${Object.keys(tables).length} tables...`);
-    try {
-      const { createSqliteWithData } = await import('../lib/sqlite-writer');
-      const sqliteData = createSqliteWithData(tables);
-      tarEntries.push({
-        name: 'db.sqlite3',
-        data: sqliteData,
-      });
-      console.debug(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
-    } catch (err) {
-      console.error(`[Backup] SQLite writer failed: ${(err as Error).message}`);
+    // 2. 数据库导出 - 优先 REST API（完整数据），回退 TS writer
+    let sqliteCreated = false;
+    
+    // 方案一: D1 REST API export（等同于 VACUUM INTO，支持所有数据库版本）
+    if (env?.CLOUDFLARE_API_TOKEN && env?.CLOUDFLARE_ACCOUNT_ID && env?.DATABASE_ID) {
+      try {
+        console.debug(`[Backup] Exporting via D1 REST API...`);
+        const { exportD1ViaRestApi } = await import('../lib/d1-export');
+        const sqliteData = await exportD1ViaRestApi(
+          env.CLOUDFLARE_ACCOUNT_ID,
+          env.DATABASE_ID,
+          env.CLOUDFLARE_API_TOKEN,
+        );
+        tarEntries.push({
+          name: 'db.sqlite3',
+          data: sqliteData,
+        });
+        console.debug(`[Backup] db.sqlite3 from REST API: ${sqliteData.length} bytes`);
+        sqliteCreated = true;
+      } catch (err) {
+        console.error(`[Backup] D1 REST API export failed: ${(err as Error).message}`);
+      }
+    } else {
+      console.debug(`[Backup] REST API not configured (missing secrets), using TS writer`);
+    }
+    
+    // 方案二: TS writer（回退）
+    if (!sqliteCreated) {
+      try {
+        const { createSqliteWithData } = await import('../lib/sqlite-writer');
+        const sqliteData = createSqliteWithData(tables);
+        tarEntries.push({
+          name: 'db.sqlite3',
+          data: sqliteData,
+        });
+        console.debug(`[Backup] db.sqlite3 from TS writer: ${sqliteData.length} bytes`);
+      } catch (err) {
+        console.error(`[Backup] SQLite writer failed: ${(err as Error).message}`);
+      }
     }
     
     // 始终包含 db.json 作为备份

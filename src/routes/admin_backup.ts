@@ -291,6 +291,9 @@ type Bindings = {
   S3_ACCESS_KEY_ID?: string;
   S3_SECRET_ACCESS_KEY?: string;
   S3_BUCKET_NAME?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
+  DATABASE_ID?: string;
 };
 
 type Variables = {
@@ -1475,7 +1478,11 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
   const runId = runInsertResult.meta.last_row_id as number;
 
-  const backupResult = await performBackup(db, runId, schedule.user_id, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2);
+  const backupResult = await performBackup(db, runId, schedule.user_id, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2, undefined, {
+    CLOUDFLARE_ACCOUNT_ID: c.env.CLOUDFLARE_ACCOUNT_ID,
+    CLOUDFLARE_API_TOKEN: c.env.CLOUDFLARE_API_TOKEN,
+    DATABASE_ID: c.env.DATABASE_ID,
+  });
   
   const finishedAt = new Date().toISOString();
   
