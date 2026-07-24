@@ -387,53 +387,19 @@ export async function performBackup(
       data: new TextEncoder().encode(JSON.stringify(meta, null, 2)),
     });
 
-    // 2. 数据库导出 - 优先 REST API（完整数据），回退 TS writer
-    let sqliteCreated = false;
-    
-    // 方案一: D1 REST API export（等同于 VACUUM INTO）
-    // 两步模式：先启动 export 存 bookmark，由 cron 轮询下载
-    if (env?.CLOUDFLARE_API_TOKEN) {
-      try {
-        console.debug(`[Backup] Starting D1 REST API export...`);
-        const { startD1Export } = await import('../lib/d1-export');
-        const exportState = await startD1Export(env.CLOUDFLARE_API_TOKEN);
-        
-        // 将 bookmark 存到 backup_runs 表，由 cron 轮询完成下载
-        await db.prepare(
-          `UPDATE backup_runs SET backup_path = ? WHERE id = ?`
-        ).bind(JSON.stringify({ phase: 'exporting', ...exportState }), runId).run();
-        
-        console.debug(`[Backup] D1 export started, bookmark saved. Cron will complete download.`);
-        // 不立即返回 sqliteData，等 cron 轮询下载
-        // 这里直接返回，备份记录标记为 "exporting"
-        return {
-          success: true,
-          message: 'D1 export started, waiting for cron to complete download',
-          backupSize: 0,
-          backupPath: null,
-        };
-      } catch (err) {
-        console.error(`[Backup] D1 export start failed: ${(err as Error).message}`);
-      }
-    } else {
-      console.debug(`[Backup] REST API not configured, using TS writer`);
+    // 2. 数据库导出 - schema only（完整数据在 db.json 中）
+    try {
+      const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
+      const sqliteData = createMinimalSqliteFile();
+      tarEntries.push({
+        name: 'db.sqlite3',
+        data: sqliteData,
+      });
+      console.debug(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
+    } catch (err) {
+      console.error(`[Backup] SQLite writer failed: ${(err as Error).message}`);
     }
-    
-    // 方案二: TS writer（回退）
-    if (!sqliteCreated) {
-      try {
-        const { createSqliteWithData } = await import('../lib/sqlite-writer');
-        const sqliteData = createSqliteWithData(tables);
-        tarEntries.push({
-          name: 'db.sqlite3',
-          data: sqliteData,
-        });
-        console.debug(`[Backup] db.sqlite3 from TS writer: ${sqliteData.length} bytes`);
-      } catch (err) {
-        console.error(`[Backup] SQLite writer failed: ${(err as Error).message}`);
-      }
-    }
-    
+
     // 始终包含 db.json 作为备份
     const dbExport = {
       backup_time: new Date().toISOString(),
