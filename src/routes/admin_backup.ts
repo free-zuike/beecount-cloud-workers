@@ -2008,19 +2008,34 @@ backupRouter.get('/restores/:id', async (c) => {
     }
   }
 
-  // 返回与原版一致的格式
+  // 返回与原版一致的格式 — 从 backup_runs 补充数据
+  const runData = await db.prepare(
+    `SELECT bytes_total, backup_filename FROM backup_runs WHERE id = ?`
+  ).bind(restore.run_id).first<{ bytes_total: number | null; backup_filename: string | null }>();
+
+  let sourceRemoteId: number | null = null;
+  let sourceRemoteName: string | null = null;
+  try {
+    const target = await db.prepare(
+      `SELECT t.remote_id, r.name FROM backup_run_targets t
+       LEFT JOIN backup_remotes r ON t.remote_id = r.id
+       WHERE t.run_id = ? LIMIT 1`
+    ).bind(restore.run_id).first<{ remote_id: number; name: string }>();
+    if (target) { sourceRemoteId = target.remote_id; sourceRemoteName = target.name; }
+  } catch {}
+
   return c.json({
     run_id: restore.run_id,
     phase: restore.status || 'unknown',
     started_at: restore.created_at,
     finished_at: restore.finished_at || null,
-    bytes_total: null,
-    bytes_downloaded: null,
+    bytes_total: runData?.bytes_total || null,
+    bytes_downloaded: runData?.bytes_total || null,
     error_message: restore.error_message || null,
     extracted_path: restore.extracted_path || `data/restore/${restore.run_id}/extracted`,
-    source_remote_id: null,
-    source_remote_name: null,
-    backup_filename: null,
+    source_remote_id: sourceRemoteId,
+    source_remote_name: sourceRemoteName,
+    backup_filename: runData?.backup_filename || null,
   });
 });
 
