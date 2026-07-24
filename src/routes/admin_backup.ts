@@ -1900,58 +1900,56 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
     backup_filename: run.backup_filename || null,
   };
 
-  // 通过 DO 推送 restore_progress 事件（与原版一致）
-  c.executionCtx.waitUntil((async () => {
-    const bytesTotal = run.bytes_total || 0;
+  // 通过 DO 推送 restore_progress 事件（同步执行，恢复模拟很快）
+  const numRunId = Number(runId);
+  const bytesTotal = run.bytes_total || 0;
 
-    // downloading 阶段
+  // downloading 阶段
+  await broadcastViaDO(c.env, userId, {
+    type: 'restore_progress',
+    runId: numRunId,
+    phase: 'downloading',
+    bytesTransferred: 0,
+    bytesTotal,
+  });
+
+  // 模拟下载进度
+  for (let i = 1; i <= 5; i++) {
+    await new Promise(r => setTimeout(r, 200));
     await broadcastViaDO(c.env, userId, {
       type: 'restore_progress',
-      runId: Number(runId),
+      runId: numRunId,
       phase: 'downloading',
-      bytesTransferred: 0,
+      bytesTransferred: Math.floor(bytesTotal * i / 5),
       bytesTotal,
     });
+  }
 
-    // 模拟下载进度
-    const steps = 5;
-    for (let i = 1; i <= steps; i++) {
-      await new Promise(r => setTimeout(r, 300));
-      await broadcastViaDO(c.env, userId, {
-        type: 'restore_progress',
-        runId: Number(runId),
-        phase: 'downloading',
-        bytesTransferred: Math.floor(bytesTotal * i / steps),
-        bytesTotal,
-      });
-    }
+  // extracting 阶段
+  await broadcastViaDO(c.env, userId, {
+    type: 'restore_progress',
+    runId: numRunId,
+    phase: 'extracting',
+    bytesTransferred: bytesTotal,
+    bytesTotal,
+  });
+  await new Promise(r => setTimeout(r, 300));
 
-    // extracting 阶段
-    await broadcastViaDO(c.env, userId, {
-      type: 'restore_progress',
-      runId: Number(runId),
-      phase: 'extracting',
-      bytesTransferred: bytesTotal,
-      bytesTotal,
-    });
-    await new Promise(r => setTimeout(r, 500));
+  // done 阶段
+  const finishedAt = new Date().toISOString();
+  try {
+    await db.prepare(
+      `UPDATE backup_restores SET status = 'done', finished_at = ? WHERE id = ?`
+    ).bind(finishedAt, restoreId).run();
+  } catch {}
 
-    // done 阶段
-    const finishedAt = new Date().toISOString();
-    try {
-      await db.prepare(
-        `UPDATE backup_restores SET status = 'done', finished_at = ? WHERE id = ?`
-      ).bind(finishedAt, restoreId).run();
-    } catch {}
-
-    await broadcastViaDO(c.env, userId, {
-      type: 'restore_progress',
-      runId: Number(runId),
-      phase: 'done',
-      bytesTransferred: bytesTotal,
-      bytesTotal,
-    });
-  })());
+  await broadcastViaDO(c.env, userId, {
+    type: 'restore_progress',
+    runId: numRunId,
+    phase: 'done',
+    bytesTransferred: bytesTotal,
+    bytesTotal,
+  });
 
   return c.json(restoreResult, 200);
 });
