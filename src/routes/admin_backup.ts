@@ -1951,7 +1951,7 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
     bytesTotal,
   });
 
-  return c.json(restoreResult, 200);
+  return c.json(restoreResult, 202);
 });
 
 /**
