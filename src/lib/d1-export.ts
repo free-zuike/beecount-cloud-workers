@@ -55,8 +55,9 @@ export async function exportD1ViaRestApi(
     body: JSON.stringify({ output_format: 'polling' }),
   });
   if (!startRes.ok) {
-    const errText = await startRes.text().catch(() => '');
-    throw new Error(`D1 export start failed (${startRes.status}): ${errText}`);
+    const errBody = await startRes.text().catch(() => 'no body');
+    console.error(`[D1 Export] Start ${startRes.status}: ${errBody}`);
+    throw new Error(`D1 export start failed (${startRes.status}): ${errBody}`);
   }
   const startData = await startRes.json() as any;
   if (!startData.result?.at_bookmark) {
@@ -75,7 +76,9 @@ export async function exportD1ViaRestApi(
       body: JSON.stringify({ current_bookmark: bookmark }),
     });
     if (!pollRes.ok) {
-      throw new Error(`D1 export poll failed: ${pollRes.status}`);
+      const errBody = await pollRes.text().catch(() => 'no body');
+      console.error(`[D1 Export] Poll ${pollRes.status}: ${errBody}`);
+      throw new Error(`D1 export poll failed: ${pollRes.status} - ${errBody}`);
     }
     const pollData = await pollRes.json() as any;
 
