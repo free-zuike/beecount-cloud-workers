@@ -1476,6 +1476,20 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
   const runId = runInsertResult.meta.last_row_id as number;
 
+  // 立即广播 running 状态，让前端实时显示
+  try {
+    const { getWsManager } = await import('../lib/ws-manager');
+    const wsManager = getWsManager();
+    wsManager.broadcastToUser(schedule.user_id, {
+      type: 'backup_status',
+      scheduleId: schedule.id,
+      status: 'running',
+      runId,
+    });
+  } catch (wsErr) {
+    console.error('[Backup] WS broadcast running failed:', wsErr);
+  }
+
   // schema-only 备份很快，直接同步执行
   try {
     const backupResult = await performBackup(db, runId, schedule.user_id, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2, undefined, {
@@ -1491,6 +1505,20 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
          WHERE id = ?`
       ).bind('succeeded', finishedAt, backupResult.backupSize, 
             backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath, runId).run();
+
+      // 广播 succeeded 状态
+      try {
+        const { getWsManager } = await import('../lib/ws-manager');
+        const wsManager = getWsManager();
+        wsManager.broadcastToUser(schedule.user_id, {
+          type: 'backup_status',
+          scheduleId: schedule.id,
+          status: 'succeeded',
+          runId,
+        });
+      } catch (wsErr) {
+        console.error('[Backup] WS broadcast succeeded failed:', wsErr);
+      }
 
       return c.json({
         id: runId,
@@ -1512,6 +1540,20 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
          SET status = ?, finished_at = ?, error_message = ?
          WHERE id = ?`
       ).bind('failed', finishedAt, backupResult.message, runId).run();
+
+      // 广播 failed 状态
+      try {
+        const { getWsManager } = await import('../lib/ws-manager');
+        const wsManager = getWsManager();
+        wsManager.broadcastToUser(schedule.user_id, {
+          type: 'backup_status',
+          scheduleId: schedule.id,
+          status: 'failed',
+          runId,
+        });
+      } catch (wsErr) {
+        console.error('[Backup] WS broadcast failed:', wsErr);
+      }
 
       return c.json({
         id: runId,
