@@ -1904,7 +1904,9 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
   const strRunId = String(runId);
   const bytesTotal = run.bytes_total || 0;
 
+  console.debug(`[Restore] Starting waitUntil for run ${strRunId}`);
   c.executionCtx.waitUntil((async () => {
+    console.debug(`[Restore] waitUntil started for run ${strRunId}`);
     try {
       // downloading
       await broadcastViaDO(c.env, userId, {
