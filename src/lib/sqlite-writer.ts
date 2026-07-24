@@ -97,10 +97,22 @@ function buildRecordPayload(columns: string[], values: unknown[]): number[] {
     valueBytes.push(encoded.slice(1));
   }
 
-  // Header: varint(headerSize) + serialType bytes
-  const headerSize = 1 + serialTypes.length; // 1 for the headerSize varint itself
+  // Header: varint(headerSize) + serialType varints
+  // headerSize = 总字节数（包括 headerSize varint 自身）
+  // serial type 可能是多字节 varint（> 251 时），不能假设每个 1 字节
+  const serialTypeVarints: number[] = [];
+  for (const st of serialTypes) {
+    serialTypeVarints.push(...encodeVarint(st));
+  }
+  // headerSize = headerSize varint 长度 + serial type varints 长度
+  // 先假设 1 字节 headerSize，计算总大小
+  let headerSize = 1 + serialTypeVarints.length;
+  // 如果 headerSize > 127，headerSize varint 自身需要 2 字节，重新计算
+  if (headerSize > 127) {
+    headerSize = encodeVarint(headerSize).length + serialTypeVarints.length;
+  }
   payload.push(...encodeVarint(headerSize));
-  payload.push(...serialTypes);
+  payload.push(...serialTypeVarints);
 
   // Values
   for (const vb of valueBytes) {
@@ -145,10 +157,6 @@ function createMasterPage(tables: { name: string; sql: string }[]): Uint8Array {
   const page = new Uint8Array(PAGE_SIZE);
   page[0] = 0x0D; // leaf table b-tree
 
-  const cellCount = tables.length + 1;
-  page[3] = (cellCount >> 8) & 0xFF;
-  page[4] = cellCount & 0xFF;
-
   const contentStart = PAGE_SIZE - 100;
   page[5] = (contentStart >> 8) & 0xFF;
   page[6] = contentStart & 0xFF;
@@ -156,35 +164,36 @@ function createMasterPage(tables: { name: string; sql: string }[]): Uint8Array {
   let cellOffset = contentStart;
   const cellPointers: number[] = [];
 
-  // sqlite_master record (rowid=1)
-  const masterPayload = buildRecordPayload(
-    ['type', 'name', 'tbl_name', 'rootpage', 'sql'],
-    ['table', 'sqlite_master', 'sqlite_master', 1, 'CREATE TABLE sqlite_master(type TEXT, name TEXT, tbl_name TEXT, rootpage INTEGER, sql TEXT)']
-  );
-  // Cell = payload_length(varint) + rowid(varint) + payload
-  const masterCell = [...encodeVarint(masterPayload.length), ...encodeVarint(1), ...masterPayload];
-  cellOffset -= masterCell.length;
-  page.set(new Uint8Array(masterCell), cellOffset);
-  cellPointers.unshift(cellOffset);
-
-  // Table schema records
+  // 所有记录（sqlite_master + 各表 schema）
+  const allRecords: { rowid: number; sql: string; name: string }[] = [
+    { rowid: 1, name: 'sqlite_master', sql: 'CREATE TABLE sqlite_master(type TEXT, name TEXT, tbl_name TEXT, rootpage INTEGER, sql TEXT)' },
+  ];
   for (let i = 0; i < tables.length; i++) {
-    const table = tables[i];
-    const rootpage = i + 2;
+    allRecords.push({ rowid: i + 2, name: tables[i].name, sql: tables[i].sql });
+  }
+
+  // 写入 cells — 按 rowid 顺序，从页面底部向上
+  for (let i = allRecords.length - 1; i >= 0; i--) {
+    const rec = allRecords[i];
     const payload = buildRecordPayload(
       ['type', 'name', 'tbl_name', 'rootpage', 'sql'],
-      ['table', table.name, table.name, rootpage, table.sql]
+      ['table', rec.name, rec.name, rec.rowid, rec.sql]
     );
-    const cell = [...encodeVarint(payload.length), ...encodeVarint(rootpage), ...payload];
+    const cell = [...encodeVarint(payload.length), ...encodeVarint(rec.rowid), ...payload];
+    if (cellOffset - cell.length < 100) continue;
     cellOffset -= cell.length;
-    if (cellOffset < 100) break;
     page.set(new Uint8Array(cell), cellOffset);
     cellPointers.unshift(cellOffset);
   }
 
-  // Cell pointers
-  for (let i = 0; i < cellPointers.length && i < cellCount; i++) {
-    const ptrOffset = 8 + (i + 1) * 2;
+  // Cell count — 只写实际存在的 cells
+  const actualCount = cellPointers.length;
+  page[3] = (actualCount >> 8) & 0xFF;
+  page[4] = actualCount & 0xFF;
+
+  // Cell pointers — 从 offset 8 开始，每个 2 字节
+  for (let i = 0; i < cellPointers.length; i++) {
+    const ptrOffset = 8 + i * 2;
     if (ptrOffset + 1 < 100) {
       page[ptrOffset] = (cellPointers[i] >> 8) & 0xFF;
       page[ptrOffset + 1] = cellPointers[i] & 0xFF;
@@ -232,7 +241,7 @@ function createDataTablePage(
   page[4] = rowsWritten & 0xFF;
 
   for (let i = 0; i < cellPointers.length; i++) {
-    const ptrOffset = 8 + (i + 1) * 2;
+    const ptrOffset = 8 + i * 2;
     if (ptrOffset + 1 < 100) {
       page[ptrOffset] = (cellPointers[i] >> 8) & 0xFF;
       page[ptrOffset + 1] = cellPointers[i] & 0xFF;
