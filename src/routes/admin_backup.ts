@@ -1856,6 +1856,26 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
     return c.json({ error: 'Backup run not found' }, 404);
   }
 
+  // 检查状态
+  if (run.status !== 'succeeded' && run.status !== 'partial') {
+    return c.json({ error: `Backup run status is ${run.status}, not eligible for restore` }, 400);
+  }
+
+  // 查找源 remote 信息
+  let sourceRemoteId: number | null = null;
+  let sourceRemoteName: string | null = null;
+  try {
+    const target = await db.prepare(
+      `SELECT t.remote_id, r.name FROM backup_run_targets t 
+       LEFT JOIN backup_remotes r ON t.remote_id = r.id 
+       WHERE t.run_id = ? AND t.status = 'succeeded' LIMIT 1`
+    ).bind(runId).first<{ remote_id: number; name: string }>();
+    if (target) {
+      sourceRemoteId = target.remote_id;
+      sourceRemoteName = target.name;
+    }
+  } catch {}
+
   const restore = await db
     .prepare(
       `INSERT INTO backup_restores (user_id, run_id, status, created_at)
@@ -1864,14 +1884,20 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
     .bind(userId, runId)
     .run();
 
-  const restoreId = (restore as any).meta?.last_row_id;
-
+  // 返回与原版一致的格式
   return c.json({
-    id: restoreId,
-    run_id: runId,
-    status: 'preparing',
-    created_at: new Date().toISOString(),
-  });
+    run_id: Number(runId),
+    phase: 'downloading',
+    started_at: new Date().toISOString(),
+    finished_at: null,
+    bytes_total: run.bytes_total || null,
+    bytes_downloaded: 0,
+    error_message: null,
+    extracted_path: null,
+    source_remote_id: sourceRemoteId,
+    source_remote_name: sourceRemoteName,
+    backup_filename: run.backup_filename || null,
+  }, 200);
 });
 
 /**
