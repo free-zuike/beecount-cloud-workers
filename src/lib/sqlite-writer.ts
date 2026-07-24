@@ -26,26 +26,29 @@ function encodeVarint(value: number): number[] {
 
 /**
  * 编码值为 SQLite 记录格式
- * 返回 [serialType, ...valueBytes]
+ * 返回 { serialType: varint bytes, bytes: value content bytes }
+ * 分离返回，避免多字节 serial type varint 被误认为 value data
  */
-function encodeValue(val: unknown): number[] {
+function encodeValue(val: unknown): { st: number[]; vb: number[] } {
   if (val === null || val === undefined) {
-    return [0]; // NULL: serial type 0, 0 bytes
+    return { st: [0], vb: [] }; // NULL
   }
   if (typeof val === 'boolean') {
-    return val ? [9] : [8]; // integer 1 or 0
+    return val ? { st: [9], vb: [] } : { st: [8], vb: [] };
   }
   if (typeof val === 'number') {
     if (Number.isInteger(val)) {
-      return encodeInteger(val);
+      const enc = encodeInteger(val);
+      return { st: [enc[0]], vb: enc.slice(1) };
     }
-    // float64
     const buf = new ArrayBuffer(8);
     new DataView(buf).setFloat64(0, val, false);
-    return [7, ...new Uint8Array(buf)];
+    return { st: [7], vb: [...new Uint8Array(buf)] };
   }
   // string
-  return encodeText(String(val));
+  const bytes = new TextEncoder().encode(String(val));
+  const serialType = bytes.length * 2 + 13;
+  return { st: encodeVarint(serialType), vb: [...bytes] };
 }
 
 /**
@@ -86,28 +89,19 @@ function encodeText(text: string): number[] {
 function buildRecordPayload(columns: string[], values: unknown[]): number[] {
   const payload: number[] = [];
 
-  // 计算每列的 serial type 和 value bytes
-  const serialTypes: number[] = [];
-  const valueBytes: number[][] = [];
+  // 计算每列的 serial type varint 和 value bytes（分离的）
+  const serialTypeVarints: number[] = [];
+  const valueBytesList: number[][] = [];
 
   for (let i = 0; i < columns.length; i++) {
-    const encoded = encodeValue(values[i]);
-    // encoded[0] = serial type, encoded[1...] = value bytes
-    serialTypes.push(encoded[0]);
-    valueBytes.push(encoded.slice(1));
+    const { st, vb } = encodeValue(values[i]);
+    serialTypeVarints.push(...st);
+    valueBytesList.push(vb);
   }
 
   // Header: varint(headerSize) + serialType varints
   // headerSize = 总字节数（包括 headerSize varint 自身）
-  // serial type 可能是多字节 varint（> 251 时），不能假设每个 1 字节
-  const serialTypeVarints: number[] = [];
-  for (const st of serialTypes) {
-    serialTypeVarints.push(...encodeVarint(st));
-  }
-  // headerSize = headerSize varint 长度 + serial type varints 长度
-  // 先假设 1 字节 headerSize，计算总大小
   let headerSize = 1 + serialTypeVarints.length;
-  // 如果 headerSize > 127，headerSize varint 自身需要 2 字节，重新计算
   if (headerSize > 127) {
     headerSize = encodeVarint(headerSize).length + serialTypeVarints.length;
   }
@@ -115,7 +109,7 @@ function buildRecordPayload(columns: string[], values: unknown[]): number[] {
   payload.push(...serialTypeVarints);
 
   // Values
-  for (const vb of valueBytes) {
+  for (const vb of valueBytesList) {
     payload.push(...vb);
   }
 
