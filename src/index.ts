@@ -226,6 +226,7 @@ export default {
         try {
           await processBackupSchedule(db, schedule, env.BEECOUNT_DO, env.R2, {
             CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN,
+            BEECOUNT_DO: env.BEECOUNT_DO,
           });
         } catch (scheduleError) {
           console.error(`[CRON] Error processing schedule ${schedule.id}:`, scheduleError);

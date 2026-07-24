@@ -27,7 +27,7 @@ export async function processBackupSchedule(
   schedule: any,
   beeCountDO?: DurableObjectNamespace,
   r2?: R2Bucket,
-  env?: { CLOUDFLARE_API_TOKEN?: string },
+  env?: { CLOUDFLARE_API_TOKEN?: string; BEECOUNT_DO?: DurableObjectNamespace },
 ) {
   // 清理超时的 pending 备份
   await cleanupStalePendingBackups(db);
@@ -184,17 +184,23 @@ export async function processBackupSchedule(
         console.error(`[CRON] Update params: ${JSON.stringify(updateParams)}`);
       }
 
-      // WebSocket 广播备份状态
+      // WebSocket 广播备份状态（通过 DO）
       try {
-        const { getWsManager } = await import('../lib/ws-manager');
-        await getWsManager().broadcastToUser(schedule.user_id, {
-          type: 'backup_status',
-          status: backupResult.success ? 'succeeded' : 'failed',
-          runId: runId,
-          backupSize: backupResult.backupSize,
-          backupPath: backupResult.backupPath,
-        });
-        logFn(`Broadcast backup status to user ${schedule.user_id}`);
+        if (env?.BEECOUNT_DO) {
+          const doId = env.BEECOUNT_DO.idFromName(`ws-${schedule.user_id}`);
+          const stub = env.BEECOUNT_DO.get(doId);
+          await stub.fetch(new URL('/broadcast', 'http://do'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: JSON.stringify({
+              type: 'backup_status',
+              status: backupResult.success ? 'succeeded' : 'failed',
+              runId: runId,
+              backupSize: backupResult.backupSize,
+              backupPath: backupResult.backupPath,
+            }) }),
+          });
+          logFn(`Broadcast backup status to user ${schedule.user_id}`);
       } catch (wsErr) {
         logFn(`WebSocket broadcast failed (non-fatal): ${(wsErr as Error).message}`);
       }

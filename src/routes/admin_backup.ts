@@ -286,6 +286,7 @@ type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
   R2: R2Bucket;
+  BEECOUNT_DO: DurableObjectNamespace;
   S3_ENDPOINT?: string;
   S3_REGION?: string;
   S3_ACCESS_KEY_ID?: string;
@@ -299,6 +300,21 @@ type Variables = {
 };
 
 const backupRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
+
+// 通过 DO 广播 WebSocket 消息（替代 ws-manager 内存单例）
+async function broadcastViaDO(env: Bindings, userId: string, message: Record<string, unknown>): Promise<void> {
+  try {
+    const doId = env.BEECOUNT_DO.idFromName(`ws-${userId}`);
+    const stub = env.BEECOUNT_DO.get(doId);
+    await stub.fetch(new URL('/broadcast', 'http://do'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: JSON.stringify(message) }),
+    });
+  } catch (err) {
+    console.error('[Backup] DO broadcast failed:', (err as Error).message);
+  }
+}
 
 // 测试端点 - 首先添加一个简单的测试路由
 backupRouter.get('/test', (c) => {
@@ -1477,15 +1493,12 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
   const runId = runInsertResult.meta.last_row_id as number;
 
   // 广播 running 状态
-  try {
-    const { getWsManager } = await import('../lib/ws-manager');
-    getWsManager().broadcastToUser(schedule.user_id, {
-      type: 'backup_status',
-      scheduleId: schedule.id,
-      status: 'running',
-      runId,
-    });
-  } catch {}
+  await broadcastViaDO(c.env, schedule.user_id, {
+    type: 'backup_status',
+    scheduleId: schedule.id,
+    status: 'running',
+    runId,
+  });
 
   // 同步执行备份（schema-only 很快）
   try {
@@ -1501,12 +1514,9 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
           backupResult.success ? null : backupResult.message, runId).run();
 
     // 广播最终状态
-    try {
-      const { getWsManager } = await import('../lib/ws-manager');
-      getWsManager().broadcastToUser(schedule.user_id, {
-        type: 'backup_status', scheduleId: schedule.id, status: finalStatus, runId,
-      });
-    } catch {}
+    await broadcastViaDO(c.env, schedule.user_id, {
+      type: 'backup_status', scheduleId: schedule.id, status: finalStatus, runId,
+    });
 
     return c.json({
       id: runId,
@@ -1528,12 +1538,9 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
       `UPDATE backup_runs SET status = 'failed', finished_at = ?, error_message = ? WHERE id = ?`
     ).bind(finishedAt, (err as Error).message, runId).run();
 
-    try {
-      const { getWsManager } = await import('../lib/ws-manager');
-      getWsManager().broadcastToUser(schedule.user_id, {
-        type: 'backup_status', scheduleId: schedule.id, status: 'failed', runId,
-      });
-    } catch {}
+    await broadcastViaDO(c.env, schedule.user_id, {
+      type: 'backup_status', scheduleId: schedule.id, status: 'failed', runId,
+    });
 
     return c.json({
       id: runId,
