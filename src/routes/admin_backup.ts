@@ -1479,8 +1479,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
   // 广播 running 状态
   try {
     const { getWsManager } = await import('../lib/ws-manager');
-    const wsManager = getWsManager();
-    wsManager.broadcastToUser(schedule.user_id, {
+    getWsManager().broadcastToUser(schedule.user_id, {
       type: 'backup_status',
       scheduleId: schedule.id,
       status: 'running',
@@ -1488,50 +1487,69 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
     });
   } catch {}
 
-  // 后台执行备份，先返回 running
-  c.executionCtx.waitUntil((async () => {
+  // 同步执行备份（schema-only 很快）
+  try {
+    const backupResult = await performBackup(db, runId, schedule.user_id, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2);
+    const finishedAt = new Date().toISOString();
+    const finalStatus = backupResult.success ? 'succeeded' : 'failed';
+
+    await db.prepare(
+      `UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?
+       WHERE id = ?`
+    ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
+          backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
+          backupResult.success ? null : backupResult.message, runId).run();
+
+    // 广播最终状态
     try {
-      const backupResult = await performBackup(db, runId, schedule.user_id, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2);
-      const finishedAt = new Date().toISOString();
-      const finalStatus = backupResult.success ? 'succeeded' : 'failed';
+      const { getWsManager } = await import('../lib/ws-manager');
+      getWsManager().broadcastToUser(schedule.user_id, {
+        type: 'backup_status', scheduleId: schedule.id, status: finalStatus, runId,
+      });
+    } catch {}
 
-      await db.prepare(
-        `UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?
-         WHERE id = ?`
-      ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
-            backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
-            backupResult.success ? null : backupResult.message, runId).run();
+    return c.json({
+      id: runId,
+      schedule_id: Number(scheduleId),
+      schedule_name: schedule.name,
+      status: finalStatus,
+      started_at: serverNow,
+      finished_at: finishedAt,
+      backup_filename: backupResult.backupPath?.split('/').pop() || null,
+      bytes_total: backupResult.backupSize,
+      error_message: backupResult.success ? null : backupResult.message,
+      log_text: backupResult.message,
+      targets: [],
+      message: backupResult.message,
+    }, 200);
+  } catch (err) {
+    const finishedAt = new Date().toISOString();
+    await db.prepare(
+      `UPDATE backup_runs SET status = 'failed', finished_at = ?, error_message = ? WHERE id = ?`
+    ).bind(finishedAt, (err as Error).message, runId).run();
 
-      // 广播 succeeded 状态（延迟 1 秒确保前端已处理 running）
-      await new Promise(r => setTimeout(r, 1000));
-      try {
-        const { getWsManager } = await import('../lib/ws-manager');
-        getWsManager().broadcastToUser(schedule.user_id, {
-          type: 'backup_status', scheduleId: schedule.id, status: finalStatus, runId,
-        });
-      } catch {}
-    } catch (err) {
-      const finishedAt = new Date().toISOString();
-      await db.prepare(
-        `UPDATE backup_runs SET status = 'failed', finished_at = ?, error_message = ? WHERE id = ?`
-      ).bind(finishedAt, (err as Error).message, runId).run();
-      try {
-        const { getWsManager } = await import('../lib/ws-manager');
-        getWsManager().broadcastToUser(schedule.user_id, {
-          type: 'backup_status', scheduleId: schedule.id, status: 'failed', runId,
-        });
-      } catch {}
-    }
-  })());
+    try {
+      const { getWsManager } = await import('../lib/ws-manager');
+      getWsManager().broadcastToUser(schedule.user_id, {
+        type: 'backup_status', scheduleId: schedule.id, status: 'failed', runId,
+      });
+    } catch {}
 
-  return c.json({
-    id: runId,
-    schedule_id: Number(scheduleId),
-    schedule_name: schedule.name,
-    status: 'running',
-    started_at: serverNow,
-    message: 'Backup started',
-  }, 200);
+    return c.json({
+      id: runId,
+      schedule_id: Number(scheduleId),
+      schedule_name: schedule.name,
+      status: 'failed',
+      started_at: serverNow,
+      finished_at: finishedAt,
+      backup_filename: null,
+      bytes_total: null,
+      error_message: (err as Error).message,
+      log_text: (err as Error).message,
+      targets: [],
+      message: (err as Error).message,
+    }, 200);
+  }
 });
 
 // ---------------------------------------------------------------------------
