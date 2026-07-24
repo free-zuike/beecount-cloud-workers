@@ -1570,25 +1570,35 @@ backupRouter.get('/runs', async (c) => {
 
   const totalRow = await db.prepare('SELECT COUNT(*) as cnt FROM backup_runs').first<{ cnt: number }>();
 
-  // 获取每个 run 的 targets
-  const runs = [];
-  for (const row of rows.results) {
-    let targets: any[] = [];
+  // 批量获取所有 targets（避免 N+1 查询）
+  const runIds = rows.results.map(r => r.id);
+  let allTargets: any[] = [];
+  if (runIds.length > 0) {
     try {
-      const targetRows = await db.prepare(
-        `SELECT t.id, t.remote_id, t.status, t.started_at, t.finished_at, t.bytes_transferred, t.error_message,
+      const placeholders = runIds.map(() => '?').join(',');
+      const targetResult = await db.prepare(
+        `SELECT t.id, t.run_id, t.remote_id, t.status, t.started_at, t.finished_at, t.bytes_transferred, t.error_message,
                 r.name as remote_name
          FROM backup_run_targets t
          LEFT JOIN backup_remotes r ON t.remote_id = r.id
-         WHERE t.run_id = ?`
-      ).bind(row.id).all();
-      targets = targetRows.results || [];
+         WHERE t.run_id IN (${placeholders})`
+      ).bind(...runIds).all();
+      allTargets = targetResult.results || [];
     } catch (e) {
       console.error('[Backup] Failed to query backup_run_targets:', (e as Error).message);
-      // 表可能不存在，返回空数组
     }
-    
-    runs.push({
+  }
+
+  // 按 run_id 分组 targets
+  const targetsByRun: Record<number, any[]> = {};
+  for (const t of allTargets) {
+    const runId = t.run_id;
+    if (!targetsByRun[runId]) targetsByRun[runId] = [];
+    targetsByRun[runId].push(t);
+  }
+
+  // 构建 runs 列表
+  const runs = rows.results.map(row => ({
       id: String(row.id),
       schedule_id: row.schedule_id ? String(row.schedule_id) : null,
       schedule_name: row.schedule_name || null,
@@ -1599,9 +1609,8 @@ backupRouter.get('/runs', async (c) => {
       bytes_total: row.bytes_total,
       error_message: row.error_message,
       log_text: row.log_text,
-      targets,
-    });
-  }
+      targets: targetsByRun[row.id] || [],
+    }));
 
   return c.json({
     total: totalRow?.cnt ?? 0,
