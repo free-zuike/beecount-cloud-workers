@@ -201,6 +201,7 @@ export async function processBackupSchedule(
             }) }),
           });
           logFn(`Broadcast backup status to user ${schedule.user_id}`);
+        }
       } catch (wsErr) {
         logFn(`WebSocket broadcast failed (non-fatal): ${(wsErr as Error).message}`);
       }
