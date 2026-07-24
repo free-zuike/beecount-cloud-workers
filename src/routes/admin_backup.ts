@@ -1878,10 +1878,10 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
 
   const restore = await db
     .prepare(
-      `INSERT INTO backup_restores (user_id, run_id, status, created_at)
-       VALUES (?, ?, 'preparing', datetime('now'))`
+      `INSERT INTO backup_restores (user_id, run_id, status, created_at, extracted_path)
+       VALUES (?, ?, 'preparing', datetime('now'), ?)`
     )
-    .bind(userId, runId)
+    .bind(userId, runId, `data/restore/${runId}/extracted`)
     .run();
 
   // 返回与原版一致的格式
@@ -2000,7 +2000,7 @@ backupRouter.get('/restores/:id', async (c) => {
     bytes_total: null,
     bytes_downloaded: null,
     error_message: restore.error_message || null,
-    extracted_path: restore.extracted_path || null,
+    extracted_path: restore.extracted_path || `data/restore/${restore.run_id}/extracted`,
     source_remote_id: null,
     source_remote_name: null,
     backup_filename: null,
