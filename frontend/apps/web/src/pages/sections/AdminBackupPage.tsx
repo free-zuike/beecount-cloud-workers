@@ -325,7 +325,7 @@ export function AdminBackupPage() {
     }
   }
 
-  const onRestoreRun = async () => {
+  const onExecuteRestore = async () => {
     if (!restoreRun) return
     try {
       await triggerRestore(token, restoreRun.id)
@@ -447,7 +447,7 @@ export function AdminBackupPage() {
         restore={restoreStatus}
         liveProgress={restoreLive}
         onTrigger={onTriggerRestore}
-        onRestore={onRestoreRun}
+        onRestore={onExecuteRestore}
         onCleanup={onCleanupRestore}
         onDownloadConfig={onDownloadConfig}
       />
