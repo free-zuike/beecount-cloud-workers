@@ -386,59 +386,20 @@ export async function performBackup(
       data: new TextEncoder().encode(JSON.stringify(meta, null, 2)),
     });
 
-    // 2. 数据库导出 - 优先 D1 dump()（等同于原版 VACUUM INTO），TS writer 回退
-    console.debug(`[Backup] Exporting db.sqlite3...`);
-    
-    // 方案一: D1 dump() — 生成完整数据库文件（与原版完全一致）
-    let sqliteCreated = false;
+    // 2. 数据库导出 - D1 dump()（等同于原版 VACUUM INTO）
+    console.debug(`[Backup] Exporting db.sqlite3 via D1 dump()...`);
     try {
       const dumpResult = await db.dump();
       const stream = new Response(dumpResult);
       const buffer = await stream.arrayBuffer();
       const sqliteData = new Uint8Array(buffer);
-      if (sqliteData.length > 100) {
-        tarEntries.push({
-          name: 'db.sqlite3',
-          data: sqliteData,
-        });
-        console.debug(`[Backup] db.sqlite3 from D1 dump(): ${sqliteData.length} bytes`);
-        sqliteCreated = true;
-      } else {
-        console.error(`[Backup] D1 dump() returned too small file: ${sqliteData.length} bytes`);
-      }
+      tarEntries.push({
+        name: 'db.sqlite3',
+        data: sqliteData,
+      });
+      console.debug(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
     } catch (err) {
       console.error(`[Backup] D1 dump() failed: ${(err as Error).message}`);
-    }
-    
-    // 方案二: TS writer — 纯 TypeScript 构建（回退方案）
-    if (!sqliteCreated) {
-      try {
-        const { createSqliteWithData } = await import('../lib/sqlite-writer');
-        const sqliteData = createSqliteWithData(tables);
-        tarEntries.push({
-          name: 'db.sqlite3',
-          data: sqliteData,
-        });
-        console.debug(`[Backup] db.sqlite3 from TS writer: ${sqliteData.length} bytes`);
-        sqliteCreated = true;
-      } catch (err) {
-        console.error(`[Backup] TS SQLite writer failed: ${(err as Error).message}`);
-      }
-    }
-    
-    // 方案三: schema-only — 最终回退
-    if (!sqliteCreated) {
-      try {
-        const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
-        const minimalSqlite = createMinimalSqliteFile();
-        tarEntries.push({
-          name: 'db.sqlite3',
-          data: minimalSqlite,
-        });
-        console.debug(`[Backup] db.sqlite3 (schema-only): ${minimalSqlite.length} bytes`);
-      } catch (err) {
-        console.error(`[Backup] All SQLite methods failed: ${(err as Error).message}`);
-      }
     }
     
     // 始终包含 db.json 作为备份

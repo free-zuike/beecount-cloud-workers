@@ -16,12 +16,25 @@ const PAGE_SIZE = 4096;
 
 // ─── 编码函数 ──────────────────────────────────────────
 
+/**
+ * 编码 SQLite 变长整数
+ * SQLite 规范：高位字节在前，低位字节在后
+ * 每字节低 7 位存储数据，最高位为 continuation flag
+ */
 function encodeVarint(value: number): number[] {
   if (value <= 0x7F) return [value];
-  const result: number[] = [];
+  // 先收集所有 7-bit 块（从低位到高位）
+  const chunks: number[] = [];
   let v = value;
-  while (v > 0x7F) { result.push((v & 0x7F) | 0x80); v >>= 7; }
-  result.push(v & 0x7F);
+  do {
+    chunks.push(v & 0x7F);
+    v >>>= 7;
+  } while (v > 0);
+  // 反转（高位在前），除最后一个字节外都设置 continuation bit
+  const result: number[] = [];
+  for (let i = chunks.length - 1; i >= 0; i--) {
+    result.push(chunks[i] | (i > 0 ? 0x80 : 0));
+  }
   return result;
 }
 
