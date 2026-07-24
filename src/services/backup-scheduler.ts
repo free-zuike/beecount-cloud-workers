@@ -27,7 +27,7 @@ export async function processBackupSchedule(
   schedule: any,
   beeCountDO?: DurableObjectNamespace,
   r2?: R2Bucket,
-  env?: { CLOUDFLARE_ACCOUNT_ID?: string; CLOUDFLARE_API_TOKEN?: string; DATABASE_ID?: string },
+  env?: { CLOUDFLARE_API_TOKEN?: string },
 ) {
   // 清理超时的 pending 备份
   await cleanupStalePendingBackups(db);

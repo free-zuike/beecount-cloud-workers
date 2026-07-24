@@ -47,9 +47,7 @@ type Bindings = {
   S3_BUCKET_NAME?: string;
   S3_PATH_STYLE?: string;
   S3_CDN_DOMAIN?: string;
-  CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
-  DATABASE_ID?: string;
 };
 
 type Variables = {
@@ -227,9 +225,7 @@ export default {
       for (const schedule of schedules) {
         try {
           await processBackupSchedule(db, schedule, env.BEECOUNT_DO, env.R2, {
-            CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID,
             CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN,
-            DATABASE_ID: env.DATABASE_ID,
           });
         } catch (scheduleError) {
           console.error(`[CRON] Error processing schedule ${schedule.id}:`, scheduleError);

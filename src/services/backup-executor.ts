@@ -324,7 +324,7 @@ export async function performBackup(
   shouldEncrypt?: boolean,
   r2?: R2Bucket,
   logFn?: (msg: string) => void,
-  env?: { CLOUDFLARE_ACCOUNT_ID?: string; CLOUDFLARE_API_TOKEN?: string; DATABASE_ID?: string },
+  env?: { CLOUDFLARE_API_TOKEN?: string },
 ): Promise<BackupResult> {
   const log = logFn || console.log;
   try {
@@ -391,15 +391,11 @@ export async function performBackup(
     let sqliteCreated = false;
     
     // 方案一: D1 REST API export（等同于 VACUUM INTO，支持所有数据库版本）
-    if (env?.CLOUDFLARE_API_TOKEN && env?.CLOUDFLARE_ACCOUNT_ID && env?.DATABASE_ID) {
+    if (env?.CLOUDFLARE_API_TOKEN) {
       try {
         console.debug(`[Backup] Exporting via D1 REST API...`);
         const { exportD1ViaRestApi } = await import('../lib/d1-export');
-        const sqliteData = await exportD1ViaRestApi(
-          env.CLOUDFLARE_ACCOUNT_ID,
-          env.DATABASE_ID,
-          env.CLOUDFLARE_API_TOKEN,
-        );
+        const sqliteData = await exportD1ViaRestApi(env.CLOUDFLARE_API_TOKEN);
         tarEntries.push({
           name: 'db.sqlite3',
           data: sqliteData,
