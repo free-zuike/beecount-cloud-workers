@@ -1502,6 +1502,8 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
             backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
             backupResult.success ? null : backupResult.message, runId).run();
 
+      // 广播 succeeded 状态（延迟 1 秒确保前端已处理 running）
+      await new Promise(r => setTimeout(r, 1000));
       try {
         const { getWsManager } = await import('../lib/ws-manager');
         getWsManager().broadcastToUser(schedule.user_id, {
