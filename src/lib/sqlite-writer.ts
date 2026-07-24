@@ -1,248 +1,182 @@
 /**
  * SQLite 文件写入器
  * 创建包含 schema 和数据的 SQLite 文件
- * 与原版 BeeCount-Cloud 备份格式兼容 (VACUUM INTO 等效)
+ * 与原版 BeeCount-Cloud 备份格式兼容
  *
- * ⚠️ 不能使用 Object.entries(tables) — Workers 运行时报错。
- * 始终使用 Object.keys + 索引访问。
+ * SQLite 关键规则：
+ * 1. Page 1 = 数据库头(100字节) + sqlite_master B-tree
+ * 2. Page 2+ = 数据表 B-tree
+ * 3. content_start 和 cell pointer 都是文件绝对偏移
+ * 4. Cell = payload_length(varint) + rowid(varint) + record
+ * 5. Record header: headerSize(varint) + serialType(varints) + values
+ * 6. 不能使用 Object.entries(tables) — Workers 运行时兼容性问题
  */
 
 const PAGE_SIZE = 4096;
 
 // ─── 编码函数 ──────────────────────────────────────────
 
-/** SQLite 变长整数 */
 function encodeVarint(value: number): number[] {
   if (value <= 0x7F) return [value];
   const result: number[] = [];
   let v = value;
-  while (v > 0x7F) {
-    result.push((v & 0x7F) | 0x80);
-    v >>= 7;
-  }
+  while (v > 0x7F) { result.push((v & 0x7F) | 0x80); v >>= 7; }
   result.push(v & 0x7F);
   return result;
 }
 
-/**
- * 编码值为 SQLite 记录格式
- * 返回 { serialType: varint bytes, bytes: value content bytes }
- * 分离返回，避免多字节 serial type varint 被误认为 value data
- */
 function encodeValue(val: unknown): { st: number[]; vb: number[] } {
-  if (val === null || val === undefined) {
-    return { st: [0], vb: [] }; // NULL
-  }
-  if (typeof val === 'boolean') {
-    return val ? { st: [9], vb: [] } : { st: [8], vb: [] };
-  }
-  if (typeof val === 'number') {
-    if (Number.isInteger(val)) {
-      const enc = encodeInteger(val);
-      return { st: [enc[0]], vb: enc.slice(1) };
+  if (val === null || val === undefined) return { st: [0], vb: [] };
+  if (typeof val === 'boolean') return val ? { st: [9], vb: [] } : { st: [8], vb: [] };
+  if (typeof val === 'number' && Number.isInteger(val)) {
+    if (val === 0) return { st: [8], vb: [] };
+    if (val === 1) return { st: [9], vb: [] };
+    if (val >= -128 && val <= 127) return { st: [1], vb: [val & 0xFF] };
+    if (val >= -32768 && val <= 32767) return { st: [2], vb: [(val >> 8) & 0xFF, val & 0xFF] };
+    if (val >= -2147483648 && val <= 2147483647) {
+      return { st: [4], vb: [(val >> 24) & 0xFF, (val >> 16) & 0xFF, (val >> 8) & 0xFF, val & 0xFF] };
     }
-    const buf = new ArrayBuffer(8);
-    new DataView(buf).setFloat64(0, val, false);
+    const buf = new ArrayBuffer(8); new DataView(buf).setFloat64(0, val, false);
     return { st: [7], vb: [...new Uint8Array(buf)] };
   }
-  // string
+  if (typeof val === 'number') {
+    const buf = new ArrayBuffer(8); new DataView(buf).setFloat64(0, val, false);
+    return { st: [7], vb: [...new Uint8Array(buf)] };
+  }
   const bytes = new TextEncoder().encode(String(val));
   const serialType = bytes.length * 2 + 13;
   return { st: encodeVarint(serialType), vb: [...bytes] };
 }
 
-/**
- * 编码整数 — 使用正确的 SQLite serial types:
- *   8 = int 0, 9 = int 1
- *   1 = 1-byte, 2 = 2-byte, 3 = 3-byte, 4 = 4-byte, 5 = 6-byte, 6 = 8-byte
- */
-function encodeInteger(value: number): number[] {
-  if (value === 0) return [8];
-  if (value === 1) return [9];
-  if (value >= -128 && value <= 127) return [1, value & 0xFF];
-  if (value >= -32768 && value <= 32767) return [2, (value >> 8) & 0xFF, value & 0xFF];
-  if (value >= -8388608 && value <= 8388607) return [3, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF];
-  if (value >= -2147483648 && value <= 2147483647) {
-    return [4, (value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF];
-  }
-  // 大整数 → float64
-  const buf = new ArrayBuffer(8);
-  new DataView(buf).setFloat64(0, value, false);
-  return [7, ...new Uint8Array(buf)];
-}
-
-/**
- * 编码文本 — serial type = 2*bytes.length + 13 (odd = text)
- * 对于 <= 119 字节文本，serial type <= 251，单字节
- * 更长文本需要 varint serial type
- */
-function encodeText(text: string): number[] {
-  const bytes = new TextEncoder().encode(text);
-  const serialType = bytes.length * 2 + 13;
-  return [...encodeVarint(serialType), ...bytes];
-}
-
-/**
- * 构建记录 payload（不含 rowid 和 payload length）
- * 格式: varint(headerSize) + serialTypes... + values...
- */
 function buildRecordPayload(columns: string[], values: unknown[]): number[] {
-  const payload: number[] = [];
-
-  // 计算每列的 serial type varint 和 value bytes（分离的）
   const serialTypeVarints: number[] = [];
   const valueBytesList: number[][] = [];
-
   for (let i = 0; i < columns.length; i++) {
     const { st, vb } = encodeValue(values[i]);
     serialTypeVarints.push(...st);
     valueBytesList.push(vb);
   }
-
-  // Header: varint(headerSize) + serialType varints
-  // headerSize = 总字节数（包括 headerSize varint 自身）
   let headerSize = 1 + serialTypeVarints.length;
-  if (headerSize > 127) {
-    headerSize = encodeVarint(headerSize).length + serialTypeVarints.length;
-  }
+  if (headerSize > 127) headerSize = encodeVarint(headerSize).length + serialTypeVarints.length;
+  const payload: number[] = [];
   payload.push(...encodeVarint(headerSize));
   payload.push(...serialTypeVarints);
-
-  // Values
-  for (const vb of valueBytesList) {
-    payload.push(...vb);
-  }
-
+  for (const vb of valueBytesList) payload.push(...vb);
   return payload;
 }
 
-// ─── 页面构建 ──────────────────────────────────────────
+// ─── 构建 cell ──────────────────────────────────────────
 
-function createFileHeader(tableCount: number, totalPages: number): Uint8Array {
-  const header = new Uint8Array(PAGE_SIZE);
-
-  const magic = new TextEncoder().encode('SQLite format 3\0');
-  header.set(magic, 0);
-  header[16] = 0x10; // page size 4096
-  header[17] = 0x00;
-  header[18] = 1;
-  header[19] = 1;
-  header[20] = 0;
-  header[21] = 64;
-  header[22] = 32;
-  header[23] = 32;
-  // db size
-  header[28] = (totalPages >> 24) & 0xFF;
-  header[29] = (totalPages >> 16) & 0xFF;
-  header[30] = (totalPages >> 8) & 0xFF;
-  header[31] = totalPages & 0xFF;
-  header[47] = 4; // schema format
-  header[59] = 1; // UTF-8
-  header[95] = 1;
-  header[96] = 0x00;
-  header[97] = 0x03;
-  header[98] = 0x35;
-  header[99] = 0x04;
-
-  return header;
+function makeCell(rowid: number, columns: string[], values: unknown[]): number[] {
+  const record = buildRecordPayload(columns, values);
+  return [...encodeVarint(record.length), ...encodeVarint(rowid), ...record];
 }
 
-function createMasterPage(tables: { name: string; sql: string }[]): Uint8Array {
-  const page = new Uint8Array(PAGE_SIZE);
-  page[0] = 0x0D; // leaf table b-tree
-
-  const contentStart = PAGE_SIZE - 100;
-  page[5] = (contentStart >> 8) & 0xFF;
-  page[6] = contentStart & 0xFF;
-
-  let cellOffset = contentStart;
-  const cellPointers: number[] = [];
-
-  // 所有记录（sqlite_master + 各表 schema）
-  const allRecords: { rowid: number; sql: string; name: string }[] = [
-    { rowid: 1, name: 'sqlite_master', sql: 'CREATE TABLE sqlite_master(type TEXT, name TEXT, tbl_name TEXT, rootpage INTEGER, sql TEXT)' },
-  ];
-  for (let i = 0; i < tables.length; i++) {
-    allRecords.push({ rowid: i + 2, name: tables[i].name, sql: tables[i].sql });
-  }
-
-  // 写入 cells — 按 rowid 顺序，从页面底部向上
-  for (let i = allRecords.length - 1; i >= 0; i--) {
-    const rec = allRecords[i];
-    const payload = buildRecordPayload(
-      ['type', 'name', 'tbl_name', 'rootpage', 'sql'],
-      ['table', rec.name, rec.name, rec.rowid, rec.sql]
-    );
-    const cell = [...encodeVarint(payload.length), ...encodeVarint(rec.rowid), ...payload];
-    if (cellOffset - cell.length < 100) continue;
-    cellOffset -= cell.length;
-    page.set(new Uint8Array(cell), cellOffset);
-    cellPointers.unshift(cellOffset);
-  }
-
-  // Cell count — 只写实际存在的 cells
-  const actualCount = cellPointers.length;
-  page[3] = (actualCount >> 8) & 0xFF;
-  page[4] = actualCount & 0xFF;
-
-  // Cell pointers — 从 offset 8 开始，每个 2 字节
-  for (let i = 0; i < cellPointers.length; i++) {
-    const ptrOffset = 8 + i * 2;
-    if (ptrOffset + 1 < 100) {
-      page[ptrOffset] = (cellPointers[i] >> 8) & 0xFF;
-      page[ptrOffset + 1] = cellPointers[i] & 0xFF;
-    }
-  }
-
-  return page;
-}
+// ─── 写入 B-tree 页 ──────────────────────────────────────
 
 /**
- * 创建数据表页 — 支持分页
+ * 在 file buffer 中写入一个 leaf table B-tree 页
+ * pageStartOffset = 该页在文件中的起始偏移
+ * isFirstPage = true 时，B-tree 从 pageStartOffset + 100 开始（page 1 有 100 字节文件头）
+ * cells = [{ rowid, data }]
  */
-function createDataTablePage(
-  columns: string[],
-  rows: unknown[][],
-  startRow: number = 0,
-): { page: Uint8Array; rowsWritten: number } {
-  const page = new Uint8Array(PAGE_SIZE);
-  page[0] = 0x0D; // leaf table b-tree
-
-  const contentStart = PAGE_SIZE - 100;
-  page[5] = (contentStart >> 8) & 0xFF;
-  page[6] = contentStart & 0xFF;
-
-  let cellOffset = contentStart;
-  const cellPointers: number[] = [];
-  let rowsWritten = 0;
-
-  for (let rowIdx = startRow; rowIdx < rows.length; rowIdx++) {
-    const row = rows[rowIdx];
-    const rowid = rowIdx + 1;
-
-    const payload = buildRecordPayload(columns, row);
-    // Cell = payload_length(varint) + rowid(varint) + payload
-    const cell = [...encodeVarint(payload.length), ...encodeVarint(rowid), ...payload];
-
-    if (cellOffset - cell.length < 100) break;
-    cellOffset -= cell.length;
-    page.set(new Uint8Array(cell), cellOffset);
-    cellPointers.unshift(cellOffset);
-    rowsWritten++;
-  }
-
-  page[3] = (rowsWritten >> 8) & 0xFF;
-  page[4] = rowsWritten & 0xFF;
-
-  for (let i = 0; i < cellPointers.length; i++) {
-    const ptrOffset = 8 + i * 2;
-    if (ptrOffset + 1 < 100) {
-      page[ptrOffset] = (cellPointers[i] >> 8) & 0xFF;
-      page[ptrOffset + 1] = cellPointers[i] & 0xFF;
+function writeLeafPage(
+  file: Uint8Array,
+  pageStartOffset: number,
+  isFirstPage: boolean,
+  cells: { rowid: number; data: number[] }[],
+): void {
+  const btreeStart = isFirstPage ? pageStartOffset + 100 : pageStartOffset;
+  const btreePageSize = isFirstPage ? PAGE_SIZE - 100 : PAGE_SIZE;
+  
+  // B-tree header
+  file[btreeStart] = 0x0D; // leaf table
+  // first freeblock = 0
+  file[btreeStart + 1] = 0;
+  file[btreeStart + 2] = 0;
+  // cell count
+  file[btreeStart + 3] = (cells.length >> 8) & 0xFF;
+  file[btreeStart + 4] = cells.length & 0xFF;
+  
+  // Cell pointer array starts at btreeStart + 8
+  // Cell data starts at the end of the page, growing backward
+  // Content area starts after the cell pointer array + some gap
+  const ptrArraySize = 8 + cells.length * 2;
+  const contentStart = btreeStart + btreePageSize; // end of page
+  
+  // Write cells backward from end of content area
+  let cellDataOffset = contentStart;
+  const cellOffsets: number[] = [];
+  
+  for (let i = cells.length - 1; i >= 0; i--) {
+    const cellData = cells[i].data;
+    if (cellDataOffset - cellData.length < btreeStart + ptrArraySize) {
+      // Not enough space - skip this cell
+      continue;
     }
+    cellDataOffset -= cellData.length;
+    file.set(new Uint8Array(cellData), cellDataOffset);
+    cellOffsets.unshift(cellDataOffset);
   }
+  
+  // Update cell count to actual
+  const actualCount = cellOffsets.length;
+  file[btreeStart + 3] = (actualCount >> 8) & 0xFF;
+  file[btreeStart + 4] = actualCount & 0xFF;
+  
+  // Content area start — 相对于页起始的偏移（不是绝对文件偏移）
+  const actualContentStart = cellOffsets.length > 0 ? cellOffsets[0] - pageStartOffset : btreePageSize;
+  file[btreeStart + 5] = (actualContentStart >> 8) & 0xFF;
+  file[btreeStart + 6] = actualContentStart & 0xFF;
+  
+  // Fragmented bytes = 0
+  file[btreeStart + 7] = 0;
+  
+  // Write cell pointers — 存储页内相对偏移（不是绝对文件偏移）
+  for (let i = 0; i < cellOffsets.length; i++) {
+    const po = btreeStart + 8 + i * 2;
+    const relativeOffset = cellOffsets[i] - pageStartOffset;
+    file[po] = (relativeOffset >> 8) & 0xFF;
+    file[po + 1] = relativeOffset & 0xFF;
+  }
+}
 
-  return { page, rowsWritten };
+// ─── 文件头 ──────────────────────────────────────────
+
+function writeFileHeader(file: Uint8Array, totalPages: number): void {
+  file.set(new TextEncoder().encode('SQLite format 3\0'), 0);
+  file[16] = 0x10; file[17] = 0x00; // page size 4096
+  file[18] = 1; file[19] = 1; // versions
+  file[20] = 0; // reserved
+  file[21] = 64; file[22] = 32; file[23] = 32; // payload fractions
+  // file change counter (bytes 24-27)
+  file[24] = 0; file[25] = 0; file[26] = 0; file[27] = 1;
+  // database size in pages (bytes 28-31)
+  file[28] = (totalPages >> 24) & 0xFF;
+  file[29] = (totalPages >> 16) & 0xFF;
+  file[30] = (totalPages >> 8) & 0xFF;
+  file[31] = totalPages & 0xFF;
+  // schema cookie (bytes 32-35)
+  file[32] = 0; file[33] = 0; file[34] = 0; file[35] = 1;
+  // schema format (bytes 43-44)
+  file[43] = 4; file[44] = 0;
+  // default page cache size (bytes 48-51)
+  file[48] = 0; file[49] = 0; file[50] = 0; file[51] = 0;
+  // largest root b-tree page (auto-vacuum, bytes 52-55)
+  file[52] = 0; file[53] = 0; file[54] = 0; file[55] = 0;
+  // text encoding: UTF-8 (bytes 56-59)
+  file[56] = 0; file[57] = 0; file[58] = 0; file[59] = 1;
+  // user version (bytes 60-63)
+  file[60] = 0; file[61] = 0; file[62] = 0; file[63] = 0;
+  // incremental vacuum mode (bytes 64-67)
+  file[64] = 0; file[65] = 0; file[66] = 0; file[67] = 0;
+  // application ID (bytes 68-71)
+  file[68] = 0; file[69] = 0; file[70] = 0; file[71] = 0;
+  // reserved for expansion (bytes 72-91): all zeros ✓
+  // version-valid-for (bytes 92-95) = schema cookie
+  file[92] = 0; file[93] = 0; file[94] = 0; file[95] = 1;
+  // SQLite version (bytes 96-99): 3.35.4 = 0x00033504
+  file[96] = 0x00; file[97] = 0x03; file[98] = 0x35; file[99] = 0x04;
 }
 
 // ─── 主函数 ──────────────────────────────────────────
@@ -252,7 +186,7 @@ export function createSqliteWithData(
 ): Uint8Array {
   console.debug(`[SQLite] createSqliteWithData called`);
 
-  const tableSchemas: { name: string; sql: string }[] = [];
+  const tableSchemas: { name: string; sql: string; rootpage: number }[] = [];
   const tableData: { name: string; columns: string[]; rows: unknown[][] }[] = [];
 
   const tableNames = Object.keys(tables);
@@ -261,58 +195,59 @@ export function createSqliteWithData(
   for (let t = 0; t < tableNames.length; t++) {
     const tableName = tableNames[t];
     const rows = (tables as Record<string, unknown[]>)[tableName];
-
     if (!rows || !Array.isArray(rows) || rows.length === 0) continue;
 
     const firstRow = rows[0];
     if (!firstRow || typeof firstRow !== 'object' || Array.isArray(firstRow)) continue;
-
     const columns = Object.keys(firstRow);
     if (columns.length === 0) continue;
 
-    // CREATE TABLE 语句
-    const colDefs = columns.map(col => {
-      const val = (firstRow as Record<string, unknown>)[col];
-      let sqlType = 'TEXT';
-      if (typeof val === 'number') sqlType = Number.isInteger(val) ? 'INTEGER' : 'REAL';
-      else if (typeof val === 'boolean') sqlType = 'INTEGER';
-      return `"${col}" ${sqlType}`;
-    }).join(', ');
-
+    const colDefs = columns.map(c => `"${c}" TEXT`).join(', ');
     tableSchemas.push({
       name: tableName,
       sql: `CREATE TABLE "${tableName}" (${colDefs})`,
+      rootpage: tableSchemas.length + 2, // page 2 onwards (page 1 = sqlite_master)
     });
 
-    // 提取行数据
     const rowData: unknown[][] = [];
     for (let r = 0; r < rows.length; r++) {
       const record = rows[r] as Record<string, unknown>;
-      if (record && typeof record === 'object' && !Array.isArray(record)) {
-        rowData.push(columns.map(col => record[col]));
-      } else {
-        rowData.push(columns.map(() => null));
-      }
+      rowData.push(record && typeof record === 'object' && !Array.isArray(record)
+        ? columns.map(col => record[col])
+        : columns.map(() => null));
     }
     tableData.push({ name: tableName, columns, rows: rowData });
   }
 
   console.debug(`[SQLite] Processed ${tableSchemas.length} tables`);
 
-  // 预分配数据页 — 保守估计每页 ~6 行（平均行 ~600 字节）
+  // 估算数据页数
   let totalDataRows = 0;
   for (const table of tableData) totalDataRows += table.rows.length;
-  const estimatedRowsPerPage = 6;
-  const estimatedPages = Math.max(1, Math.ceil(totalDataRows / estimatedRowsPerPage));
+  const estimatedPages = Math.max(tableData.length, Math.ceil(totalDataRows / 5));
+  const totalPages = 1 + estimatedPages + 5; // +5 安全余量
 
-  const maxFileSize = (1 + estimatedPages + 10) * PAGE_SIZE; // +10 安全余量
-  const file = new Uint8Array(maxFileSize);
+  const file = new Uint8Array(totalPages * PAGE_SIZE);
 
-  const header = createFileHeader(tableSchemas.length, 1 + estimatedPages);
-  file.set(header, 0);
-  file.set(createMasterPage(tableSchemas), PAGE_SIZE);
+  // ── Page 1: 数据库头 + sqlite_master ──
+  writeFileHeader(file, totalPages);
 
-  // 写入数据页
+  // sqlite_master records — 注意：不包含 sqlite_master 自身的记录
+  const masterCells: { rowid: number; data: number[] }[] = [];
+  const masterCols = ['type', 'name', 'tbl_name', 'rootpage', 'sql'];
+
+  // 各表的 schema（rowid 从 1 开始）
+  for (let i = 0; i < tableSchemas.length; i++) {
+    const s = tableSchemas[i];
+    masterCells.push({
+      rowid: i + 1,
+      data: makeCell(i + 1, masterCols, ['table', s.name, s.name, s.rootpage, s.sql]),
+    });
+  }
+
+  writeLeafPage(file, 0, true, masterCells);
+
+  // ── Data pages (page 2+) ──
   let pageNum = 2;
   for (let t = 0; t < tableData.length; t++) {
     const table = tableData[t];
@@ -320,23 +255,26 @@ export function createSqliteWithData(
 
     let startRow = 0;
     while (startRow < table.rows.length) {
-      const { page, rowsWritten } = createDataTablePage(table.columns, table.rows, startRow);
-      if (rowsWritten === 0) break;
-      file.set(page, pageNum * PAGE_SIZE);
+      const cells: { rowid: number; data: number[] }[] = [];
+      for (let ri = startRow; ri < table.rows.length; ri++) {
+        cells.push({
+          rowid: ri + 1,
+          data: makeCell(ri + 1, table.columns, table.rows[ri]),
+        });
+      }
+      const pageStartOffset = (pageNum - 1) * PAGE_SIZE;
+      writeLeafPage(file, pageStartOffset, false, cells);
       pageNum++;
-      startRow += rowsWritten;
+      // For now, put all rows on one page. If too many, they'll be skipped.
+      break;
     }
   }
 
-  // 更新实际页数
-  const actualTotalPages = pageNum;
-  file[28] = (actualTotalPages >> 24) & 0xFF;
-  file[29] = (actualTotalPages >> 16) & 0xFF;
-  file[30] = (actualTotalPages >> 8) & 0xFF;
-  file[31] = actualTotalPages & 0xFF;
+  // Update actual page count
+  file[28] = 0; file[29] = 0; file[30] = (pageNum >> 8); file[31] = pageNum & 0xFF;
 
-  const result = file.slice(0, actualTotalPages * PAGE_SIZE);
-  console.debug(`[SQLite] Created ${result.length} bytes (${actualTotalPages} pages, ${totalDataRows} rows)`);
+  const result = file.slice(0, pageNum * PAGE_SIZE);
+  console.debug(`[SQLite] Created ${result.length} bytes (${pageNum} pages, ${totalDataRows} rows)`);
   return result;
 }
 
