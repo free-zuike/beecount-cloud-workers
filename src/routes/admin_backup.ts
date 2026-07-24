@@ -1970,18 +1970,41 @@ backupRouter.get('/restores', async (c) => {
 backupRouter.get('/restores/:id', async (c) => {
   const db = c.env.DB;
   const userId = c.get('userId');
-  const id = c.req.param('id');
+  const runId = c.req.param('id');
 
-  const restore = await db
-    .prepare('SELECT * FROM backup_restores WHERE id = ? AND user_id = ?')
-    .bind(id, userId)
+  // 前端传入的是 backup run ID，不是 restore record ID
+  // 兼容两种查询方式
+  let restore = await db
+    .prepare('SELECT * FROM backup_restores WHERE run_id = ? AND user_id = ?')
+    .bind(runId, userId)
     .first();
+
+  // 回退：按 restore record ID 查询
+  if (!restore) {
+    restore = await db
+      .prepare('SELECT * FROM backup_restores WHERE id = ? AND user_id = ?')
+      .bind(runId, userId)
+      .first();
+  }
 
   if (!restore) {
     return c.json({ error: 'Restore not found' }, 404);
   }
 
-  return c.json(restore);
+  // 返回与原版一致的格式
+  return c.json({
+    run_id: restore.run_id,
+    phase: restore.status || 'unknown',
+    started_at: restore.created_at,
+    finished_at: restore.finished_at || null,
+    bytes_total: null,
+    bytes_downloaded: null,
+    error_message: restore.error_message || null,
+    extracted_path: restore.extracted_path || null,
+    source_remote_id: null,
+    source_remote_name: null,
+    backup_filename: null,
+  });
 });
 
 /**
