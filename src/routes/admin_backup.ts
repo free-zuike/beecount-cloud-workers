@@ -1900,57 +1900,46 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
     backup_filename: run.backup_filename || null,
   };
 
-  // 第一个 restore_progress 在响应前发（和备份的 backup_progress 一样）
+  // 所有 WS 事件通过 waitUntil 发送（确保在 HTTP 响应处理之后到达前端）
   const strRunId = String(runId);
   const bytesTotal = run.bytes_total || 0;
 
-  await broadcastViaDO(c.env, userId, {
-    type: 'restore_progress',
-    runId: strRunId,
-    phase: 'downloading',
-    bytesTransferred: 0,
-    bytesTotal,
-  });
-
-  // 剩余事件在 waitUntil 中发（响应返回后）
   c.executionCtx.waitUntil((async () => {
     try {
+      // downloading
+      await broadcastViaDO(c.env, userId, {
+        type: 'restore_progress', runId: strRunId, phase: 'downloading',
+        bytesTransferred: 0, bytesTotal,
+      });
+
       for (let i = 1; i <= 5; i++) {
         await new Promise(r => setTimeout(r, 200));
         await broadcastViaDO(c.env, userId, {
-          type: 'restore_progress',
-          runId: strRunId,
-          phase: 'downloading',
-          bytesTransferred: Math.floor(bytesTotal * i / 5),
-          bytesTotal,
+          type: 'restore_progress', runId: strRunId, phase: 'downloading',
+          bytesTransferred: Math.floor(bytesTotal * i / 5), bytesTotal,
         });
       }
 
+      // extracting
       await broadcastViaDO(c.env, userId, {
-        type: 'restore_progress',
-        runId: strRunId,
-        phase: 'extracting',
-        bytesTransferred: bytesTotal,
-        bytesTotal,
+        type: 'restore_progress', runId: strRunId, phase: 'extracting',
+        bytesTransferred: bytesTotal, bytesTotal,
       });
       await new Promise(r => setTimeout(r, 300));
 
+      // done
       const finishedAt = new Date().toISOString();
       try {
-        await db.prepare(
-          `UPDATE backup_restores SET status = 'done', finished_at = ? WHERE id = ?`
-        ).bind(finishedAt, restoreId).run();
+        await db.prepare(`UPDATE backup_restores SET status = 'done', finished_at = ? WHERE id = ?`)
+          .bind(finishedAt, restoreId).run();
       } catch {}
 
       await broadcastViaDO(c.env, userId, {
-        type: 'restore_progress',
-        runId: strRunId,
-        phase: 'done',
-        bytesTransferred: bytesTotal,
-        bytesTotal,
+        type: 'restore_progress', runId: strRunId, phase: 'done',
+        bytesTransferred: bytesTotal, bytesTotal,
       });
     } catch (err) {
-      console.error(`[Restore] waitUntil broadcast failed: ${(err as Error).message}`);
+      console.error(`[Restore] waitUntil failed: ${(err as Error).message}`);
     }
   })());
 
