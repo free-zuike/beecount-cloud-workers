@@ -12,7 +12,6 @@ import {
   listBackupRuns,
   listBackupSchedules,
   prepareRestore,
-  triggerRestore,
   revealBackupRemote,
   runBackupNow,
   testBackupRemote,
@@ -325,16 +324,6 @@ export function AdminBackupPage() {
     }
   }
 
-  const onRestoreRun = async () => {
-    if (!restoreRun) return
-    try {
-      await triggerRestore(token, restoreRun.id)
-      setRestoreLive({ phase: 'downloading' })
-    } catch (err) {
-      notifyError(err)
-    }
-  }
-
   const onCleanupRestore = async () => {
     if (!restoreRun) return
     try {
@@ -447,7 +436,6 @@ export function AdminBackupPage() {
         restore={restoreStatus}
         liveProgress={restoreLive}
         onTrigger={onTriggerRestore}
-        onRestore={onRestoreRun}
         onCleanup={onCleanupRestore}
         onDownloadConfig={onDownloadConfig}
       />

@@ -19,8 +19,6 @@ type Props = {
   liveProgress?: { phase: string; bytesTransferred?: number; bytesTotal?: number } | null
   /** 用户已点过「准备恢复」时的进度查看;首次触发用 onTrigger。 */
   onTrigger?: () => Promise<void>
-  /** 触发实际恢复（导入数据到 D1） */
-  onRestore?: () => Promise<void>
   onCleanup?: () => Promise<void>
   onDownloadConfig?: () => Promise<void>
 }
@@ -49,14 +47,12 @@ export function BackupRestoreGuideDialog({
   restore,
   liveProgress,
   onTrigger,
-  onRestore,
   onCleanup,
   onDownloadConfig,
 }: Props) {
   const t = useT()
   const [showCli, setShowCli] = useState(false)
   const [triggering, setTriggering] = useState(false)
-  const [restoring, setRestoring] = useState(false)
   const [cleaning, setCleaning] = useState(false)
 
   const phase = liveProgress?.phase || restore?.phase
@@ -197,27 +193,23 @@ rm -rf ${path}/..`
             ) : null}
           </div>
 
-          {/* 恢复操作区 */}
+          {/* 用户手动替换的指引 */}
           {isDone ? (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <span className="font-medium">
-                  ✓ {t('backup.restore.done')}
+                  {t('backup.restore.steps.title')}
                 </span>
-                <span className="font-mono text-[11px] text-muted-foreground">{path}</span>
-              </div>
-              {onRestore ? (
-                <Button
-                  size="sm"
-                  disabled={restoring}
-                  onClick={async () => {
-                    setRestoring(true)
-                    try { await onRestore() } finally { setRestoring(false) }
-                  }}
-                >
-                  {restoring ? '恢复中...' : '恢复'}
+                <Button size="sm" variant="outline" onClick={() => void copyAll()}>
+                  {t('backup.restore.button.copyAll')}
                 </Button>
-              ) : null}
+              </div>
+              <pre className="overflow-x-auto rounded-md border border-border/60 bg-muted/40 p-3 font-mono text-[10px] leading-relaxed">
+{shellScript}
+              </pre>
+              <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                ⚠ {t('backup.restore.warn.replace')}
+              </p>
             </div>
           ) : null}
 
