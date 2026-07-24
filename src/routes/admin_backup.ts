@@ -1507,9 +1507,41 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
     } catch {}
 
     try {
-      const backupResult = await performBackup(db, runId, schedule.user_id, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2);
+      // 收集日志
+      const logLines: string[] = [];
+      const logFn = (msg: string) => {
+        const ts = new Date().toISOString();
+        logLines.push(`[${ts}] ${msg}`);
+      };
+
+      logFn(`backup start, run=${runId} label=${serverNow.replace(/[:.]/g, '').slice(0, 15)} remotes=['${remoteId || 'local'}']`);
+
+      const backupResult = await performBackup(db, runId, schedule.user_id, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2, logFn);
       const finishedAt = new Date().toISOString();
       const finalStatus = backupResult.success ? 'succeeded' : 'failed';
+
+      logFn(`backup ${finalStatus}, size=${backupResult.backupSize || 0} bytes`);
+      const logText = logLines.join('\n');
+
+      await db.prepare(
+        `UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?, log_text = ?
+         WHERE id = ?`
+      ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
+            backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
+            backupResult.success ? null : backupResult.message, logText, runId).run();
+
+      // 创建 backup_run_targets 记录
+      if (remoteId) {
+        try {
+          await db.prepare(
+            `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, bytes_transferred, error_message)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          ).bind(runId, remoteId, finalStatus, serverNow, finishedAt,
+                backupResult.backupSize || null, backupResult.success ? null : backupResult.message).run();
+        } catch (e) {
+          console.error('[Backup] Failed to insert backup_run_targets:', (e as Error).message);
+        }
+      }
 
       await db.prepare(
         `UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?
@@ -1524,9 +1556,20 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
       });
     } catch (err) {
       const finishedAt = new Date().toISOString();
+      const logText = `[${new Date().toISOString()}] backup failed: ${(err as Error).message}`;
       await db.prepare(
-        `UPDATE backup_runs SET status = 'failed', finished_at = ?, error_message = ? WHERE id = ?`
-      ).bind(finishedAt, (err as Error).message, runId).run();
+        `UPDATE backup_runs SET status = 'failed', finished_at = ?, error_message = ?, log_text = ? WHERE id = ?`
+      ).bind(finishedAt, (err as Error).message, logText, runId).run();
+
+      // 创建 backup_run_targets 记录
+      if (remoteId) {
+        try {
+          await db.prepare(
+            `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, error_message)
+             VALUES (?, ?, 'failed', ?, ?, ?)`
+          ).bind(runId, remoteId, serverNow, finishedAt, (err as Error).message).run();
+        } catch {}
+      }
       await broadcastViaDO(c.env, schedule.user_id, {
         type: 'backup_status', scheduleId: schedule.id, status: 'failed', runId,
       });
