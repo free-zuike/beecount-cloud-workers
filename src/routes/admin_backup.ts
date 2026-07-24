@@ -1476,17 +1476,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
   const runId = runInsertResult.meta.last_row_id as number;
 
-  // 立即返回响应，备份在后台执行（ctx.waitUntil）
-  c.json({
-    id: runId,
-    schedule_id: Number(scheduleId),
-    schedule_name: schedule.name,
-    status: 'running',
-    started_at: serverNow,
-    message: 'Backup started in background',
-  }, 200);
-
-  // 后台执行备份
+  // 后台执行备份（ctx.waitUntil）
   c.executionCtx.waitUntil((async () => {
     try {
       const backupResult = await performBackup(db, runId, schedule.user_id, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2, undefined, {
@@ -1531,6 +1521,16 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
       ).bind(finishedAt, (err as Error).message, runId).run();
     }
   })());
+
+  // 立即返回 running 状态
+  return c.json({
+    id: runId,
+    schedule_id: Number(scheduleId),
+    schedule_name: schedule.name,
+    status: 'running',
+    started_at: serverNow,
+    message: 'Backup started in background',
+  }, 200);
 });
 
 // ---------------------------------------------------------------------------

@@ -73,7 +73,7 @@ export async function exportD1ViaRestApi(
     const pollRes = await fetch(exportUrl, {
       method: 'POST',
       headers: authHeaders,
-      body: JSON.stringify({ current_bookmark: bookmark }),
+      body: JSON.stringify({ current_bookmark: bookmark, output_format: 'polling' }),
     });
     if (!pollRes.ok) {
       const errBody = await pollRes.text().catch(() => 'no body');
