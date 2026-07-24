@@ -29,9 +29,6 @@ export async function processBackupSchedule(
   r2?: R2Bucket,
   env?: { CLOUDFLARE_API_TOKEN?: string },
 ) {
-  // 先检查是否有 pending 的 D1 export 需要完成
-  await checkPendingD1Exports(db, r2, env);
-
   // 清理超时的 pending 备份
   await cleanupStalePendingBackups(db);
 
@@ -237,62 +234,3 @@ export async function processBackupSchedule(
   }
 }
 
-/**
- * 检查 pending 的 D1 export 任务，完成下载
- * 由 cron 每 5 分钟调用一次
- */
-async function checkPendingD1Exports(
-  db: D1Database,
-  r2?: R2Bucket,
-  env?: { CLOUDFLARE_API_TOKEN?: string },
-) {
-  if (!env?.CLOUDFLARE_API_TOKEN) return;
-
-  try {
-    // 查找 backup_path 包含 "exporting" 的记录（status=pending 或 running）
-    const pendingRuns = await db.prepare(
-      `SELECT id, schedule_id, ledger_id, remote_id, backup_path, user_id
-       FROM backup_runs
-       WHERE status IN ('pending', 'running')
-         AND backup_path LIKE '%exporting%'`
-    ).all<{ id: number; schedule_id: number; ledger_id: string; remote_id: string; backup_path: string; user_id: string }>();
-
-    if (!pendingRuns.results || pendingRuns.results.length === 0) return;
-
-    const { pollD1Export } = await import('../lib/d1-export');
-
-    for (const run of pendingRuns.results) {
-      try {
-        const exportState = JSON.parse(run.backup_path);
-        if (!exportState.bookmark || !exportState.accountId) continue;
-
-        console.log(`[CRON] Polling D1 export for run ${run.id}...`);
-        const sqliteData = await pollD1Export(env.CLOUDFLARE_API_TOKEN, exportState);
-
-        if (sqliteData) {
-          // 导出完成，更新 backup_path
-          await db.prepare(
-            `UPDATE backup_runs SET backup_path = ? WHERE id = ?`
-          ).bind(`d1-export-${Date.now()}`, run.id).run();
-          console.log(`[CRON] D1 export completed for run ${run.id}: ${sqliteData.length} bytes`);
-
-          // 将 SQLite 数据存到 R2
-          if (r2) {
-            const filename = `backups/${run.user_id}/${Date.now()}_backup.sqlite3`;
-            await r2.put(filename, sqliteData);
-            await db.prepare(
-              `UPDATE backup_runs SET backup_filename = ?, backup_path = ?, bytes_total = ? WHERE id = ?`
-            ).bind(filename, filename, sqliteData.length, run.id).run();
-            console.log(`[CRON] SQLite uploaded to R2: ${filename}`);
-          }
-        } else {
-          console.log(`[CRON] D1 export still processing for run ${run.id}`);
-        }
-      } catch (err) {
-        console.error(`[CRON] Failed to poll D1 export for run ${run.id}:`, err);
-      }
-    }
-  } catch (err) {
-    console.error(`[CRON] Error checking pending exports:`, err);
-  }
-}
