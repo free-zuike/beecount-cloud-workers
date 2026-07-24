@@ -219,6 +219,13 @@ export function prepareRestore(
   return authedPost(`/admin/backup/runs/${runId}/prepare-restore`, token, {})
 }
 
+export function triggerRestore(
+  token: string,
+  runId: number,
+): Promise<{ ok: boolean; message: string }> {
+  return authedPost(`/admin/backup/restores/${runId}/trigger`, token, {})
+}
+
 export function listBackupRestores(
   token: string,
 ): Promise<{ items: BackupRestore[] }> {
