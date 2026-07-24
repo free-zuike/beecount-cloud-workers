@@ -386,20 +386,18 @@ export async function performBackup(
       data: new TextEncoder().encode(JSON.stringify(meta, null, 2)),
     });
 
-    // 2. 数据库导出 - D1 dump()（等同于原版 VACUUM INTO）
-    console.debug(`[Backup] Exporting db.sqlite3 via D1 dump()...`);
+    // 2. 数据库导出 - 用 TS writer 构建 SQLite 文件（dump() 仅支持 D1 alpha 数据库）
+    console.debug(`[Backup] Creating db.sqlite3 with ${Object.keys(tables).length} tables...`);
     try {
-      const dumpResult = await db.dump();
-      const stream = new Response(dumpResult);
-      const buffer = await stream.arrayBuffer();
-      const sqliteData = new Uint8Array(buffer);
+      const { createSqliteWithData } = await import('../lib/sqlite-writer');
+      const sqliteData = createSqliteWithData(tables);
       tarEntries.push({
         name: 'db.sqlite3',
         data: sqliteData,
       });
       console.debug(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
     } catch (err) {
-      console.error(`[Backup] D1 dump() failed: ${(err as Error).message}`);
+      console.error(`[Backup] SQLite writer failed: ${(err as Error).message}`);
     }
     
     // 始终包含 db.json 作为备份
