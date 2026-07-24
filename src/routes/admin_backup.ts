@@ -1894,7 +1894,7 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
   const restoreId = (restore as any).meta?.last_row_id;
   const restoreResult = {
     run_id: Number(runId),
-    phase: 'pending',
+    phase: 'downloading',
     started_at: new Date().toISOString(),
     finished_at: null,
     bytes_total: run.bytes_total || null,
@@ -1905,6 +1905,60 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
     source_remote_name: sourceRemoteName,
     backup_filename: run.backup_filename || null,
   };
+
+  // 后台执行恢复（前端期望 prepare-restore 后自动开始）
+  const strRunId = String(runId);
+  const bytesTotal = run.bytes_total || 0;
+
+  c.executionCtx.waitUntil((async () => {
+    try {
+      const { performRestore } = await import('../lib/restore-service');
+
+      let backupPath = run.backup_path || '';
+      if (!backupPath && c.env.R2) {
+        const listing = await c.env.R2.list({ prefix: `backups/${userId}/` });
+        if (listing.objects.length > 0) {
+          const latest = listing.objects.sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime())[0];
+          backupPath = latest.key;
+        }
+      }
+      if (!backupPath) throw new Error('No backup file found');
+
+      await broadcastViaDO(c.env, userId, {
+        type: 'restore_progress', runId: strRunId, phase: 'downloading',
+        bytesTransferred: 0, bytesTotal,
+      });
+
+      const result = await performRestore(db, c.env.R2, backupPath, (progress) => {
+        broadcastViaDO(c.env, userId, {
+          type: 'restore_progress', runId: strRunId, phase: progress.phase,
+          bytesTransferred: progress.bytesTransferred, bytesTotal: progress.bytesTotal,
+        }).catch(() => {});
+      });
+
+      const finishedAt = new Date().toISOString();
+      await db.prepare(
+        `UPDATE backup_restores SET status = ?, finished_at = ?, extracted_path = ?, error_message = ? WHERE id = ?`
+      ).bind(result.success ? 'done' : 'failed', finishedAt,
+            result.success ? `data/restore/${runId}/extracted` : null,
+            result.success ? null : result.message, restoreId).run();
+
+      await broadcastViaDO(c.env, userId, {
+        type: 'restore_progress', runId: strRunId, phase: result.success ? 'done' : 'failed',
+        bytesTransferred: 0, bytesTotal: 0,
+      });
+    } catch (err) {
+      console.error(`[Restore] Failed: ${(err as Error).message}`);
+      const finishedAt = new Date().toISOString();
+      await db.prepare(
+        `UPDATE backup_restores SET status = 'failed', finished_at = ?, error_message = ? WHERE id = ?`
+      ).bind(finishedAt, (err as Error).message, restoreId).run();
+      await broadcastViaDO(c.env, userId, {
+        type: 'restore_progress', runId: strRunId, phase: 'failed',
+        bytesTransferred: 0, bytesTotal: 0,
+      });
+    }
+  })());
 
   return c.json(restoreResult, 202);
 });
