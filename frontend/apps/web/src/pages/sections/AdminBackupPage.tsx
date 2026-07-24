@@ -319,13 +319,13 @@ export function AdminBackupPage() {
     try {
       const result = await prepareRestore(token, restoreRun.id)
       setRestoreStatus(result)
-      // 不自动设置 downloading — 等用户点「恢复」按钮才触发
+      setRestoreLive({ phase: 'downloading' })
     } catch (err) {
       notifyError(err)
     }
   }
 
-  const onExecuteRestore = async () => {
+  const onRestoreRun = async () => {
     if (!restoreRun) return
     try {
       await triggerRestore(token, restoreRun.id)
@@ -447,7 +447,7 @@ export function AdminBackupPage() {
         restore={restoreStatus}
         liveProgress={restoreLive}
         onTrigger={onTriggerRestore}
-        onRestore={onExecuteRestore}
+        onRestore={onRestoreRun}
         onCleanup={onCleanupRestore}
         onDownloadConfig={onDownloadConfig}
       />
