@@ -1901,13 +1901,13 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
   };
 
   // 通过 DO 推送 restore_progress 事件（同步执行，恢复模拟很快）
-  const numRunId = Number(runId);
+  const strRunId = String(runId);
   const bytesTotal = run.bytes_total || 0;
 
   // downloading 阶段
   await broadcastViaDO(c.env, userId, {
     type: 'restore_progress',
-    runId: numRunId,
+    runId: strRunId,
     phase: 'downloading',
     bytesTransferred: 0,
     bytesTotal,
@@ -1918,7 +1918,7 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
     await new Promise(r => setTimeout(r, 200));
     await broadcastViaDO(c.env, userId, {
       type: 'restore_progress',
-      runId: numRunId,
+      runId: strRunId,
       phase: 'downloading',
       bytesTransferred: Math.floor(bytesTotal * i / 5),
       bytesTotal,
@@ -1928,7 +1928,7 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
   // extracting 阶段
   await broadcastViaDO(c.env, userId, {
     type: 'restore_progress',
-    runId: numRunId,
+    runId: strRunId,
     phase: 'extracting',
     bytesTransferred: bytesTotal,
     bytesTotal,
@@ -1945,7 +1945,7 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
 
   await broadcastViaDO(c.env, userId, {
     type: 'restore_progress',
-    runId: numRunId,
+    runId: strRunId,
     phase: 'done',
     bytesTransferred: bytesTotal,
     bytesTotal,
