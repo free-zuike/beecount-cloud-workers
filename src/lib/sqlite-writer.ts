@@ -98,7 +98,7 @@ function writeLeafPage(
   pageStartOffset: number,
   isFirstPage: boolean,
   cells: { rowid: number; data: number[] }[],
-): void {
+): number {
   const btreeStart = isFirstPage ? pageStartOffset + 100 : pageStartOffset;
   const btreePageSize = isFirstPage ? PAGE_SIZE - 100 : PAGE_SIZE;
   
@@ -152,6 +152,8 @@ function writeLeafPage(
     file[po] = (relativeOffset >> 8) & 0xFF;
     file[po + 1] = relativeOffset & 0xFF;
   }
+  
+  return actualCount;
 }
 
 // ─── 文件头 ──────────────────────────────────────────
@@ -261,11 +263,34 @@ export function createSqliteWithData(
   writeLeafPage(file, 0, true, masterCells);
 
   // ── Data pages (page 2+) ──
+  // 先计算每个表需要多少页，再分配 rootpage
+  const tablePages: { tableIdx: number; pages: number }[] = [];
+  for (let t = 0; t < tableData.length; t++) {
+    const table = tableData[t];
+    if (table.rows.length === 0) { tablePages.push({ tableIdx: t, pages: 0 }); continue; }
+    
+    // 估算每页能放多少行（保守估计每行 ~300 字节，页可用 ~3900 字节）
+    const rowsPerPage = Math.max(1, Math.floor(3900 / 300));
+    const pages = Math.max(1, Math.ceil(table.rows.length / rowsPerPage));
+    tablePages.push({ tableIdx: t, pages });
+  }
+  
+  // 分配 rootpage
+  let rootPage = 2;
+  for (const tp of tablePages) {
+    if (tp.pages > 0) {
+      tableData[tp.tableIdx].columns; // touch to avoid optimization
+      tableSchemas[tp.tableIdx].rootpage = rootPage;
+      rootPage += tp.pages;
+    }
+  }
+  
+  // 写入数据页
   let pageNum = 2;
   for (let t = 0; t < tableData.length; t++) {
     const table = tableData[t];
     if (table.rows.length === 0) continue;
-
+    
     let startRow = 0;
     while (startRow < table.rows.length) {
       const cells: { rowid: number; data: number[] }[] = [];
@@ -276,10 +301,10 @@ export function createSqliteWithData(
         });
       }
       const pageStartOffset = (pageNum - 1) * PAGE_SIZE;
-      writeLeafPage(file, pageStartOffset, false, cells);
+      const written = writeLeafPage(file, pageStartOffset, false, cells);
+      startRow += written;
       pageNum++;
-      // For now, put all rows on one page. If too many, they'll be skipped.
-      break;
+      if (startRow >= table.rows.length) break;
     }
   }
 
