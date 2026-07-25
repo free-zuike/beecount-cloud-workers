@@ -180,7 +180,7 @@ authRouter.post('/register', zValidator('json', z.object({
     return c.json({ error: 'Registration disabled' }, 403);
   }
 
-  const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType } = c.req.valid('json');
+  const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType, app_version: appVersion, os_version: osVersion, device_model: deviceModel } = c.req.valid('json');
   const email = rawEmail.trim().toLowerCase();
   const resolvedDeviceId = deviceId || randomUUID();
   const jwtSecret = c.env.JWT_SECRET;
@@ -208,7 +208,7 @@ authRouter.post('/register', zValidator('json', z.object({
 
   // Create device（使用 upsert 处理跨用户冲突）
   const finalDeviceId = await upsertDevice(
-    db, userId, resolvedDeviceId, deviceName, platform, undefined, undefined, undefined, c.req.header('CF-Connecting-IP')
+    db, userId, resolvedDeviceId, deviceName, platform, appVersion, osVersion, deviceModel, c.req.header('CF-Connecting-IP')
   );
 
   const accessToken = await createAccessToken(userId, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
