@@ -60,6 +60,7 @@ export function BackupRestoreGuideDialog({
 
   const phase = liveProgress?.phase || restore?.phase
   const isRunning = phase === 'downloading' || phase === 'extracting'
+  const isPending = phase === 'pending'
   const isDone = phase === 'done'
   const isFailed = phase === 'failed'
 
@@ -197,7 +198,7 @@ rm -rf ${path}/..`
           </div>
 
           {/* 用户手动替换的指引 */}
-          {isDone ? (
+          {(isDone || isPending) ? (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <span className="font-medium">
