@@ -1429,77 +1429,57 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
   const ledgerId = ledger?.id || null;
 
-  let remoteId: string | null = null;
-  let remoteConfig: Record<string, string> = { backend_type: 'local' };
+  let remoteConfigs: Array<{ remoteId: string; config: Record<string, string> }> = [];
   let shouldEncrypt = false;
 
   if (schedule.remote_ids) {
     try {
       const remoteIds = JSON.parse(schedule.remote_ids);
-      console.log('[Backup] Parsed remote_ids:', remoteIds);
-      if (remoteIds.length > 0) {
-        remoteId = String(remoteIds[0]);
-        console.log('[Backup] Querying backup_remotes with id:', remoteId);
+      // 加载所有远端配置（与原版 fan-out 对齐）
+      for (const rid of remoteIds) {
+        const strRid = String(rid);
         const remote = await db
           .prepare('SELECT backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?')
-          .bind(remoteId)
+          .bind(strRid)
           .first<{ backend_type: string; config_summary: string; encrypted: number }>();
-        console.log('[Backup] Query result:', remote);
-        
+
         if (remote) {
-          const configStr = remote.config_summary || '{}';
-          console.log('[Backup] configStr from backup_remotes:', configStr);
-          const parsedConfig = JSON.parse(configStr);
-          console.log('[Backup] parsedConfig keys:', Object.keys(parsedConfig));
-          console.log('[Backup] parsedConfig.root_path:', parsedConfig.root_path);
-          const hasS3Config = parsedConfig.bucket && parsedConfig.access_key_id && parsedConfig.secret_access_key;
-          const isR2Type = remote.backend_type === 'r2';
-          const isS3Type = remote.backend_type === 's3';
-          if ((isS3Type && hasS3Config) || isR2Type) {
-            console.log('[Backup] Found remote config:', remote.backend_type);
-            const defaultRootPath = 'beecount';
-            const rootPath = (parsedConfig.root_path || '').replace(/^\/+|\/+$/g, '') || defaultRootPath;
-            remoteConfig = {
-              backend_type: remote.backend_type,
-              ...parsedConfig,
-              path_style: parsedConfig.path_style !== undefined ? parsedConfig.path_style : 'true',
-              savePath: rootPath
-            };
-            console.log('[Backup] Full remoteConfig:', JSON.stringify(remoteConfig));
-            shouldEncrypt = remote.encrypted === 1;
-          } else {
-            console.log('[Backup] backup_remotes config is empty, trying sys_config');
+          const parsedConfig = JSON.parse(remote.config_summary || '{}');
+          // 补充 R2 Bucket 绑定
+          if (remote.backend_type === 'r2' && c.env.R2) {
+            parsedConfig._r2Bucket = c.env.R2;
           }
+          remoteConfigs.push({ remoteId: strRid, config: { backend_type: remote.backend_type, ...parsedConfig } });
+          if (remote.encrypted === 1) shouldEncrypt = true;
         }
       }
     } catch (err) {
-      console.log('[Backup] Failed to parse remote_ids, trying sys_config. Error:', err);
+      console.log('[Backup] Failed to parse remote_ids:', err);
     }
   }
 
-  if (remoteConfig.backend_type === 'local' || !remoteConfig.bucket) {
-    console.log('[Backup] Trying to get S3 config from sys_config');
+  // 兜底：无远端配置时尝试 sys_config S3
+  if (remoteConfigs.length === 0) {
     try {
       const sysConfig = await getFirstEnabledS3Config(db, c.env);
       if (sysConfig && sysConfig.bucketName) {
-        console.log('[Backup] Found S3 config in sys_config:', sysConfig.name);
-        remoteConfig = {
-          backend_type: 's3',
-          endpoint: sysConfig.endpoint || 'https://s3.amazonaws.com',
-          bucket: sysConfig.bucketName,
-          access_key_id: sysConfig.accessKeyId,
-          secret_access_key: sysConfig.secretAccessKey,
-          region: sysConfig.region || 'auto',
-          savePath: sysConfig.savePath,
-        };
-        console.log('[Backup] Using sys_config S3 config, endpoint:', remoteConfig.endpoint, 'savePath:', remoteConfig.savePath);
-      } else {
-        console.log('[Backup] No S3 config found in sys_config either');
+        remoteConfigs.push({
+          remoteId: 'sys_config',
+          config: {
+            backend_type: 's3',
+            endpoint: sysConfig.endpoint || 'https://s3.amazonaws.com',
+            bucket: sysConfig.bucketName,
+            access_key_id: sysConfig.accessKeyId,
+            secret_access_key: sysConfig.secretAccessKey,
+            region: sysConfig.region || 'auto',
+            savePath: sysConfig.savePath,
+          }
+        });
       }
-    } catch (err) {
-      console.log('[Backup] Failed to get sys_config S3 config:', err);
-    }
+    } catch {}
   }
+
+  const remoteId = remoteConfigs[0]?.remoteId || null;
 
   const runInsertResult = await db
     .prepare(
@@ -1535,7 +1515,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
       logFn(`backup start, run=${runId} label=${serverNow.replace(/[:.]/g, '').slice(0, 15)} remotes=['${remoteId || 'local'}']`);
 
-      const backupResult = await performBackup(db, runId, schedule.user_id, ledgerId || 'global', remoteConfig, shouldEncrypt, c.env.R2, logFn);
+      const backupResult = await performBackupFanOut(db, runId, schedule.user_id, ledgerId || 'global', remoteConfigs, shouldEncrypt, c.env.R2, logFn);
       const finishedAt = new Date().toISOString();
       const finalStatus = backupResult.success ? 'succeeded' : 'failed';
 
@@ -1549,13 +1529,13 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
             backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
             backupResult.success ? null : backupResult.message, logText, runId).run();
 
-      // 创建 backup_run_targets 记录
-      if (remoteId) {
+      // 为每个远端创建 backup_run_targets 记录（与原版 fan-out 对齐）
+      for (const rc of remoteConfigs) {
         try {
           await db.prepare(
             `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, bytes_transferred, error_message)
              VALUES (?, ?, ?, ?, ?, ?, ?)`
-          ).bind(runId, remoteId, finalStatus, serverNow, finishedAt,
+          ).bind(runId, rc.remoteId, finalStatus, serverNow, finishedAt,
                 backupResult.backupSize || null, backupResult.success ? null : backupResult.message).run();
         } catch (e) {
           console.error('[Backup] Failed to insert backup_run_targets:', (e as Error).message);
@@ -1580,13 +1560,13 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
         `UPDATE backup_runs SET status = 'failed', finished_at = ?, error_message = ?, log_text = ? WHERE id = ?`
       ).bind(finishedAt, (err as Error).message, logText, runId).run();
 
-      // 创建 backup_run_targets 记录
-      if (remoteId) {
+      // 为每个远端创建 backup_run_targets 记录（错误路径）
+      for (const rc of remoteConfigs) {
         try {
           await db.prepare(
             `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, error_message)
              VALUES (?, ?, 'failed', ?, ?, ?)`
-          ).bind(runId, remoteId, serverNow, finishedAt, (err as Error).message).run();
+          ).bind(runId, rc.remoteId, serverNow, finishedAt, (err as Error).message).run();
         } catch {}
       }
       await broadcastViaDO(c.env, schedule.user_id, {
@@ -1703,6 +1683,7 @@ backupRouter.get('/runs', async (c) => {
  */
 backupRouter.post('/run-now', zValidator('json', RunNowSchema), async (c) => {
   const db = c.env.DB;
+  const userId = c.get('userId');
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
@@ -1715,38 +1696,91 @@ backupRouter.post('/run-now', zValidator('json', RunNowSchema), async (c) => {
     return c.json({ error: 'Ledger not found' }, 404);
   }
 
-  const runInsertResult2 = await db
+  // 加载远端配置（支持指定 remote_id 或所有已配置远端）
+  const remoteConfigs: Array<{ remoteId: string; config: Record<string, string> }> = [];
+  if (req.remote_id) {
+    const remote = await db
+      .prepare('SELECT backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?')
+      .bind(req.remote_id)
+      .first<{ backend_type: string; config_summary: string; encrypted: number }>();
+    if (remote) {
+      const parsedConfig = JSON.parse(remote.config_summary || '{}');
+      if (remote.backend_type === 'r2' && c.env.R2) parsedConfig._r2Bucket = c.env.R2;
+      remoteConfigs.push({ remoteId: req.remote_id, config: { backend_type: remote.backend_type, ...parsedConfig } });
+    }
+  } else {
+    // 无指定远端时加载所有远端
+    const allRemotes = await db
+      .prepare('SELECT id, backend_type, config_summary, encrypted FROM backup_remotes')
+      .all<{ id: string; backend_type: string; config_summary: string; encrypted: number }>();
+    for (const remote of allRemotes.results || []) {
+      const parsedConfig = JSON.parse(remote.config_summary || '{}');
+      if (remote.backend_type === 'r2' && c.env.R2) parsedConfig._r2Bucket = c.env.R2;
+      remoteConfigs.push({ remoteId: remote.id, config: { backend_type: remote.backend_type, ...parsedConfig } });
+    }
+  }
+
+  const shouldEncrypt = remoteConfigs.some(rc => (rc.config as any).encrypted === 1);
+  const remoteId = remoteConfigs[0]?.remoteId || null;
+
+  const runInsertResult = await db
     .prepare(
-      `INSERT INTO backup_runs
-       (schedule_id, ledger_id, remote_id, status, started_at)
-       VALUES (NULL, ?, ?, 'running', ?)`
+      `INSERT INTO backup_runs (user_id, ledger_id, remote_id, status, started_at)
+       VALUES (?, ?, ?, 'running', ?)`
     )
-    .bind(ledger.id, req.remote_id ?? null, serverNow)
+    .bind(userId, ledger.id, remoteId, serverNow)
     .run();
 
-  const runId = runInsertResult2.meta.last_row_id as number;
+  const runId = runInsertResult.meta.last_row_id as number;
 
-  // WebSocket 广播备份开始状态
-  try {
-    const { getWsManager } = await import('../lib/ws-manager');
-    await getWsManager().broadcastToUser(userId, {
-      type: 'backup_status',
-      status: 'running',
-      runId: runId,
-      started_at: serverNow,
-    });
-  } catch (e) {
-    // WebSocket broadcast is non-critical
-  }
+  // 后台执行备份
+  c.executionCtx.waitUntil((async () => {
+    const logLines: string[] = [];
+    const logFn = (msg: string) => { logLines.push(`[${new Date().toISOString()}] ${msg}`); };
+    try {
+      const backupResult = await performBackupFanOut(db, runId, userId, ledger.id, remoteConfigs, shouldEncrypt, c.env.R2, logFn);
+      const finishedAt = new Date().toISOString();
+      const finalStatus = backupResult.success ? 'succeeded' : 'failed';
+
+      await db.prepare(
+        `UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?, log_text = ? WHERE id = ?`
+      ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
+            backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
+            backupResult.success ? null : backupResult.message, logLines.join('\n'), runId).run();
+
+      for (const rc of remoteConfigs) {
+        try {
+          await db.prepare(
+            `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, bytes_transferred, error_message)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          ).bind(runId, rc.remoteId, finalStatus, serverNow, finishedAt,
+                backupResult.backupSize || null, backupResult.success ? null : backupResult.message).run();
+        } catch {}
+      }
+
+      await broadcastViaDO(c.env, userId, { type: 'backup_status', status: finalStatus, runId });
+    } catch (err) {
+      const finishedAt = new Date().toISOString();
+      await db.prepare(`UPDATE backup_runs SET status = 'failed', finished_at = ?, error_message = ?, log_text = ? WHERE id = ?`)
+        .bind(finishedAt, (err as Error).message, logLines.join('\n'), runId).run();
+      for (const rc of remoteConfigs) {
+        try {
+          await db.prepare(`INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, error_message) VALUES (?, ?, 'failed', ?, ?, ?)`)
+            .bind(runId, rc.remoteId, serverNow, finishedAt, (err as Error).message).run();
+        } catch {}
+      }
+      await broadcastViaDO(c.env, userId, { type: 'backup_status', status: 'failed', runId });
+    }
+  })());
 
   return c.json({
     id: runId,
     ledger_id: req.ledger_id,
-    remote_id: req.remote_id,
+    remote_id: remoteId,
     status: 'running',
     started_at: serverNow,
     message: 'Backup started.',
-  }, 200);
+  }, 202);
 });
 
 /**
