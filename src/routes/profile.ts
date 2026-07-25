@@ -90,11 +90,19 @@ profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => 
   const updated = await db.prepare('SELECT * FROM user_profiles WHERE user_id = ?').bind(userId).first() as any;
   const user = await db.prepare('SELECT email FROM users WHERE id = ?').bind(userId).first<{ email: string }>();
 
-  // 广播 profile_change 给其他端实时同步
+  // 广播 profile_change 给其他端实时同步（与原版对齐：发送完整 payload）
   if (updates.length > 0) {
+    const profilePayload = {
+      avatar_version: updated?.avatar_version ?? 0,
+      display_name: updated?.display_name ?? null,
+      income_is_red: updated?.income_is_red ?? null,
+      theme_primary_color: updated?.theme_primary_color ?? null,
+      appearance: (() => { try { return updated?.appearance_json ? JSON.parse(updated.appearance_json) : null; } catch { return null; } })(),
+      primary_currency: updated?.primary_currency ?? null,
+    };
     try {
       const { getWsManager } = await import('../lib/ws-manager');
-      await getWsManager().broadcastToUser(userId, { type: 'profile_change' });
+      await getWsManager().broadcastToUser(userId, { type: 'profile_change', ...profilePayload });
     } catch {}
     try {
       const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
@@ -102,7 +110,7 @@ profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => 
       await doStub.fetch(new Request('https://dummy/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: JSON.stringify({ type: 'profile_change' }) }),
+        body: JSON.stringify({ message: JSON.stringify({ type: 'profile_change', ...profilePayload }) }),
       }));
     } catch {}
   }
@@ -187,10 +195,17 @@ profileRouter.post('/avatar', async (c) => {
     const profile = await db.prepare('SELECT avatar_version FROM user_profiles WHERE user_id = ?').bind(userId).first<{ avatar_version: number }>();
     const ver = profile?.avatar_version ?? 1;
 
-    // 广播 profile_change 给其他端实时同步
+    // 广播 profile_change 给其他端实时同步（与原版对齐：发送完整 payload）
+    const profileData = await db.prepare('SELECT display_name, income_is_red, theme_primary_color, appearance_json FROM user_profiles WHERE user_id = ?').bind(userId).first<{ display_name: string | null; income_is_red: boolean | null; theme_primary_color: string | null; appearance_json: string | null }>();
+    const avatarPayload = {
+      avatar_version: ver,
+      display_name: profileData?.display_name ?? null,
+      income_is_red: profileData?.income_is_red ?? null,
+      theme_primary_color: profileData?.theme_primary_color ?? null,
+    };
     try {
       const { getWsManager } = await import('../lib/ws-manager');
-      await getWsManager().broadcastToUser(userId, { type: 'profile_change' });
+      await getWsManager().broadcastToUser(userId, { type: 'profile_change', ...avatarPayload });
     } catch {}
     try {
       const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
@@ -198,7 +213,7 @@ profileRouter.post('/avatar', async (c) => {
       await doStub.fetch(new Request('https://dummy/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: JSON.stringify({ type: 'profile_change' }) }),
+        body: JSON.stringify({ message: JSON.stringify({ type: 'profile_change', ...avatarPayload }) }),
       }));
     } catch {}
 

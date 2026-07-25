@@ -564,10 +564,6 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
               .bind(ledgerRowId || '', change.entity_sync_id).first<{ created_by_user_id: string | null }>();
             p.createdByUserId = existing?.created_by_user_id || userId;
           }
-          // 规范化 tags 字段：Flutter 客户端期望 tags 是 String?，push 时可能传了数组
-          if (Array.isArray(p.tags)) {
-            p.tags = (p.tags as string[]).join(',');
-          }
           payloadForStorage = p;
         }
 
@@ -1035,9 +1031,11 @@ syncRouter.get('/pull', async (c) => {
       params.push(ledgerId);
     }
 
-    // 注意：不再用 updated_by_device_id 过滤设备自身变更
-    // 在无 WebSocket 推送的环境下，设备需要能看到自己推送的变更
-    // 重复处理由客户端游标 (since) 防止
+    // 与原版对齐：过滤设备自身变更（依赖 WS 推送获取实时更新）
+    if (deviceId) {
+      query += ' AND (c.updated_by_device_id IS NULL OR c.updated_by_device_id != ?)';
+      params.push(deviceId);
+    }
     
     query += ' ORDER BY c.change_id ASC LIMIT ?';
     params.push(limit + 1);
