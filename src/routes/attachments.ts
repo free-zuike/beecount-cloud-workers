@@ -316,10 +316,18 @@ const handleUpload = async (c: any) => {
             return c.json({ error: 'ledger_id is required' }, 400);
         }
 
-        const ledger = await db
+        let ledger = await db
             .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
             .bind(userId, ledgerExternalId)
             .first() as { id: string; external_id: string } | null;
+
+        // 尝试共享账本 — 与原版 _resolve_ledger 对齐
+        if (!ledger) {
+            ledger = await db
+                .prepare('SELECT l.id, l.external_id FROM ledgers l JOIN ledger_members lm ON l.id = lm.ledger_id WHERE lm.user_id = ? AND l.external_id = ?')
+                .bind(userId, ledgerExternalId)
+                .first() as { id: string; external_id: string } | null;
+        }
 
         if (!ledger) {
             return c.json({ error: 'Ledger not found' }, 404);
@@ -455,10 +463,18 @@ attachmentsRouter.post('/batch-exists', async (c) => {
             return c.json({ error: 'Invalid request' }, 400);
         }
 
-        const ledger = await db
+        let ledger = await db
             .prepare('SELECT id FROM ledgers WHERE user_id = ? AND external_id = ?')
             .bind(userId, ledgerExternalId)
             .first<{ id: string }>();
+
+        // 支持共享账本
+        if (!ledger) {
+            ledger = await db
+                .prepare('SELECT l.id FROM ledgers l JOIN ledger_members lm ON l.id = lm.ledger_id WHERE lm.user_id = ? AND l.external_id = ?')
+                .bind(userId, ledgerExternalId)
+                .first<{ id: string }>();
+        }
 
         if (!ledger) {
             return c.json({ exists: [] });
