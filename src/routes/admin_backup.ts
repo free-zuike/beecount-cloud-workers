@@ -2405,12 +2405,65 @@ backupRouter.post('/restore-from-r2', async (c) => {
 });
 
 /**
- * DELETE /restore-from-r2/phantom-devices - 清理恢复过程中误创建的 phantom 设备
+ * POST /restore-from-r2/fix-user-data - 将旧用户的数据迁移到当前用户
  */
-backupRouter.delete('/phantom-devices', async (c) => {
+backupRouter.post('/restore-from-r2/fix-user-data', async (c) => {
   const db = c.env.DB;
-  const result = await db.prepare(`DELETE FROM devices WHERE name = 'restored-device'`).run();
-  return c.json({ deleted: result.meta?.changes || 0 });
+  const currentUserId = c.get('userId');
+
+  // 找到旧用户（有数据但不是当前用户的）
+  const otherUsers = await db.prepare(
+    `SELECT DISTINCT user_id FROM ledgers WHERE user_id != ?`
+  ).bind(currentUserId).all<{ user_id: string }>();
+
+  if (!otherUsers.results || otherUsers.results.length === 0) {
+    return c.json({ message: 'No other user data found', migrated: false });
+  }
+
+  const oldUserId = otherUsers.results[0].user_id;
+  const changes: Record<string, number> = {};
+
+  // 1. 迁移 ledgers
+  let r = await db.prepare(`UPDATE ledgers SET user_id = ? WHERE user_id = ?`).bind(currentUserId, oldUserId).run();
+  changes['ledgers'] = r.meta?.changes || 0;
+
+  // 2. 迁移 ledger_members（删除旧用户的 owner 记录，当前用户成为 owner）
+  r = await db.prepare(`UPDATE ledger_members SET user_id = ? WHERE user_id = ?`).bind(currentUserId, oldUserId).run();
+  changes['ledger_members'] = r.meta?.changes || 0;
+
+  // 3. 迁移投影表
+  for (const table of ['read_tx_projection', 'read_account_projection', 'read_category_projection', 'read_tag_projection', 'read_budget_projection']) {
+    try {
+      r = await db.prepare(`UPDATE "${table}" SET user_id = ? WHERE user_id = ?`).bind(currentUserId, oldUserId).run();
+      changes[table] = r.meta?.changes || 0;
+    } catch {}
+  }
+
+  // 4. 迁移 sync 表
+  for (const table of ['sync_changes', 'sync_cursors', 'sync_push_idempotency']) {
+    try {
+      r = await db.prepare(`UPDATE "${table}" SET user_id = ? WHERE user_id = ?`).bind(currentUserId, oldUserId).run();
+      changes[table] = r.meta?.changes || 0;
+    } catch {}
+  }
+
+  // 5. 迁移备份相关
+  for (const table of ['backup_remotes', 'backup_schedules', 'backup_runs', 'backup_run_targets', 'backup_restores']) {
+    try {
+      r = await db.prepare(`UPDATE "${table}" SET user_id = ? WHERE user_id = ?`).bind(currentUserId, oldUserId).run();
+      changes[table] = r.meta?.changes || 0;
+    } catch {}
+  }
+
+  // 6. 迁移其他
+  for (const table of ['personal_access_tokens', 'audit_logs', 'exchange_rate_overrides']) {
+    try {
+      r = await db.prepare(`UPDATE "${table}" SET user_id = ? WHERE user_id = ?`).bind(currentUserId, oldUserId).run();
+      changes[table] = r.meta?.changes || 0;
+    } catch {}
+  }
+
+  return c.json({ message: `Migrated data from ${oldUserId} to ${currentUserId}`, changes });
 });
 
 // ---------------------------------------------------------------------------

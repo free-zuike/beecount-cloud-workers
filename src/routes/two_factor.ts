@@ -336,7 +336,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   const authHeader = c.req.header('Authorization');
   const challenge_token = body.challenge_token
     || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined);
-  const { code, method, device_id, device_name, platform, client_type: clientType } = body;
+  const { code, method, device_id, device_name, platform, client_type: clientType, app_version, os_version, device_model } = body;
   const serverNow = nowUtc();
 
   if (!challenge_token) {
@@ -414,7 +414,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   // 使用与 login 相同的 upsertDevice 逻辑，避免重复创建设备记录
   const resolvedDeviceId = await upsertDevice(
     db, user.id, device_id || randomUUID(), device_name || 'Unknown Device', platform || 'unknown',
-    undefined, undefined, undefined, c.req.header('CF-Connecting-IP')
+    app_version, os_version, device_model, c.req.header('CF-Connecting-IP')
   );
 
   // 创建 DB-backed refresh token
