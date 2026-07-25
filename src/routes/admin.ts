@@ -305,7 +305,7 @@ adminRouter.post('/users', zValidator('json', AdminUserCreateSchema), async (c) 
       `INSERT INTO users (id, email, password_hash, is_admin, is_enabled, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`
     )
-    .bind(userId, req.email.toLowerCase(), passwordHash, req.is_admin ? 1 : 0, req.is_enabled ? 1 : 0, serverNow)
+    .bind(userId, req.email.toLowerCase(), passwordHash, 0, req.is_enabled ? 1 : 0, serverNow)
     .run();
 
   // 创建用户 profile
@@ -320,7 +320,7 @@ adminRouter.post('/users', zValidator('json', AdminUserCreateSchema), async (c) 
   return c.json({
     id: userId,
     email: req.email.toLowerCase(),
-    is_admin: req.is_admin,
+    is_admin: false,
     is_enabled: req.is_enabled,
     created_at: serverNow,
     display_name: null,
@@ -352,6 +352,14 @@ adminRouter.patch('/users/:id', zValidator('json', AdminUserPatchSchema), async 
 
   if (!user) {
     return c.json({ error: 'User not found' }, 404);
+  }
+
+  // 阻止禁用管理员用户（与原版对齐）
+  if (req.is_enabled === false) {
+    const targetUser = await db.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first<{ is_admin: number }>();
+    if (targetUser?.is_admin) {
+      return c.json({ error: 'Cannot disable an admin user' }, 400);
+    }
   }
 
   if (req.email) {
@@ -441,44 +449,31 @@ adminRouter.delete('/users/:id', async (c) => {
     return c.json({ error: 'User not found' }, 404);
   }
 
-  // 清理 R2 存储文件（avatars + category-icons + attachments）
-  if (c.env.R2) {
-    try {
-      // 1. 清理头像
-      const profile = await db.prepare('SELECT avatar_file_id FROM user_profiles WHERE user_id = ?')
-        .bind(userId).first<{ avatar_file_id: string | null }>();
-      if (profile?.avatar_file_id) {
-        try { await c.env.R2.delete(`avatars/${userId}/${profile.avatar_file_id}`); } catch {}
-      }
-
-      // 2. 清理分类图标
-      const iconFiles = await db.prepare(
-        "SELECT storage_path FROM attachment_files WHERE user_id = ? AND attachment_kind = 'category_icon'"
-      ).bind(userId).all<{ storage_path: string }>();
-      for (const f of iconFiles.results) {
-        try { await c.env.R2.delete(f.storage_path); } catch {}
-      }
-
-      // 3. 清理附件文件
-      const attFiles = await db.prepare(
-        "SELECT storage_path FROM attachment_files WHERE user_id = ? AND attachment_kind = 'transaction'"
-      ).bind(userId).all<{ storage_path: string }>();
-      for (const f of attFiles.results) {
-        try { await c.env.R2.delete(f.storage_path); } catch {}
-      }
-    } catch (e) {
-      console.log('[ADMIN] R2 cleanup failed (non-fatal):', e);
-    }
+  // 阻止删除管理员用户（与原版对齐）
+  const targetUser = await db.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first<{ is_admin: number }>();
+  if (targetUser?.is_admin) {
+    return c.json({ error: 'Cannot delete an admin user' }, 400);
   }
 
-  // 撤销该用户的所有 refresh tokens（防止已删除用户的 token 仍可使用）
+  const now = nowUtc();
+
+  // 软删除（与原版对齐：禁用而非物理删除）
   await db
-    .prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL')
-    .bind(nowUtc(), userId)
+    .prepare('UPDATE users SET is_enabled = 0, is_admin = 0 WHERE id = ?')
+    .bind(userId)
     .run();
 
-  // 物理删除（CASCADE 会删除关联数据）
-  await db.prepare('DELETE FROM users WHERE id = ?').bind(userId).run();
+  // 撤销该用户的所有 refresh tokens
+  await db
+    .prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL')
+    .bind(now, userId)
+    .run();
+
+  // 撤销该用户的所有设备
+  await db
+    .prepare('UPDATE devices SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL')
+    .bind(now, userId)
+    .run();
 
   return c.json({ id: userId, email: null, is_admin: false, is_enabled: false, created_at: null });
 });

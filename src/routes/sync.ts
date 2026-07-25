@@ -96,7 +96,7 @@ async function resolveTagsCsv(db: D1Database, tags: string | null, tagIds: strin
   return resolved.length > 0 ? resolved.join(',') : null;
 }
 
-const USER_GLOBAL_TYPES = ['category', 'account', 'tag'];
+const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override'];
 
 function isUserGlobalType(entityType: string): boolean {
   return USER_GLOBAL_TYPES.includes(entityType);
@@ -399,7 +399,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     console.log('[SYNC] existingChangeMap size:', existingChangeMap.size);
 
     // 补充查询 user-global 变更（category/account/tag 不依附 ledger）
-    const USER_GLOBAL_TYPES = ['category', 'account', 'tag'];
+    const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override'];
     const userGlobalEntries = changes
       .filter(c => USER_GLOBAL_TYPES.includes(c.entity_type) && !c.ledger_id)
       .map(c => ({ entity_type: c.entity_type, entity_sync_id: c.entity_sync_id }));
@@ -471,7 +471,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
       for (const change of batchChanges) {
         // user-global 实体：category/account/tag 可以不依附 ledger
-        const USER_GLOBAL_TYPES = ['category', 'account', 'tag'];
+        const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override'];
         const isUserGlobal = USER_GLOBAL_TYPES.includes(change.entity_type) && !change.ledger_id;
 
         const changeUpdatedAt = toUtcDate(change.updated_at);
@@ -573,9 +573,10 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
         const ledgerRowRef = isUserGlobal ? null : { id: ledgerRowId as string, external_id: '' };
 
-        // 添加到批量插入
+        // 添加到批量插入 — ledger-scoped 使用 ledger owner 的 user_id（与原版对齐）
+        const changeUserId = isUserGlobal ? userId : (ledgerMap[change.ledger_id as string]?.user_id ?? userId);
         const bindParams = [
-            userId,
+            changeUserId,
             isUserGlobal ? null : (ledgerRowId ?? null),
             change.entity_type ?? '',
             change.entity_sync_id ?? '',
@@ -1009,18 +1010,25 @@ syncRouter.get('/pull', async (c) => {
         .bind(new Date().toISOString(), deviceId, userId).run();
     }
 
+    // 获取用户可访问的所有账本 ID（自有 + 共享成员）— 与原版 list_accessible_ledgers 对齐
+    const accessibleLedgerRows = await db.prepare(
+      `SELECT l.id FROM ledgers l WHERE l.user_id = ?
+       UNION
+       SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?`
+    ).bind(userId, userId).all<{ id: string }>();
+    const accessibleLedgerIds = accessibleLedgerRows.results.map(r => r.id);
+
     let query = `
       SELECT c.change_id, c.entity_type, c.entity_sync_id, c.action, c.payload_json, c.updated_at, c.updated_by_device_id, c.scope, l.external_id as ledger_id
       FROM sync_changes c
       LEFT JOIN ledgers l ON c.ledger_id = l.id
-      WHERE c.user_id = ?
-        AND (
-          (c.scope = 'user' AND c.change_id > ?)
-          OR (c.scope = 'ledger' AND c.change_id > ?)
-        )
+      WHERE (
+        (c.scope = 'user' AND c.user_id = ? AND c.change_id > ?)
+        OR (c.scope = 'ledger' AND c.ledger_id IN (${accessibleLedgerIds.map(() => '?').join(',')}) AND c.change_id > ?)
+      )
     `;
-    
-    const params: (string | number)[] = [userId, since, since];
+
+    const params: (string | number)[] = [userId, since, ...accessibleLedgerIds, since];
     
     if (ledgerId) {
       query += ' AND (l.external_id = ? OR c.scope = \'user\')';
@@ -1075,7 +1083,7 @@ syncRouter.get('/pull', async (c) => {
     if (deviceId && limitedResults.length > 0) {
       const perLedgerCursor: Record<string, number> = {};
       for (const r of limitedResults) {
-        const lid = r.ledger_id ?? '__global__';
+        const lid = r.ledger_id ?? '__user_global__';
         perLedgerCursor[lid] = Math.max(perLedgerCursor[lid] ?? 0, r.change_id);
       }
       const now = new Date().toISOString();
