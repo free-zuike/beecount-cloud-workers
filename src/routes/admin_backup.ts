@@ -2151,12 +2151,21 @@ backupRouter.delete('/restores/:id', async (c) => {
   const userId = c.get('userId');
   const id = c.req.param('id');
 
-  await db
-    .prepare('DELETE FROM backup_restores WHERE id = ? AND user_id = ?')
+  // 兼容：前端传入的是 backup run ID，不是 restore record ID
+  let result = await db
+    .prepare('DELETE FROM backup_restores WHERE run_id = ? AND user_id = ?')
     .bind(id, userId)
     .run();
 
-  return c.json({ success: true });
+  if (result.meta.changes === 0) {
+    // 回退：按 restore record ID 删除
+    result = await db
+      .prepare('DELETE FROM backup_restores WHERE id = ? AND user_id = ?')
+      .bind(id, userId)
+      .run();
+  }
+
+  return c.json({ success: true, deleted: result.meta.changes });
 });
 
 // ---------------------------------------------------------------------------
