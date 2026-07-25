@@ -1445,7 +1445,7 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
         .prepare(`SELECT COALESCE(SUM(COALESCE(native_amount, amount)), 0) as total FROM read_tx_projection
                    WHERE ledger_id = ? AND category_sync_id = ? AND tx_type = 'expense'
                    AND happened_at >= ? AND happened_at < ?
-                   AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`)
+                   AND (exclude_from_budget IS NULL OR exclude_from_budget = 0 OR exclude_from_budget = false)`)
         .bind(ledger.id, b.category_sync_id, `${currentMonth}-01`, `${nextMonth}-01`)
         .first<{ total: number }>();
       spent = row?.total ?? 0;
@@ -1454,7 +1454,7 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
         .prepare(`SELECT COALESCE(SUM(COALESCE(native_amount, amount)), 0) as total FROM read_tx_projection
                    WHERE ledger_id = ? AND tx_type = 'expense'
                    AND happened_at >= ? AND happened_at < ?
-                   AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`)
+                   AND (exclude_from_budget IS NULL OR exclude_from_budget = 0 OR exclude_from_budget = false)`)
         .bind(ledger.id, `${currentMonth}-01`, `${nextMonth}-01`)
         .first<{ total: number }>();
       spent = row?.total ?? 0;
