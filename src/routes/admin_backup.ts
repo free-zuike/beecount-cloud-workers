@@ -1553,6 +1553,28 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
       await broadcastViaDO(c.env, schedule.user_id, {
         type: 'backup_status', scheduleId: schedule.id, status: finalStatus, runId,
       });
+
+      // 备份保留策略清理（与原版 retention_days 对齐）
+      if (schedule.retention_days && schedule.retention_days > 0) {
+        try {
+          const cutoffDate = new Date(Date.now() - schedule.retention_days * 24 * 3600000).toISOString();
+          const oldRuns = await db.prepare(
+            `SELECT id, backup_path FROM backup_runs WHERE schedule_id = ? AND status IN ('succeeded','partial') AND finished_at < ? ORDER BY finished_at ASC`
+          ).bind(schedule.id, cutoffDate).all<{ id: number; backup_path: string | null }>();
+          if (oldRuns.results && oldRuns.results.length > 0) {
+            for (const oldRun of oldRuns.results) {
+              if (oldRun.backup_path && c.env.R2) {
+                try { await c.env.R2.delete(oldRun.backup_path); } catch {}
+              }
+              await db.prepare('DELETE FROM backup_run_targets WHERE run_id = ?').bind(oldRun.id).run();
+              await db.prepare('DELETE FROM backup_runs WHERE id = ?').bind(oldRun.id).run();
+            }
+            console.log(`[Backup] Retention: cleaned ${oldRuns.results.length} old runs (>${schedule.retention_days} days)`);
+          }
+        } catch (e) {
+          console.error('[Backup] Retention cleanup failed (non-fatal):', e);
+        }
+      }
     } catch (err) {
       const finishedAt = new Date().toISOString();
       const logText = `[${new Date().toISOString()}] backup failed: ${(err as Error).message}`;
