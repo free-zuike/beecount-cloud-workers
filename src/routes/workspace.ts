@@ -819,6 +819,13 @@ workspaceRouter.get('/ledger-counts', async (c) => {
   const txCount = txCountRow?.cnt ?? 0;
   const firstAt = txCountRow?.first_at ?? null;
 
+  // 计算实际的 distinct_days（与原版对齐）
+  const distinctDaysRows = await db
+    .prepare(`SELECT DISTINCT substr(happened_at, 1, 10) as day FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})`)
+    .bind(...ledgerInternalIds)
+    .all<{ day: string }>();
+  const distinctDays = distinctDaysRows.results.length;
+
   let daysSinceFirstTx = 0;
   if (firstAt) {
     const firstDate = new Date(firstAt);
@@ -829,7 +836,7 @@ workspaceRouter.get('/ledger-counts', async (c) => {
   return c.json({
     tx_count: txCount,
     days_since_first_tx: daysSinceFirstTx,
-    distinct_days: txCount,
+    distinct_days: distinctDays,
     first_tx_at: firstAt,
   });
 });
@@ -918,7 +925,8 @@ workspaceRouter.get('/analytics', async (c) => {
     let bucket: string;
 
     if (scope === 'month') {
-      bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}`;
+      // 月度分析用日粒度（YYYY-MM-DD），与原版对齐
+      bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}-${String(localDate.getUTCDate()).padStart(2, '0')}`;
     } else if (scope === 'year') {
       bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}`;
     } else {
