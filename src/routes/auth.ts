@@ -272,10 +272,15 @@ authRouter.post('/login', zValidator('json', z.object({
 
   if (user.totp_enabled) {
     const challengeToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', ['challenge:2fa'], 300, 'totp_challenge');
+    // 2FA 前先 upsert 设备，确保 challenge_token 关联正确的 device_id
+    const resolvedDeviceId = await upsertDevice(
+      db, user.id, deviceId || randomUUID(), deviceName, platform, appVersion, osVersion, deviceModel, c.req.header('CF-Connecting-IP')
+    );
     return c.json({
       requires_2fa: true,
       challenge_token: challengeToken,
       available_methods: ['totp', 'recovery_code'],
+      device_id: resolvedDeviceId,
     });
   }
 

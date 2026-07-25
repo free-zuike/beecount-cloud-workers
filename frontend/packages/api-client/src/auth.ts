@@ -9,10 +9,11 @@ const USER_ID_KEY = `beecount.user_id.${API_BASE}`
 /** 持久化登录会话。2FA challenge 阶段不持久化(payload.requires_2fa=true)。 */
 export function persistSession(payload: LoginResponse): void {
   if (typeof window === 'undefined') return
-  if (payload.requires_2fa) return
+  // 即使 requires_2fa 也要保存 device_id，确保 2FA 验证时能复用
   if (payload.device_id) {
     window.localStorage.setItem(DEVICE_ID_KEY, payload.device_id)
   }
+  if (payload.requires_2fa) return
   if (payload.refresh_token) {
     window.localStorage.setItem(REFRESH_TOKEN_KEY, payload.refresh_token)
   }
