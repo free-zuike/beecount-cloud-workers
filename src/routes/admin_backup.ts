@@ -1906,13 +1906,12 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
     backup_filename: run.backup_filename || null,
   };
 
-  // 后台执行恢复（与原版一致：prepare-restore 自动开始恢复）
+  // 后台下载备份到 R2（等同于原版下载到本地目录）
   const strRunId = String(runId);
 
   c.executionCtx.waitUntil((async () => {
     try {
-      const { performRestore } = await import('../lib/restore-service');
-
+      // 下载备份文件
       let backupPath = run.backup_path || '';
       if (!backupPath && c.env.R2) {
         const listing = await c.env.R2.list({ prefix: `backups/${userId}/` });
@@ -1928,26 +1927,18 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
         bytesTransferred: 0, bytesTotal: run.bytes_total || 0,
       });
 
-      const result = await performRestore(db, c.env.R2, backupPath, (progress) => {
-        broadcastViaDO(c.env, userId, {
-          type: 'restore_progress', runId: strRunId, phase: progress.phase,
-          bytesTransferred: progress.bytesTransferred, bytesTotal: progress.bytesTotal,
-        }).catch(() => {});
-      });
-
+      // 下载完成 → 标记为 done（等用户点击恢复数据再导入）
       const finishedAt = new Date().toISOString();
       await db.prepare(
-        `UPDATE backup_restores SET status = ?, finished_at = ?, extracted_path = ?, error_message = ? WHERE id = ?`
-      ).bind(result.success ? 'done' : 'failed', finishedAt,
-            result.success ? `data/restore/${runId}/extracted` : null,
-            result.success ? null : result.message, restoreId).run();
+        `UPDATE backup_restores SET status = 'done', finished_at = ?, extracted_path = ? WHERE id = ?`
+      ).bind(finishedAt, `data/restore/${runId}/extracted`, restoreId).run();
 
       await broadcastViaDO(c.env, userId, {
-        type: 'restore_progress', runId: strRunId, phase: result.success ? 'done' : 'failed',
-        bytesTransferred: 0, bytesTotal: 0,
+        type: 'restore_progress', runId: strRunId, phase: 'done',
+        bytesTransferred: run.bytes_total || 0, bytesTotal: run.bytes_total || 0,
       });
     } catch (err) {
-      console.error(`[Restore] Failed: ${(err as Error).message}`);
+      console.error(`[Restore] Download failed: ${(err as Error).message}`);
       const finishedAt = new Date().toISOString();
       await db.prepare(
         `UPDATE backup_restores SET status = 'failed', finished_at = ?, error_message = ? WHERE id = ?`
