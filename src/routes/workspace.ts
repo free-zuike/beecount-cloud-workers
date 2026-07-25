@@ -665,31 +665,46 @@ workspaceRouter.get('/tags', async (c) => {
 
   const tagRows = await db.prepare(tagQuery).bind(...tagParams).all<Record<string, unknown>>();
 
-  // 预聚合每个 tag 的 tx 统计
+  // 预聚合每个 tag 的 tx 统计 — 单次查询代替 N+1（与原版对齐）
   const tagStats: Record<string, { tx_count: number; expense_total: number; income_total: number }> = {};
-  const tagRowsForStats = await db.prepare(`SELECT sync_id, ledger_id FROM read_tag_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`).bind(...ledgerInternalIds).all<{ sync_id: string; ledger_id: string | null }>();
+  const tagRowsForStats = await db.prepare(`SELECT sync_id, name, ledger_id FROM read_tag_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`).bind(...ledgerInternalIds).all<{ sync_id: string; name: string; ledger_id: string | null }>();
   const tagSyncIds = tagRowsForStats.results.map(r => r.sync_id);
 
   if (tagSyncIds.length > 0) {
-    // 按 tag_sync_ids_json 匹配
+    // 单次扫描所有交易（与原版对齐）
+    const allTxRows = await db.prepare(
+      `SELECT sync_id, tx_type, COALESCE(native_amount, amount) as effective_amount, tag_sync_ids_json, tags_csv 
+       FROM read_tx_projection 
+       WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) 
+       AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`
+    ).bind(...ledgerInternalIds).all<{ sync_id: string; tx_type: string; effective_amount: number; tag_sync_ids_json: string | null; tags_csv: string | null }>();
+
+    // 初始化所有 tag 统计
     for (const tagId of tagSyncIds) {
-      // 检查该标签是否为 user-global（ledger_id IS NULL）
-      const tagRow = tagRowsForStats.results.find(r => r.sync_id === tagId);
-      const isUserGlobal = tagRow && !tagRow.ledger_id;
-      
-      let txRows;
-      if (isUserGlobal) {
-        txRows = await db.prepare(`SELECT tx_type, COALESCE(native_amount, amount) as effective_amount FROM read_tx_projection WHERE tag_sync_ids_json LIKE ? AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`).bind(`%"${tagId}"%`).all<{ tx_type: string; effective_amount: number }>();
-      } else {
-        txRows = await db.prepare(`SELECT tx_type, COALESCE(native_amount, amount) as effective_amount FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND tag_sync_ids_json LIKE ? AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`).bind(...ledgerInternalIds, `%"${tagId}"%`).all<{ tx_type: string; effective_amount: number }>();
+      tagStats[tagId] = { tx_count: 0, expense_total: 0, income_total: 0 };
+    }
+
+    // 遍历交易匹配 tag（主匹配：tag_sync_ids_json，回退：tags_csv 名称匹配）
+    for (const tx of allTxRows.results) {
+      for (const tagRow of tagRowsForStats.results) {
+        let matched = false;
+        // 主匹配：tag_sync_ids_json 包含该 tag sync_id
+        if (tx.tag_sync_ids_json && tx.tag_sync_ids_json.includes(`"${tagRow.sync_id}"`)) {
+          matched = true;
+        }
+        // 回退匹配：tags_csv 包含该 tag name（与原版对齐）
+        if (!matched && tx.tags_csv && tagRow.name) {
+          const tagNames = tx.tags_csv.split(',').map((s: string) => s.trim());
+          if (tagNames.includes(tagRow.name)) {
+            matched = true;
+          }
+        }
+        if (matched) {
+          tagStats[tagRow.sync_id].tx_count++;
+          if (tx.tx_type === 'expense') tagStats[tagRow.sync_id].expense_total += tx.effective_amount;
+          else if (tx.tx_type === 'income') tagStats[tagRow.sync_id].income_total += tx.effective_amount;
+        }
       }
-      let txCount = 0, expenseTotal = 0, incomeTotal = 0;
-      for (const r of txRows.results) {
-        txCount++;
-        if (r.tx_type === 'expense') expenseTotal += r.effective_amount;
-        else if (r.tx_type === 'income') incomeTotal += r.effective_amount;
-      }
-      tagStats[tagId] = { tx_count: txCount, expense_total: expenseTotal, income_total: incomeTotal };
     }
   }
 
