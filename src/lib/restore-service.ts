@@ -117,58 +117,87 @@ function parseTar(data: Uint8Array): { name: string; size: number; data: Uint8Ar
 
 /**
  * 导入数据到 D1
+ * 策略：先查表的实际列，只导入匹配的列
  */
 async function importToD1(
   db: D1Database,
   tables: Record<string, unknown[]>,
-): Promise<{ tablesImported: number; rowsImported: number }> {
+): Promise<{ tablesImported: number; rowsImported: number; errors: string[] }> {
   let tablesImported = 0;
   let rowsImported = 0;
-  
+  const errors: string[] = [];
+
+  // 获取 D1 中已存在的表
+  const existingTables = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all<{ name: string }>();
+  const existingTableNames = new Set(existingTables.map(r => r.name));
+
   const tableNames = Object.keys(tables);
   for (const tableName of tableNames) {
     const rows = tables[tableName];
     if (!Array.isArray(rows) || rows.length === 0) continue;
-    
-    // 获取列名
+
+    // 跳过 D1 中不存在的表
+    if (!existingTableNames.has(tableName)) {
+      console.debug(`[Restore] Skipping table ${tableName}: not found in D1`);
+      continue;
+    }
+
+    // 获取表的实际列
+    const tableInfo = await db.prepare(`PRAGMA table_info("${tableName}")`).all<{ name: string }>();
+    const dbColumns = new Set(tableInfo.map(c => c.name));
+
+    // 获取备份中的列名
     const firstRow = rows[0] as Record<string, unknown>;
     if (!firstRow || typeof firstRow !== 'object') continue;
-    const columns = Object.keys(firstRow);
-    if (columns.length === 0) continue;
-    
-    // 批量插入（每批 100 行）— 不删除现有数据，用 INSERT OR REPLACE
-    const batchSize = 100;
-    for (let i = 0; i < rows.length; i += batchSize) {
-      const batch = rows.slice(i, i + batchSize);
-      const placeholders = batch.map(() => `(${columns.map(() => '?').join(',')})`).join(',');
-      const values = batch.flatMap(row => {
-        const record = row as Record<string, unknown>;
-        return columns.map(col => record[col] ?? null);
-      });
-      
+    const backupColumns = Object.keys(firstRow);
+
+    // 只使用 D1 表中存在的列
+    const matchedColumns = backupColumns.filter(col => dbColumns.has(col));
+    if (matchedColumns.length === 0) {
+      console.debug(`[Restore] Skipping table ${tableName}: no matching columns`);
+      continue;
+    }
+
+    // 如果备份列多于 D1 列，记录差异
+    const missingInD1 = backupColumns.filter(col => !dbColumns.has(col));
+    if (missingInD1.length > 0) {
+      console.debug(`[Restore] ${tableName}: skipping columns: ${missingInD1.join(', ')}`);
+    }
+
+    // 获取主键列（用于 INSERT OR REPLACE）
+    const pkColumns = tableInfo.filter(c => c.pk > 0).map(c => c.name);
+    const useReplace = pkColumns.length > 0;
+
+    // 逐行插入（避免批量中某行失败导致整批丢失）
+    let importedCount = 0;
+    for (const row of rows) {
+      const record = row as Record<string, unknown>;
+      const values = matchedColumns.map(col => record[col] ?? null);
+
       try {
-        // 先尝试 INSERT OR REPLACE（有主键的表）
-        await db.prepare(`INSERT OR REPLACE INTO "${tableName}" (${columns.map(c => `"${c}"`).join(',')}) VALUES ${placeholders}`)
-          .bind(...values)
-          .run();
-        rowsImported += batch.length;
-      } catch {
-        try {
-          // 回退到普通 INSERT
-          await db.prepare(`INSERT INTO "${tableName}" (${columns.map(c => `"${c}"`).join(',')}) VALUES ${placeholders}`)
-            .bind(...values)
-            .run();
-          rowsImported += batch.length;
-        } catch (err) {
-          console.error(`[Restore] Failed to import batch for ${tableName}: ${(err as Error).message}`);
+        if (useReplace) {
+          await db.prepare(`INSERT OR REPLACE INTO "${tableName}" (${matchedColumns.map(c => `"${c}"`).join(',')}) VALUES (${matchedColumns.map(() => '?').join(',')})`)
+            .bind(...values).run();
+        } else {
+          await db.prepare(`INSERT INTO "${tableName}" (${matchedColumns.map(c => `"${c}"`).join(',')}) VALUES (${matchedColumns.map(() => '?').join(',')})`)
+            .bind(...values).run();
         }
+        importedCount++;
+      } catch (err) {
+        const msg = `[Restore] ${tableName}: ${(err as Error).message}`;
+        console.error(msg);
+        errors.push(msg);
       }
     }
-    
-    tablesImported++;
+
+    if (importedCount > 0) {
+      tablesImported++;
+      rowsImported += importedCount;
+      console.debug(`[Restore] ${tableName}: ${importedCount}/${rows.length} rows imported`);
+    }
   }
-  
-  return { tablesImported, rowsImported };
+
+  return { tablesImported, rowsImported, errors };
 }
 
 /**
@@ -213,23 +242,20 @@ export async function performRestore(
     // Phase 2: 导入数据到 D1
     onProgress?.({ phase: 'importing', bytesTransferred: 0, bytesTotal: totalBytes });
     
-    const { tablesImported, rowsImported } = await importToD1(db, tables);
-    
+    const { tablesImported, rowsImported, errors } = await importToD1(db, tables);
+
+    const errMsg = errors.length > 0 ? ` (${errors.length} errors: ${errors.slice(0, 3).join('; ')})` : '';
     onProgress?.({ phase: 'importing', bytesTransferred: totalBytes, bytesTotal: totalBytes });
-    
-    // Phase 3: 上传附件到 R2
-    onProgress?.({ phase: 'uploading', bytesTransferred: 0, bytesTotal: attachments.size });
-    
+
     const attachmentsUploaded = await uploadAttachments(r2, attachments);
-    
+
     onProgress?.({ phase: 'uploading', bytesTransferred: attachmentsUploaded, bytesTotal: attachments.size });
-    
-    // Phase 4: 完成
+
     onProgress?.({ phase: 'done', bytesTransferred: 0, bytesTotal: 0 });
-    
+
     return {
       success: true,
-      message: `Restored ${tablesImported} tables, ${rowsImported} rows, ${attachmentsUploaded} attachments`,
+      message: `Restored ${tablesImported} tables, ${rowsImported} rows, ${attachmentsUploaded} attachments${errMsg}`,
       tablesImported,
       rowsImported,
       attachmentsUploaded,

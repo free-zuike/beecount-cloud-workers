@@ -2142,19 +2142,19 @@ backupRouter.delete('/restores/:id', async (c) => {
 });
 
 /**
- * GET /restore-from-r2/list - 列出 R2 中所有可用的备份文件
+ * GET /restore-from-r2/list - 列出 R2 中所有可用的备份文件 + 内容概览
  */
 backupRouter.get('/restore-from-r2/list', async (c) => {
   const r2 = c.env.R2;
   if (!r2) return c.json({ error: 'R2 not configured' }, 400);
 
   // 尝试多种前缀
-  let allObjects: R2Object[] = [];
+  const allObjects: R2Object[] = [];
   for (const prefix of ['beecount/backups/', 'backups/']) {
     let cursor: string | undefined;
     do {
       const listing = await r2.list({ prefix, limit: 100, cursor });
-      allObjects = allObjects.concat(listing.objects);
+      allObjects.push(...listing.objects);
       cursor = listing.truncated ? listing.objects[listing.objects.length - 1].key : undefined;
     } while (cursor);
   }
@@ -2163,17 +2163,75 @@ backupRouter.get('/restore-from-r2/list', async (c) => {
     return c.json({ backups: [], message: 'No backups found' });
   }
 
-  // 过滤出备份文件，排除目录
-  const backups = allObjects
+  // 过滤出备份文件
+  const backupFiles = allObjects
     .filter(o => o.key.endsWith('.tar.gz') || o.key.endsWith('.zip'))
-    .map(o => ({
-      key: o.key,
-      size: o.size,
-      uploaded: o.uploaded.toISOString(),
-      // 提取日期时间
-      filename: o.key.split('/').pop() || o.key,
-    }))
-    .sort((a, b) => b.uploaded.localeCompare(a.uploaded)); // 最新在前
+    .sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime());
+
+  const backups = [];
+  for (const obj of backupFiles) {
+    const entry: Record<string, unknown> = {
+      key: obj.key,
+      size: obj.size,
+      uploaded: obj.uploaded.toISOString(),
+      filename: obj.key.split('/').pop() || obj.key,
+    };
+
+    // 尝试读取前 10 个备份的内容概览（db.json 表名和行数）
+    try {
+      const resp = await r2.get(obj.key);
+      if (resp) {
+        const ab = await resp.arrayBuffer();
+        const raw = new Uint8Array(ab);
+        const ds = new DecompressionStream('gzip');
+        const w = ds.writable.getWriter();
+        w.write(raw); w.close();
+        const reader = ds.readable.getReader();
+        const chunks: Uint8Array[] = [];
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+        }
+        let totalLen = 0;
+        for (const ch of chunks) totalLen += ch.length;
+        const decompressed = new Uint8Array(totalLen);
+        let off = 0;
+        for (const ch of chunks) { decompressed.set(ch, off); off += ch.length; }
+
+        // 解析 tar，找 db.json
+        let tarOff = 0;
+        while (tarOff < decompressed.length - 512) {
+          const hdr = decompressed.slice(tarOff, tarOff + 512);
+          const name = new TextDecoder().decode(hdr.slice(0, 100)).replace(/\0/g, '');
+          if (!name) break;
+          const sizeOct = new TextDecoder().decode(hdr.slice(124, 136)).replace(/\0/g, '').trim();
+          const sz = parseInt(sizeOct, 8) || 0;
+          const contentOff = tarOff + 512;
+
+          if (name === 'db.json') {
+            const jsonText = new TextDecoder().decode(decompressed.slice(contentOff, contentOff + sz));
+            const dbJson = JSON.parse(jsonText);
+            const tables = dbJson.tables || {};
+            const summary: Record<string, number> = {};
+            for (const [t, rows] of Object.entries(tables)) {
+              summary[t] = Array.isArray(rows) ? rows.length : 0;
+            }
+            entry.tables = summary;
+            entry.totalRows = Object.values(summary).reduce((s, n) => s + n, 0);
+          }
+          if (name === 'db.sqlite3') {
+            entry.hasSqlite3 = true;
+          }
+          tarOff = contentOff + Math.ceil(sz / 512) * 512;
+        }
+      }
+    } catch (e) {
+      entry.previewError = (e as Error).message;
+    }
+
+    backups.push(entry);
+  }
 
   return c.json({ backups });
 });
