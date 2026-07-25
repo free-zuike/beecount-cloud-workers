@@ -17,8 +17,8 @@ type Props = {
   onClose: () => void
   restore: BackupRestore | null
   liveProgress?: { phase: string; bytesTransferred?: number; bytesTotal?: number } | null
-  /** 用户已点过「准备恢复」时的进度查看;首次触发用 onTrigger。 */
   onTrigger?: () => Promise<void>
+  onRestore?: () => Promise<void>
   onCleanup?: () => Promise<void>
   onDownloadConfig?: () => Promise<void>
 }
@@ -47,6 +47,7 @@ export function BackupRestoreGuideDialog({
   restore,
   liveProgress,
   onTrigger,
+  onRestore,
   onCleanup,
   onDownloadConfig,
 }: Props) {
@@ -200,7 +201,7 @@ rm -rf ${path}/..`
                 <span className="font-medium">
                   {t('backup.restore.steps.title')}
                 </span>
-                <Button size="sm" variant="outline" onClick={() => void onTrigger?.()}>
+                <Button size="sm" variant="outline" onClick={() => void onRestore?.()}>
                   恢复数据
                 </Button>
               </div>
