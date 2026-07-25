@@ -1145,10 +1145,16 @@ syncRouter.get('/ledgers', async (c) => {
   const db = c.env.DB;
 
   try {
+    // 查询用户可访问的所有账本（自有 + 共享成员）— 与原版 list_accessible_ledgers 对齐
     const ledgers = await db
-      .prepare(`SELECT id, external_id, name, currency, created_at FROM ledgers WHERE user_id = ?`)
-      .bind(userId)
-      .all<{ id: string; external_id: string; name: string; currency: string; created_at: string }>();
+      .prepare(`SELECT l.id, l.external_id, l.name, l.currency, l.created_at, 'owner' as role
+                FROM ledgers l WHERE l.user_id = ?
+                UNION
+                SELECT l.id, l.external_id, l.name, l.currency, l.created_at, lm.role
+                FROM ledgers l JOIN ledger_members lm ON l.id = lm.ledger_id
+                WHERE lm.user_id = ?`)
+      .bind(userId, userId)
+      .all<{ id: string; external_id: string; name: string; currency: string; created_at: string; role: string }>();
 
     const result: Array<Record<string, unknown>> = [];
 
@@ -1160,13 +1166,14 @@ syncRouter.get('/ledgers', async (c) => {
         .first<{ action: string }>();
       if (tombstone?.action === 'delete') continue;
 
-      // 检查是否有任何变更（空账本也返回）
+      // 检查是否有任何变更（空账本跳过，与原版对齐）
       const latestChangeId = await db
         .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id = ?')
         .bind(l.id)
         .first<{ max_id: number | null }>();
+      if (!latestChangeId?.max_id) continue;
 
-      // 获取最新变更时间（无变更时用 created_at）
+      // 获取最新变更时间
       const latestUpdated = await db
         .prepare('SELECT updated_at FROM sync_changes WHERE ledger_id = ? ORDER BY change_id DESC LIMIT 1')
         .bind(l.id)
@@ -1181,10 +1188,10 @@ syncRouter.get('/ledgers', async (c) => {
       result.push({
         ledger_id: l.external_id,
         path: l.external_id,
-        updated_at: latestUpdated?.updated_at ?? l.created_at,
+        updated_at: latestUpdated?.updated_at ?? new Date().toISOString(),
         size: 512 + (txCount?.cnt ?? 0) * 300,
         metadata: { source: 'lazy_rebuild' },
-        role: 'owner',
+        role: l.role,
       });
     }
 
