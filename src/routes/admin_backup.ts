@@ -2222,6 +2222,38 @@ backupRouter.get('/restore-from-r2/debug', async (c) => {
 });
 
 /**
+ * GET /restore-from-r2/debug2 - 深度诊断投影表 ledger_id 值
+ */
+backupRouter.get('/restore-from-r2/debug2', async (c) => {
+  const db = c.env.DB;
+
+  // 1. ledgers 表的 id 和 external_id
+  const ledgers = await db.prepare(`SELECT id, external_id, user_id, name FROM ledgers`).all<{ id: string; external_id: string; user_id: string; name: string }>();
+
+  // 2. read_tx_projection 的 ledger_id 和 sync_id
+  const txProj = await db.prepare(`SELECT ledger_id, sync_id, user_id FROM read_tx_projection`).all<{ ledger_id: string; sync_id: string; user_id: string }>();
+
+  // 3. read_account_projection 的 ledger_id
+  const accProj = await db.prepare(`SELECT ledger_id, sync_id, user_id FROM read_account_projection`).all<{ ledger_id: string; sync_id: string; user_id: string }>();
+
+  // 4. read_budget_projection 的 ledger_id
+  const budgetProj = await db.prepare(`SELECT ledger_id, sync_id, user_id FROM read_budget_projection`).all<{ ledger_id: string; sync_id: string; user_id: string }>();
+
+  // 5. 检查 PRAGMA table_info 确认列类型
+  const ledgerSchema = await db.prepare(`PRAGMA table_info("ledgers")`).all<{ name: string; type: string; pk: number }>();
+  const txSchema = await db.prepare(`PRAGMA table_info("read_tx_projection")`).all<{ name: string; type: string; pk: number }>();
+
+  return c.json({
+    ledgers: ledgers.results || [],
+    txProjection: txProj.results || [],
+    accProjection: accProj.results || [],
+    budgetProjection: budgetProj.results || [],
+    ledgerSchema: (ledgerSchema.results || []).filter((c: any) => c.name === 'id' || c.name === 'external_id'),
+    txProjectionSchema: (txSchema.results || []).filter((c: any) => c.name === 'ledger_id'),
+  });
+});
+
+/**
  * GET /restore-from-r2/list - 列出 R2 中所有可用的备份文件 + 内容概览
  */
 backupRouter.get('/restore-from-r2/list', async (c) => {
