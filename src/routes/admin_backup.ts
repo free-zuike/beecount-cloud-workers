@@ -32,7 +32,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { getFirstEnabledS3Config } from './sys_config';
 import { signS3Request } from '../lib/s3';
-import { performBackup, calculateNextRun } from '../services/backup-executor';
+import { performBackup, calculateNextRun, validateCronExpression } from '../services/backup-executor';
 import { insertAuditLog } from '../lib/audit';
 
 // ===========================
@@ -1191,6 +1191,12 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
     }
   }
   
+  // 验证 cron 表达式（与原版 CronTrigger 对齐）
+  const cronCheck = validateCronExpression(req.cron_expr);
+  if (!cronCheck.valid) {
+    return c.json({ error: cronCheck.error }, 400);
+  }
+
   // 计算首次运行时间（使用时区偏移）
   const nextRunAt = calculateNextRun(req.cron_expr, timezoneOffset ?? 0);
 
@@ -1302,6 +1308,10 @@ backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), a
   }
 
   if (req.cron_expr !== undefined) {
+    const cronCheck = validateCronExpression(req.cron_expr);
+    if (!cronCheck.valid) {
+      return c.json({ error: cronCheck.error }, 400);
+    }
     updates.push('cron_expr = ?');
     params.push(req.cron_expr);
     // 更新 cron 表达式时重新计算下次运行时间（使用时区偏移）

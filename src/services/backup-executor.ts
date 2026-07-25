@@ -698,6 +698,63 @@ export async function performBackup(
  * @param cronExpr cron表达式（UTC时间）
  * @param timezoneOffset 用户时区偏移（分钟，东八区为-480，仅用于显示）
  */
+/**
+ * 验证 cron 表达式是否合法（5 字段：分 时 日 月 周）
+ * 与原版 APScheduler CronTrigger.from_crontab() 对齐
+ */
+export function validateCronExpression(cronExpr: string): { valid: boolean; error?: string } {
+  const parts = cronExpr.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    return { valid: false, error: `Cron expression must have 5 fields, got ${parts.length}` };
+  }
+
+  const ranges = [
+    { name: 'minute', min: 0, max: 59 },
+    { name: 'hour', min: 0, max: 23 },
+    { name: 'day', min: 1, max: 31 },
+    { name: 'month', min: 1, max: 12 },
+    { name: 'weekday', min: 0, max: 7 },
+  ];
+
+  for (let i = 0; i < 5; i++) {
+    const field = parts[i];
+    const { name, min, max } = ranges[i];
+
+    if (field === '*') continue;
+
+    // 处理 */N
+    if (field.startsWith('*/')) {
+      const step = parseInt(field.slice(2), 10);
+      if (isNaN(step) || step < 1 || step > max) {
+        return { valid: false, error: `Invalid ${name} step: ${field}` };
+      }
+      continue;
+    }
+
+    // 处理 N-M
+    const rangeMatch = field.match(/^(\d+)-(\d+)$/);
+    if (rangeMatch) {
+      const start = parseInt(rangeMatch[1], 10);
+      const end = parseInt(rangeMatch[2], 10);
+      if (start < min || end > max || start > end) {
+        return { valid: false, error: `Invalid ${name} range: ${field}` };
+      }
+      continue;
+    }
+
+    // 处理逗号分隔的值
+    const values = field.split(',');
+    for (const v of values) {
+      const num = parseInt(v, 10);
+      if (isNaN(num) || num < min || num > max) {
+        return { valid: false, error: `Invalid ${name} value: ${v} (valid range ${min}-${max})` };
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
 export function calculateNextRun(cronExpr: string, timezoneOffset: number = 0): string {
   try {
     const parts = cronExpr.trim().split(/\s+/);
