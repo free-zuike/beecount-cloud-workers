@@ -259,9 +259,15 @@ backupRouter.post('/fix-data', async (c) => {
           if (!fullRow) continue;
 
           const payload: Record<string, unknown> = {};
+          const BOOLEAN_FIELDS = new Set(['enabled', 'exclude_from_stats', 'exclude_from_budget', 'is_default', 'hidden', 'income_is_red']);
           for (const [k, v] of Object.entries(fullRow)) {
             if (k === 'id' || k === 'rowid') continue;
-            payload[k] = v;
+            // SQLite 用 0/1 存储布尔值，Flutter 期望 bool
+            if (BOOLEAN_FIELDS.has(k) && typeof v === 'number') {
+              payload[k] = v === 1;
+            } else {
+              payload[k] = v;
+            }
           }
 
           const maxChangeId = await db.prepare('SELECT MAX(change_id) as max_id FROM sync_changes').first<{ max_id: number | null }>();
