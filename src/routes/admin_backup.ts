@@ -2142,6 +2142,86 @@ backupRouter.delete('/restores/:id', async (c) => {
 });
 
 /**
+ * GET /restore-from-r2/debug - 诊断：检查 D1 当前数据 + 备份文件内容
+ */
+backupRouter.get('/restore-from-r2/debug', async (c) => {
+  const db = c.env.DB;
+  const r2 = c.env.R2;
+  const userId = c.get('userId');
+
+  // 1. D1 当前行数
+  const d1Tables = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all<{ name: string }>();
+  const d1Counts: Record<string, number> = {};
+  for (const t of (d1Tables.results || [])) {
+    try {
+      const res = await db.prepare(`SELECT COUNT(*) as cnt FROM "${t.name}"`).first<{ cnt: number }>();
+      d1Counts[t.name] = res?.cnt || 0;
+    } catch { d1Counts[t.name] = -1; }
+  }
+
+  // 2. 最新备份文件内容
+  let backupInfo: Record<string, unknown> = {};
+  if (r2) {
+    let listing = await r2.list({ prefix: `beecount/backups/${userId}/` });
+    if (!listing.objects?.length) listing = await r2.list({ prefix: `beecount/backups/` });
+    if (listing.objects?.length) {
+      const latest = listing.objects.sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime())[0];
+      backupInfo.key = latest.key;
+      backupInfo.size = latest.size;
+      backupInfo.uploaded = latest.uploaded.toISOString();
+
+      try {
+        const resp = await r2.get(latest.key);
+        if (resp) {
+          const ab = await resp.arrayBuffer();
+          const raw = new Uint8Array(ab);
+          const ds = new DecompressionStream('gzip');
+          const w = ds.writable.getWriter();
+          w.write(raw); w.close();
+          const reader = ds.readable.getReader();
+          const chunks: Uint8Array[] = [];
+          while (true) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); }
+          let totalLen = 0; for (const ch of chunks) totalLen += ch.length;
+          const decompressed = new Uint8Array(totalLen);
+          let off = 0; for (const ch of chunks) { decompressed.set(ch, off); off += ch.length; }
+
+          let tarOff = 0;
+          const tarEntries: string[] = [];
+          while (tarOff < decompressed.length - 512) {
+            const hdr = decompressed.slice(tarOff, tarOff + 512);
+            const name = new TextDecoder().decode(hdr.slice(0, 100)).replace(/\0/g, '');
+            if (!name) break;
+            const sizeOct = new TextDecoder().decode(hdr.slice(124, 136)).replace(/\0/g, '').trim();
+            const sz = parseInt(sizeOct, 8) || 0;
+            const contentOff = tarOff + 512;
+            tarEntries.push(`${name} (${sz} bytes)`);
+
+            if (name === 'db.json') {
+              const jsonText = new TextDecoder().decode(decompressed.slice(contentOff, contentOff + sz));
+              const dbJson = JSON.parse(jsonText);
+              const tables = dbJson.tables || {};
+              const backupCounts: Record<string, number> = {};
+              let totalRows = 0;
+              for (const [t, rows] of Object.entries(tables)) {
+                const cnt = Array.isArray(rows) ? rows.length : 0;
+                backupCounts[t] = cnt;
+                totalRows += cnt;
+              }
+              backupInfo.tables = backupCounts;
+              backupInfo.totalRows = totalRows;
+            }
+            tarOff = contentOff + Math.ceil(sz / 512) * 512;
+          }
+          backupInfo.tarEntries = tarEntries;
+        }
+      } catch (e) { backupInfo.error = (e as Error).message; }
+    }
+  }
+
+  return c.json({ d1: d1Counts, d1Total: Object.values(d1Counts).reduce((s, n) => s + Math.max(0, n), 0), backup: backupInfo });
+});
+
+/**
  * GET /restore-from-r2/list - 列出 R2 中所有可用的备份文件 + 内容概览
  */
 backupRouter.get('/restore-from-r2/list', async (c) => {
