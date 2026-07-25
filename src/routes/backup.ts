@@ -207,4 +207,28 @@ backupRouter.delete('/clear-data', async (c) => {
   }
 });
 
+/**
+ * POST /backup/fix-data - 修复恢复数据中 sync_id 为空的投影记录
+ */
+backupRouter.post('/fix-data', async (c) => {
+  const db = c.env.DB;
+  const fixes: Record<string, number> = {};
+
+  const tables = ['read_account_projection', 'read_category_projection', 'read_tag_projection', 'read_tx_projection', 'read_budget_projection'];
+  for (const tableName of tables) {
+    try {
+      const empty = await db.prepare(`SELECT rowid FROM "${tableName}" WHERE sync_id IS NULL OR sync_id = ''`).all<{ rowid: number }>();
+      if (empty.results && empty.results.length > 0) {
+        for (const row of empty.results) {
+          const newSyncId = crypto.randomUUID();
+          await db.prepare(`UPDATE "${tableName}" SET sync_id = ? WHERE rowid = ?`).bind(newSyncId, row.rowid).run();
+        }
+        fixes[tableName] = empty.results.length;
+      }
+    } catch {}
+  }
+
+  return c.json({ fixes, message: 'Fixed sync_id for empty records' });
+});
+
 export default backupRouter;
