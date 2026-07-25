@@ -315,6 +315,205 @@ async function withRetry<T>(
   throw lastError;
 }
 
+export interface GeneratedBackup {
+  backupBytes: Uint8Array;
+  encrypted: boolean;
+  backupSize: number;
+  logLines: string[];
+}
+
+/**
+ * 生成备份字节（与原版 fan-out 对齐：生成一次，上传到多个远端）
+ */
+export async function generateBackupBytes(
+  db: D1Database,
+  userId: string,
+  ledgerId: string,
+  r2?: R2Bucket,
+  logFn?: (msg: string) => void,
+): Promise<GeneratedBackup> {
+  const log = logFn || console.log;
+  const logLines: string[] = [];
+  const logWrap = (msg: string) => { log(msg); logLines.push(`[${new Date().toISOString()}] ${msg}`); };
+
+  logWrap(`[Backup] Starting full database backup, user: ${userId}`);
+
+  // 导出所有用户数据表
+  const tables: Record<string, unknown[]> = {};
+  for (const tableName of BACKUP_TABLES) {
+    try {
+      const rows = await withRetry(() => exportTable(db, tableName), 3, 1000, `export ${tableName}`);
+      if (rows.length > 0) tables[tableName] = rows;
+    } catch (err) {
+      logWrap(`[Backup] Skipping ${tableName}: ${(err as Error).message}`);
+    }
+  }
+
+  // R2 附件
+  let attachments = new Map<string, Uint8Array>();
+  if (r2) {
+    try {
+      attachments = await withRetry(() => fetchR2Attachments(r2), 2, 2000, 'fetch R2 attachments');
+      logWrap(`[Backup] R2 attachments: ${attachments.size} files`);
+    } catch {}
+  }
+
+  // 创建 tar.gz
+  const tarEntries: { name: string; data: Uint8Array }[] = [];
+  tarEntries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: '1.0', createdAt: new Date().toISOString(), userId, includeAttachments: true }, null, 2)) });
+  try {
+    const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
+    tarEntries.push({ name: 'db.sqlite3', data: createMinimalSqliteFile() });
+  } catch {}
+  tarEntries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: new Date().toISOString(), version: '1.0', schema_version: 1, user_id: userId, tables }, null, 2)) });
+  for (const [key, value] of attachments) tarEntries.push({ name: key, data: value });
+
+  let backupBytes = await withRetry(() => createTarGz(tarEntries), 2, 1000, 'create tar.gz');
+  logWrap(`[Backup] tar.gz created: ${backupBytes.length} bytes, ${Object.keys(tables).length} tables`);
+
+  return { backupBytes, encrypted: false, backupSize: backupBytes.length, logLines };
+}
+
+/**
+ * 上传备份到单个远端（与原版 fan-out 单个 worker 对齐）
+ */
+export async function uploadBackupToRemote(
+  backupBytes: Uint8Array,
+  encrypted: boolean,
+  remoteConfig: Record<string, string>,
+  userId: string,
+  logFn?: (msg: string) => void,
+): Promise<{ ok: boolean; message: string; key?: string }> {
+  const log = logFn || console.log;
+
+  if (remoteConfig.backend_type === 's3' || remoteConfig.backend_type === 'b2') {
+    const isB2 = remoteConfig.backend_type === 'b2';
+    const endpoint = remoteConfig.endpoint || (isB2 ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
+    const bucket = remoteConfig.bucket;
+    const accessKey = remoteConfig.access_key_id || remoteConfig.key;
+    const secretKey = remoteConfig.secret_access_key || remoteConfig.account;
+    const region = remoteConfig.region || 'auto';
+    if (!bucket || !accessKey || !secretKey) return { ok: false, message: 'S3 configuration incomplete' };
+
+    let prefix = '';
+    if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else prefix = 'beecount/';
+
+    const localTime = new Date(Date.now() + 8 * 3600000);
+    const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+    const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
+
+    const result = await uploadToS3(endpoint, bucket, accessKey, secretKey, region, key, backupBytes, 'application/gzip');
+    return result.ok ? { ok: true, message: 'Upload successful', key } : { ok: false, message: result.message };
+  }
+
+  if (remoteConfig.backend_type === 'webdav') {
+    const localTime = new Date(Date.now() + 8 * 3600000);
+    const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+    let prefix = '';
+    if (remoteConfig.savePath) prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    const key = `${prefix}backups/${userId}/${ts}_backup.tar.gz`;
+    const result = await uploadToWebDav(remoteConfig.url!, remoteConfig.username!, remoteConfig.password!, key, backupBytes);
+    return result.ok ? { ok: true, message: 'Upload successful', key } : { ok: false, message: result.message };
+  }
+
+  if (remoteConfig.backend_type === 'r2' && remoteConfig._r2Bucket) {
+    const bucket = remoteConfig._r2Bucket as unknown as R2Bucket;
+    const localTime = new Date(Date.now() + 8 * 3600000);
+    const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+    const key = `beecount/backups/${userId}/${ts}_backup.tar.gz`;
+    await bucket.put(key, backupBytes, { httpMetadata: { contentType: 'application/gzip' } });
+    return { ok: true, message: 'R2 upload successful', key };
+  }
+
+  return { ok: true, message: 'Local backup (no upload)' };
+}
+
+/**
+ * 并行上传备份到多个远端（与原版 fan-out ThreadPoolExecutor 对齐）
+ */
+export async function performBackupFanOut(
+  db: D1Database,
+  runId: number,
+  userId: string,
+  ledgerId: string,
+  remoteConfigs: Array<{ remoteId: string; config: Record<string, string> }>,
+  shouldEncrypt?: boolean,
+  r2?: R2Bucket,
+  logFn?: (msg: string) => void,
+): Promise<BackupResult> {
+  const log = logFn || console.log;
+  const logLines: string[] = [];
+  const logWrap = (msg: string) => { log(msg); logLines.push(`[${new Date().toISOString()}] ${msg}`); };
+
+  // 1. 生成一次备份字节
+  const generated = await generateBackupBytes(db, userId, ledgerId, r2, logFn);
+  logLines.push(...generated.logLines);
+
+  // 2. 加密（如果需要）
+  let backupBytes = generated.backupBytes;
+  let encrypted = false;
+  if (shouldEncrypt && remoteConfigs.length > 0) {
+    const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.encryption_password;
+    if (pw) {
+      try {
+        backupBytes = await encryptData(backupBytes, pw);
+        encrypted = true;
+        logWrap(`[Backup] Encrypted: ${backupBytes.length} bytes`);
+      } catch {}
+    }
+  }
+
+  // 3. 并行上传到所有远端（与原版 ThreadPoolExecutor fan-out 对齐）
+  const remoteIds = remoteConfigs.map(r => r.remoteId);
+  logWrap(`[Backup] Fan-out to ${remoteConfigs.length} remotes: ${remoteIds.join(', ')}`);
+
+  const uploadResults = await Promise.allSettled(
+    remoteConfigs.map(async ({ remoteId, config }) => {
+      const result = await uploadBackupToRemote(backupBytes, encrypted, config, userId, logWrap);
+      logWrap(`[Backup] Remote ${remoteId}: ${result.ok ? 'success' : 'failed'} ${result.message}`);
+      return { remoteId, ...result };
+    })
+  );
+
+  const successful = uploadResults.filter(r => r.status === 'fulfilled' && r.value.ok);
+  const failed = uploadResults.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok));
+
+  // 4. 保存到 R2（第一个成功的路径）
+  let backupPath: string | null = null;
+  if (r2 && successful.length > 0) {
+    const successResult = (successful[0] as PromiseFulfilledResult<{ remoteId: string; ok: boolean; message: string; key?: string }>).value;
+    if (successResult.key) {
+      backupPath = successResult.key;
+    }
+  }
+
+  // 5. 上传附件到 R2
+  let attachmentsUploaded = 0;
+  if (r2) {
+    try {
+      const attachments = await fetchR2Attachments(r2);
+      for (const [key, data] of attachments) {
+        try { await r2.put(key, data); attachmentsUploaded++; } catch {}
+      }
+    } catch {}
+  }
+
+  const allSucceeded = failed.length === 0;
+  const status = allSucceeded ? 'succeeded' : (successful.length > 0 ? 'partial' : 'failed');
+
+  return {
+    success: allSucceeded,
+    message: allSucceeded
+      ? `Backup completed to ${remoteConfigs.length} remote(s)`
+      : `${successful.length}/${remoteConfigs.length} succeeded, ${failed.length} failed`,
+    backupSize: backupBytes.length,
+    backupPath: backupPath || undefined,
+    attachmentsUploaded,
+  };
+}
+
 export async function performBackup(
   db: D1Database,
   runId: number,
