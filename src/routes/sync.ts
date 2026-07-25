@@ -258,11 +258,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     console.log('[SYNC] device check result:', device);
 
     if (!device) {
-      // 设备不存在（可能恢复后丢失），自动注册
-      console.debug(`[SYNC] Auto-registering device: ${deviceId} for user: ${userId}`);
-      await db.prepare(`INSERT OR IGNORE INTO devices (id, user_id, name, platform, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)`)
-        .bind(deviceId, userId, 'restored-device', 'unknown', new Date().toISOString(), new Date().toISOString())
-        .run();
+      return c.json({ error: 'Invalid device' }, 401);
     }
 
     // 更新设备最后活跃时间
@@ -1000,18 +996,14 @@ syncRouter.get('/pull', async (c) => {
   console.log('[SYNC] /sync/pull since:', since, 'limit:', limit, 'ledger_id:', ledgerId, 'device_id:', deviceId);
 
   try {
-    // 设备验证 + heartbeat（设备不存在时自动注册）
+    // 设备验证 + heartbeat
     if (deviceId) {
       const device = await db
         .prepare('SELECT id FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL')
         .bind(deviceId, userId)
         .first();
       if (!device) {
-        // 设备不存在（可能恢复后丢失），自动注册
-        console.debug(`[SYNC] Auto-registering device: ${deviceId} for user: ${userId}`);
-        await db.prepare(`INSERT OR IGNORE INTO devices (id, user_id, name, platform, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)`)
-          .bind(deviceId, userId, 'restored-device', 'unknown', new Date().toISOString(), new Date().toISOString())
-          .run();
+        return c.json({ error: 'Invalid device' }, 401);
       }
       await db.prepare('UPDATE devices SET last_seen_at = ? WHERE id = ? AND user_id = ?')
         .bind(new Date().toISOString(), deviceId, userId).run();

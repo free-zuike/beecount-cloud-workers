@@ -2404,6 +2404,15 @@ backupRouter.post('/restore-from-r2', async (c) => {
   }
 });
 
+/**
+ * DELETE /restore-from-r2/phantom-devices - 清理恢复过程中误创建的 phantom 设备
+ */
+backupRouter.delete('/phantom-devices', async (c) => {
+  const db = c.env.DB;
+  const result = await db.prepare(`DELETE FROM devices WHERE name = 'restored-device'`).run();
+  return c.json({ deleted: result.meta?.changes || 0 });
+});
+
 // ---------------------------------------------------------------------------
 // POST /admin/backups/upload-db - 上传数据库备份文件
 // ---------------------------------------------------------------------------
