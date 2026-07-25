@@ -1230,6 +1230,13 @@ syncRouter.get('/full', async (c) => {
       return c.json({ ledger_id: ledgerId, snapshot: null, latest_cursor: 0 });
     }
 
+    console.debug(`[SYNC] sync/full ledger found: id=${ledger.id}, external_id=${ledger.external_id}`);
+
+    // 诊断：检查投影表中的 ledger_id 是否匹配
+    const sampleTx = await db.prepare('SELECT ledger_id FROM read_tx_projection LIMIT 3').all<{ ledger_id: string }>();
+    console.debug(`[SYNC] sync/full projection ledger_ids:`, JSON.stringify(sampleTx.results?.map(r => r.ledger_id)));
+    console.debug(`[SYNC] sync/full looking for ledger.id:`, ledger.id);
+
     // latest_cursor 只取该账本的 max change_id（与原版 _max_cursor_for_ledgers 对齐）
     const latestCursorRow = await db
       .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id = ?')
@@ -1252,21 +1259,29 @@ syncRouter.get('/full', async (c) => {
       .first<{ max_id: number | null }>();
 
     // 如果 sync_changes 为空但投影表有数据（恢复后场景），仍然构建快照
-    const hasProjections = await db
+    // 用 ledger.id 和 external_id 都试一下（INSERT OR REPLACE 可能导致 id 不一致）
+    const hasProjectionsById = await db
       .prepare('SELECT 1 FROM read_tx_projection WHERE ledger_id = ? LIMIT 1')
       .bind(ledger.id)
       .first();
+    const hasProjectionsByExtId = await db
+      .prepare('SELECT 1 FROM read_tx_projection WHERE ledger_id = ? LIMIT 1')
+      .bind(ledger.external_id)
+      .first();
+    const hasProjections = hasProjectionsById || hasProjectionsByExtId;
+    // 用实际匹配的值查询
+    const effectiveLedgerId = hasProjectionsById ? ledger.id : ledger.external_id;
 
     if (!ledgerChangeId?.max_id && !hasProjections) {
       return c.json({ ledger_id: ledgerId, snapshot: null, latest_cursor: latestCursor });
     }
 
     const [txs, accounts, categories, tags, budgets] = await Promise.all([
-      db.prepare('SELECT * FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id).all(),
+      db.prepare('SELECT * FROM read_tx_projection WHERE ledger_id = ?').bind(effectiveLedgerId).all(),
       db.prepare('SELECT * FROM read_account_projection WHERE user_id = ?').bind(userId).all(),
       db.prepare('SELECT * FROM read_category_projection WHERE user_id = ?').bind(userId).all(),
       db.prepare('SELECT * FROM read_tag_projection WHERE user_id = ?').bind(userId).all(),
-      db.prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?').bind(ledger.id).all(),
+      db.prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?').bind(effectiveLedgerId).all(),
     ]);
 
     // 检查缓存（与原版 snapshot_cache 对齐）
