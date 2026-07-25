@@ -894,6 +894,13 @@ workspaceRouter.get('/analytics', async (c) => {
 
   const ledgerInternalIds = ledgers.results.map((l) => l.id);
 
+  // 获取 month_start_day（单账本时使用该账本的设置，多账本默认 1）
+  let monthStartDay = 1;
+  if (ledgerInternalIds.length === 1) {
+    const msdRow = await db.prepare('SELECT month_start_day FROM ledgers WHERE id = ?').bind(ledgerInternalIds[0]).first<{ month_start_day: number }>();
+    if (msdRow?.month_start_day) monthStartDay = Math.min(Math.max(msdRow.month_start_day, 1), 28);
+  }
+
   // exclude_from_stats=true 的交易不计入收支统计（与原版对齐）
   let txQuery = `SELECT tx_type, COALESCE(native_amount, amount) as effective_amount, happened_at, category_name FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`;
   const txParams: (string | number)[] = [...ledgerInternalIds];
@@ -903,9 +910,9 @@ workspaceRouter.get('/analytics', async (c) => {
     const year = parseInt(yearStr, 10);
     const month = parseInt(monthStr, 10);
     if (year && month) {
-      // 用时区偏移计算本地月份边界，再转回UTC
-      const localStart = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0) - tzOffsetMinutes * 60000);
-      const localEnd = new Date(Date.UTC(year, month, 1, 0, 0, 0) - tzOffsetMinutes * 60000);
+      // 用 month_start_day 计算账单周期边界（与原版 _analytics_range 对齐）
+      const localStart = new Date(Date.UTC(year, month - 1, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000);
+      const localEnd = new Date(Date.UTC(year, month, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000);
       const startAt = localStart.toISOString();
       const endAt = localEnd.toISOString();
       txQuery += ' AND happened_at >= ? AND happened_at < ?';
@@ -943,7 +950,15 @@ workspaceRouter.get('/analytics', async (c) => {
       // 月度分析用日粒度（YYYY-MM-DD），与原版对齐
       bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}-${String(localDate.getUTCDate()).padStart(2, '0')}`;
     } else if (scope === 'year') {
-      bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}`;
+      // 年度分析用月粒度，且按 month_start_day 切桶（与原版对齐）
+      if (localDate.getUTCDate() < monthStartDay) {
+        // 日期在 start_day 之前，归入上月
+        const prevMonth = localDate.getUTCMonth() === 0 ? 11 : localDate.getUTCMonth() - 1;
+        const prevYear = localDate.getUTCMonth() === 0 ? localDate.getUTCFullYear() - 1 : localDate.getUTCFullYear();
+        bucket = `${prevYear}-${String(prevMonth + 1).padStart(2, '0')}`;
+      } else {
+        bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}`;
+      }
     } else {
       const weekStart = new Date(localDate);
       weekStart.setUTCDate(localDate.getUTCDate() - localDate.getUTCDay());
@@ -1890,59 +1905,105 @@ workspaceRouter.get('/net-worth-history', async (c) => {
   const ledgerInternalIds = ledgers.results.map(l => l.id);
   const placeholders = ledgerInternalIds.map(() => '?').join(',');
 
-  // 获取所有账户
+  // 获取所有账户（含 hidden 和 account_type）
   const accounts = await db
-    .prepare(`SELECT sync_id, initial_balance, currency FROM read_account_projection WHERE user_id = ?`)
+    .prepare(`SELECT sync_id, initial_balance, currency, account_type, hidden FROM read_account_projection WHERE user_id = ?`)
     .bind(userId)
-    .all<{ sync_id: string; initial_balance: number; currency: string | null }>();
+    .all<{ sync_id: string; initial_balance: number; currency: string | null; account_type: string | null; hidden: number | null }>();
 
-  // 获取所有交易
+  // 获取所有交易（按 happened_at 排序，与原版对齐）
   const txs = await db
-    .prepare(`SELECT happened_at, tx_type, COALESCE(native_amount, amount) as effective_amount, account_sync_id, from_account_sync_id, to_account_sync_id FROM read_tx_projection WHERE ledger_id IN (${placeholders})`)
+    .prepare(`SELECT happened_at, tx_type, amount, COALESCE(native_amount, amount) as effective_amount, account_sync_id, from_account_sync_id, to_account_sync_id FROM read_tx_projection WHERE ledger_id IN (${placeholders}) ORDER BY happened_at ASC`)
     .bind(...ledgerInternalIds)
-    .all<{ happened_at: string; tx_type: string; effective_amount: number; account_sync_id: string | null; from_account_sync_id: string | null; to_account_sync_id: string | null }>();
+    .all<{ happened_at: string; tx_type: string; amount: number; effective_amount: number; account_sync_id: string | null; from_account_sync_id: string | null; to_account_sync_id: string | null }>();
+
+  // 获取 primary_currency
+  const profile = await db.prepare('SELECT primary_currency FROM user_profiles WHERE user_id = ?').bind(userId).first<{ primary_currency: string | null }>();
+  const baseCurrency = profile?.primary_currency || 'CNY';
 
   // 检查是否多币种
   const currencies = new Set(accounts.results.map(a => a.currency).filter(Boolean));
   const multiCurrency = currencies.size > 1;
 
-  // 按月聚合
-  const monthlyMap: Record<string, { net_worth: number; assets: number; liabilities: number }> = {};
-
-  // 计算初始余额总和
+  // 区分负债账户（credit_card, loan）— 与原版对齐
+  const LIABILITY_TYPES = new Set(['credit_card', 'loan', 'liability']);
+  const accountBalances: Record<string, number> = {};
   let totalAssets = 0;
   let totalLiabilities = 0;
+
   for (const acc of accounts.results) {
     const bal = acc.initial_balance ?? 0;
-    if (bal >= 0) totalAssets += bal;
-    else totalLiabilities += Math.abs(bal);
+    accountBalances[acc.sync_id] = bal;
+    if (LIABILITY_TYPES.has(acc.account_type || '')) {
+      totalLiabilities += Math.abs(bal);
+    } else {
+      totalAssets += bal;
+    }
   }
 
-  // 按月累加交易
+  // 按时间顺序逐笔处理交易，追踪账户余额变化
+  const monthlyChanges: Record<string, { assets: number; liabilities: number }> = {};
+
   for (const tx of txs.results) {
     const month = tx.happened_at.slice(0, 7); // YYYY-MM
-    if (!monthlyMap[month]) {
-      monthlyMap[month] = { net_worth: 0, assets: 0, liabilities: 0 };
-    }
+    const amt = tx.amount; // 使用 amount（与原版对齐）
 
-    if (tx.tx_type === 'income') {
-      monthlyMap[month].assets += tx.effective_amount;
-    } else if (tx.tx_type === 'expense') {
-      monthlyMap[month].liabilities += tx.effective_amount;
+    if (tx.tx_type === 'income' && tx.account_sync_id) {
+      const acc = accounts.results.find(a => a.sync_id === tx.account_sync_id);
+      if (acc && !LIABILITY_TYPES.has(acc.account_type || '')) {
+        if (!monthlyChanges[month]) monthlyChanges[month] = { assets: 0, liabilities: 0 };
+        monthlyChanges[month].assets += amt;
+        accountBalances[tx.account_sync_id] = (accountBalances[tx.account_sync_id] ?? 0) + amt;
+      }
+    } else if (tx.tx_type === 'expense' && tx.account_sync_id) {
+      const acc = accounts.results.find(a => a.sync_id === tx.account_sync_id);
+      if (acc && !LIABILITY_TYPES.has(acc.account_type || '')) {
+        if (!monthlyChanges[month]) monthlyChanges[month] = { assets: 0, liabilities: 0 };
+        monthlyChanges[month].liabilities += amt;
+        accountBalances[tx.account_sync_id] = (accountBalances[tx.account_sync_id] ?? 0) - amt;
+      }
     } else if (tx.tx_type === 'transfer') {
-      // 转账不影响净值
+      // 转账：from_account 减少，to_account 增加 — 总净值不变但影响账户余额
+      // 不影响 assets/liabilities 聚合（与原版一致）
+    } else if (tx.tx_type === 'adjustment' && tx.account_sync_id) {
+      if (!monthlyChanges[month]) monthlyChanges[month] = { assets: 0, liabilities: 0 };
+      if (tx.amount >= 0) {
+        monthlyChanges[month].assets += tx.amount;
+      } else {
+        monthlyChanges[month].liabilities += Math.abs(tx.amount);
+      }
+      accountBalances[tx.account_sync_id] = (accountBalances[tx.account_sync_id] ?? 0) + tx.amount;
+    }
+  }
+
+  // 稀疏到稠密填充（缺失月份用上月值）
+  const allMonths: string[] = [];
+  if (txs.results.length > 0) {
+    const firstMonth = txs.results[0].happened_at.slice(0, 7);
+    const lastMonth = txs.results[txs.results.length - 1].happened_at.slice(0, 7);
+    let [y, m] = firstMonth.split('-').map(Number);
+    const [endY, endM] = lastMonth.split('-').map(Number);
+    while (y < endY || (y === endY && m <= endM)) {
+      allMonths.push(`${y}-${String(m).padStart(2, '0')}`);
+      m++;
+      if (m > 12) { m = 1; y++; }
     }
   }
 
   // 构建 series
-  const series = Object.entries(monthlyMap)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([bucket, data]) => ({
-      bucket,
-      net_worth: totalAssets + data.assets - totalLiabilities - data.liabilities,
-      assets: totalAssets + data.assets,
-      liabilities: totalLiabilities + data.liabilities,
-    }));
+  let runningAssets = totalAssets;
+  let runningLiabilities = totalLiabilities;
+  const series = allMonths.map(month => {
+    const change = monthlyChanges[month] ?? { assets: 0, liabilities: 0 };
+    runningAssets += change.assets;
+    runningLiabilities += change.liabilities;
+    return {
+      bucket: month,
+      net_worth: runningAssets - runningLiabilities,
+      assets: runningAssets,
+      liabilities: runningLiabilities,
+    };
+  });
 
   return c.json({ series, multi_currency: multiCurrency });
 });
