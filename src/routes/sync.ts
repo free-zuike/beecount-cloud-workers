@@ -1665,6 +1665,33 @@ async function applyChangeToProjection(
   switch (change.entity_type) {
     case 'transaction': {
       if (change.action === 'delete') {
+        // 删除前收集附件文件 ID（与原版 gc_orphan_attachments_for_ledger 对齐）
+        if (r2) {
+          try {
+            const txRow = await db.prepare(
+              'SELECT attachments_json FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?'
+            ).bind(ledgerId, change.entity_sync_id).first<{ attachments_json: string | null }>();
+            if (txRow?.attachments_json) {
+              const attachments = JSON.parse(txRow.attachments_json);
+              if (Array.isArray(attachments)) {
+                for (const att of attachments) {
+                  const fileId = att.id || att.file_id;
+                  if (fileId) {
+                    // 从 attachment_files 获取 storage_path
+                    const attFile = await db.prepare(
+                      "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'transaction'"
+                    ).bind(fileId).first<{ storage_path: string }>();
+                    if (attFile?.storage_path) {
+                      try { await r2.delete(attFile.storage_path); } catch {}
+                    }
+                    await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
+                  }
+                }
+              }
+            }
+          } catch {}
+        }
+
         await db
           .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
           .bind(ledgerId, change.entity_sync_id)
