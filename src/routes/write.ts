@@ -1944,7 +1944,7 @@ writeRouter.get('/ledgers/:ledgerId/budgets/usage', async (c) => {
   for (const b of dedup.values()) {
     let baseQuery = `SELECT COALESCE(SUM(COALESCE(native_amount, amount)), 0) as total FROM read_tx_projection
       WHERE ledger_id = ? AND tx_type = 'expense' AND happened_at >= ? AND happened_at < ?
-      AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`;
+      AND (exclude_from_budget IS NULL OR exclude_from_budget = 0 OR exclude_from_budget = false)`;
     const params: (string | number)[] = [ledger.id, startStr, endStr];
 
     if (b.budget_type === 'category' && b.category_sync_id) {
