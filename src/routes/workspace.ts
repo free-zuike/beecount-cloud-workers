@@ -1802,13 +1802,14 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
 
   const ownerAccounts = await db
     .prepare(
-      `SELECT DISTINCT name, account_type, currency
+      `SELECT DISTINCT sync_id, name, account_type, currency, initial_balance, note,
+              credit_limit, billing_day, payment_due_day, bank_name, card_last_four
        FROM read_account_projection
-       WHERE user_id = ?
+       WHERE user_id = ? AND sync_id IS NOT NULL AND sync_id != ''
        ORDER BY LOWER(name) ASC`
     )
     .bind(ownerId)
-    .all<{ name: string | null; account_type: string | null; currency: string | null }>();
+    .all<{ sync_id: string; name: string | null; account_type: string | null; currency: string | null; initial_balance: number | null; note: string | null; credit_limit: number | null; billing_day: number | null; payment_due_day: number | null; bank_name: string | null; card_last_four: string | null }>();
 
   const ownerTags = await db
     .prepare(
@@ -1830,9 +1831,18 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
       icon_type: cat.icon_type,
     })),
     accounts: ownerAccounts.results.map((acct) => ({
+      sync_id: acct.sync_id,
       name: acct.name,
       account_type: acct.account_type,
       currency: acct.currency,
+      initial_balance: acct.initial_balance ?? 0,
+      note: acct.note,
+      credit_limit: acct.credit_limit,
+      billing_day: acct.billing_day,
+      payment_due_day: acct.payment_due_day,
+      bank_name: acct.bank_name,
+      card_last_four: acct.card_last_four,
+      updated_at: new Date().toISOString(),
     })),
     tags: ownerTags.results.map((tag) => ({
       name: tag.name,
