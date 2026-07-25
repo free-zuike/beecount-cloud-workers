@@ -2153,8 +2153,16 @@ backupRouter.post('/restore-from-r2', async (c) => {
     return c.json({ error: 'R2 not configured' }, 400);
   }
 
-  // 查找 R2 中最新的备份文件
-  const listing = await r2.list({ prefix: `backups/${userId}/` });
+  // 查找 R2 中最新的备份文件（前缀 beecount/）
+  let listing = await r2.list({ prefix: `beecount/backups/${userId}/` });
+  if (!listing.objects || listing.objects.length === 0) {
+    // 尝试无前缀路径
+    listing = await r2.list({ prefix: `backups/${userId}/` });
+  }
+  if (!listing.objects || listing.objects.length === 0) {
+    // 最后尝试列出所有 beecount 前缀
+    listing = await r2.list({ prefix: `beecount/` });
+  }
   if (!listing.objects || listing.objects.length === 0) {
     return c.json({ error: 'No backups found in R2' }, 404);
   }
