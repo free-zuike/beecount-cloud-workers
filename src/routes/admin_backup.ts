@@ -2141,6 +2141,48 @@ backupRouter.delete('/restores/:id', async (c) => {
   return c.body(null, 204);
 });
 
+/**
+ * POST /restore-from-r2 - 直接从 R2 恢复数据（不依赖 backup_runs 记录）
+ */
+backupRouter.post('/restore-from-r2', async (c) => {
+  const db = c.env.DB;
+  const userId = c.get('userId');
+  const r2 = c.env.R2;
+  
+  if (!r2) {
+    return c.json({ error: 'R2 not configured' }, 400);
+  }
+
+  // 查找 R2 中最新的备份文件
+  const listing = await r2.list({ prefix: `backups/${userId}/` });
+  if (!listing.objects || listing.objects.length === 0) {
+    return c.json({ error: 'No backups found in R2' }, 404);
+  }
+
+  const latest = listing.objects.sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime())[0];
+  console.debug(`[Restore] Restoring from: ${latest.key}`);
+
+  try {
+    const { performRestore } = await import('../lib/restore-service');
+
+    const result = await performRestore(db, r2, latest.key, (progress) => {
+      console.debug(`[Restore] ${progress.phase}: ${progress.bytesTransferred}/${progress.bytesTotal}`);
+    });
+
+    return c.json({
+      success: result.success,
+      message: result.message,
+      backupFile: latest.key,
+      tablesImported: result.tablesImported,
+      rowsImported: result.rowsImported,
+      attachmentsUploaded: result.attachmentsUploaded,
+    }, 200);
+  } catch (err) {
+    console.error(`[Restore] Failed: ${(err as Error).message}`);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // POST /admin/backups/upload-db - 上传数据库备份文件
 // ---------------------------------------------------------------------------
