@@ -1250,7 +1250,14 @@ syncRouter.get('/full', async (c) => {
       .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id = ?')
       .bind(ledger.id)
       .first<{ max_id: number | null }>();
-    if (!ledgerChangeId?.max_id) {
+
+    // 如果 sync_changes 为空但投影表有数据（恢复后场景），仍然构建快照
+    const hasProjections = await db
+      .prepare('SELECT 1 FROM read_tx_projection WHERE ledger_id = ? LIMIT 1')
+      .bind(ledger.id)
+      .first();
+
+    if (!ledgerChangeId?.max_id && !hasProjections) {
       return c.json({ ledger_id: ledgerId, snapshot: null, latest_cursor: latestCursor });
     }
 
