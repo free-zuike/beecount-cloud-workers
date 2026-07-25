@@ -1103,10 +1103,6 @@ syncRouter.get('/pull', async (c) => {
             payload = {};
           }
         }
-        // 规范化 tags 字段：Flutter 客户端期望 tags 是 String?，但 push 时可能传了数组
-        if (c.entity_type === 'transaction' && Array.isArray(payload.tags)) {
-          payload.tags = (payload.tags as string[]).join(',');
-        }
         return {
           change_id: c.change_id,
           ledger_id: c.scope === 'user' ? '__user_global__' : (c.ledger_id ?? ''),
@@ -1319,6 +1315,7 @@ syncRouter.get('/full', async (c) => {
         payload: { content: JSON.stringify(snapshot), metadata: { source: 'lazy_rebuild' } },
         updated_at: new Date().toISOString(),
         updated_by_device_id: null,
+        scope: 'ledger',
       },
     });
   } catch (error) {
