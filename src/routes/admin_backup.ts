@@ -2424,8 +2424,89 @@ backupRouter.get('/restore-from-r2/list', async (c) => {
 });
 
 /**
- * POST /restore-from-r2 - 从指定 R2 备份恢复数据
+ * POST /restore-from-r2/fix-data - 修复恢复数据中 sync_id 为空的记录
  */
+backupRouter.post('/restore-from-r2/fix-data', async (c) => {
+  const db = c.env.DB;
+  const fixes: Record<string, number> = {};
+
+  // 1. 修复 read_account_projection 中 sync_id 为空的记录
+  try {
+    const emptyAccounts = await db.prepare(
+      `SELECT rowid FROM read_account_projection WHERE sync_id IS NULL OR sync_id = ''`
+    ).all<{ rowid: number }>();
+    if (emptyAccounts.results && emptyAccounts.results.length > 0) {
+      for (const row of emptyAccounts.results) {
+        const newSyncId = crypto.randomUUID();
+        await db.prepare(`UPDATE read_account_projection SET sync_id = ? WHERE rowid = ?`)
+          .bind(newSyncId, row.rowid).run();
+      }
+      fixes['read_account_projection'] = emptyAccounts.results.length;
+    }
+  } catch {}
+
+  // 2. 修复 read_category_projection 中 sync_id 为空的记录
+  try {
+    const emptyCats = await db.prepare(
+      `SELECT rowid FROM read_category_projection WHERE sync_id IS NULL OR sync_id = ''`
+    ).all<{ rowid: number }>();
+    if (emptyCats.results && emptyCats.results.length > 0) {
+      for (const row of emptyCats.results) {
+        const newSyncId = crypto.randomUUID();
+        await db.prepare(`UPDATE read_category_projection SET sync_id = ? WHERE rowid = ?`)
+          .bind(newSyncId, row.rowid).run();
+      }
+      fixes['read_category_projection'] = emptyCats.results.length;
+    }
+  } catch {}
+
+  // 3. 修复 read_tag_projection 中 sync_id 为空的记录
+  try {
+    const emptyTags = await db.prepare(
+      `SELECT rowid FROM read_tag_projection WHERE sync_id IS NULL OR sync_id = ''`
+    ).all<{ rowid: number }>();
+    if (emptyTags.results && emptyTags.results.length > 0) {
+      for (const row of emptyTags.results) {
+        const newSyncId = crypto.randomUUID();
+        await db.prepare(`UPDATE read_tag_projection SET sync_id = ? WHERE rowid = ?`)
+          .bind(newSyncId, row.rowid).run();
+      }
+      fixes['read_tag_projection'] = emptyTags.results.length;
+    }
+  } catch {}
+
+  // 4. 修复 read_tx_projection 中 sync_id 为空的记录
+  try {
+    const emptyTxs = await db.prepare(
+      `SELECT rowid FROM read_tx_projection WHERE sync_id IS NULL OR sync_id = ''`
+    ).all<{ rowid: number }>();
+    if (emptyTxs.results && emptyTxs.results.length > 0) {
+      for (const row of emptyTxs.results) {
+        const newSyncId = crypto.randomUUID();
+        await db.prepare(`UPDATE read_tx_projection SET sync_id = ? WHERE rowid = ?`)
+          .bind(newSyncId, row.rowid).run();
+      }
+      fixes['read_tx_projection'] = emptyTxs.results.length;
+    }
+  } catch {}
+
+  // 5. 修复 read_budget_projection 中 sync_id 为空的记录
+  try {
+    const emptyBudgets = await db.prepare(
+      `SELECT rowid FROM read_budget_projection WHERE sync_id IS NULL OR sync_id = ''`
+    ).all<{ rowid: number }>();
+    if (emptyBudgets.results && emptyBudgets.results.length > 0) {
+      for (const row of emptyBudgets.results) {
+        const newSyncId = crypto.randomUUID();
+        await db.prepare(`UPDATE read_budget_projection SET sync_id = ? WHERE rowid = ?`)
+          .bind(newSyncId, row.rowid).run();
+      }
+      fixes['read_budget_projection'] = emptyBudgets.results.length;
+    }
+  } catch {}
+
+  return c.json({ fixes, message: 'Fixed sync_id for empty records' });
+});
 backupRouter.post('/restore-from-r2', async (c) => {
   const db = c.env.DB;
   const userId = c.get('userId');
