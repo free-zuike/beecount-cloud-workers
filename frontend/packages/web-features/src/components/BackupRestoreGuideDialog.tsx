@@ -201,7 +201,7 @@ rm -rf ${path}/..`
                   {t('backup.restore.steps.title')}
                 </span>
                 <Button size="sm" variant="outline" onClick={() => void copyAll()}>
-                  {t('backup.restore.button.copyAll')}
+                  恢复数据
                 </Button>
               </div>
               <pre className="overflow-x-auto rounded-md border border-border/60 bg-muted/40 p-3 font-mono text-[10px] leading-relaxed">
