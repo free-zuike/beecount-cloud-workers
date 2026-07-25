@@ -1369,10 +1369,21 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
     return c.json({ error: 'Ledger has reached the maximum member limit' }, 400);
   }
 
-  await db
-    .prepare('INSERT INTO ledger_members (ledger_id, user_id, role) VALUES (?, ?, ?)')
-    .bind(invite.ledger_id, userId, invite.target_role)
-    .run();
+  // 并发保护：用 try-catch 捕获 UNIQUE 约束冲突（与原版 SELECT FOR UPDATE 对齐）
+  try {
+    await db
+      .prepare('INSERT INTO ledger_members (ledger_id, user_id, role) VALUES (?, ?, ?)')
+      .bind(invite.ledger_id, userId, invite.target_role)
+      .run();
+  } catch (err) {
+    if ((err as Error).message?.includes('UNIQUE')) {
+      // 已是成员（并发请求竞争），返回成功
+      const cnt = await db.prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).first<{ cnt: number }>();
+      const li = await db.prepare('SELECT currency FROM ledgers WHERE id = ?').bind(invite.ledger_id).first<{ currency: string }>();
+      return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) + 1 });
+    }
+    throw err;
+  }
 
   await db
     .prepare('UPDATE ledger_invites SET used_at = ?, used_by = ? WHERE id = ?')
@@ -1388,6 +1399,24 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
     .prepare('SELECT currency FROM ledgers WHERE id = ?')
     .bind(invite.ledger_id)
     .first<{ currency: string }>();
+
+  // WS 广播 member_change（与原版 broadcast_to_ledger 对齐）
+  try {
+    const members = await db.prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).all<{ user_id: string }>();
+    const { getWsManager } = await import('../lib/ws-manager');
+    for (const m of members.results) {
+      await getWsManager().broadcastToUser(m.user_id, { type: 'member_change', ledgerId: invite.external_id, changeType: 'added', userId });
+    }
+  } catch {}
+  try {
+    const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
+    const doStub = c.env.BEECOUNT_DO.get(doId);
+    await doStub.fetch(new Request('https://dummy/broadcast', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: JSON.stringify({ type: 'member_change', ledgerId: invite.external_id, changeType: 'added', userId }) }),
+    }));
+  } catch {}
 
   await insertAuditLog({
     db, userId, ledgerId: invite.ledger_id, action: 'join', entityType: 'ledger', entityId: invite.external_id,
@@ -1458,10 +1487,20 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
     return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) + 1 });
   }
 
-  await db
-    .prepare('INSERT INTO ledger_members (ledger_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)')
-    .bind(invite.ledger_id, userId, invite.target_role, nowUtc())
-    .run();
+  // 并发保护：try-catch 捕获 UNIQUE 约束冲突
+  try {
+    await db
+      .prepare('INSERT INTO ledger_members (ledger_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)')
+      .bind(invite.ledger_id, userId, invite.target_role, nowUtc())
+      .run();
+  } catch (err) {
+    if ((err as Error).message?.includes('UNIQUE')) {
+      const cnt = await db.prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).first<{ cnt: number }>();
+      const li = await db.prepare('SELECT currency FROM ledgers WHERE id = ?').bind(invite.ledger_id).first<{ currency: string }>();
+      return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) + 1 });
+    }
+    throw err;
+  }
 
   await db.prepare('UPDATE ledger_invites SET used_at = ?, used_by = ? WHERE id = ?')
     .bind(nowUtc(), userId, invite.id)
@@ -1469,6 +1508,15 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
 
   const updatedCount = await db.prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).first<{ cnt: number }>();
   const ledgerInfo = await db.prepare('SELECT currency FROM ledgers WHERE id = ?').bind(invite.ledger_id).first<{ currency: string }>();
+
+  // WS 广播 member_change
+  try {
+    const members = await db.prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).all<{ user_id: string }>();
+    const { getWsManager } = await import('../lib/ws-manager');
+    for (const m of members.results) {
+      await getWsManager().broadcastToUser(m.user_id, { type: 'member_change', ledgerId: invite.external_id, changeType: 'added', userId });
+    }
+  } catch {}
 
   return c.json({
     ledger_id: invite.external_id,
