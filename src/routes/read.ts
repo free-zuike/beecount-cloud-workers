@@ -1496,20 +1496,27 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
   for (const b of budgets.results) {
     let spent = 0;
     if (b.category_sync_id) {
-      // 子分类展开：查找所有子分类（与原版 _expand_category_to_children 对齐）
-      const childCategories = await db
-        .prepare('SELECT sync_id FROM read_category_projection WHERE ledger_id = ? AND parent_sync_id = ?')
-        .bind(ledger.id, b.category_sync_id)
-        .all<{ sync_id: string }>();
-      const categoryIds = [b.category_sync_id, ...childCategories.results.map(c => c.sync_id)];
+      // 子分类展开：查找所有子分类（用 parent_name 匹配，与原版 _expand_category_to_children 对齐）
+      const parentCat = await db
+        .prepare('SELECT name FROM read_category_projection WHERE sync_id = ? AND ledger_id = ?')
+        .bind(b.category_sync_id, ledger.id)
+        .first<{ name: string }>();
+      const categorySyncIds: string[] = [b.category_sync_id];
+      if (parentCat?.name) {
+        const children = await db
+          .prepare('SELECT sync_id FROM read_category_projection WHERE ledger_id = ? AND parent_name = ?')
+          .bind(ledger.id, parentCat.name)
+          .all<{ sync_id: string }>();
+        categorySyncIds.push(...children.results.map(c => c.sync_id));
+      }
 
-      const placeholders = categoryIds.map(() => '?').join(',');
+      const placeholders = categorySyncIds.map(() => '?').join(',');
       const row = await db
         .prepare(`SELECT COALESCE(SUM(COALESCE(native_amount, amount)), 0) as total FROM read_tx_projection
                    WHERE ledger_id = ? AND category_sync_id IN (${placeholders}) AND tx_type = 'expense'
                    AND happened_at >= ? AND happened_at < ?
                    AND (exclude_from_budget IS NULL OR exclude_from_budget = 0 OR exclude_from_budget = false)`)
-        .bind(ledger.id, ...categoryIds, `${currentMonth}-01`, `${nextMonth}-01`)
+        .bind(ledger.id, ...categorySyncIds, `${currentMonth}-01`, `${nextMonth}-01`)
         .first<{ total: number }>();
       spent = row?.total ?? 0;
     } else {
