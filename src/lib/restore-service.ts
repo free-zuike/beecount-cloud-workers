@@ -96,10 +96,10 @@ function parseTar(data: Uint8Array): { name: string; size: number; data: Uint8Ar
   
   while (offset < data.length - 512) {
     const header = data.slice(offset, offset + 512);
-    const name = header.slice(0, 100).toString('utf8').replace(/\0/g, '');
+    const name = new TextDecoder().decode(header.slice(0, 100)).replace(/\0/g, '');
     if (!name) break;
     
-    const sizeOctal = header.slice(124, 136).toString('utf8').replace(/\0/g, '').trim();
+    const sizeOctal = new TextDecoder().decode(header.slice(124, 136)).replace(/\0/g, '').trim();
     const size = parseInt(sizeOctal, 8) || 0;
     
     const contentOffset = offset + 512;
