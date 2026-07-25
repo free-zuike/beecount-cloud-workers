@@ -1455,11 +1455,30 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
   }
   if (!ledger) return c.json({ error: 'Ledger not found' }, 404);
 
+  // 获取 month_start_day（与原版 _current_period_range 对齐）
+  const ledgerDetail = await db.prepare('SELECT month_start_day FROM ledgers WHERE id = ?').bind(ledger.id).first<{ month_start_day: number }>();
+  const monthStartDay = Math.min(Math.max(ledgerDetail?.month_start_day ?? 1, 1), 28);
+
   const now = new Date();
-  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const nextMonth = now.getMonth() === 11
-    ? `${now.getFullYear() + 1}-01`
-    : `${now.getFullYear()}-${String(now.getMonth() + 2).padStart(2, '0')}`;
+  const today = now.getDate();
+  const year = now.getFullYear();
+  const month = now.getMonth(); // 0-based
+
+  // 与原版对齐的周期计算：如果 day >= monthStartDay，周期从当月 start_day 开始；否则从上月 start_day 开始
+  let periodStart: Date;
+  let periodEnd: Date;
+  if (today >= monthStartDay) {
+    periodStart = new Date(year, month, monthStartDay);
+    periodEnd = new Date(year, month + 1, monthStartDay);
+  } else {
+    periodStart = new Date(year, month - 1, monthStartDay);
+    periodEnd = new Date(year, month, monthStartDay);
+  }
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const formatDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const currentMonth = formatDate(periodStart);
+  const nextMonth = formatDate(periodEnd);
 
   const budgets = await db
     .prepare('SELECT sync_id, category_sync_id, amount, period FROM read_budget_projection WHERE ledger_id = ? AND enabled = 1')
