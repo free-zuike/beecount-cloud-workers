@@ -652,6 +652,25 @@ adminRouter.post('/devices/:id/revoke', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// DELETE /admin/devices/:id - 删除设备
+// ---------------------------------------------------------------------------
+
+adminRouter.delete('/devices/:id', async (c) => {
+  const db = c.env.DB;
+  const deviceId = c.req.param('id');
+
+  const device = await db.prepare('SELECT id FROM devices WHERE id = ?').bind(deviceId).first();
+  if (!device) {
+    return c.json({ error: 'Device not found' }, 404);
+  }
+
+  await db.prepare('DELETE FROM devices WHERE id = ?').bind(deviceId).run();
+  await db.prepare("DELETE FROM refresh_tokens WHERE device_id = ?").bind(deviceId).run();
+
+  return c.json({ ok: true, device_id: deviceId });
+});
+
+// ---------------------------------------------------------------------------
 // GET /admin/logs - 获取最近日志（简化版）
 // ---------------------------------------------------------------------------
 
