@@ -608,7 +608,7 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
     // 尝试按内部 id 查找
     ledger = await db
       .prepare(
-        `SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
+        `SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day, l.user_id
          FROM ledgers l
          WHERE l.user_id = ? AND l.id = ?`
       )
@@ -619,6 +619,7 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
         name: string | null;
         currency: string;
         month_start_day: number;
+        user_id: string;
       }>();
   }
 
@@ -626,7 +627,7 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
     // 共享账本：通过 ledger_members 查找
     ledger = await db
       .prepare(
-        `SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
+        `SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day, l.user_id
          FROM ledgers l
          JOIN ledger_members lm ON l.id = lm.ledger_id
          WHERE lm.user_id = ? AND (l.external_id = ? OR l.id = ?)`
@@ -638,12 +639,20 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
         name: string | null;
         currency: string;
         month_start_day: number;
+        user_id: string;
       }>();
   }
 
   if (!ledger) {
     return c.json({ error: 'Ledger not found' }, 404);
   }
+
+  // 确定用户在该账本中的角色（与原版对齐）
+  const memberRow = await db
+    .prepare('SELECT role FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .bind(ledger.id, userId)
+    .first<{ role: string }>();
+  const userRole = ledger.user_id === userId ? 'owner' : (memberRow?.role ?? 'owner');
 
   // 检查软删除
   const tombstone = await db
@@ -701,7 +710,7 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
     balance: (totals?.income_total ?? 0) - (totals?.expense_total ?? 0),
     exported_at: now,
     updated_at: now,
-    role: 'owner',
+    role: userRole as 'owner' | 'editor' | 'viewer',
     is_shared: totalMembers > 1,
     member_count: totalMembers,
     source_change_id: latestChangeId?.max_id ?? 0,

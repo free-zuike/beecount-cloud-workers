@@ -1211,10 +1211,12 @@ workspaceRouter.post('/invites/:code/preview', async (c) => {
     .prepare(
       `SELECT li.id, li.code, li.target_role, li.expires_at, li.used_at, li.invited_by,
               l.external_id, l.name as ledger_name, l.currency,
-              u.email as owner_email
+              u.email as owner_email,
+              p.display_name as owner_display_name
        FROM ledger_invites li
        JOIN ledgers l ON li.ledger_id = l.id
        JOIN users u ON l.user_id = u.id
+       LEFT JOIN user_profiles p ON p.user_id = l.user_id
        WHERE li.code = ?`
     )
     .bind(inviteCode)
@@ -1229,6 +1231,7 @@ workspaceRouter.post('/invites/:code/preview', async (c) => {
       ledger_name: string | null;
       currency: string;
       owner_email: string;
+      owner_display_name: string | null;
     }>();
 
   if (!invite) {
@@ -1258,6 +1261,7 @@ workspaceRouter.post('/invites/:code/preview', async (c) => {
     ledger_name: invite.ledger_name,
     currency: invite.currency,
     owner_email: invite.owner_email,
+    invited_by_display_name: invite.owner_display_name ?? invite.owner_email,
     expires_at: invite.expires_at,
   });
 });
@@ -1337,6 +1341,16 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
     .bind(nowUtc(), userId, invite.id)
     .run();
 
+  // 查询 member_count 和 currency（与原版对齐）
+  const updatedCount = await db
+    .prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?')
+    .bind(invite.ledger_id)
+    .first<{ cnt: number }>();
+  const ledgerInfo = await db
+    .prepare('SELECT currency FROM ledgers WHERE id = ?')
+    .bind(invite.ledger_id)
+    .first<{ currency: string }>();
+
   await insertAuditLog({
     db, userId, ledgerId: invite.ledger_id, action: 'join', entityType: 'ledger', entityId: invite.external_id,
     details: { invite_code: invite.code, target_role: invite.target_role },
@@ -1345,7 +1359,9 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
   return c.json({
     ledger_id: invite.external_id,
     ledger_name: invite.ledger_name,
+    ledger_currency: ledgerInfo?.currency ?? 'CNY',
     role: invite.target_role,
+    member_count: (updatedCount?.cnt ?? 0) + 1,
   });
 });
 
@@ -1399,7 +1415,9 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
     .first();
 
   if (existingMember) {
-    return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, role: invite.target_role });
+    const cnt = await db.prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).first<{ cnt: number }>();
+    const li = await db.prepare('SELECT currency FROM ledgers WHERE id = ?').bind(invite.ledger_id).first<{ currency: string }>();
+    return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) + 1 });
   }
 
   await db
@@ -1411,10 +1429,15 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
     .bind(nowUtc(), userId, invite.id)
     .run();
 
+  const updatedCount = await db.prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).first<{ cnt: number }>();
+  const ledgerInfo = await db.prepare('SELECT currency FROM ledgers WHERE id = ?').bind(invite.ledger_id).first<{ currency: string }>();
+
   return c.json({
     ledger_id: invite.external_id,
     ledger_name: invite.ledger_name,
+    ledger_currency: ledgerInfo?.currency ?? 'CNY',
     role: invite.target_role,
+    member_count: (updatedCount?.cnt ?? 0) + 1,
   });
 });
 
