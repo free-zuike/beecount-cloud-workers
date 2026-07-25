@@ -98,6 +98,15 @@ async function resolveTagsCsv(db: D1Database, tags: string | null, tagIds: strin
 
 const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override'];
 
+/** SQLite 用 0/1 存储布尔值，Flutter 期望 bool — 统一转换 */
+const BOOL_KEYS = ['enabled', 'exclude_from_stats', 'exclude_from_budget', 'is_default', 'hidden', 'income_is_red'];
+function convertBooleans<T extends Record<string, unknown>>(row: T): T {
+  for (const k of BOOL_KEYS) {
+    if (typeof row[k] === 'number') (row as any)[k] = row[k] === 1;
+  }
+  return row;
+}
+
 function isUserGlobalType(entityType: string): boolean {
   return USER_GLOBAL_TYPES.includes(entityType);
 }
@@ -1097,9 +1106,9 @@ syncRouter.get('/pull', async (c) => {
         if (c.payload_json) {
           try {
             payload = JSON.parse(c.payload_json);
+            convertBooleans(payload);
           } catch (err) {
             console.error('[SYNC] /sync/pull JSON.parse error for change_id:', c.change_id, 'entity_type:', c.entity_type, 'error:', err);
-            // 返回空 payload 而不是崩溃
             payload = {};
           }
         }
@@ -1294,11 +1303,11 @@ syncRouter.get('/full', async (c) => {
         currency: ledger.currency || 'CNY',
         monthStartDay: ledger.month_start_day || 1,
         count: txs.results.length,
-        items: txs.results,
-        accounts: accounts.results,
-        categories: categories.results,
-        tags: tags.results,
-        budgets: budgets.results,
+        items: txs.results.map(r => convertBooleans(r as Record<string, unknown>)),
+        accounts: accounts.results.map(r => convertBooleans(r as Record<string, unknown>)),
+        categories: categories.results.map(r => convertBooleans(r as Record<string, unknown>)),
+        tags: tags.results.map(r => convertBooleans(r as Record<string, unknown>)),
+        budgets: budgets.results.map(r => convertBooleans(r as Record<string, unknown>)),
       };
       snapshotCachePut(ledger.id, latestCursor, snapshot);
     }
