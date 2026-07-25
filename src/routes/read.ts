@@ -459,15 +459,37 @@ readRouter.get('/workspace/transactions', async (c) => {
   const bindings: (string | number)[] = [userId];
 
   if (ledgerId) {
-    const ledger = await db
+    // 支持共享账本 — 与原版 _visible_workspace_ledgers 对齐
+    let ledger = await db
       .prepare('SELECT id FROM ledgers WHERE user_id = ? AND external_id = ?')
       .bind(userId, ledgerId)
       .first<{ id: string }>();
-    
+    if (!ledger) {
+      ledger = await db
+        .prepare('SELECT l.id FROM ledgers l JOIN ledger_members lm ON l.id = lm.ledger_id WHERE lm.user_id = ? AND l.external_id = ?')
+        .bind(userId, ledgerId)
+        .first<{ id: string }>();
+    }
     if (ledger) {
       query += ' AND ledger_id = ?';
       bindings.push(ledger.id);
+    } else {
+      // 账本不存在或无权访问，返回空结果
+      return c.json({ rows: [], total: 0 });
     }
+  } else {
+    // 无 ledgerId 过滤时，查询用户可访问的所有账本
+    const accessibleIds = await db.prepare(
+      `SELECT l.id FROM ledgers l WHERE l.user_id = ?
+       UNION
+       SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?`
+    ).bind(userId, userId).all<{ id: string }>();
+    if (accessibleIds.results.length === 0) {
+      return c.json({ rows: [], total: 0 });
+    }
+    const ids = accessibleIds.results.map(r => r.id);
+    query += ` AND ledger_id IN (${ids.map(() => '?').join(',')})`;
+    bindings.push(...ids);
   }
 
   if (dateFrom) {
@@ -505,9 +527,9 @@ readRouter.get('/workspace/transactions', async (c) => {
     bindings.push(amountMax);
   }
   if (q) {
-    query += ' AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ?)';
+    query += ' AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ? OR from_account_name LIKE ? OR to_account_name LIKE ? OR tags_csv LIKE ?)';
     const like = `%${q}%`;
-    bindings.push(like, like, like);
+    bindings.push(like, like, like, like, like, like);
   }
   if (txSyncId) {
     query += ' AND sync_id = ?';
@@ -527,6 +549,11 @@ readRouter.get('/workspace/transactions', async (c) => {
   bindings.push(limit, offset);
 
   const rows = await db.prepare(query).bind(...bindings).all<Record<string, unknown>>();
+
+  // 查询真实总数（与原版对齐）— 移除 ORDER BY/LIMIT/OFFSET
+  const countQuery = query.replace(/ORDER BY.*$/, '');
+  const countBindings = bindings.slice(0, -2); // 去掉最后的 limit 和 offset
+  const totalResult = await db.prepare(`SELECT COUNT(*) as cnt FROM (${countQuery})`).bind(...countBindings).first<{ cnt: number }>();
 
   const items = rows.results.map((row) => {
     const tagIds = safeJsonParse<string[]>(row.tag_sync_ids_json as string | null) ?? [];
@@ -562,7 +589,7 @@ readRouter.get('/workspace/transactions', async (c) => {
 
   return c.json({
     items,
-    total: rows.results.length,
+    total: totalResult?.cnt ?? rows.results.length,
     limit,
     offset,
   });
