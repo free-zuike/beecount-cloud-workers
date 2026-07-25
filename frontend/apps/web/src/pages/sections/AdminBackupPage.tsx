@@ -319,6 +319,7 @@ export function AdminBackupPage() {
     try {
       const result = await prepareRestore(token, restoreRun.id)
       setRestoreStatus(result)
+      setRestoreLive({ phase: 'downloading' })
     } catch (err) {
       notifyError(err)
     }
