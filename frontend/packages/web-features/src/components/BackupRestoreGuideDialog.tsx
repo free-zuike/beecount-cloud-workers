@@ -200,7 +200,7 @@ rm -rf ${path}/..`
                 <span className="font-medium">
                   {t('backup.restore.steps.title')}
                 </span>
-                <Button size="sm" variant="outline" onClick={() => void copyAll()}>
+                <Button size="sm" variant="outline" onClick={() => void onTrigger?.()}>
                   恢复数据
                 </Button>
               </div>
