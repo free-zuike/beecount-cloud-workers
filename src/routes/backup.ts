@@ -240,8 +240,8 @@ backupRouter.post('/fix-data', async (c) => {
 
   for (const pt of projectionTables) {
     try {
-      // 先删除旧的 sync_changes（可能有错误的 ledger_id），然后重建
-      const deleted = await db.prepare(`DELETE FROM sync_changes WHERE entity_type = ? AND scope = ?`).bind(pt.entityType, pt.entityType === 'account' || pt.entityType === 'category' || pt.entityType === 'tag' ? 'user' : 'ledger').run();
+      // 先删除该 entity_type 的所有 sync_changes，然后重建
+      const deleted = await db.prepare(`DELETE FROM sync_changes WHERE entity_type = ?`).bind(pt.entityType).run();
       if (deleted.meta?.changes && deleted.meta.changes > 0) {
         fixes[`deleted_${pt.entityType}`] = deleted.meta.changes;
       }
