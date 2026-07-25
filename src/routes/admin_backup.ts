@@ -734,6 +734,15 @@ backupRouter.delete('/remotes/:id', async (c) => {
     return c.json({ error: 'Remote not found' }, 404);
   }
 
+  // 检查是否绑定定时任务（与原版对齐：绑定中的远端不可删除）
+  const boundSchedules = await db
+    .prepare(`SELECT id FROM backup_schedules WHERE remote_ids LIKE ?`)
+    .bind(`%"${remoteId}"%`)
+    .first();
+  if (boundSchedules) {
+    return c.json({ error: 'Remote is bound to one or more schedules. Remove from schedules first.' }, 409);
+  }
+
   await db.prepare('DELETE FROM backup_remotes WHERE id = ?').bind(remoteId).run();
 
   return c.json({ success: true });

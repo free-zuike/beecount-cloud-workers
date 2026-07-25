@@ -327,6 +327,8 @@ adminRouter.post('/users', zValidator('json', AdminUserCreateSchema), async (c) 
     avatar_url: null,
     avatar_version: 0,
   } as AdminUserOut);
+
+  await insertAuditLog({ db, userId: c.get('userId'), action: 'admin_user_create', entityType: 'user', entityId: userId, details: { email: req.email.toLowerCase() } });
 });
 
 // ---------------------------------------------------------------------------
@@ -419,6 +421,7 @@ adminRouter.patch('/users/:id', zValidator('json', AdminUserPatchSchema), async 
     avatar_version: row.avatar_version ?? 0,
   };
 
+  await insertAuditLog({ db, userId: c.get('userId'), action: 'admin_user_patch', entityType: 'user', entityId: userId, details: { changes: Object.keys(req).filter(k => (req as any)[k] !== undefined) } });
   return c.json(response);
 });
 
@@ -474,6 +477,8 @@ adminRouter.delete('/users/:id', async (c) => {
     .prepare('UPDATE devices SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL')
     .bind(now, userId)
     .run();
+
+  await insertAuditLog({ db, userId: c.get('userId'), action: 'admin_user_delete', entityType: 'user', entityId: userId, details: { soft_delete: true } });
 
   return c.json({ id: userId, email: null, is_admin: false, is_enabled: false, created_at: null });
 });
