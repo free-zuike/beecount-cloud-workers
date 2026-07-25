@@ -136,14 +136,7 @@ async function importToD1(
     const columns = Object.keys(firstRow);
     if (columns.length === 0) continue;
     
-    // 先清空表（备份恢复是全量替换）
-    try {
-      await db.prepare(`DELETE FROM "${tableName}"`).run();
-    } catch {
-      // 表可能不存在
-    }
-    
-    // 批量插入（每批 100 行）
+    // 批量插入（每批 100 行）— 不删除现有数据，用 INSERT OR REPLACE
     const batchSize = 100;
     for (let i = 0; i < rows.length; i += batchSize) {
       const batch = rows.slice(i, i + batchSize);
@@ -154,12 +147,21 @@ async function importToD1(
       });
       
       try {
-        await db.prepare(`INSERT INTO "${tableName}" (${columns.map(c => `"${c}"`).join(',')}) VALUES ${placeholders}`)
+        // 先尝试 INSERT OR REPLACE（有主键的表）
+        await db.prepare(`INSERT OR REPLACE INTO "${tableName}" (${columns.map(c => `"${c}"`).join(',')}) VALUES ${placeholders}`)
           .bind(...values)
           .run();
         rowsImported += batch.length;
-      } catch (err) {
-        console.error(`[Restore] Failed to import batch for ${tableName}: ${(err as Error).message}`);
+      } catch {
+        try {
+          // 回退到普通 INSERT
+          await db.prepare(`INSERT INTO "${tableName}" (${columns.map(c => `"${c}"`).join(',')}) VALUES ${placeholders}`)
+            .bind(...values)
+            .run();
+          rowsImported += batch.length;
+        } catch (err) {
+          console.error(`[Restore] Failed to import batch for ${tableName}: ${(err as Error).message}`);
+        }
       }
     }
     
