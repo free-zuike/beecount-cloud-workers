@@ -2142,45 +2142,88 @@ backupRouter.delete('/restores/:id', async (c) => {
 });
 
 /**
- * POST /restore-from-r2 - 直接从 R2 恢复数据（不依赖 backup_runs 记录）
+ * GET /restore-from-r2/list - 列出 R2 中所有可用的备份文件
+ */
+backupRouter.get('/restore-from-r2/list', async (c) => {
+  const r2 = c.env.R2;
+  if (!r2) return c.json({ error: 'R2 not configured' }, 400);
+
+  // 尝试多种前缀
+  let allObjects: R2Object[] = [];
+  for (const prefix of ['beecount/backups/', 'backups/']) {
+    let cursor: string | undefined;
+    do {
+      const listing = await r2.list({ prefix, limit: 100, cursor });
+      allObjects = allObjects.concat(listing.objects);
+      cursor = listing.truncated ? listing.objects[listing.objects.length - 1].key : undefined;
+    } while (cursor);
+  }
+
+  if (allObjects.length === 0) {
+    return c.json({ backups: [], message: 'No backups found' });
+  }
+
+  // 过滤出备份文件，排除目录
+  const backups = allObjects
+    .filter(o => o.key.endsWith('.tar.gz') || o.key.endsWith('.zip'))
+    .map(o => ({
+      key: o.key,
+      size: o.size,
+      uploaded: o.uploaded.toISOString(),
+      // 提取日期时间
+      filename: o.key.split('/').pop() || o.key,
+    }))
+    .sort((a, b) => b.uploaded.localeCompare(a.uploaded)); // 最新在前
+
+  return c.json({ backups });
+});
+
+/**
+ * POST /restore-from-r2 - 从指定 R2 备份恢复数据
  */
 backupRouter.post('/restore-from-r2', async (c) => {
   const db = c.env.DB;
   const userId = c.get('userId');
   const r2 = c.env.R2;
-  
+
   if (!r2) {
     return c.json({ error: 'R2 not configured' }, 400);
   }
 
-  // 查找 R2 中最新的备份文件（前缀 beecount/）
-  let listing = await r2.list({ prefix: `beecount/backups/${userId}/` });
-  if (!listing.objects || listing.objects.length === 0) {
-    // 尝试无前缀路径
-    listing = await r2.list({ prefix: `backups/${userId}/` });
-  }
-  if (!listing.objects || listing.objects.length === 0) {
-    // 最后尝试列出所有 beecount 前缀
-    listing = await r2.list({ prefix: `beecount/` });
-  }
-  if (!listing.objects || listing.objects.length === 0) {
-    return c.json({ error: 'No backups found in R2' }, 404);
-  }
+  // 支持指定备份路径
+  let body: { backupPath?: string } = {};
+  try { body = await c.req.json(); } catch {}
+  const backupPath = body.backupPath;
 
-  const latest = listing.objects.sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime())[0];
-  console.debug(`[Restore] Restoring from: ${latest.key}`);
+  // 查找备份文件
+  let selectedPath = backupPath;
+  if (!selectedPath) {
+    let listing;
+    listing = await r2.list({ prefix: `beecount/backups/${userId}/` });
+    if (!listing.objects || listing.objects.length === 0) {
+      listing = await r2.list({ prefix: `backups/${userId}/` });
+    }
+    if (!listing.objects || listing.objects.length === 0) {
+      listing = await r2.list({ prefix: `beecount/backups/` });
+    }
+    if (!listing.objects || listing.objects.length === 0) {
+      return c.json({ error: 'No backups found in R2' }, 404);
+    }
+    selectedPath = listing.objects.sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime())[0].key;
+  }
+  console.debug(`[Restore] Restoring from: ${selectedPath}`);
 
   try {
     const { performRestore } = await import('../lib/restore-service');
 
-    const result = await performRestore(db, r2, latest.key, (progress) => {
+    const result = await performRestore(db, r2, selectedPath, (progress) => {
       console.debug(`[Restore] ${progress.phase}: ${progress.bytesTransferred}/${progress.bytesTotal}`);
     });
 
     return c.json({
       success: result.success,
       message: result.message,
-      backupFile: latest.key,
+      backupFile: selectedPath,
       tablesImported: result.tablesImported,
       rowsImported: result.rowsImported,
       attachmentsUploaded: result.attachmentsUploaded,
