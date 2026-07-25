@@ -128,8 +128,8 @@ async function importToD1(
   const errors: string[] = [];
 
   // 获取 D1 中已存在的表
-  const existingTables = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all<{ name: string }>();
-  const existingTableNames = new Set(existingTables.map(r => r.name));
+  const existingTablesResult = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all<{ name: string }>();
+  const existingTableNames = new Set((existingTablesResult.results || []).map(r => r.name));
 
   const tableNames = Object.keys(tables);
   for (const tableName of tableNames) {
@@ -143,8 +143,9 @@ async function importToD1(
     }
 
     // 获取表的实际列
-    const tableInfo = await db.prepare(`PRAGMA table_info("${tableName}")`).all<{ name: string }>();
-    const dbColumns = new Set(tableInfo.map(c => c.name));
+    const tableInfoResult = await db.prepare(`PRAGMA table_info("${tableName}")`).all<{ name: string; pk: number }>();
+    const tableInfoRows = tableInfoResult.results || [];
+    const dbColumns = new Set(tableInfoRows.map(c => c.name));
 
     // 获取备份中的列名
     const firstRow = rows[0] as Record<string, unknown>;
@@ -165,7 +166,7 @@ async function importToD1(
     }
 
     // 获取主键列（用于 INSERT OR REPLACE）
-    const pkColumns = tableInfo.filter(c => c.pk > 0).map(c => c.name);
+    const pkColumns = tableInfoRows.filter(c => c.pk > 0).map(c => c.name);
     const useReplace = pkColumns.length > 0;
 
     // 逐行插入（避免批量中某行失败导致整批丢失）
