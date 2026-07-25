@@ -208,12 +208,13 @@ backupRouter.delete('/clear-data', async (c) => {
 });
 
 /**
- * POST /backup/fix-data - 修复恢复数据中 sync_id 为空的投影记录
+ * POST /backup/fix-data - 修复恢复数据：补充缺失的 sync_changes 记录
  */
 backupRouter.post('/fix-data', async (c) => {
   const db = c.env.DB;
   const fixes: Record<string, number> = {};
 
+  // 1. 修复 sync_id 为空的投影记录
   const tables = ['read_account_projection', 'read_category_projection', 'read_tag_projection', 'read_tx_projection', 'read_budget_projection'];
   for (const tableName of tables) {
     try {
@@ -223,12 +224,76 @@ backupRouter.post('/fix-data', async (c) => {
           const newSyncId = crypto.randomUUID();
           await db.prepare(`UPDATE "${tableName}" SET sync_id = ? WHERE rowid = ?`).bind(newSyncId, row.rowid).run();
         }
-        fixes[tableName] = empty.results.length;
+        fixes[`${tableName}_sync_id`] = empty.results.length;
       }
     } catch {}
   }
 
-  return c.json({ fixes, message: 'Fixed sync_id for empty records' });
+  // 2. 为投影表中有数据但 sync_changes 中缺失的记录补充 sync_changes
+  // 这样 sync/pull 才能把数据推送给 App
+  const projectionTables: Array<{ table: string; entityType: string; ledgerIdCol: string; userCol: string }> = [
+    { table: 'read_budget_projection', entityType: 'budget', ledgerIdCol: 'ledger_id', userCol: 'user_id' },
+    { table: 'read_account_projection', entityType: 'account', ledgerIdCol: 'ledger_id', userCol: 'user_id' },
+    { table: 'read_category_projection', entityType: 'category', ledgerIdCol: 'ledger_id', userCol: 'user_id' },
+    { table: 'read_tag_projection', entityType: 'tag', ledgerIdCol: 'ledger_id', userCol: 'user_id' },
+  ];
+
+  for (const pt of projectionTables) {
+    try {
+      // 查找投影表中有数据但 sync_changes 中没有对应记录的行
+      const missing = await db.prepare(`
+        SELECT p.sync_id, p.${pt.userCol} as user_id, p.${pt.ledgerIdCol} as ledger_id, p.source_change_id
+        FROM "${pt.table}" p
+        WHERE p.sync_id IS NOT NULL AND p.sync_id != ''
+        AND NOT EXISTS (
+          SELECT 1 FROM sync_changes sc
+          WHERE sc.entity_type = ? AND sc.entity_sync_id = p.sync_id
+        )
+      `).bind(pt.entityType).all<{ sync_id: string; user_id: string; ledger_id: string | null; source_change_id: number | null }>();
+
+      if (missing.results && missing.results.length > 0) {
+        let insertedCount = 0;
+        for (const row of missing.results) {
+          // 从投影表中获取完整数据构建 payload
+          const fullRow = await db.prepare(`SELECT * FROM "${pt.table}" WHERE sync_id = ?`).bind(row.sync_id).first<Record<string, unknown>>();
+          if (!fullRow) continue;
+
+          const payload: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(fullRow)) {
+            if (k === 'id' || k === 'rowid') continue;
+            payload[k] = v;
+          }
+
+          const maxChangeId = await db.prepare('SELECT MAX(change_id) as max_id FROM sync_changes').first<{ max_id: number | null }>();
+          const newChangeId = (maxChangeId?.max_id ?? 0) + 1;
+
+          try {
+            await db.prepare(`
+              INSERT INTO sync_changes (change_id, user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, scope)
+              VALUES (?, ?, ?, ?, ?, 'upsert', ?, ?, NULL, ?)
+            `).bind(
+              newChangeId,
+              row.user_id,
+              row.ledger_id || null,
+              pt.entityType,
+              row.sync_id,
+              JSON.stringify(payload),
+              new Date().toISOString(),
+              pt.entityType === 'account' || pt.entityType === 'category' || pt.entityType === 'tag' ? 'user' : 'ledger'
+            ).run();
+            insertedCount++;
+          } catch (err) {
+            console.error(`[FixData] Failed to insert sync_changes for ${pt.entityType} ${row.sync_id}:`, (err as Error).message);
+          }
+        }
+        fixes[`sync_changes_${pt.entityType}`] = insertedCount;
+      }
+    } catch (err) {
+      console.error(`[FixData] Failed processing ${pt.table}:`, (err as Error).message);
+    }
+  }
+
+  return c.json({ fixes, message: 'Fixed sync_id and created missing sync_changes records' });
 });
 
 export default backupRouter;
