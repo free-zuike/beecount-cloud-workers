@@ -240,16 +240,18 @@ backupRouter.post('/fix-data', async (c) => {
 
   for (const pt of projectionTables) {
     try {
-      // 查找投影表中有数据但 sync_changes 中没有对应记录的行
+      // 先删除旧的 sync_changes（可能有错误的 ledger_id），然后重建
+      const deleted = await db.prepare(`DELETE FROM sync_changes WHERE entity_type = ? AND scope = ?`).bind(pt.entityType, pt.entityType === 'account' || pt.entityType === 'category' || pt.entityType === 'tag' ? 'user' : 'ledger').run();
+      if (deleted.meta?.changes && deleted.meta.changes > 0) {
+        fixes[`deleted_${pt.entityType}`] = deleted.meta.changes;
+      }
+
+      // 查找投影表中所有有 sync_id 的记录
       const missing = await db.prepare(`
         SELECT p.sync_id, p.${pt.userCol} as user_id, p.${pt.ledgerIdCol} as ledger_id, p.source_change_id
         FROM "${pt.table}" p
         WHERE p.sync_id IS NOT NULL AND p.sync_id != ''
-        AND NOT EXISTS (
-          SELECT 1 FROM sync_changes sc
-          WHERE sc.entity_type = ? AND sc.entity_sync_id = p.sync_id
-        )
-      `).bind(pt.entityType).all<{ sync_id: string; user_id: string; ledger_id: string | null; source_change_id: number | null }>();
+      `).all<{ sync_id: string; user_id: string; ledger_id: string | null; source_change_id: number | null }>();
 
       if (missing.results && missing.results.length > 0) {
         let insertedCount = 0;
@@ -268,6 +270,12 @@ backupRouter.post('/fix-data', async (c) => {
             } else {
               payload[k] = v;
             }
+          }
+
+          // 将 payload 中的 ledger_id 从内部 D1 ID 转换为 external_id（Flutter 期望 external_id）
+          if (payload.ledger_id && typeof payload.ledger_id === 'string') {
+            const ledger = await db.prepare('SELECT external_id FROM ledgers WHERE id = ?').bind(payload.ledger_id).first<{ external_id: string }>();
+            if (ledger) payload.ledger_id = ledger.external_id;
           }
 
           const maxChangeId = await db.prepare('SELECT MAX(change_id) as max_id FROM sync_changes').first<{ max_id: number | null }>();
