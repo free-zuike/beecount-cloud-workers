@@ -446,7 +446,7 @@ workspaceRouter.get('/accounts', async (c) => {
     ledgerMeta[l.id] = { external_id: l.external_id, name: l.name };
   });
 
-  let acctQuery = `SELECT * FROM read_account_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL) AND sync_id != '' AND sync_id IS NOT NULL`;
+  let acctQuery = `SELECT * FROM read_account_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`;
   const acctParams: string[] = [...ledgerInternalIds];
 
   // 默认按当前用户过滤，防止看到其他用户的数据
