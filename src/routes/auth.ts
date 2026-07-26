@@ -135,15 +135,10 @@ export async function upsertDevice(
       `INSERT INTO devices (id, user_id, name, platform, app_version, os_version, device_model, last_ip, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(targetId, userId, deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, clientIp, now).run();
   } else {
-    if (existingDevice.revoked_at) {
-      await db.prepare(
-        `UPDATE devices SET last_seen_at = ?, last_ip = ?, name = ?, platform = ?, app_version = ?, os_version = ?, device_model = ?, revoked_at = NULL WHERE id = ?`
-      ).bind(now, clientIp, deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, targetId).run();
-    } else {
-      await db.prepare(
-        `UPDATE devices SET last_seen_at = ?, last_ip = ?, name = ?, platform = ?, app_version = ?, os_version = ?, device_model = ? WHERE id = ?`
-      ).bind(now, clientIp, deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, targetId).run();
-    }
+    // 未传字段保留现有值（与原版对齐：Python 用 `if is not None` 模式）
+    await db.prepare(
+      `UPDATE devices SET last_seen_at = ?, last_ip = ?, name = ?, platform = ?, app_version = ?, os_version = ?, device_model = ?${existingDevice.revoked_at ? ', revoked_at = NULL' : ''} WHERE id = ?`
+    ).bind(now, clientIp || null, deviceName || null, platform || null, appVersion || null, osVersion || null, deviceModel || null, targetId).run();
   }
 
   return targetId;

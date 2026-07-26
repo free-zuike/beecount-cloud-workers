@@ -129,7 +129,7 @@ function buildOtpauthUri(secret: string, email: string): string {
  * @param window - 允许的时间窗口（前后各 window 个步长）
  * @returns 是否验证通过
  */
-async function verifyTotpCode(secret: string, code: string, window: number = 2): Promise<boolean> {
+async function verifyTotpCode(secret: string, code: string, window: number = 1): Promise<boolean> {
   if (!/^\d{6}$/.test(code)) return false;
   try {
     const totp = new OTPAuth.TOTP({ issuer: 'BeeCount', secret: OTPAuth.Secret.fromBase32(secret) });
