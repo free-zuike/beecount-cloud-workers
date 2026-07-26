@@ -364,6 +364,39 @@ backupRouter.post('/fix-data', async (c) => {
 });
 
 /**
+ * GET /backup/restore-from-r2/list - 列出 R2 中所有可用的备份文件
+ */
+backupRouter.get('/restore-from-r2/list', async (c) => {
+  const r2 = c.env.R2;
+  if (!r2) return c.json({ error: 'R2 not configured' }, 400);
+
+  const allObjects: R2Object[] = [];
+  for (const prefix of ['beecount/backups/']) {
+    let cursor: string | undefined;
+    do {
+      const listing = await r2.list({ prefix, limit: 100, cursor });
+      allObjects.push(...listing.objects);
+      cursor = listing.truncated ? listing.objects[listing.objects.length - 1].key : undefined;
+    } while (cursor);
+  }
+
+  const backupFiles = allObjects
+    .filter(function(o) { return o.key.endsWith('.tar.gz'); })
+    .sort(function(a, b) { return b.uploaded.getTime() - a.uploaded.getTime(); });
+
+  var backups = [];
+  for (var obj of backupFiles) {
+    backups.push({
+      key: obj.key,
+      size: obj.size,
+      uploaded: obj.uploaded.toISOString(),
+    });
+  }
+
+  return c.json({ backups: backups });
+});
+
+/**
  * POST /backup/restore-from-r2 - 从 R2 备份恢复数据（非管理员路由）
  */
 backupRouter.post('/restore-from-r2', async (c) => {
