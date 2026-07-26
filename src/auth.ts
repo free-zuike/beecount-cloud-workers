@@ -200,8 +200,12 @@ export async function decodeRefreshToken(
     if (!payload) {
       return { valid: false, reason: 'Invalid JWT signature' };
     }
-    if (payload.type !== 'refresh') {
-      return { valid: false, reason: 'Invalid token type' };
+    if (payload.type && payload.type !== 'refresh') {
+      // 兼容旧版 token（没有 type 字段或 type 为 access）
+      if (payload.type === 'access') {
+        return { valid: false, reason: 'Invalid token type' };
+      }
+      // 没有 type 字段视为 refresh token（旧版兼容）
     }
 
     const userId = payload.sub;
