@@ -184,7 +184,7 @@ authRouter.post('/register', zValidator('json', z.object({
 
   const existingUser = await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
   if (existingUser) {
-    return c.json({ error: 'Email already registered' }, 409);
+    return c.json({ error: 'Email already exists' }, 409);
   }
 
   const userId = randomUUID();
@@ -262,20 +262,16 @@ authRouter.post('/login', zValidator('json', z.object({
   }
 
   if (!user.is_enabled) {
-    return c.json({ error: 'Account disabled' }, 403);
+    return c.json({ error: 'User disabled' }, 403);
   }
 
   if (user.totp_enabled) {
+    // 与原版对齐：2FA challenge 时不创建设备，仅在 /2fa/verify 时创建
     const challengeToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', ['challenge:2fa'], 300, 'totp_challenge');
-    // 2FA 前先 upsert 设备，确保 challenge_token 关联正确的 device_id
-    const resolvedDeviceId = await upsertDevice(
-      db, user.id, deviceId || randomUUID(), deviceName, platform, appVersion, osVersion, deviceModel, c.req.header('CF-Connecting-IP')
-    );
     return c.json({
       requires_2fa: true,
       challenge_token: challengeToken,
       available_methods: ['totp', 'recovery_code'],
-      device_id: resolvedDeviceId,
     });
   }
 
@@ -347,7 +343,7 @@ authRouter.post('/refresh', zValidator('json', z.object({
       return c.json({ error: 'User not found' }, 401);
     }
     if (!user.is_enabled) {
-      return c.json({ error: 'Account disabled' }, 403);
+      return c.json({ error: 'User disabled' }, 403);
     }
 
     // 与原版对齐：检查设备状态 + 更新 last_seen_at
