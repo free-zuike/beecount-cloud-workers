@@ -396,31 +396,7 @@ backupRouter.post('/restore-from-r2', async (c) => {
     var { performRestore } = await import('../lib/restore-service');
     var result = await performRestore(db, r2, selectedPath, function(progress) {
       console.debug('[Restore] ' + progress.phase + ': ' + progress.bytesTransferred + '/' + progress.bytesTotal);
-    }, userId);
-
-    // 自动为所有被导入数据的用户创建 sync_changes（不需要手动 fix-data）
-    if (result.success) {
-      try {
-        const allUserIds = await db.prepare('SELECT DISTINCT user_id FROM read_category_projection').all<{ user_id: string }>();
-        for (const row of (allUserIds.results || [])) {
-          await createSyncChangesForUser(db, row.user_id);
-        }
-        const allUserIds2 = await db.prepare('SELECT DISTINCT user_id FROM read_tag_projection').all<{ user_id: string }>();
-        for (const row of (allUserIds2.results || [])) {
-          await createSyncChangesForUser(db, row.user_id);
-        }
-        const allUserIds3 = await db.prepare('SELECT DISTINCT user_id FROM read_budget_projection').all<{ user_id: string }>();
-        for (const row of (allUserIds3.results || [])) {
-          await createSyncChangesForUser(db, row.user_id);
-        }
-        const allUserIds4 = await db.prepare('SELECT DISTINCT user_id FROM read_account_projection').all<{ user_id: string }>();
-        for (const row of (allUserIds4.results || [])) {
-          await createSyncChangesForUser(db, row.user_id);
-        }
-      } catch (e) {
-        console.error('[Restore] Auto sync_changes failed (non-fatal):', e);
-      }
-    }
+    });
 
     return c.json({
       success: result.success,

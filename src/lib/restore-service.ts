@@ -175,10 +175,6 @@ async function importToD1(
     let importedCount = 0;
     for (const row of rows) {
       const record = row as Record<string, unknown>;
-      // 如果指定了 targetUserId，替换 user_id 列（恢复后数据归属当前用户）
-      if (targetUserId && matchedColumns.includes('user_id')) {
-        record['user_id'] = targetUserId;
-      }
       const values = matchedColumns.map(col => record[col] ?? null);
 
       try {
@@ -236,7 +232,6 @@ export async function performRestore(
   r2: R2Bucket,
   backupPath: string,
   onProgress?: (progress: RestoreProgress) => void,
-  targetUserId?: string,
 ): Promise<RestoreResult> {
   try {
     // Phase 1: 下载并解压
