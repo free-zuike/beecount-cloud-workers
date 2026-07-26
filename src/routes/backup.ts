@@ -324,4 +324,52 @@ backupRouter.post('/fix-data', async (c) => {
   return c.json({ fixes, message: 'Fixed sync_id and created missing sync_changes records' });
 });
 
+/**
+ * POST /backup/restore-from-r2 - 从 R2 备份恢复数据（非管理员路由）
+ */
+backupRouter.post('/restore-from-r2', async (c) => {
+  const db = c.env.DB;
+  const userId = c.get('userId');
+  const r2 = c.env.R2;
+
+  if (!r2) {
+    return c.json({ error: 'R2 not configured' }, 400);
+  }
+
+  let body: { backupPath?: string } = {};
+  try { body = await c.req.json(); } catch {}
+  const backupPath = body.backupPath;
+
+  let selectedPath = backupPath;
+  if (!selectedPath) {
+    let listing;
+    listing = await r2.list({ prefix: 'beecount/backups/' + userId + '/' });
+    if (!listing.objects || listing.objects.length === 0) {
+      listing = await r2.list({ prefix: 'beecount/backups/' });
+    }
+    if (!listing.objects || listing.objects.length === 0) {
+      return c.json({ error: 'No backups found in R2' }, 404);
+    }
+    selectedPath = listing.objects.sort(function(a, b) { return b.uploaded.getTime() - a.uploaded.getTime(); })[0].key;
+  }
+
+  try {
+    var { performRestore } = await import('../lib/restore-service');
+    var result = await performRestore(db, r2, selectedPath, function(progress) {
+      console.debug('[Restore] ' + progress.phase + ': ' + progress.bytesTransferred + '/' + progress.bytesTotal);
+    });
+
+    return c.json({
+      success: result.success,
+      message: result.message,
+      backupFile: selectedPath,
+      tablesImported: result.tablesImported,
+      rowsImported: result.rowsImported,
+      attachmentsUploaded: result.attachmentsUploaded,
+    }, 200);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
 export default backupRouter;

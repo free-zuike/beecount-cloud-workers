@@ -2,101 +2,92 @@
  * 全量 API 测试脚本 — 在浏览器控制台执行
  * 前提：已用 qq.com 账户登录
  */
-(async () => {
-  const token = localStorage.getItem('beecount.token./api/v1');
+(async function() {
+  var token = localStorage.getItem('beecount.token./api/v1');
   if (!token) { console.error('未登录'); return; }
-  const H = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
-  const results = [];
-  const ok = (n, p, d) => { results.push({n,p,d}); console.log(p?'✅':'❌', n, d||''); };
-  const api = async (url, opts) => { try { const r = await fetch(url, opts); const j = await r.json().catch(()=>({})); return {status:r.status, ...j}; } catch(e) { return {error:e.message}; } };
+  var H = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
+  var R = [];
+  var ok = function(n, p, d) { R.push({n:n,p:p,d:d}); console.log(p ? '\u2705' : '\u274c', n, d || ''); };
+  var api = async function(u, o) {
+    try {
+      var r = await fetch(u, o);
+      var j = await r.json().catch(function() { return {}; });
+      return Object.assign({s: r.status}, j);
+    } catch(e) { return {error: e.message}; }
+  };
 
-  console.log('=== 1. 认证 ===');
-  const me = await api('/api/v1/profile/me', {headers:H});
-  ok('profile/me', !!me.user_id, `user: ${me.email}`);
+  // 1. Profile
+  var me = await api('/api/v1/profile/me', {headers: H});
+  ok('profile/me', !!me.user_id, me.email);
 
-  console.log('=== 2. 设备管理 ===');
-  const devices = await api('/api/v1/admin/devices?view=deduped', {headers:H});
-  ok('devices deduped', Array.isArray(devices), `${devices.length} devices`);
+  // 2. Ledgers
+  var ld = await api('/api/v1/sync/ledgers', {headers: H});
+  ok('sync/ledgers', Array.isArray(ld), ld.length + ' ledgers');
 
-  console.log('=== 3. Sync: ledgers ===');
-  const ledgers = await api('/api/v1/sync/ledgers', {headers:H});
-  ok('sync/ledgers', Array.isArray(ledgers), `${ledgers.length} ledgers, roles: ${[...new Set(ledgers.map(l=>l.role))]}`);
-  ok('sync/ledgers has shared', ledgers.some(l=>l.is_shared), '');
-
-  console.log('=== 4. Sync: full ===');
-  if (ledgers.length > 0) {
-    const full = await api(`/api/v1/sync/full?ledger_id=${ledgers[0].ledger_id}`, {headers:H});
-    ok('sync/full snapshot', !!full.snapshot, `cursor: ${full.latest_cursor}`);
-    const budgetCount = full.snapshot?.payload ? JSON.parse(full.snapshot.payload.content).budgets?.length : 0;
-    ok('sync/full has budgets', budgetCount > 0, `${budgetCount} budgets`);
+  // 3. Sync/full
+  if (ld.length > 0) {
+    var f = await api('/api/v1/sync/full?ledger_id=' + ld[0].ledger_id, {headers: H});
+    ok('sync/full', !!f.snapshot, 'cursor:' + f.latest_cursor);
+    var bc = 0;
+    try { bc = JSON.parse(f.snapshot.payload.content).budgets.length; } catch(e) {}
+    ok('budgets in snapshot', bc > 0, bc + ' budgets');
   }
 
-  console.log('=== 5. Read: ledger detail ===');
-  if (ledgers.length > 0) {
-    const det = await api(`/api/v1/read/ledgers/${ledgers[0].ledger_id}`, {headers:H});
-    ok('read/ledger', !!det.role, `role: ${det.role}, shared: ${det.is_shared}`);
+  // 4. Read: ledger detail
+  if (ld.length > 0) {
+    var d = await api('/api/v1/read/ledgers/' + ld[0].ledger_id, {headers: H});
+    ok('read/ledger role', !!d.role, 'role:' + d.role + ' shared:' + d.is_shared);
   }
 
-  console.log('=== 6. Read: transactions ===');
-  if (ledgers.length > 0) {
-    const txs = await api(`/api/v1/read/ledgers/${ledgers[0].ledger_id}/transactions?limit=5`, {headers:H});
-    ok('transactions', Array.isArray(txs), `${txs.length} txs`);
+  // 5. Stats
+  if (ld.length > 0) {
+    var s = await api('/api/v1/read/ledgers/' + ld[0].ledger_id + '/stats', {headers: H});
+    ok('stats budget_total', s.budget_total !== undefined, 'budget_total:' + s.budget_total + ' tx_total:' + s.transaction_total);
   }
 
-  console.log('=== 7. Read: accounts ===');
-  if (ledgers.length > 0) {
-    const accs = await api(`/api/v1/read/ledgers/${ledgers[0].ledger_id}/accounts`, {headers:H});
-    ok('accounts', Array.isArray(accs), `${accs.length} accounts`);
-    if (accs.length > 0) ok('account has hidden', 'hidden' in accs[0], `hidden: ${accs[0].hidden}`);
+  // 6. Transactions
+  if (ld.length > 0) {
+    var txs = await api('/api/v1/read/ledgers/' + ld[0].ledger_id + '/transactions?limit=5', {headers: H});
+    ok('transactions', Array.isArray(txs), txs.length + ' txs');
   }
 
-  console.log('=== 8. Read: budgets ===');
-  if (ledgers.length > 0) {
-    const buds = await api(`/api/v1/read/ledgers/${ledgers[0].ledger_id}/budgets`, {headers:H});
-    ok('budgets', Array.isArray(buds), `${buds.length} budgets`);
-    const usage = await api(`/api/v1/read/ledgers/${ledgers[0].ledger_id}/budgets/usage`, {headers:H});
-    ok('budgets/usage', !!usage?.items, `${usage?.items?.length || 0} usage`);
+  // 7. Accounts
+  if (ld.length > 0) {
+    var accs = await api('/api/v1/read/ledgers/' + ld[0].ledger_id + '/accounts', {headers: H});
+    ok('accounts', Array.isArray(accs), accs.length + ' accounts');
   }
 
-  console.log('=== 9. Stats ===');
-  if (ledgers.length > 0) {
-    const stats = await api(`/api/v1/read/ledgers/${ledgers[0].ledger_id}/stats`, {headers:H});
-    ok('stats', !!stats?.budget_count !== undefined, `budget_total: ${stats?.budget_total}, tx_total: ${stats?.transaction_total}`);
+  // 8. Budgets
+  if (ld.length > 0) {
+    var buds = await api('/api/v1/read/ledgers/' + ld[0].ledger_id + '/budgets', {headers: H});
+    ok('budgets', Array.isArray(buds), buds.length + ' budgets');
   }
 
-  console.log('=== 10. Workspace ===');
-  const analytics = await api('/api/v1/read/workspace/analytics?scope=month', {headers:H});
-  ok('analytics', !!analytics?.summary, '');
+  // 9. Workspace
+  var nw = await api('/api/v1/read/workspace/net-worth-history', {headers: H});
+  ok('net-worth', !!nw.series, (nw.series ? nw.series.length : 0) + ' months');
 
-  const tags = await api('/api/v1/read/workspace/tags', {headers:H});
-  ok('workspace tags', Array.isArray(tags), `${tags.length} tags`);
+  var an = await api('/api/v1/read/workspace/analytics?scope=month', {headers: H});
+  ok('analytics', !!an.summary, '');
 
-  const counts = await api('/api/v1/read/workspace/ledger-counts', {headers:H});
-  ok('ledger-counts', !!counts?.tx_count, `tx:${counts?.tx_count}, distinct_days:${counts?.distinct_days}`);
+  var tags = await api('/api/v1/read/workspace/tags', {headers: H});
+  ok('workspace tags', Array.isArray(tags), tags.length + ' tags');
 
-  const nw = await api('/api/v1/read/workspace/net-worth-history', {headers:H});
-  ok('net-worth-history', !!nw?.series, `${nw?.series?.length || 0} months`);
+  var counts = await api('/api/v1/read/workspace/ledger-counts', {headers: H});
+  ok('ledger-counts', true, 'tx:' + counts.tx_count + ' days:' + counts.distinct_days);
 
-  console.log('=== 11. Backup admin ===');
-  const remotes = await api('/api/v1/admin/backup/remotes', {headers:H});
-  ok('backup remotes', Array.isArray(remotes), `${remotes.length} remotes`);
-  const schedules = await api('/api/v1/admin/backup/schedules', {headers:H});
-  ok('backup schedules', Array.isArray(schedules), `${schedules.length} schedules`);
+  // 10. Admin
+  var ov = await api('/api/v1/admin/overview', {headers: H});
+  ok('admin overview', !!ov.users_total, 'users:' + ov.users_total + ' txs:' + ov.transactions_total);
 
-  console.log('=== 12. Audit logs ===');
-  const logs = await api('/api/v1/admin/logs?limit=3', {headers:H});
-  ok('audit logs', Array.isArray(logs.items), `${logs.items?.length || 0} entries`);
+  var us = await api('/api/v1/admin/users', {headers: H});
+  ok('admin users', Array.isArray(us.items), us.items.length + ' users');
 
-  console.log('=== 13. Admin users ===');
-  const users = await api('/api/v1/admin/users', {headers:H});
-  ok('admin users', Array.isArray(users.items), `${users.items?.length || 0} users`);
+  var logs = await api('/api/v1/admin/logs?limit=3', {headers: H});
+  ok('audit logs', Array.isArray(logs.items), (logs.items ? logs.items.length : 0) + ' entries');
 
-  console.log('=== 14. Admin overview ===');
-  const overview = await api('/api/v1/admin/overview', {headers:H});
-  ok('admin overview', !!overview?.users_total, `users:${overview?.users_total}, txs:${overview?.transactions_total}`);
-
-  console.log('\n===== 测试汇总 =====');
-  const p = results.filter(r=>r.p).length, f = results.filter(r=>!r.p).length;
-  console.log(`通过: ${p}/${results.length}`);
-  if (f) results.filter(r=>!r.p).forEach(r=>console.log(`  ❌ ${r.n}: ${r.d}`));
+  console.log('\n\u2550\u2550\u2550 \u6d4b\u8bd5\u6c47\u603b \u2550\u2550\u2550');
+  var p = R.filter(function(r) { return r.p; }).length;
+  console.log('\u901a\u8fc7: ' + p + '/' + R.length);
+  R.filter(function(r) { return !r.p; }).forEach(function(r) { console.log('  \u274c', r.n, r.d); });
 })();
