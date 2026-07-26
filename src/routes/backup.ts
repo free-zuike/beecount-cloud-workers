@@ -364,7 +364,7 @@ backupRouter.post('/fix-data', async (c) => {
 });
 
 /**
- * GET /backup/restore-from-r2/list - 列出 R2 备份文件（仅限管理员）
+ * GET /backup/restore-from-r2/list - 列出 R2 备份文件 + 内容概览（仅限管理员）
  */
 backupRouter.get('/restore-from-r2/list', async (c) => {
   const db = c.env.DB;
@@ -372,13 +372,11 @@ backupRouter.get('/restore-from-r2/list', async (c) => {
   const r2 = c.env.R2;
   if (!r2) return c.json({ error: 'R2 not configured' }, 400);
 
-  // 仅限管理员
   const user = await db.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first<{ is_admin: number }>();
   if (!user || !user.is_admin) {
     return c.json({ error: 'Forbidden' }, 403);
   }
 
-  // 列出所有备份
   const allObjects: R2Object[] = [];
   let cursor: string | undefined;
   do {
@@ -387,12 +385,70 @@ backupRouter.get('/restore-from-r2/list', async (c) => {
     cursor = listing.truncated ? listing.objects[listing.objects.length - 1].key : undefined;
   } while (cursor);
 
-  const backups = allObjects
+  const backupFiles = allObjects
     .filter(function(o) { return o.key.endsWith('.tar.gz'); })
-    .sort(function(a, b) { return b.uploaded.getTime() - a.uploaded.getTime(); })
-    .map(function(o) {
-      return { key: o.key, size: o.size, uploaded: o.uploaded.toISOString() };
-    });
+    .sort(function(a, b) { return b.uploaded.getTime() - a.uploaded.getTime(); });
+
+  // 检查前 10 个备份的内容摘要
+  const backups: Record<string, unknown>[] = [];
+  for (const obj of backupFiles.slice(0, 10)) {
+    const entry: Record<string, unknown> = {
+      key: obj.key,
+      size: obj.size,
+      uploaded: obj.uploaded.toISOString(),
+    };
+
+    try {
+      const resp = await r2.get(obj.key);
+      if (resp) {
+        const ab = await resp.arrayBuffer();
+        const raw = new Uint8Array(ab);
+        const ds = new DecompressionStream('gzip');
+        const w = ds.writable.getWriter();
+        w.write(raw); w.close();
+        const reader = ds.readable.getReader();
+        const chunks: Uint8Array[] = [];
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+        }
+        let totalLen = 0;
+        for (const ch of chunks) totalLen += ch.length;
+        const decompressed = new Uint8Array(totalLen);
+        let off = 0;
+        for (const ch of chunks) { decompressed.set(ch, off); off += ch.length; }
+
+        // 解析 tar，找 db.json
+        let tarOff = 0;
+        while (tarOff < decompressed.length - 512) {
+          const hdr = decompressed.slice(tarOff, tarOff + 512);
+          const name = new TextDecoder().decode(hdr.slice(0, 100)).replace(/\0/g, '');
+          if (!name) break;
+          const sizeOct = new TextDecoder().decode(hdr.slice(124, 136)).replace(/\0/g, '').trim();
+          const sz = parseInt(sizeOct, 8) || 0;
+          const contentOff = tarOff + 512;
+
+          if (name === 'db.json') {
+            const jsonText = new TextDecoder().decode(decompressed.slice(contentOff, contentOff + sz));
+            const dbJson = JSON.parse(jsonText);
+            const tables = dbJson.tables || {};
+            const summary: Record<string, number> = {};
+            for (const [t, rows] of Object.entries(tables)) {
+              summary[t] = Array.isArray(rows) ? rows.length : 0;
+            }
+            entry.summary = summary;
+            entry.totalRows = Object.values(summary).reduce(function(s, n) { return s + n; }, 0);
+          }
+          tarOff = contentOff + Math.ceil(sz / 512) * 512;
+        }
+      }
+    } catch (e) {
+      entry.error = (e as Error).message;
+    }
+
+    backups.push(entry);
+  }
 
   return c.json({ backups: backups });
 });
