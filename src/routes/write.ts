@@ -1765,18 +1765,19 @@ writeRouter.patch('/ledgers/:ledgerId/budgets/:id', zValidator('json', WriteBudg
   }
 
   const existingBudget = await db
-    .prepare('SELECT budget_type, category_sync_id FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
+    .prepare('SELECT budget_type, category_sync_id, amount, period, start_day, enabled FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
     .bind(ledger.id, budgetSyncId)
-    .first<{ budget_type: string; category_sync_id: string | null }>();
+    .first<{ budget_type: string; category_sync_id: string | null; amount: number; period: string; start_day: number; enabled: number }>();
 
   if (!existingBudget) return c.json({ error: 'Budget not found' }, 404);
 
   const budgetType = existingBudget.budget_type;
   const categoryId = existingBudget.category_sync_id;
-  const amount = req.amount ?? 0;
-  const period = req.period ?? 'monthly';
-  const startDay = req.start_day ?? 1;
-  const enabled = req.enabled ?? true;
+  // 未传字段保留现有值（与原版 exclude_unset=True 对齐）
+  const amount = req.amount !== undefined ? req.amount : existingBudget.amount;
+  const period = req.period !== undefined ? req.period : existingBudget.period;
+  const startDay = req.start_day !== undefined ? req.start_day : existingBudget.start_day;
+  const enabled = req.enabled !== undefined ? req.enabled : (existingBudget.enabled === 1);
 
   const changeResult = await db
     .prepare(

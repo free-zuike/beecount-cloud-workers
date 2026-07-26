@@ -147,8 +147,8 @@ profileRouter.post('/me/change-password', zValidator('json', z.object({
   return c.json({ success: true });
 });
 
-const ALLOWED_MIME: Record<string, string> = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/heic': 'heic', 'image/heif': 'heif' };
-const FILE_EXT_MIME: Record<string, string> = { 'jpg': 'jpg', 'jpeg': 'jpg', 'png': 'png', 'webp': 'webp', 'gif': 'gif', 'heic': 'heic', 'heif': 'heif' };
+const ALLOWED_MIME: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const FILE_EXT_MIME: Record<string, string> = { 'jpg': 'jpg', 'jpeg': 'jpg', 'png': 'png', 'webp': 'webp' };
 const MAX_AVATAR_BYTES = 1 * 1024 * 1024;
 
 // POST /avatar - 上传头像
