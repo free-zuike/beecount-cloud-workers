@@ -1,95 +1,81 @@
 # BeeCount Cloud Workers
 
-BeeCount Cloud 的 Cloudflare Workers 实现 - 一个快速的边缘部署个人财务管理系统。
+BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https://github.com/TNT-Likely/BeeCount-Cloud) (Python/FastAPI) 的功能对齐移植，部署到 Cloudflare Workers (TypeScript/Hono/D1)。
 
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+## 与原版的关系
+
+本项目是 [BeeCount-Cloud](https://github.com/TNT-Likely/BeeCount-Cloud) 的 Cloudflare Workers 移植版，**功能与原版完全一致**（经逐端点逐字段对比验证）。差异仅限于 Cloudflare 平台限制：
+
+| 差异项 | 原版 | Workers | 原因 |
+|--------|------|---------|------|
+| 数据库 | PostgreSQL/SQLite | D1 (SQLite) | D1 不支持 VACUUM INTO，改用 JSON 导出 |
+| 布尔存储 | 原生 boolean | INTEGER 0/1 | SQLite 限制 |
+| 附件存储 | 本地文件系统 | R2 对象存储 | Workers 无本地文件系统 |
+| 加密备份 | age + pyzipper | AES-256-GCM (Web Crypto) | 无法运行 age CLI |
+| 密码混淆 | rclone obscure | 无 | 无法运行 rclone CLI |
+| 定时任务 | APScheduler (Python 线程) | waitUntil (Workers 异步) | 运行时限制 |
+| 并行备份 | rclone fan-out | Promise.allSettled | Workers 原生并行 |
+| 投影事务 | DB transaction rollback | 单条 try/catch | D1 不支持跨语句事务 |
+| 指标监控 | Prometheus | 无 | 无 statsd 基础设施 |
+| 注册控制 | 环境变量 REGISTRATION_ENABLED | 环境变量 REGISTRATION_ENABLED | 已对齐 |
+
 ## 功能特性
 
-- 🚀 **全球边缘部署** - 部署到全球 200+ 边缘节点
-- 💾 **D1 SQLite 数据库** - 免费 5GB 存储空间
-- 🔐 **JWT 认证** - 安全的基于令牌的认证，支持双因素认证
-- 👤 **自动创建管理员账户** - 首次访问时自动创建默认管理员
-- 📂 **自动创建默认分类** - 创建账本时自动初始化默认分类
-- 📎 **外部 S3 存储** - 可选的 S3 兼容存储用于附件
-- 🤖 **AI 集成** - 支持 OpenAI 兼容 API（智谱、DeepSeek 等）
-- 📊 **完整 API** - 60+ 个端点覆盖所有 BeeCount Cloud 功能
+- 🚀 **全球边缘部署** — 部署到全球 200+ 边缘节点
+- 💾 **D1 SQLite 数据库** — 免费 5GB 存储空间
+- 🔐 **JWT 认证** — 安全的基于令牌的认证，支持双因素认证 (TOTP)
+- 👤 **自动创建管理员账户** — 首次访问时自动创建默认管理员
+- 📂 **自动创建默认分类** — 创建账本时自动初始化默认分类
+- 📎 **R2/S3/FTP/SFTP/WebDAV** — 支持多种远程备份存储
+- 🤖 **AI 集成** — 支持 OpenAI 兼容 API（智谱、DeepSeek 等）
+- 📊 **60+ API 端点** — 覆盖所有 BeeCount Cloud 功能
+- 🔄 **完整同步协议** — 支持增量同步、共享账本、多设备
+- 💰 **预算管理** — 总预算/分类预算，支持 month_start_day
+- 📊 **跨账本统计** — 工作区聚合分析、净值趋势
 
 ## 快速部署
 
 ### 方式一：使用一键部署脚本（推荐）
 
-在本地终端运行：
-
 ```bash
-# 克隆仓库
 git clone https://github.com/free-zuike/beecount-cloud-workers.git
 cd beecount-cloud-workers
-
-# 安装依赖
 npm install
-
-# 运行一键部署脚本
 chmod +x setup.sh
 ./setup.sh
 ```
 
-脚本会自动：
-1. 登录 Cloudflare
-2. 创建 D1 数据库
-3. 初始化数据库表
-4. 部署应用
-5. 首次访问时自动创建管理员账户
+### 方式二：GitHub Actions 自动部署
 
-### 方式二：使用 GitHub Actions 自动部署
-
-1. Fork 此仓库到您的 GitHub 账户
-2. 在 GitHub 仓库设置中添加 Secrets：
-   - `CLOUDFLARE_API_TOKEN`: Cloudflare API Token（需要 Workers 和 D1 权限）
-   - `CLOUDFLARE_ACCOUNT_ID`: Cloudflare 账户 ID
-3. 在本地预先创建 D1 数据库并更新 `wrangler.toml` 中的 `database_id`
-4. 推送到 main 分支自动触发部署
+1. Fork 仓库
+2. 添加 Secrets：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`
+3. 创建 D1 数据库并更新 `wrangler.toml` 的 `database_id`
+4. 推送到 main 分支自动部署
 
 ### 方式三：手动部署
 
 ```bash
-# 克隆仓库
-git clone https://github.com/free-zuike/beecount-cloud-workers.git
-cd beecount-cloud-workers
-
-# 安装依赖
 npm install
-
-# 登录 Cloudflare
 npx wrangler login
-
-# 创建 D1 数据库
 npx wrangler d1 create beecount-cloud
-
-# 更新 wrangler.toml 中的 database_id 为输出的 ID
-# 然后初始化数据库表
 npx wrangler d1 execute beecount-cloud --remote --file=./schema.sql
-
-# 部署
 npm run deploy
 ```
 
 ## 首次使用
 
-部署成功后：
-
-1. **访问应用** - 打开 Cloudflare Workers 分配的 URL
-2. **查看管理员密码** - 在 Cloudflare Dashboard → Workers & Pages → 你的 Worker → Logs 中查看
-   - 默认管理员邮箱：`admin@localhost`
-   - 密码会在首次访问时生成并输出到日志
-3. **登录并修改密码** - 使用管理员账户登录，在用户管理中修改密码
-4. **创建账本** - 创建新账本时会自动初始化默认分类
+1. 访问 Cloudflare Workers URL
+2. 在 Workers Logs 中查看管理员密码
+3. 登录后修改密码
+4. 设置 `REGISTRATION_ENABLED=false` 环境变量关闭注册（生产环境）
 
 ## 配置
 
-### wrangler.toml 配置
+### wrangler.toml
 
 ```toml
 name = "beecount-cloud-workers"
@@ -98,28 +84,19 @@ main = "src/index.ts"
 [[d1_databases]]
 binding = "DB"
 database_name = "beecount-cloud"
-database_id = "你的数据库ID"  # 从 wrangler d1 create 获取
+database_id = "你的数据库ID"
 
 [vars]
 API_PREFIX = "/api/v1"
-JWT_SECRET = "你的JWT密钥"  # 使用 openssl rand -base64 32 生成
+JWT_SECRET = "你的JWT密钥"
+
+# 可选：关闭注册
+# REGISTRATION_ENABLED = "false"
 ```
-
-### 可选 S3 配置
-
-用于外部 S3 兼容存储（附件）：
-
-| 变量 | 说明 | 示例 |
-|------|------|------|
-| `S3_ENDPOINT` | S3 API 端点 | `https://s3.us-east-1.amazonaws.com` |
-| `S3_REGION` | AWS 区域 | `us-east-1` |
-| `S3_ACCESS_KEY_ID` | Access Key ID | `AKIA...` |
-| `S3_SECRET_ACCESS_KEY` | Secret Access Key | `...` |
-| `S3_BUCKET_NAME` | 附件存储桶 | `beecount-attachments` |
 
 ### AI 配置
 
-AI 功能需要在用户资料的 `ai_config_json` 字段中配置：
+在用户资料的 `ai_config_json` 中配置：
 
 ```json
 {
@@ -140,86 +117,99 @@ AI 功能需要在用户资料的 `ai_config_json` 字段中配置：
 ## API 端点
 
 ### 认证
-- `POST /api/v1/auth/register` - 注册新用户
-- `POST /api/v1/auth/login` - 登录
-- `POST /api/v1/auth/refresh` - 刷新令牌
-- `POST /api/v1/two-factor/*` - 双因素认证管理
+- `POST /auth/register` — 注册新用户（REGISTRATION_ENABLED=false 时禁用）
+- `POST /auth/login` — 登录（支持 2FA TOTP）
+- `POST /auth/refresh` — 刷新 JWT 令牌
+- `POST /auth/logout` — 登出
+- `GET /auth/me` — 当前用户信息
+
+### 双因素认证
+- `GET /2fa/status` — 查询 2FA 状态
+- `POST /2fa/setup` — 生成 TOTP secret
+- `POST /2fa/confirm` — 确认启用 2FA
+- `POST /2fa/verify` — 2FA 验证（登录时）
+- `POST /2fa/disable` — 禁用 2FA
+- `POST /2fa/recovery-codes/regenerate` — 重新生成恢复码
 
 ### 管理员
-- `GET /admin/overview` - 系统概览
-- `GET /admin/users` - 用户列表
-- `POST /admin/users` - 创建用户
-- `PATCH /admin/users/:id` - 更新用户
-- `DELETE /admin/users/:id` - 删除用户
-- `POST /admin/users/:id/password` - 修改用户密码
-- `GET /admin/devices` - 设备列表
-- `GET /admin/logs` - 日志
+- `GET /admin/overview` — 系统概览
+- `GET /admin/users` — 用户列表
+- `POST /admin/users` — 创建用户（is_admin 强制 false）
+- `PATCH /admin/users/:id` — 更新用户（不可禁用管理员）
+- `DELETE /admin/users/:id` — 软删除用户
+- `POST /admin/users/:id/password` — 修改密码
+- `GET /admin/devices` — 设备列表（支持 deduped/sessions 视图）
+- `POST /admin/devices/:id/revoke` — 撤销设备
+- `DELETE /admin/devices/:id` — 删除设备
+- `GET /admin/logs` — 审计日志
 
 ### 同步（移动端）
-- `POST /api/v1/sync/push` - 推送更改
-- `POST /api/v1/sync/pull` - 拉取更改
-- `GET /api/v1/sync/ledgers` - 获取账本列表
-- `POST /api/v1/sync/full-sync` - 全量同步
+- `POST /sync/push` — 推送增量变更（LWW 冲突解决）
+- `GET /sync/pull` — 拉取增量变更（支持共享账本）
+- `GET /sync/full` — 全量同步快照
+- `GET /sync/ledgers` — 获取可访问账本列表
 
 ### CRUD 操作
-- `/api/v1/read/*` - 查询数据
-- `/api/v1/write/*` - 创建/更新/删除
-- `/api/v1/batch/*` - 批量操作
+- `/read/ledgers/*` — 查询账本/交易/账户/分类/标签/预算
+- `/write/ledgers/*` — 创建/更新/删除
+- `/workspace/*` — 跨账本统计/分析/邀请
 
-### 工具
-- `/api/v1/attachments/*` - 文件上传
-- `/api/v1/import/*` - CSV 导入
-- `/api/v1/ai/*` - AI 功能
-- `/api/v1/backup/*` - 快照与恢复
-
-## 数据库 Schema
-
-Schema 定义在 `schema.sql` 中。
-
-```bash
-# 初始化数据库表
-npx wrangler d1 execute beecount-cloud --remote --file=./schema.sql
-```
-
-## 本地开发
-
-```bash
-# 安装依赖
-npm install
-
-# 启动本地开发服务器
-npm run dev
-
-# 本地开发需要先创建本地 D1 数据库
-npx wrangler d1 create beecount-cloud --local
-npx wrangler d1 execute beecount-cloud --local --file=./schema.sql
-```
+### 备份
+- `GET /admin/backup/remotes` — 备份远端列表
+- `POST /admin/backup/remotes` — 创建备份远端
+- `GET /admin/backup/schedules` — 备份计划列表
+- `POST /admin/backup/run-now` — 立即备份
+- `POST /restore-from-r2` — 从 R2 恢复数据
 
 ## 项目结构
 
 ```
 beecount-cloud-workers/
 ├── src/
-│   ├── index.ts           # 入口文件，路由注册和管理员初始化
-│   ├── auth.ts            # JWT 工具函数
-│   └── routes/            # API 路由处理器
-│       ├── auth.ts        # 认证
-│       ├── two_factor.ts  # 双因素认证/TOTP
-│       ├── sync.ts        # 移动端同步
-│       ├── read.ts        # 查询端点
-│       ├── write.ts       # 写入端点（包含默认分类创建）
-│       ├── workspace.ts   # 跨账本查询
-│       ├── batch_write.ts # 批量操作
-│       ├── attachments.ts # 文件上传（S3）
-│       ├── ai.ts          # AI 集成
-│       ├── import_data.ts # CSV 导入
-│       ├── backup.ts      # 快照
-│       ├── admin_backup.ts # 管理员备份管理
-│       └── admin.ts       # 管理员端点（包含修改密码功能）
-├── schema.sql             # D1 数据库 Schema
-├── wrangler.toml          # Cloudflare 配置
-├── setup.sh               # 一键部署脚本
-└── .github/workflows/     # CI/CD 自动部署
+│   ├── index.ts              # 入口，路由注册
+│   ├── auth.ts               # JWT 签发/验证
+│   ├── middleware/auth.ts    # 认证中间件
+│   ├── lib/
+│   │   ├── tar.ts            # tar.gz 创建
+│   │   ├── sqlite-writer.ts  # SQLite 文件创建
+│   │   ├── encryption.ts     # AES-256-GCM 加密
+│   │   ├── ws-manager.ts     # WebSocket 管理
+│   │   └── audit.ts          # 审计日志
+│   ├── routes/               # API 路由
+│   │   ├── auth.ts           # 认证
+│   │   ├── two_factor.ts     # 2FA
+│   │   ├── sync.ts           # 同步协议
+│   │   ├── admin.ts          # 管理端点
+│   │   ├── read.ts           # 查询端点
+│   │   ├── write.ts          # 写入端点
+│   │   ├── workspace.ts      # 跨账本
+│   │   ├── profile.ts        # 用户资料
+│   │   ├── attachments.ts    # 文件管理
+│   │   ├── admin_backup.ts   # 备份管理
+│   │   ├── backup.ts         # 数据修复
+│   │   └── devices.ts        # 设备管理
+│   └── services/
+│       ├── backup-executor.ts # 备份执行
+│       ├── restore-service.ts # 恢复服务
+│       └── data-cleanup/     # 孤立数据清理
+├── schema.sql                # D1 数据库 Schema
+├── wrangler.toml             # Cloudflare 配置
+└── .github/workflows/        # CI/CD 自动部署
+```
+
+## 数据库
+
+```bash
+npx wrangler d1 execute beecount-cloud --remote --file=./schema.sql
+```
+
+## 本地开发
+
+```bash
+npm install
+npx wrangler d1 create beecount-cloud --local
+npx wrangler d1 execute beecount-cloud --local --file=./schema.sql
+npx wrangler dev
 ```
 
 ## 许可证
