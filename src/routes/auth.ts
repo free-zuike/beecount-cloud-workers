@@ -207,7 +207,7 @@ authRouter.post('/register', zValidator('json', z.object({
   );
 
   const accessToken = await createAccessToken(userId, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
-  const refreshTokenObj = await createRefreshToken(userId, finalDeviceId, db, isApp ? 'app' : 'web', tokenScopes);
+  const refreshTokenObj = await createRefreshToken(userId, finalDeviceId, db, isApp ? 'app' : 'web', tokenScopes, jwtSecret);
 
   // 不在注册时创建默认账本和分类 — 由 mobile push 时自动创建
   // 避免注册产生 124+ 次 DB 写入，以及 external_id 不匹配导致双账本
@@ -292,7 +292,7 @@ authRouter.post('/login', zValidator('json', z.object({
   );
 
   const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
-  const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web', tokenScopes);
+  const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web', tokenScopes, jwtSecret);
 
   // 清理该设备的旧 token（过期 + 已撤销），防止 token 无限堆积
   await db.prepare(
@@ -371,7 +371,7 @@ authRouter.post('/refresh', zValidator('json', z.object({
     const tokenScopesFinal = tokenScopes && tokenScopes.length > 0 ? tokenScopes : (isApp ? ['app_write'] : ['web_read', 'web_write', 'ops_write']);
 
     const accessToken = await createAccessToken(tokenUserId, jwtSecret, isApp ? 'app' : 'web', tokenScopesFinal);
-    const newRefreshToken = await createRefreshToken(tokenUserId, deviceId, db, clientType, tokenScopesFinal);
+    const newRefreshToken = await createRefreshToken(tokenUserId, deviceId, db, clientType, tokenScopesFinal, jwtSecret);
 
     await revokeRefreshToken(refreshToken, db);
 

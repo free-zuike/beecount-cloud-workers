@@ -167,11 +167,12 @@ export async function createRefreshToken(
   deviceId: string,
   db: D1Database,
   clientType: string = 'app',
-  scopes: string[] = ['app_write']
+  scopes: string[] = ['app_write'],
+  jwtSecret: string = ''
 ): Promise<{ id: string; token: string; expiresAt: Date }> {
   // 与原版对齐：refresh token 也是 JWT（type=refresh），不是随机 UUID
   const expiresIn = 30 * 24 * 60 * 60; // 30 天
-  const token = await createAccessToken(userId, (globalThis as any).__JWT_SECRET || '', clientType, scopes, expiresIn, 'refresh');
+  const token = await createAccessToken(userId, jwtSecret, clientType, scopes, expiresIn, 'refresh');
   const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
   const expiresAt = new Date(Date.now() + expiresIn * 1000);
   const id = randomUUID();
