@@ -431,12 +431,12 @@ authRouter.get('/me', async (c) => {
   });
 });
 
-// POST /auth/logout — 吊销 refresh token
-authRouter.post('/logout', async (c) => {
+// POST /auth/logout — 吊销 refresh token（与原版 AuthLogoutRequest 对齐）
+authRouter.post('/logout', zValidator('json', z.object({ refresh_token: z.string().optional() })), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
-  const body = await c.req.json().catch(() => ({}));
-  const refreshToken = body.refresh_token as string | undefined;
+  const body = c.req.valid('json');
+  const refreshToken = body.refresh_token;
   let revoked = false;
 
   if (refreshToken && userId) {

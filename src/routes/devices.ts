@@ -81,16 +81,21 @@ const devicesRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 devicesRouter.get('/', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
+  const view = c.req.query('view') ?? 'deduped';
+  const activeWithinDays = parseInt(c.req.query('active_within_days') ?? '30', 10);
+
+  // 计算活跃时间窗口
+  const cutoff = new Date(Date.now() - activeWithinDays * 24 * 60 * 60 * 1000).toISOString();
 
   const rows = await db
     .prepare(
       `SELECT id, name, platform, app_version, os_version, device_model,
               last_ip, last_seen_at, created_at
        FROM devices
-       WHERE user_id = ? AND revoked_at IS NULL
+       WHERE user_id = ? AND revoked_at IS NULL AND last_seen_at >= ?
        ORDER BY last_seen_at DESC`
     )
-    .bind(userId)
+    .bind(userId, cutoff)
     .all<{
       id: string;
       name: string;
@@ -103,6 +108,40 @@ devicesRouter.get('/', async (c) => {
       created_at: string;
     }>();
 
+  // deduped 视图：按 (user_id, name, platform, device_model, os_version, app_version) 分组
+  if (view === 'deduped') {
+    const grouped = new Map<string, { primary: typeof rows.results[0]; count: number }>();
+    for (const row of rows.results) {
+      const key = [
+        row.name || '', row.platform || '', row.device_model || '',
+        row.os_version || '', row.app_version || ''
+      ].join('|');
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.count++;
+      } else {
+        grouped.set(key, { primary: row, count: 1 });
+      }
+    }
+    const result: DeviceOut[] = [];
+    for (const { primary, count } of grouped.values()) {
+      result.push({
+        id: primary.id,
+        name: primary.name,
+        platform: primary.platform,
+        app_version: primary.app_version,
+        os_version: primary.os_version,
+        device_model: primary.device_model,
+        last_ip: primary.last_ip,
+        last_seen_at: primary.last_seen_at,
+        created_at: primary.created_at,
+        session_count: count,
+      });
+    }
+    return c.json(result);
+  }
+
+  // sessions 视图：返回所有记录
   const result: DeviceOut[] = rows.results.map((row) => ({
     id: row.id,
     name: row.name,
@@ -119,23 +158,29 @@ devicesRouter.get('/', async (c) => {
   return c.json(result);
 });
 
-// ---------------------------------------------------------------------------
-// DELETE /devices/:id - 撤销设备
-// ---------------------------------------------------------------------------
+// POST /devices/:id/revoke - 撤销设备（与原版 POST /{device_id}/revoke 对齐）
+devicesRouter.post('/:id/revoke', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const deviceId = c.req.param('id');
+  const serverNow = nowUtc();
 
-/**
- * 撤销指定设备
- *
- * 功能说明：
- * - 将设备的 revoked_at 设置为当前时间
- * - 使该设备的所有 refresh_token 失效
- * - 用户无法再使用该设备登录
- *
- * 路径参数：
- * - id: 设备 ID
- *
- * 响应：成功返回空 JSON
- */
+  const device = await db
+    .prepare('SELECT id FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL')
+    .bind(deviceId, userId)
+    .first<{ id: string }>();
+
+  if (!device) {
+    return c.json({ error: 'Device not found' }, 404);
+  }
+
+  await db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ?').bind(serverNow, deviceId).run();
+  await db.prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL').bind(serverNow, deviceId).run();
+
+  return c.json({ ok: true, device_id: deviceId });
+});
+
+// DELETE /devices/:id - 撤销设备
 devicesRouter.delete('/:id', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
