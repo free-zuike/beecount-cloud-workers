@@ -33,7 +33,7 @@ wsRouter.get('/', async (c) => {
           }
           // 与原版对齐：校验 scope
           const scopes: string[] = payload.scopes || [];
-          const hasScope = scopes.includes('app:write') || scopes.includes('web:write');
+          const hasScope = scopes.includes('app_write') || scopes.includes('web_write');
           if (!hasScope) {
             return c.json({ error: 'Insufficient scope' }, 403);
           }

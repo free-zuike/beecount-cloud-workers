@@ -170,8 +170,8 @@ authRouter.post('/register', zValidator('json', z.object({
 
   // 检查注册是否启用（与原版对齐）
   const db = c.env.DB;
-  const settings = await db.prepare('SELECT setup_completed FROM system_settings WHERE id = ?').bind('default').first<{ setup_completed: number }>();
-  if (settings && settings.setup_completed) {
+  // 检查注册是否启用（与原版对齐：使用环境变量 REGISTRATION_ENABLED）
+  if (process.env.REGISTRATION_ENABLED === 'false') {
     return c.json({ error: 'Registration disabled' }, 403);
   }
 
@@ -180,7 +180,7 @@ authRouter.post('/register', zValidator('json', z.object({
   const resolvedDeviceId = deviceId || randomUUID();
   const jwtSecret = c.env.JWT_SECRET;
   const isApp = clientType !== 'web';
-  const tokenScopes = isApp ? ['app:write'] : ['web:read', 'web:write', 'ops:write'];
+  const tokenScopes = isApp ? ['app_write'] : ['web_read', 'web_write', 'ops_write'];
 
   const existingUser = await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
   if (existingUser) {
@@ -207,7 +207,7 @@ authRouter.post('/register', zValidator('json', z.object({
   );
 
   const accessToken = await createAccessToken(userId, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
-  const refreshTokenObj = await createRefreshToken(userId, finalDeviceId, db, isApp ? 'app' : 'web');
+  const refreshTokenObj = await createRefreshToken(userId, finalDeviceId, db, isApp ? 'app' : 'web', tokenScopes);
 
   // 不在注册时创建默认账本和分类 — 由 mobile push 时自动创建
   // 避免注册产生 124+ 次 DB 写入，以及 external_id 不匹配导致双账本
@@ -243,7 +243,7 @@ authRouter.post('/login', zValidator('json', z.object({
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
   const isApp = clientType !== 'web';
-  const tokenScopes = isApp ? ['app:write'] : ['web:read', 'web:write', 'ops:write'];
+  const tokenScopes = isApp ? ['app_write'] : ['web_read', 'web_write', 'ops_write'];
 
   const user = await db.prepare('SELECT id, email, password_hash, is_enabled, is_admin, totp_enabled FROM users WHERE email = ?').bind(email).first<{ id: string, email: string, password_hash: string, is_enabled: number, is_admin: number, totp_enabled: number }>();
   if (!user) {
@@ -292,7 +292,7 @@ authRouter.post('/login', zValidator('json', z.object({
   );
 
   const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
-  const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web');
+  const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web', tokenScopes);
 
   // 清理该设备的旧 token（过期 + 已撤销），防止 token 无限堆积
   await db.prepare(
@@ -328,17 +328,18 @@ authRouter.post('/refresh', zValidator('json', z.object({
   console.log(`[REFRESH] token=${tokenPrefix}...`);
 
   try {
-    const decoded = await decodeRefreshToken(refreshToken, db);
+    const decoded = await decodeRefreshToken(refreshToken, db, jwtSecret);
     if (!decoded.valid) {
       console.log(`[REFRESH] FAILED: ${decoded.reason}`);
       return c.json({ error: decoded.reason }, 401);
     }
 
-    const { userId, deviceId, clientType } = decoded;
-    console.log(`[REFRESH] OK: user=${userId} device=${deviceId} client=${clientType}`);
+    const { userId: tokenUserId, deviceId, clientType } = decoded;
+    const tokenScopes = decoded.scopes;
+    console.log(`[REFRESH] OK: user=${tokenUserId} device=${deviceId} client=${clientType}`);
 
-    // 与原版对齐：检查用户是否被禁用
-    const user = await db.prepare('SELECT id, email, is_admin, is_enabled FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string; is_admin: number; is_enabled: number }>();
+    // 与原版对齐：从 JWT claims 获取 user_id（不信任 DB）
+    const user = await db.prepare('SELECT id, email, is_admin, is_enabled FROM users WHERE id = ?').bind(tokenUserId).first<{ id: string; email: string; is_admin: number; is_enabled: number }>();
     if (!user) {
       return c.json({ error: 'User not found' }, 401);
     }
@@ -351,38 +352,37 @@ authRouter.post('/refresh', zValidator('json', z.object({
     if (deviceId) {
       const device = await db
         .prepare('SELECT id, revoked_at FROM devices WHERE id = ? AND user_id = ?')
-        .bind(deviceId, userId)
+        .bind(deviceId, tokenUserId)
         .first<{ id: string; revoked_at: string | null }>();
       if (device) {
         if (device.revoked_at) {
           return c.json({ error: 'Device revoked' }, 401);
         }
-        // 与原版对齐：refresh 时更新 device.last_seen_at 和 last_ip
         await db.prepare('UPDATE devices SET last_seen_at = ?, last_ip = ? WHERE id = ?')
           .bind(nowUtc(), clientIp, deviceId).run();
       }
-      // 设备不存在时不报错（与原版对齐：原版对 None 设备会创建，但我们不在此处 upsert 以避免冲突）
+      // 设备不存在时创建（与原版对齐）
+      if (!device) {
+        await upsertDevice(db, tokenUserId, deviceId, 'Unknown Device', 'unknown', undefined, undefined, undefined, clientIp);
+      }
     }
 
     const isApp = clientType !== 'web';
-    const tokenScopes = isApp ? ['app:write'] : ['web:read', 'web:write', 'ops:write'];
+    const tokenScopesFinal = tokenScopes && tokenScopes.length > 0 ? tokenScopes : (isApp ? ['app_write'] : ['web_read', 'web_write', 'ops_write']);
 
-    const accessToken = await createAccessToken(userId, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
-    const newRefreshToken = await createRefreshToken(userId, deviceId, db, clientType);
+    const accessToken = await createAccessToken(tokenUserId, jwtSecret, isApp ? 'app' : 'web', tokenScopesFinal);
+    const newRefreshToken = await createRefreshToken(tokenUserId, deviceId, db, clientType, tokenScopesFinal);
 
     await revokeRefreshToken(refreshToken, db);
 
-    // 不在 refresh 时清理旧 token — 与原版 Python 对齐：原版仅在 login 时清理
-    // 过早清理可能导致客户端尚未保存新 token 时旧 token 被删除
-
     return c.json({
       requires_2fa: false,
-      user: { id: userId, email: user.email || null, is_admin: Boolean(user.is_admin) },
+      user: { id: user.id, email: user.email || null, is_admin: Boolean(user.is_admin) },
       access_token: accessToken,
       refresh_token: newRefreshToken.token,
       expires_in: 3600,
       device_id: deviceId || 'unknown',
-      scopes: tokenScopes,
+      scopes: tokenScopesFinal,
     });
   } catch (error) {
     console.error('Refresh token error:', error);

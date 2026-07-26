@@ -116,11 +116,31 @@ async function hmacSHA256(key: string, data: string): Promise<string> {
   return uint8ArrayToBase64url(new Uint8Array(signature));
 }
 
+/** 解码并验证 JWT（与原版 decode_token 对齐） */
+async function decodeJwtPayload(token: string, secret: string): Promise<Record<string, unknown> | null> {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const [headerB64, payloadB64, signature] = parts;
+    const expectedSig = await hmacSHA256(secret, `${headerB64}.${payloadB64}`);
+    const encoder = new TextEncoder();
+    if (encoder.encode(signature).length !== encoder.encode(expectedSig).length ||
+        !(await crypto.subtle.timingSafeEqual(encoder.encode(signature), encoder.encode(expectedSig)))) {
+      return null;
+    }
+    const payloadStr = base64urlDecode(payloadB64);
+    if (!payloadStr) return null;
+    return JSON.parse(payloadStr);
+  } catch {
+    return null;
+  }
+}
+
 export async function createAccessToken(
   userId: string,
   secret: string,
   clientType: string = 'app',
-  scopes: string[] = ['app:write'],
+  scopes: string[] = ['app_write'],
   expiresIn: number = 3600,
   tokenType: string = 'access'
 ): Promise<string> {
@@ -146,11 +166,14 @@ export async function createRefreshToken(
   userId: string,
   deviceId: string,
   db: D1Database,
-  clientType: string = 'app'
+  clientType: string = 'app',
+  scopes: string[] = ['app_write']
 ): Promise<{ id: string; token: string; expiresAt: Date }> {
-  const token = randomUUID();
+  // 与原版对齐：refresh token 也是 JWT（type=refresh），不是随机 UUID
+  const expiresIn = 30 * 24 * 60 * 60; // 30 天
+  const token = await createAccessToken(userId, (globalThis as any).__JWT_SECRET || '', clientType, scopes, expiresIn, 'refresh');
   const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
-  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + expiresIn * 1000);
   const id = randomUUID();
 
   await db.prepare(`
@@ -163,23 +186,37 @@ export async function createRefreshToken(
 
 export async function decodeRefreshToken(
   token: string,
-  db: D1Database
-): Promise<{ valid: true; userId: string; deviceId: string; clientType: string } | { valid: false; reason: string }> {
+  db: D1Database,
+  jwtSecret?: string
+): Promise<{ valid: true; userId: string; deviceId: string; clientType: string; scopes: string[] } | { valid: false; reason: string }> {
   try {
+    // 与原版对齐：先解码 JWT 获取 claims，再查 DB 做吊销检查
+    const secret = jwtSecret || (globalThis as any).__JWT_SECRET || '';
+    const payload = decodeJwtPayload(token, secret);
+    if (!payload) {
+      return { valid: false, reason: 'Invalid JWT signature' };
+    }
+    if (payload.type !== 'refresh') {
+      return { valid: false, reason: 'Invalid token type' };
+    }
+
+    const userId = payload.sub;
+    if (!userId) {
+      return { valid: false, reason: 'Missing subject' };
+    }
+
     const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
     const now = new Date().toISOString();
-    const gracePeriodMs = 60 * 1000; // 60秒宽限期：最近被撤销的 token 仍可使用
+    const gracePeriodMs = 60 * 1000;
     const graceCutoff = new Date(Date.now() - gracePeriodMs).toISOString();
 
-    // 优先查找未撤销的 token
+    // 查 DB 检查吊销和过期（与原版对齐：JWT + DB 混合验证）
     let result = await db.prepare(`
       SELECT user_id, device_id, expires_at, client_type
       FROM refresh_tokens
       WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?
     `).bind(tokenHash, now).first<{ user_id: string; device_id: string; expires_at: string; client_type: string | null }>();
 
-    // 宽限期兜底：如果 token 刚被撤销（60秒内）且未过期，仍然接受
-    // 防止客户端旋转 token 后网络异常导致旧 token 被撤销但新 token 未保存
     if (!result) {
       const graceResult = await db.prepare(`
         SELECT user_id, device_id, expires_at, client_type
@@ -192,17 +229,18 @@ export async function decodeRefreshToken(
     }
 
     if (!result) {
-      return { valid: false, reason: 'Refresh token expired or not found' };
+      return { valid: false, reason: 'Refresh token expired' };
     }
 
     return {
       valid: true,
       userId: result.user_id,
       deviceId: result.device_id,
-      clientType: result.client_type || 'app'
+      clientType: payload.client_type || result.client_type || 'app',
+      scopes: (payload.scopes as string[]) || [],
     };
-  } catch (error) {
-    return { valid: false, reason: 'Invalid refresh token' };
+  } catch (err) {
+    return { valid: false, reason: (err as Error).message };
   }
 }
 

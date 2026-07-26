@@ -408,7 +408,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
 
   // 生成真正的签名 JWT access token
   const isApp = clientType !== 'web';
-  const tokenScopes = isApp ? ['app:write'] : ['web:read', 'web:write', 'ops:write'];
+  const tokenScopes = isApp ? ['app_write'] : ['web_read', 'web_write', 'ops_write'];
   const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
 
   // 使用与 login 相同的 upsertDevice 逻辑，避免重复创建设备记录
