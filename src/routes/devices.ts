@@ -164,6 +164,8 @@ devicesRouter.get('/', async (c) => {
         session_count: count,
       });
     }
+    // 按 last_seen_at 倒序排列（与原版对齐）
+    result.sort((a, b) => b.last_seen_at.localeCompare(a.last_seen_at));
     return c.json(result);
   }
 
