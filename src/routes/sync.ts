@@ -176,7 +176,7 @@ async function enrichTxPayloadsWithUserIds(
 // ===========================
 
 const SyncPushRequestSchema = z.object({
-  device_id: z.string().optional(),
+  device_id: z.string(),
   changes: z.array(
     z.object({
       ledger_id: z.string().optional().nullable(),
@@ -630,8 +630,8 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         // 追踪 user-global 变更（与原版对齐：push 后广播 __user_global__ 通道）
         if (isUserGlobal) {
           touchedUserGlobal = true;
-          // 共享账本 fan-out：仅对 category/account/tag 推 shared_resource_change
-          if (USER_GLOBAL_TYPES.includes(change.entity_type)) {
+          // 共享账本 fan-out：仅对 category/account/tag 推 shared_resource_change（与原版对齐）
+          if (['category', 'account', 'tag'].includes(change.entity_type)) {
             pendingSharedResourceEvents.push({
               resource_type: change.entity_type,
               action: change.action,
@@ -657,8 +657,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
         // 立即应用这一批次的投影更新（避免一次性处理太多）
         for (const { change, ledgerRow, newChangeId } of processedChanges) {
-          try {
-            if (isUserGlobalType(change.entity_type)) {
+          if (isUserGlobalType(change.entity_type)) {
               await applyUserChangeToProjection(db, userId, {
                 change_id: newChangeId,
                 entity_type: change.entity_type,
@@ -676,15 +675,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
                 ledger_id: ledgerRow.id,
               });
             }
-          } catch (err) {
-            console.error('[SYNC] Error applying change to projection:', err);
-            projectionErrors.push({
-              change_id: newChangeId,
-              entity_type: change.entity_type,
-              entity_sync_id: change.entity_sync_id,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
+        }
         }
         processedChanges.length = 0; // 清空已处理的列表
       }
