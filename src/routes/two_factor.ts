@@ -145,7 +145,7 @@ async function verifyTotpCode(secret: string, code: string, window: number = 2):
 // ===========================
 
 const TwoFAConfirmSchema = z.object({
-  code: z.string().regex(/^\d{6}$/, '必须是6位数字'),
+  code: z.string().min(6).max(8),
 });
 
 const TwoFAVerifySchema = z.object({
@@ -158,16 +158,16 @@ const TwoFAVerifySchema = z.object({
   app_version: z.string().optional(),
   os_version: z.string().optional(),
   device_model: z.string().optional(),
-  client_type: z.string().optional().default('mobile'),
+  client_type: z.string().optional().default('app'),
 });
 
 const TwoFADisableSchema = z.object({
   password: z.string(),
-  code: z.string().regex(/^\d{6}$/, '必须是6位数字'),
+  code: z.string().min(6).max(8),
 });
 
 const TwoFARegenerateSchema = z.object({
-  code: z.string().regex(/^\d{6}$/, '必须是6位数字'),
+  code: z.string().min(6).max(8),
 });
 
 // ===========================
