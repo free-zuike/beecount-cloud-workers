@@ -240,12 +240,18 @@ export async function decodeRefreshToken(
       return { valid: false, reason: 'Refresh token expired' };
     }
 
+    // 返回时使用 DB 记录的 client_type 和 fallback scopes
+    const isApp = result.client_type === 'web' ? false : true;
+    const defaultScopes = isApp ? ['app_write'] : ['web_read', 'web_write', 'ops_write'];
+    
+    const scopes = (payload.scopes as string[]) || defaultScopes;
+    
     return {
       valid: true,
       userId: result.user_id,
       deviceId: result.device_id,
-      clientType: payload.client_type || result.client_type || 'app',
-      scopes: (payload.scopes as string[]) || [],
+      clientType: result.client_type || (isApp ? 'app' : 'web'),
+      scopes: scopes,
     };
   } catch (err) {
     return { valid: false, reason: (err as Error).message };
