@@ -418,7 +418,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   );
 
   // 创建 DB-backed refresh token
-  const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web');
+  const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web', undefined, jwtSecret);
 
   // 清理该设备的旧 token（过期 + 已撤销），防止无限堆积
   await db.prepare(
