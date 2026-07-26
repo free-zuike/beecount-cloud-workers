@@ -364,45 +364,53 @@ backupRouter.post('/fix-data', async (c) => {
 });
 
 /**
- * GET /backup/restore-from-r2/list - 列出 R2 中所有可用的备份文件
+ * GET /backup/restore-from-r2/list - 列出 R2 备份文件（仅限管理员）
  */
 backupRouter.get('/restore-from-r2/list', async (c) => {
+  const db = c.env.DB;
+  const userId = c.get('userId');
   const r2 = c.env.R2;
   if (!r2) return c.json({ error: 'R2 not configured' }, 400);
 
+  // 仅限管理员
+  const user = await db.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first<{ is_admin: number }>();
+  if (!user || !user.is_admin) {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+
+  // 列出所有备份
   const allObjects: R2Object[] = [];
-  for (const prefix of ['beecount/backups/']) {
-    let cursor: string | undefined;
-    do {
-      const listing = await r2.list({ prefix, limit: 100, cursor });
-      allObjects.push(...listing.objects);
-      cursor = listing.truncated ? listing.objects[listing.objects.length - 1].key : undefined;
-    } while (cursor);
-  }
+  let cursor: string | undefined;
+  do {
+    const listing = await r2.list({ prefix: 'beecount/backups/', limit: 100, cursor });
+    allObjects.push(...listing.objects);
+    cursor = listing.truncated ? listing.objects[listing.objects.length - 1].key : undefined;
+  } while (cursor);
 
-  const backupFiles = allObjects
+  const backups = allObjects
     .filter(function(o) { return o.key.endsWith('.tar.gz'); })
-    .sort(function(a, b) { return b.uploaded.getTime() - a.uploaded.getTime(); });
-
-  var backups = [];
-  for (var obj of backupFiles) {
-    backups.push({
-      key: obj.key,
-      size: obj.size,
-      uploaded: obj.uploaded.toISOString(),
+    .sort(function(a, b) { return b.uploaded.getTime() - a.uploaded.getTime(); })
+    .map(function(o) {
+      return { key: o.key, size: o.size, uploaded: o.uploaded.toISOString() };
     });
-  }
 
   return c.json({ backups: backups });
 });
+});
 
 /**
- * POST /backup/restore-from-r2 - 从 R2 备份恢复数据（非管理员路由）
+ * POST /backup/restore-from-r2 - 从 R2 备份恢复数据（仅限管理员）
  */
 backupRouter.post('/restore-from-r2', async (c) => {
   const db = c.env.DB;
   const userId = c.get('userId');
   const r2 = c.env.R2;
+
+  // 仅限管理员（与原版一致：恢复是管理员操作）
+  const user = await db.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first<{ is_admin: number }>();
+  if (!user || !user.is_admin) {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
 
   if (!r2) {
     return c.json({ error: 'R2 not configured' }, 400);
@@ -414,13 +422,13 @@ backupRouter.post('/restore-from-r2', async (c) => {
 
   let selectedPath = backupPath;
   if (!selectedPath) {
-    let listing;
-    listing = await r2.list({ prefix: 'beecount/backups/' + userId + '/' });
+    // 先找当前用户的备份，没有则找全部
+    let listing = await r2.list({ prefix: 'beecount/backups/' + userId + '/' });
     if (!listing.objects || listing.objects.length === 0) {
       listing = await r2.list({ prefix: 'beecount/backups/' });
     }
     if (!listing.objects || listing.objects.length === 0) {
-      return c.json({ error: 'No backups found in R2' }, 404);
+      return c.json({ error: 'No backups found' }, 404);
     }
     selectedPath = listing.objects.sort(function(a, b) { return b.uploaded.getTime() - a.uploaded.getTime(); })[0].key;
   }
