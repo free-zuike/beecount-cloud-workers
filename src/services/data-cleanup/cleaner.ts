@@ -10,7 +10,7 @@ import type { CleanupRecord, CleanupResult } from './types';
 
 /**
  * 清理孤立数据记录。
- * 每条记录独立事务提交/回滚，与原版对齐。
+ * 按 type 分发清理操作，与原版 _dispatch 对齐。
  */
 export async function clean(
   db: D1Database,
@@ -22,37 +22,77 @@ export async function clean(
   for (const record of records) {
     try {
       const recordKey = record.sync_id || record.row_id || record.file_path || 'unknown';
+      const extra = record.extra || {};
 
-      if (record.sync_id && record.type === 'transaction') {
-        // 清理孤立交易投影
-        await db.prepare('DELETE FROM read_tx_projection WHERE sync_id = ?')
-          .bind(record.sync_id).run();
+      if (record.type === 'tx_missing_category') {
+        // A1: 清空交易的分类引用（保留交易本体）
+        await clearTxField(db, record, 'category_sync_id', 'category_name');
         successCount++;
-      } else if (record.sync_id && record.type === 'category') {
-        // 清理孤立分类投影
-        await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ?')
-          .bind(record.sync_id).run();
+      } else if (record.type === 'tx_missing_account') {
+        // A2: 清空交易的账户引用
+        await clearTxField(db, record, 'account_sync_id', 'account_name');
         successCount++;
-      } else if (record.sync_id && record.type === 'tag') {
-        // 清理孤立标签投影
-        await db.prepare('DELETE FROM read_tag_projection WHERE sync_id = ?')
-          .bind(record.sync_id).run();
+      } else if (record.type === 'tx_from_account') {
+        // A3a: 清空转账转出账户引用
+        await clearTxField(db, record, 'from_account_sync_id', 'from_account_name');
         successCount++;
-      } else if (record.sync_id && record.type === 'budget') {
-        // 清理孤立预算投影
-        await db.prepare('DELETE FROM read_budget_projection WHERE sync_id = ?')
-          .bind(record.sync_id).run();
+      } else if (record.type === 'tx_to_account') {
+        // A3b: 清空转账转入账户引用
+        await clearTxField(db, record, 'to_account_sync_id', 'to_account_name');
         successCount++;
-      } else if (record.sync_id && record.type === 'account') {
-        // 清理孤立账户投影
-        await db.prepare('DELETE FROM read_account_projection WHERE sync_id = ?')
-          .bind(record.sync_id).run();
+      } else if (record.type === 'budget_missing_category') {
+        // A4: 清空预算的分类引用（保留预算本体）
+        const ledgerId = String(extra.ledger_id || '');
+        const syncId = record.sync_id || String(extra.sync_id || '');
+        await db.prepare(
+          `UPDATE read_budget_projection SET category_sync_id = NULL WHERE ledger_id = ? AND sync_id = ?`
+        ).bind(ledgerId, syncId).run();
         successCount++;
-      } else if (record.row_id && record.type === 'sync_orphan') {
-        // 清理孤立 sync_change
-        await db.prepare('DELETE FROM sync_changes WHERE change_id = ?')
-          .bind(Number(record.row_id)).run();
-        successCount++;
+      } else if (record.type === 'sync_orphan' || record.type === 'sync_change_missing_entity') {
+        // C1: 删除孤立 sync_change
+        if (record.row_id) {
+          const changeId = Number(record.row_id);
+          await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(changeId).run();
+          successCount++;
+        } else {
+          failures.push({ record_key: recordKey, error: 'sync_change record 缺 row_id' });
+        }
+      } else if (record.type === 'transaction') {
+        // Workers 特有：投影无 sync_changes → 删除投影行
+        if (record.sync_id) {
+          await db.prepare('DELETE FROM read_tx_projection WHERE sync_id = ?').bind(record.sync_id).run();
+          successCount++;
+        } else {
+          failures.push({ record_key: recordKey, error: 'transaction record 缺 sync_id' });
+        }
+      } else if (record.type === 'category') {
+        if (record.sync_id) {
+          await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ?').bind(record.sync_id).run();
+          successCount++;
+        } else {
+          failures.push({ record_key: recordKey, error: 'category record 缺 sync_id' });
+        }
+      } else if (record.type === 'tag') {
+        if (record.sync_id) {
+          await db.prepare('DELETE FROM read_tag_projection WHERE sync_id = ?').bind(record.sync_id).run();
+          successCount++;
+        } else {
+          failures.push({ record_key: recordKey, error: 'tag record 缺 sync_id' });
+        }
+      } else if (record.type === 'budget') {
+        if (record.sync_id) {
+          await db.prepare('DELETE FROM read_budget_projection WHERE sync_id = ?').bind(record.sync_id).run();
+          successCount++;
+        } else {
+          failures.push({ record_key: recordKey, error: 'budget record 缺 sync_id' });
+        }
+      } else if (record.type === 'account') {
+        if (record.sync_id) {
+          await db.prepare('DELETE FROM read_account_projection WHERE sync_id = ?').bind(record.sync_id).run();
+          successCount++;
+        } else {
+          failures.push({ record_key: recordKey, error: 'account record 缺 sync_id' });
+        }
       } else {
         failures.push({
           record_key: recordKey,
@@ -68,4 +108,26 @@ export async function clean(
   }
 
   return { success_count: successCount, failures };
+}
+
+/**
+ * 清空交易的指定引用字段（与原版 _clear_tx_field 对齐）
+ */
+async function clearTxField(
+  db: D1Database,
+  record: CleanupRecord,
+  syncIdCol: string,
+  nameCol: string,
+): Promise<void> {
+  const extra = record.extra || {};
+  const ledgerId = String(extra.ledger_id || '');
+  const syncId = record.sync_id || String(extra.sync_id || '');
+
+  if (!ledgerId || !syncId) {
+    throw new Error(`record 缺 ledger_id/sync_id`);
+  }
+
+  await db.prepare(
+    `UPDATE read_tx_projection SET ${syncIdCol} = NULL, ${nameCol} = NULL WHERE ledger_id = ? AND sync_id = ?`
+  ).bind(ledgerId, syncId).run();
 }
