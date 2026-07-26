@@ -829,24 +829,37 @@ readRouter.get('/ledgers/:ledgerExternalId/stats', async (c) => {
         .first<{ cnt: number }>(),
     ]);
 
-  // 全局统计
+  // 全局统计 — 跨所有可访问账本（自有 + 共享成员），与原版对齐
+  const accessibleLedgerIds = await db
+    .prepare(`SELECT l.id FROM ledgers l WHERE l.user_id = ?
+              UNION
+              SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?`)
+    .bind(userId, userId)
+    .all<{ id: string }>();
+  const ledgerIds = accessibleLedgerIds.results.map(r => r.id);
+
   const [txTotal, budgetTotal, attachmentTotal, categoryAttachmentTotal] = await Promise.all([
-    db
-      .prepare('SELECT COUNT(*) as cnt FROM read_tx_projection WHERE user_id = ?')
-      .bind(userId)
-      .first<{ cnt: number }>(),
-    db
-      .prepare('SELECT COUNT(*) as cnt FROM read_budget_projection WHERE user_id = ?')
-      .bind(userId)
-      .first<{ cnt: number }>(),
-    db
-      .prepare(
-        `SELECT COUNT(*) as cnt FROM attachment_files a
-         JOIN ledgers l ON a.ledger_id = l.id
-         WHERE l.user_id = ? AND a.attachment_kind = 'transaction'`
-      )
-      .bind(userId)
-      .first<{ cnt: number }>(),
+    ledgerIds.length > 0
+      ? db
+          .prepare(`SELECT COUNT(*) as cnt FROM read_tx_projection WHERE ledger_id IN (${ledgerIds.map(() => '?').join(',')})`)
+          .bind(...ledgerIds)
+          .first<{ cnt: number }>()
+      : Promise.resolve({ cnt: 0 }),
+    ledgerIds.length > 0
+      ? db
+          .prepare(`SELECT COUNT(*) as cnt FROM read_budget_projection WHERE ledger_id IN (${ledgerIds.map(() => '?').join(',')})`)
+          .bind(...ledgerIds)
+          .first<{ cnt: number }>()
+      : Promise.resolve({ cnt: 0 }),
+    ledgerIds.length > 0
+      ? db
+          .prepare(
+            `SELECT COUNT(*) as cnt FROM attachment_files a
+             WHERE a.ledger_id IN (${ledgerIds.map(() => '?').join(',')}) AND a.attachment_kind = 'transaction'`
+          )
+          .bind(...ledgerIds)
+          .first<{ cnt: number }>()
+      : Promise.resolve({ cnt: 0 }),
     db
       .prepare(
         `SELECT COUNT(*) as cnt FROM read_category_projection
