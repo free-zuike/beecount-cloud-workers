@@ -118,10 +118,12 @@ function parseTar(data: Uint8Array): { name: string; size: number; data: Uint8Ar
 /**
  * 导入数据到 D1
  * 策略：先查表的实际列，只导入匹配的列
+ * targetUserId: 如果指定，会替换所有 user_id 列为当前用户（恢复后数据归属当前用户）
  */
 async function importToD1(
   db: D1Database,
   tables: Record<string, unknown[]>,
+  targetUserId?: string,
 ): Promise<{ tablesImported: number; rowsImported: number; errors: string[] }> {
   let tablesImported = 0;
   let rowsImported = 0;
@@ -173,6 +175,10 @@ async function importToD1(
     let importedCount = 0;
     for (const row of rows) {
       const record = row as Record<string, unknown>;
+      // 如果指定了 targetUserId，替换 user_id 列（恢复后数据归属当前用户）
+      if (targetUserId && matchedColumns.includes('user_id')) {
+        record['user_id'] = targetUserId;
+      }
       const values = matchedColumns.map(col => record[col] ?? null);
 
       try {
@@ -230,6 +236,7 @@ export async function performRestore(
   r2: R2Bucket,
   backupPath: string,
   onProgress?: (progress: RestoreProgress) => void,
+  targetUserId?: string,
 ): Promise<RestoreResult> {
   try {
     // Phase 1: 下载并解压
@@ -243,7 +250,7 @@ export async function performRestore(
     // Phase 2: 导入数据到 D1
     onProgress?.({ phase: 'importing', bytesTransferred: 0, bytesTotal: totalBytes });
     
-    const { tablesImported, rowsImported, errors } = await importToD1(db, tables);
+    const { tablesImported, rowsImported, errors } = await importToD1(db, tables, targetUserId);
 
     const errMsg = errors.length > 0 ? ` (${errors.length} errors: ${errors.slice(0, 3).join('; ')})` : '';
     onProgress?.({ phase: 'importing', bytesTransferred: totalBytes, bytesTotal: totalBytes });
