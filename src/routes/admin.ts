@@ -317,6 +317,8 @@ adminRouter.post('/users', zValidator('json', AdminUserCreateSchema), async (c) 
     .bind(userId, req.email.split('@')[0])
     .run();
 
+  await insertAuditLog({ db, userId: c.get('userId'), action: 'admin_user_create', entityType: 'user', entityId: userId, details: { email: req.email.toLowerCase() } });
+
   return c.json({
     id: userId,
     email: req.email.toLowerCase(),
@@ -327,8 +329,6 @@ adminRouter.post('/users', zValidator('json', AdminUserCreateSchema), async (c) 
     avatar_url: null,
     avatar_version: 0,
   } as AdminUserOut);
-
-  await insertAuditLog({ db, userId: c.get('userId'), action: 'admin_user_create', entityType: 'user', entityId: userId, details: { email: req.email.toLowerCase() } });
 });
 
 // ---------------------------------------------------------------------------

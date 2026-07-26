@@ -994,7 +994,7 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
     ledgerTxBindings.push(startAt);
   }
   if (endAt) {
-    ledgerTxQuery += ' AND happened_at <= ?';
+    ledgerTxQuery += ' AND happened_at < ?';
     ledgerTxBindings.push(endAt);
   }
 

@@ -224,7 +224,7 @@ async function testS3Connection(
         
         console.log('[Backup S3 Test] LIST test passed');
         return { ok: true, message: `S3 connection successful: ${cleanBucket} at ${endpoint}` };
-        return { ok: true, message: `S3 connection successful: ${cleanBucket} at ${endpoint}` };
+
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         console.error('[Backup S3 Test] Error:', errorMsg);

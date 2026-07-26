@@ -2063,6 +2063,33 @@ async function applyChangeToProjection(
       }
       break;
     }
+
+    case 'exchange_rate_override': {
+      if (change.action === 'delete') {
+        await db
+          .prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND target_currency = ?')
+          .bind(userId, payload.base_currency ?? '', payload.target_currency ?? '')
+          .run();
+      } else {
+        const existing = await db
+          .prepare('SELECT base_currency FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND target_currency = ?')
+          .bind(userId, payload.base_currency ?? '', payload.target_currency ?? '')
+          .first();
+
+        if (existing) {
+          await db
+            .prepare('UPDATE exchange_rate_overrides SET rate = ?, updated_at = ? WHERE user_id = ? AND base_currency = ? AND target_currency = ?')
+            .bind(payload.rate ?? 1, new Date().toISOString(), userId, payload.base_currency ?? '', payload.target_currency ?? '')
+            .run();
+        } else {
+          await db
+            .prepare('INSERT INTO exchange_rate_overrides (user_id, base_currency, target_currency, rate, updated_at) VALUES (?, ?, ?, ?, ?)')
+            .bind(userId, payload.base_currency ?? '', payload.target_currency ?? '', payload.rate ?? 1, new Date().toISOString())
+            .run();
+        }
+      }
+      break;
+    }
   }
 }
 

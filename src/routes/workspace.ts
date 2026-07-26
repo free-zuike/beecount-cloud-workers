@@ -1372,8 +1372,8 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
   // 并发保护：用 try-catch 捕获 UNIQUE 约束冲突（与原版 SELECT FOR UPDATE 对齐）
   try {
     await db
-      .prepare('INSERT INTO ledger_members (ledger_id, user_id, role) VALUES (?, ?, ?)')
-      .bind(invite.ledger_id, userId, invite.target_role)
+      .prepare('INSERT INTO ledger_members (ledger_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)')
+      .bind(invite.ledger_id, userId, invite.target_role, new Date().toISOString())
       .run();
   } catch (err) {
     if ((err as Error).message?.includes('UNIQUE')) {
