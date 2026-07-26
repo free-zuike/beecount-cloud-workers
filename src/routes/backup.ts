@@ -452,7 +452,6 @@ backupRouter.get('/restore-from-r2/list', async (c) => {
 
   return c.json({ backups: backups });
 });
-});
 
 /**
  * POST /backup/restore-from-r2 - 从 R2 备份恢复数据（仅限管理员）
