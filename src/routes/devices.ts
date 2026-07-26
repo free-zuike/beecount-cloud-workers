@@ -84,18 +84,44 @@ devicesRouter.get('/', async (c) => {
   const view = c.req.query('view') ?? 'deduped';
   const activeWithinDays = parseInt(c.req.query('active_within_days') ?? '30', 10);
 
-  // 计算活跃时间窗口
-  const cutoff = new Date(Date.now() - activeWithinDays * 24 * 60 * 60 * 1000).toISOString();
+  // 计算活跃时间窗口（0 表示不过滤，与原版对齐）
+  const cutoff = activeWithinDays > 0 ? new Date(Date.now() - activeWithinDays * 24 * 60 * 60 * 1000).toISOString() : null;
 
-  const rows = await db
-    .prepare(
-      `SELECT id, name, platform, app_version, os_version, device_model,
-              last_ip, last_seen_at, created_at
-       FROM devices
-       WHERE user_id = ? AND revoked_at IS NULL AND last_seen_at >= ?
-       ORDER BY last_seen_at DESC`
-    )
-    .bind(userId, cutoff)
+  const rows = cutoff
+    ? await db.prepare(
+        `SELECT id, name, platform, app_version, os_version, device_model,
+                last_ip, last_seen_at, created_at
+         FROM devices
+         WHERE user_id = ? AND revoked_at IS NULL AND last_seen_at >= ?
+         ORDER BY last_seen_at DESC`
+      ).bind(userId, cutoff).all<{
+        id: string;
+        name: string;
+        platform: string;
+        app_version: string | null;
+        os_version: string | null;
+        device_model: string | null;
+        last_ip: string | null;
+        last_seen_at: string;
+        created_at: string;
+      }>()
+    : await db.prepare(
+        `SELECT id, name, platform, app_version, os_version, device_model,
+                last_ip, last_seen_at, created_at
+         FROM devices
+         WHERE user_id = ? AND revoked_at IS NULL
+         ORDER BY last_seen_at DESC`
+      ).bind(userId).all<{
+        id: string;
+        name: string;
+        platform: string;
+        app_version: string | null;
+        os_version: string | null;
+        device_model: string | null;
+        last_ip: string | null;
+        last_seen_at: string;
+        created_at: string;
+      }>();
     .all<{
       id: string;
       name: string;
@@ -113,8 +139,8 @@ devicesRouter.get('/', async (c) => {
     const grouped = new Map<string, { primary: typeof rows.results[0]; count: number }>();
     for (const row of rows.results) {
       const key = [
-        row.name || '', row.platform || '', row.device_model || '',
-        row.os_version || '', row.app_version || ''
+        (row.name || '').toLowerCase(), (row.platform || '').toLowerCase(), (row.device_model || '').toLowerCase(),
+        (row.os_version || '').toLowerCase(), (row.app_version || '').toLowerCase()
       ].join('|');
       const existing = grouped.get(key);
       if (existing) {
