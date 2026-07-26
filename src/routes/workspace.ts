@@ -1792,13 +1792,14 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
 
   const ownerCategories = await db
     .prepare(
-      `SELECT DISTINCT name, kind, level, sort_order, icon, icon_type
+      `SELECT DISTINCT sync_id, name, kind, level, sort_order, icon, icon_type,
+              icon_cloud_file_id, icon_cloud_sha256, parent_name
        FROM read_category_projection
-       WHERE user_id = ?
+       WHERE user_id = ? AND sync_id IS NOT NULL AND sync_id != ''
        ORDER BY kind, sort_order, LOWER(name) ASC`
     )
     .bind(ownerId)
-    .all<{ name: string | null; kind: string | null; level: number | null; sort_order: number | null; icon: string | null; icon_type: string | null }>();
+    .all<{ sync_id: string; name: string | null; kind: string | null; level: number | null; sort_order: number | null; icon: string | null; icon_type: string | null; icon_cloud_file_id: string | null; icon_cloud_sha256: string | null; parent_name: string | null }>();
 
   const ownerAccounts = await db
     .prepare(
@@ -1813,22 +1814,27 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
 
   const ownerTags = await db
     .prepare(
-      `SELECT DISTINCT name, color
+      `SELECT DISTINCT sync_id, name, color
        FROM read_tag_projection
-       WHERE user_id = ?
+       WHERE user_id = ? AND sync_id IS NOT NULL AND sync_id != ''
        ORDER BY LOWER(name) ASC`
     )
     .bind(ownerId)
-    .all<{ name: string | null; color: string | null }>();
+    .all<{ sync_id: string; name: string | null; color: string | null }>();
 
   return c.json({
     categories: ownerCategories.results.map((cat) => ({
+      sync_id: cat.sync_id,
       name: cat.name,
       kind: cat.kind,
       level: cat.level,
       sort_order: cat.sort_order,
       icon: cat.icon,
       icon_type: cat.icon_type,
+      icon_cloud_file_id: cat.icon_cloud_file_id,
+      icon_cloud_sha256: cat.icon_cloud_sha256,
+      parent_name: cat.parent_name,
+      updated_at: new Date().toISOString(),
     })),
     accounts: ownerAccounts.results.map((acct) => ({
       sync_id: acct.sync_id,
@@ -1845,8 +1851,10 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
       updated_at: new Date().toISOString(),
     })),
     tags: ownerTags.results.map((tag) => ({
+      sync_id: tag.sync_id,
       name: tag.name,
       color: tag.color,
+      updated_at: new Date().toISOString(),
     })),
   });
 });

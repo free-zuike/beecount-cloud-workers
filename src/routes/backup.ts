@@ -212,7 +212,21 @@ backupRouter.delete('/clear-data', async (c) => {
  */
 backupRouter.post('/fix-data', async (c) => {
   const db = c.env.DB;
-  const fixes: Record<string, number> = {};
+  const fixes: Record<string, unknown> = {};
+
+  // 诊断：sync_changes 中各 entity_type 的数量
+  const typeCounts = await db.prepare(`SELECT entity_type, COUNT(*) as cnt FROM sync_changes GROUP BY entity_type`).all<{ entity_type: string; cnt: number }>();
+  fixes['sync_changes_by_type'] = Object.fromEntries((typeCounts.results || []).map(r => [r.entity_type, r.cnt]));
+
+  // 诊断：投影表行数
+  const projCounts: Record<string, number> = {};
+  for (const t of ['read_budget_projection', 'read_account_projection', 'read_category_projection', 'read_tag_projection', 'read_tx_projection']) {
+    try {
+      const r = await db.prepare(`SELECT COUNT(*) as cnt FROM "${t}"`).first<{ cnt: number }>();
+      projCounts[t] = r?.cnt ?? 0;
+    } catch { projCounts[t] = -1; }
+  }
+  fixes['projection_counts'] = projCounts;
 
   // 1. 修复 sync_id 为空的投影记录
   const tables = ['read_account_projection', 'read_category_projection', 'read_tag_projection', 'read_tx_projection', 'read_budget_projection'];
