@@ -141,6 +141,7 @@ interface ReadAccountOut {
   payment_due_day: number | null;
   bank_name: string | null;
   card_last_four: string | null;
+  hidden: number | null;
 }
 
 /** 分类输出 */
@@ -984,9 +985,9 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
     ledgerTxBindings.push(txType);
   }
   if (q) {
-    ledgerTxQuery += ' AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ?)';
+    ledgerTxQuery += ' AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ? OR from_account_name LIKE ? OR to_account_name LIKE ? OR tags_csv LIKE ?)';
     const like = `%${q}%`;
-    ledgerTxBindings.push(like, like, like);
+    ledgerTxBindings.push(like, like, like, like, like, like);
   }
   if (startAt) {
     ledgerTxQuery += ' AND happened_at >= ?';
@@ -1143,7 +1144,7 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
   const rows = await db
     .prepare(
       `SELECT DISTINCT r.sync_id, r.name, r.account_type, r.currency, r.initial_balance,
-              r.note, r.credit_limit, r.billing_day, r.payment_due_day, r.bank_name, r.card_last_four
+              r.note, r.credit_limit, r.billing_day, r.payment_due_day, r.bank_name, r.card_last_four, r.hidden
        FROM read_account_projection r
        WHERE r.user_id = ?
        ORDER BY LOWER(r.name) ASC`
@@ -1194,6 +1195,7 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
       payment_due_day: row.payment_due_day as number | null,
       bank_name: row.bank_name as string | null,
       card_last_four: row.card_last_four as string | null,
+      hidden: row.hidden as number | null,
     });
   }
 
