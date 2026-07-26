@@ -676,7 +676,6 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
               });
             }
         }
-        }
         processedChanges.length = 0; // 清空已处理的列表
       }
     }
