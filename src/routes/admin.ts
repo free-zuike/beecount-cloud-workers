@@ -684,7 +684,7 @@ adminRouter.delete('/devices/:id', async (c) => {
 // 修改用户密码
 adminRouter.post('/users/:id/password', zValidator('json', z.object({
   admin_password: z.string(),
-  new_password: z.string().min(8)
+  new_password: z.string().min(6)
 })), async (c) => {
   const db = c.env.DB;
   const userId = c.req.param('id');

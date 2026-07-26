@@ -192,13 +192,13 @@ workspaceRouter.get('/transactions.csv', async (c) => {
   }
 
   if (q) {
-    txQuery += ' AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ?)';
+    txQuery += ' AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ? OR from_account_name LIKE ? OR to_account_name LIKE ? OR tags_csv LIKE ?)';
     const like = `%${q}%`;
-    params.push(like, like, like);
+    params.push(like, like, like, like, like, like);
   }
   if (accountSyncId) {
-    txQuery += ' AND account_sync_id = ?';
-    params.push(accountSyncId);
+    txQuery += ' AND (account_sync_id = ? OR from_account_sync_id = ? OR to_account_sync_id = ?)';
+    params.push(accountSyncId, accountSyncId, accountSyncId);
   }
   if (categorySyncId) {
     txQuery += ' AND category_sync_id = ?';
@@ -1081,7 +1081,7 @@ workspaceRouter.post('/ledgers/:id/invites', zValidator('json', InviteSchema), a
     .bind(ledger.id)
     .first<{ cnt: number }>();
 
-  if ((memberCount?.cnt ?? 0) >= 4) {
+  if ((memberCount?.cnt ?? 0) >= 5) {
     return c.json({ error: 'Ledger has reached the maximum of 5 members (owner + 4 editors)' }, 400);
   }
 

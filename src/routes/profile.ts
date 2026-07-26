@@ -132,7 +132,7 @@ profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => 
 // POST /me/change-password
 profileRouter.post('/me/change-password', zValidator('json', z.object({
   current_password: z.string(),
-  new_password: z.string().min(8),
+  new_password: z.string().min(6),
 })), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
