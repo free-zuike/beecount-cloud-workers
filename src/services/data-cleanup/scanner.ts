@@ -22,7 +22,7 @@ async function scanTxMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> 
   `).bind(MAX_ORPHANS).all<{ sync_id: string; ledger_id: string; user_id: string }>();
 
   return result.results.map((row) => ({
-    type: 'sync_orphan' as const,
+    type: 'transaction' as const,
     user_id: row.user_id,
     sync_id: row.sync_id,
     ledger_id: row.ledger_id,
@@ -44,7 +44,7 @@ async function scanCategoryMissingSyncChange(db: D1Database): Promise<OrphanReco
   `).bind(MAX_ORPHANS).all<{ sync_id: string; ledger_id: string; user_id: string; name: string }>();
 
   return result.results.map((row) => ({
-    type: 'sync_orphan' as const,
+    type: 'category' as const,
     user_id: row.user_id,
     sync_id: row.sync_id,
     ledger_id: row.ledger_id,
@@ -66,7 +66,7 @@ async function scanTagMissingSyncChange(db: D1Database): Promise<OrphanRecord[]>
   `).bind(MAX_ORPHANS).all<{ sync_id: string; ledger_id: string; user_id: string; name: string }>();
 
   return result.results.map((row) => ({
-    type: 'sync_orphan' as const,
+    type: 'tag' as const,
     user_id: row.user_id,
     sync_id: row.sync_id,
     ledger_id: row.ledger_id,
@@ -88,7 +88,7 @@ async function scanBudgetMissingSyncChange(db: D1Database): Promise<OrphanRecord
   `).bind(MAX_ORPHANS).all<{ sync_id: string; ledger_id: string; user_id: string; budget_type: string }>();
 
   return result.results.map((row) => ({
-    type: 'sync_orphan' as const,
+    type: 'budget' as const,
     user_id: row.user_id,
     sync_id: row.sync_id,
     ledger_id: row.ledger_id,
@@ -110,7 +110,7 @@ async function scanAccountMissingSyncChange(db: D1Database): Promise<OrphanRecor
   `).bind(MAX_ORPHANS).all<{ sync_id: string; ledger_id: string; user_id: string; name: string }>();
 
   return result.results.map((row) => ({
-    type: 'sync_orphan' as const,
+    type: 'account' as const,
     user_id: row.user_id,
     sync_id: row.sync_id,
     ledger_id: row.ledger_id,
