@@ -31,6 +31,45 @@ function nowUtc(): string {
 // ===========================
 
 /**
+ * 为指定用户创建 sync_changes 记录（restore 后自动调用）
+ * 这样 App 的 sync/pull 就能获取到投影数据
+ */
+async function createSyncChangesForUser(db: D1Database, targetUserId: string): Promise<void> {
+  const projectionTables: Array<{ table: string; entityType: string }> = [
+    { table: 'read_category_projection', entityType: 'category' },
+    { table: 'read_tag_projection', entityType: 'tag' },
+    { table: 'read_budget_projection', entityType: 'budget' },
+    { table: 'read_account_projection', entityType: 'account' },
+  ];
+
+  const maxChangeId = await db.prepare('SELECT MAX(change_id) as max_id FROM sync_changes').first<{ max_id: number | null }>();
+  let currentId = (maxChangeId?.max_id ?? 0);
+
+  for (const pt of projectionTables) {
+    const rows = await db.prepare(`SELECT sync_id, ledger_id FROM "${pt.table}" WHERE user_id = ? AND sync_id IS NOT NULL AND sync_id != ''`).bind(targetUserId).all<{ sync_id: string; ledger_id: string | null }>();
+    for (const row of (rows.results || [])) {
+      currentId++;
+      const fullRow = await db.prepare(`SELECT * FROM "${pt.table}" WHERE sync_id = ?`).bind(row.sync_id).first<Record<string, unknown>>();
+      if (!fullRow) continue;
+      const payload: Record<string, unknown> = {};
+      const BOOL_KEYS = ['enabled', 'exclude_from_stats', 'exclude_from_budget', 'is_default', 'hidden', 'income_is_red'];
+      for (const [k, v] of Object.entries(fullRow)) {
+        if (k === 'id' || k === 'rowid') continue;
+        if (BOOL_KEYS.includes(k) && typeof v === 'number') { payload[k] = v === 1; } else { payload[k] = v; }
+      }
+      if (payload.ledger_id && typeof payload.ledger_id === 'string') {
+        const ledger = await db.prepare('SELECT external_id FROM ledgers WHERE id = ?').bind(payload.ledger_id).first<{ external_id: string }>();
+        if (ledger) payload.ledger_id = ledger.external_id;
+      }
+      try {
+        await db.prepare(`INSERT INTO sync_changes (change_id, user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, scope) VALUES (?, ?, ?, ?, ?, 'upsert', ?, ?, ?)`)
+          .bind(currentId, targetUserId, row.ledger_id || null, pt.entityType, row.sync_id, JSON.stringify(payload), new Date().toISOString(), pt.entityType === 'account' || pt.entityType === 'category' || pt.entityType === 'tag' ? 'user' : 'ledger').run();
+      } catch {}
+    }
+  }
+}
+
+/**
  * GET /backup/export
  * 导出用户所有数据
  */
@@ -358,6 +397,30 @@ backupRouter.post('/restore-from-r2', async (c) => {
     var result = await performRestore(db, r2, selectedPath, function(progress) {
       console.debug('[Restore] ' + progress.phase + ': ' + progress.bytesTransferred + '/' + progress.bytesTotal);
     });
+
+    // 自动为所有被导入数据的用户创建 sync_changes（不需要手动 fix-data）
+    if (result.success) {
+      try {
+        const allUserIds = await db.prepare('SELECT DISTINCT user_id FROM read_category_projection').all<{ user_id: string }>();
+        for (const row of (allUserIds.results || [])) {
+          await createSyncChangesForUser(db, row.user_id);
+        }
+        const allUserIds2 = await db.prepare('SELECT DISTINCT user_id FROM read_tag_projection').all<{ user_id: string }>();
+        for (const row of (allUserIds2.results || [])) {
+          await createSyncChangesForUser(db, row.user_id);
+        }
+        const allUserIds3 = await db.prepare('SELECT DISTINCT user_id FROM read_budget_projection').all<{ user_id: string }>();
+        for (const row of (allUserIds3.results || [])) {
+          await createSyncChangesForUser(db, row.user_id);
+        }
+        const allUserIds4 = await db.prepare('SELECT DISTINCT user_id FROM read_account_projection').all<{ user_id: string }>();
+        for (const row of (allUserIds4.results || [])) {
+          await createSyncChangesForUser(db, row.user_id);
+        }
+      } catch (e) {
+        console.error('[Restore] Auto sync_changes failed (non-fatal):', e);
+      }
+    }
 
     return c.json({
       success: result.success,
