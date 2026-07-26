@@ -556,10 +556,25 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           continue;
         }
 
-        // 完全相同的 (ts, device_id) → 幂等重放
+        // 时间戳相同时按 device_id 字典序裁决（与原版 tuple 排序对齐）
+        if (existingTuple && existingTuple.ts === incomingTuple.ts) {
+          const incomingDid = deviceId ?? '';
+          const existingDid = existingTuple.deviceId ?? '';
+          if (existingDid > incomingDid) {
+            // 服务端设备赢 → 拒绝
+            rejected++;
+            conflictCount++;
+            continue;
+          }
+          if (existingDid === incomingDid) {
+            // 幂等重放 → 接受
+            accepted++;
+            continue;
+          }
+          // incomingDid > existingDid → 落入下方接受逻辑
+        }
         if (existingTuple && existingTuple.ts === incomingTuple.ts && existingTuple.deviceId === incomingTuple.deviceId) {
           accepted++;
-          console.log('[SYNC] IDEMPOTENT - same (ts,device):', change.entity_type, change.entity_sync_id);
           continue;
         }
 
