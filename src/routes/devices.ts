@@ -122,17 +122,6 @@ devicesRouter.get('/', async (c) => {
         last_seen_at: string;
         created_at: string;
       }>();
-    .all<{
-      id: string;
-      name: string;
-      platform: string;
-      app_version: string | null;
-      os_version: string | null;
-      device_model: string | null;
-      last_ip: string | null;
-      last_seen_at: string;
-      created_at: string;
-    }>();
 
   // deduped 视图：按 (user_id, name, platform, device_model, os_version, app_version) 分组
   if (view === 'deduped') {
