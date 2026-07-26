@@ -192,7 +192,10 @@ export async function decodeRefreshToken(
 ): Promise<{ valid: true; userId: string; deviceId: string; clientType: string; scopes: string[] } | { valid: false; reason: string }> {
   try {
     // 与原版对齐：先解码 JWT 获取 claims，再查 DB 做吊销检查
-    const secret = jwtSecret || (globalThis as any).__JWT_SECRET || '';
+    const secret = jwtSecret || '';
+    if (!secret) {
+      return { valid: false, reason: 'JWT secret not configured' };
+    }
     const payload = decodeJwtPayload(token, secret);
     if (!payload) {
       return { valid: false, reason: 'Invalid JWT signature' };
