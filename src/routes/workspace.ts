@@ -506,6 +506,7 @@ workspaceRouter.get('/accounts', async (c) => {
       payment_due_day: row.payment_due_day,
       bank_name: row.bank_name,
       card_last_four: row.card_last_four,
+      hidden: Boolean(row.hidden),
       tx_count: txStats?.tx_count ?? 0,
       income_total: incomeTotal,
       expense_total: expenseTotal,
