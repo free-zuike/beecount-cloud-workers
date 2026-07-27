@@ -857,18 +857,18 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
     )
     .bind(userId, 'account', accountSyncId, 'upsert', safeJsonStringify({
       syncId: accountSyncId,
-      name: req.name,
-      type: req.account_type ?? null,
-      currency: req.currency ?? null,
-      initialBalance: req.initial_balance ?? 0,
+      ...(req.name !== undefined && { name: req.name }),
+      ...(req.account_type !== undefined && { type: req.account_type }),
+      ...(req.currency !== undefined && { currency: req.currency }),
+      ...(req.initial_balance !== undefined && { initialBalance: req.initial_balance }),
       sortOrder: 0,
-      note: req.note ?? null,
-      creditLimit: req.credit_limit ?? null,
-      billingDay: req.billing_day ?? null,
-      paymentDueDay: req.payment_due_day ?? null,
-      bankName: req.bank_name ?? null,
-      cardLastFour: req.card_last_four ?? null,
-      hidden: req.hidden != null ? (req.hidden ? 1 : 0) : null,
+      ...(req.note !== undefined && { note: req.note }),
+      ...(req.credit_limit !== undefined && { creditLimit: req.credit_limit }),
+      ...(req.billing_day !== undefined && { billingDay: req.billing_day }),
+      ...(req.payment_due_day !== undefined && { paymentDueDay: req.payment_due_day }),
+      ...(req.bank_name !== undefined && { bankName: req.bank_name }),
+      ...(req.card_last_four !== undefined && { cardLastFour: req.card_last_four }),
+      ...(req.hidden !== undefined && { hidden: req.hidden ? 1 : 0 }),
     }), serverNow, userId)
     .run();
 
@@ -881,20 +881,33 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
       .first();
 
     if (existingAccount) {
+      // 只更新请求中提供的字段（与原版 PATCH exclude_unset 对齐）
+      const sets: string[] = [];
+      const vals: unknown[] = [];
+      if (req.name !== undefined) { sets.push('name = ?'); vals.push(req.name); }
+      if (req.account_type !== undefined) { sets.push('account_type = ?'); vals.push(req.account_type); }
+      if (req.currency !== undefined) { sets.push('currency = ?'); vals.push(req.currency); }
+      if (req.initial_balance !== undefined) { sets.push('initial_balance = ?'); vals.push(req.initial_balance); }
+      if (req.note !== undefined) { sets.push('note = ?'); vals.push(req.note); }
+      if (req.credit_limit !== undefined) { sets.push('credit_limit = ?'); vals.push(req.credit_limit); }
+      if (req.billing_day !== undefined) { sets.push('billing_day = ?'); vals.push(req.billing_day); }
+      if (req.payment_due_day !== undefined) { sets.push('payment_due_day = ?'); vals.push(req.payment_due_day); }
+      if (req.bank_name !== undefined) { sets.push('bank_name = ?'); vals.push(req.bank_name); }
+      if (req.card_last_four !== undefined) { sets.push('card_last_four = ?'); vals.push(req.card_last_four); }
+      if (req.hidden !== undefined) { sets.push('hidden = ?'); vals.push(req.hidden ? 1 : 0); }
+      sets.push('source_change_id = ?');
+      vals.push(newChangeId);
+      vals.push(accountSyncId, userId);
+
       const updateResult = await db
         .prepare(
-          `UPDATE read_account_projection SET
-           name = ?, account_type = ?, currency = ?, initial_balance = ?,
-           note = ?, credit_limit = ?, billing_day = ?, payment_due_day = ?,
-           bank_name = ?, card_last_four = ?, hidden = ?, source_change_id = ?
-           WHERE sync_id = ? AND user_id = ?`
+          `UPDATE read_account_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
         )
-        .bind(req.name ?? null, req.account_type ?? null, req.currency ?? null, req.initial_balance ?? 0,
-          req.note ?? null, req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
-          req.bank_name ?? null, req.card_last_four ?? null, req.hidden != null ? (req.hidden ? 1 : 0) : null, newChangeId, accountSyncId, userId)
+        .bind(...vals)
         .run();
       console.log('[PATCH account] update result:', JSON.stringify(updateResult.meta));
     } else {
+      // INSERT 需要所有字段（用默认值填充未提供的字段）
       await db
         .prepare(
           `INSERT INTO read_account_projection
@@ -915,7 +928,7 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
 
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'update', entityType: 'account', entityId: accountSyncId,
-    details: { name: req.name },
+    details: { name: req.name ?? null },
   });
 
   // WS 广播
