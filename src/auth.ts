@@ -213,7 +213,6 @@ export async function decodeRefreshToken(
       console.error('[decodeRefreshToken] Missing subject - payload keys:', Object.keys(payload).join(','));
       return { valid: false, reason: 'Missing subject' };
     }
-    }
 
     const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
     const now = new Date().toISOString();
