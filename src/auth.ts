@@ -196,22 +196,33 @@ export async function decodeRefreshToken(
     if (!secret) {
       return { valid: false, reason: 'JWT secret not configured' };
     }
-    const payload = decodeJwtPayload(token, secret);
-    if (!payload) {
-      return { valid: false, reason: 'Invalid JWT signature' };
-    }
-    if (payload.type && payload.type !== 'refresh') {
-      // 兼容旧版 token（没有 type 字段或 type 为 access）
-      if (payload.type === 'access') {
-        return { valid: false, reason: 'Invalid token type' };
-      }
-      // 没有 type 字段视为 refresh token（旧版兼容）
-    }
 
-    const userId = payload.sub ? String(payload.sub) : null;
-    if (!userId) {
-      console.error('[decodeRefreshToken] Missing subject - payload type:', typeof payload, 'payload:', JSON.stringify(payload));
-      return { valid: false, reason: 'Missing subject' };
+    // 尝试解码 JWT，失败时仍然通过 DB 查找（兼容旧版空 payload）
+    let payload: Record<string, unknown> | null = null;
+    let userIdFromJwt: string | null = null;
+    let clientTypeFromJwt: string | null = null;
+    let scopesFromJwt: string[] | null = null;
+
+    try {
+      const decoded = decodeJwtPayload(token, secret);
+      if (decoded) {
+        payload = decoded;
+        // 只取标准 JWT 的 sub 字段
+        if (payload.sub) {
+          userIdFromJwt = String(payload.sub);
+        }
+        if (payload.client_type) {
+          clientTypeFromJwt = String(payload.client_type);
+        }
+        if (payload.type && payload.type === 'access') {
+          return { valid: false, reason: 'Invalid token type' };
+        }
+        if (payload.scopes && Array.isArray(payload.scopes)) {
+          scopesFromJwt = payload.scopes as string[];
+        }
+      }
+    } catch {
+      // JWT 解码失败，继续通过 DB 查找
     }
 
     const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
@@ -241,17 +252,17 @@ export async function decodeRefreshToken(
       return { valid: false, reason: 'Refresh token expired' };
     }
 
-    // 返回时使用 DB 记录的 client_type 和 fallback scopes
+    // 用 DB 记录的 user_id 兜底（兼容 JWT payload 为空的情况）
+    const userId = userIdFromJwt || result.user_id;
     const isApp = result.client_type === 'web' ? false : true;
     const defaultScopes = isApp ? ['app_write'] : ['web_read', 'web_write', 'ops_write'];
-    
-    const scopes = (payload.scopes as string[]) || defaultScopes;
-    
+    const scopes = scopesFromJwt || defaultScopes;
+
     return {
       valid: true,
-      userId: result.user_id,
+      userId: userId,
       deviceId: result.device_id,
-      clientType: result.client_type || (isApp ? 'app' : 'web'),
+      clientType: clientTypeFromJwt || result.client_type || (isApp ? 'app' : 'web'),
       scopes: scopes,
     };
   } catch (err) {
