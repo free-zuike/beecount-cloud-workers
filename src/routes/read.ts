@@ -1195,7 +1195,7 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
       payment_due_day: row.payment_due_day as number | null,
       bank_name: row.bank_name as string | null,
       card_last_four: row.card_last_four as string | null,
-      hidden: row.hidden as number | null,
+      hidden: Boolean(row.hidden),
     });
   }
 
