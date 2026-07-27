@@ -125,57 +125,11 @@ export interface BackupResult {
 }
 
 // ===========================
-// AES-256-GCM 加密工具
+// AES-256-GCM 加密工具 — 使用 '../lib/encryption' 的 encryptData
 // ===========================
 
-const SALT_LENGTH = 16;
-const IV_LENGTH = 12;
-const KEY_LENGTH = 256;
-const ITERATIONS = 100000;
-
-async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
-  const encoder = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(password),
-    'PBKDF2',
-    false,
-    ['deriveKey']
-  );
-
-  return crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt,
-      iterations: ITERATIONS,
-      hash: 'SHA-256',
-    },
-    keyMaterial,
-    { name: 'AES-GCM', length: KEY_LENGTH },
-    false,
-    ['encrypt', 'decrypt']
-  );
-}
-
-async function encryptData(plaintext: string, password: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const salt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
-  const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
-  const key = await deriveKey(password, salt);
-
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    encoder.encode(plaintext)
-  );
-
-  const combined = new Uint8Array(SALT_LENGTH + IV_LENGTH + ciphertext.byteLength);
-  combined.set(salt, 0);
-  combined.set(iv, SALT_LENGTH);
-  combined.set(new Uint8Array(ciphertext), SALT_LENGTH + IV_LENGTH);
-
-  return btoa(String.fromCharCode(...combined));
-}
+// 加密函数使用 '../lib/encryption' 的 encryptData（接受 Uint8Array）
+// 本地 encryptData 已废弃，使用导入版本
 
 async function getEncryptionPassword(
   remoteConfig: Record<string, string>,
@@ -461,7 +415,9 @@ export async function performBackupFanOut(
         backupBytes = await encryptData(backupBytes, pw);
         encrypted = true;
         logWrap(`[Backup] Encrypted: ${backupBytes.length} bytes`);
-      } catch {}
+      } catch (e) {
+        logWrap(`[Backup] Encryption failed: ${e}`);
+      }
     }
   }
 
