@@ -889,7 +889,7 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
            bank_name = ?, card_last_four = ?, hidden = ?, source_change_id = ?
            WHERE sync_id = ? AND user_id = ?`
         )
-        .bind(req.name, req.account_type ?? null, req.currency ?? null, req.initial_balance ?? 0,
+        .bind(req.name ?? null, req.account_type ?? null, req.currency ?? null, req.initial_balance ?? 0,
           req.note ?? null, req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
           req.bank_name ?? null, req.card_last_four ?? null, req.hidden != null ? (req.hidden ? 1 : 0) : null, newChangeId, accountSyncId, userId)
         .run();
@@ -902,7 +902,7 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
             note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
            VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .bind(accountSyncId, userId, req.name, req.account_type ?? null,
+        .bind(accountSyncId, userId, req.name ?? null, req.account_type ?? null,
           req.currency ?? null, req.initial_balance ?? 0, req.note ?? null,
           req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
           req.bank_name ?? null, req.card_last_four ?? null, req.hidden != null ? (req.hidden ? 1 : 0) : null, newChangeId)
