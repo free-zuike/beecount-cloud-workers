@@ -302,16 +302,6 @@ const handleUpload = async (c: any) => {
             return c.json({ error: `File too large (max ${MAX_UPLOAD_BYTES / 1024 / 1024}MB)` }, 413);
         }
 
-        // MIME 类型白名单检查
-        const ALLOWED_MIME_TYPES = new Set([
-            'image/jpeg', 'image/png', 'image/webp', 'image/gif',
-            'application/pdf', 'text/csv', 'application/json', 'text/plain',
-        ]);
-        const fileMimeType = (file.type || '').toLowerCase();
-        if (fileMimeType && !ALLOWED_MIME_TYPES.has(fileMimeType)) {
-            return c.json({ error: `File type not allowed: ${fileMimeType}` }, 415);
-        }
-
         if (!ledgerExternalId) {
             return c.json({ error: 'ledger_id is required' }, 400);
         }
