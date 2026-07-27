@@ -208,10 +208,11 @@ export async function decodeRefreshToken(
       // 没有 type 字段视为 refresh token（旧版兼容）
     }
 
-    const userIdRaw = payload.sub || payload.user_id || payload.userId;
-    const userId = userIdRaw && typeof userIdRaw === 'string' ? userIdRaw : null;
+    const userId = payload.sub ? String(payload.sub) : null;
     if (!userId) {
+      console.error('[decodeRefreshToken] Missing subject - payload keys:', Object.keys(payload).join(','));
       return { valid: false, reason: 'Missing subject' };
+    }
     }
 
     const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
