@@ -210,7 +210,7 @@ export async function decodeRefreshToken(
 
     const userId = payload.sub ? String(payload.sub) : null;
     if (!userId) {
-      console.error('[decodeRefreshToken] Missing subject - payload keys:', Object.keys(payload).join(','));
+      console.error('[decodeRefreshToken] Missing subject - payload type:', typeof payload, 'payload:', JSON.stringify(payload));
       return { valid: false, reason: 'Missing subject' };
     }
 
