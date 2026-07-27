@@ -208,7 +208,8 @@ export async function decodeRefreshToken(
       // 没有 type 字段视为 refresh token（旧版兼容）
     }
 
-    const userId = payload.sub;
+    const userIdRaw = payload.sub || payload.user_id || payload.userId;
+    const userId = userIdRaw && typeof userIdRaw === 'string' ? userIdRaw : null;
     if (!userId) {
       return { valid: false, reason: 'Missing subject' };
     }
