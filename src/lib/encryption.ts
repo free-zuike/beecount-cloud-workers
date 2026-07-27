@@ -1,7 +1,7 @@
 /**
- * AES-256-GCM 加密/解密
- * 用于备份文件加密，加密后直接保存为 .zip 文件（与原版兼容）
+ * AES-256-GCM 加密/解密 + 标准 AES-256 加密 zip（与原版 pyzipper WZ_AES 兼容）
  */
+import JSZip from 'jszip';
 
 const SALT_LENGTH = 16;
 const IV_LENGTH = 12;
@@ -44,4 +44,29 @@ export async function decryptData(encryptedData: Uint8Array, password: string): 
   const key = await deriveKey(password, salt);
   const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
   return new Uint8Array(decrypted);
+}
+
+/**
+ * 创建标准 AES-256 加密 zip 文件（WinZip AES，与原版 pyzipper WZ_AES 兼容）
+ * 可用 7-Zip / WinRAR / macOS Archive Utility 等工具打开输入密码解压
+ * zip 内包含 backup.tar.gz 文件
+ */
+export async function createEncryptedZip(tarGzBytes: Uint8Array, password: string): Promise<Uint8Array> {
+  const zip = new JSZip();
+  zip.file('backup.tar.gz', tarGzBytes, { binary: true });
+  return zip.generateAsync({
+    type: 'uint8array',
+    password,
+    encryption: 'AES256',
+  });
+}
+
+/**
+ * 从标准 AES-256 加密 zip 中提取 backup.tar.gz
+ */
+export async function extractEncryptedZip(zipBytes: Uint8Array, password: string): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(zipBytes, { password });
+  const file = zip.file('backup.tar.gz');
+  if (!file) throw new Error('Encrypted zip does not contain backup.tar.gz');
+  return file.async('uint8array');
 }

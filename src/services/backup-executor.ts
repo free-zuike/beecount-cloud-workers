@@ -8,7 +8,7 @@ import { uploadToS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
-import { encryptData } from '../lib/encryption';
+import { createEncryptedZip, extractEncryptedZip } from '../lib/encryption';
 import { createSqliteWithData } from '../lib/sqlite-writer';
 
 // ===========================
@@ -125,7 +125,7 @@ export interface BackupResult {
 }
 
 // ===========================
-// AES-256-GCM 加密工具 — 使用 '../lib/encryption' 的 encryptData
+// AES-256-GCM 加密工具 — 使用 '../lib/encryption' 的 createEncryptedZip
 // ===========================
 
 // 加密函数使用 '../lib/encryption' 的 encryptData（接受 Uint8Array）
@@ -412,7 +412,7 @@ export async function performBackupFanOut(
     const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.zipryption_password;
     if (pw) {
       try {
-        backupBytes = await encryptData(backupBytes, pw);
+        backupBytes = await createEncryptedZip(backupBytes, pw);
         encrypted = true;
         logWrap(`[Backup] Encrypted: ${backupBytes.length} bytes`);
       } catch (e) {
@@ -592,7 +592,7 @@ export async function performBackup(
       if (encryptionPassword) {
         try {
           log('[Backup] Encrypting backup with AES-256-GCM...');
-          backupBytes = await encryptData(backupBytes, encryptionPassword);
+          backupBytes = await createEncryptedZip(backupBytes, encryptionPassword);
           encrypted = true;
           log(`[Backup] Backup encrypted: ${backupBytes.length} bytes`);
         } catch (encryptErr) {
