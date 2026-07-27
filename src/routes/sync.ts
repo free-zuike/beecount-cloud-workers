@@ -1726,62 +1726,31 @@ async function applyChangeToProjection(
           .bind(ledgerId, change.entity_sync_id)
           .run();
       } else {
-        const existing = await db
-          .prepare('SELECT sync_id FROM read_account_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .first();
-
-        if (existing) {
-          await db
-            .prepare(
-              `UPDATE read_account_projection SET
-               name = ?, account_type = ?, currency = ?, initial_balance = ?,
-               note = ?, credit_limit = ?, billing_day = ?, payment_due_day = ?,
-               bank_name = ?, card_last_four = ?, source_change_id = ?
-               WHERE ledger_id = ? AND sync_id = ?`
-            )
-            .bind(
-              payload.name ?? null,
-              payload.account_type ?? null,
-              payload.currency ?? null,
-              payload.initial_balance ?? 0,
-              payload.note ?? null,
-              payload.credit_limit ?? null,
-              payload.billing_day ?? null,
-              payload.payment_due_day ?? null,
-              payload.bank_name ?? null,
-              payload.card_last_four ?? null,
-              change.change_id,
-              ledgerId,
-              change.entity_sync_id,
-            )
-            .run();
-        } else {
-          await db
-            .prepare(
-              `INSERT INTO read_account_projection
-               (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
-                note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            )
-            .bind(
-              ledgerId,
-              change.entity_sync_id,
-              userId,
-              payload.name ?? null,
-              payload.account_type ?? null,
-              payload.currency ?? null,
-              payload.initial_balance ?? 0,
-              payload.note ?? null,
-              payload.credit_limit ?? null,
-              payload.billing_day ?? null,
-              payload.payment_due_day ?? null,
-              payload.bank_name ?? null,
-              payload.card_last_four ?? null,
-              change.change_id,
-            )
-            .run();
-        }
+        // 用 INSERT OR REPLACE 替代 SELECT + UPDATE/INSERT
+        await db
+          .prepare(
+            `INSERT OR REPLACE INTO read_account_projection
+             (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+              note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            ledgerId,
+            change.entity_sync_id,
+            userId,
+            payload.name ?? null,
+            payload.account_type ?? null,
+            payload.currency ?? null,
+            payload.initial_balance ?? 0,
+            payload.note ?? null,
+            payload.credit_limit ?? null,
+            payload.billing_day ?? null,
+            payload.payment_due_day ?? null,
+            payload.bank_name ?? null,
+            payload.card_last_four ?? null,
+            change.change_id,
+          )
+          .run();
       }
       break;
     }
@@ -1935,7 +1904,6 @@ async function applyChangeToProjection(
             change.change_id,
           )
           .run();
-        }
       }
       break;
     }
