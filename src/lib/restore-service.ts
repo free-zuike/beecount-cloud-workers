@@ -22,7 +22,7 @@ export interface RestoreResult {
 
 /**
  * 从 R2 下载备份并解析 tar.gz
- * 支持加密备份（.enc 结尾），需提供 password
+ * 支持加密备份（.zip 结尾），需提供 password
  */
 async function downloadAndExtractBackup(
   r2: R2Bucket,
@@ -35,14 +35,14 @@ async function downloadAndExtractBackup(
   
   let data = new Uint8Array(await obj.arrayBuffer());
   
-  // 如果是加密备份（.enc 结尾），先解密
-  const isEncrypted = backupPath.endsWith('.enc');
+  // 如果是加密备份（.zip 结尾），先解密
+  const isEncrypted = backupPath.endsWith('.zip');
   if (isEncrypted) {
     if (!password) {
       throw new Error('Backup is encrypted but no password provided');
     }
-    const { decryptData } = await import('./encryption');
-    data = await decryptData(data, password);
+    const { decryptFromZip } = await import('./encryption');
+    data = await decryptFromZip(data, password);
   }
   
   // 解压 gzip
