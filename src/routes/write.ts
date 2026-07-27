@@ -873,7 +873,7 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
 
   try {
     const existingAccount = await db
-      .prepare('SELECT sync_id FROM read_account_projection WHERE sync_id = ? AND user_id = ? AND ledger_id IS NULL')
+      .prepare('SELECT sync_id FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
       .bind(accountSyncId, userId)
       .first();
 
@@ -884,7 +884,7 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
            name = ?, account_type = ?, currency = ?, initial_balance = ?,
            note = ?, credit_limit = ?, billing_day = ?, payment_due_day = ?,
            bank_name = ?, card_last_four = ?, source_change_id = ?
-           WHERE sync_id = ? AND user_id = ? AND ledger_id IS NULL`
+           WHERE sync_id = ? AND user_id = ?`
         )
         .bind(req.name, req.account_type ?? null, req.currency ?? null, req.initial_balance ?? 0,
           req.note ?? null, req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
