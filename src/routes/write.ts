@@ -834,11 +834,13 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
   const db = c.env.DB;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
+  const ledgerId = c.req.param('ledgerId');
   const accountSyncId = c.req.param('id');
 
+  // 查找账本：支持 owner 和 member，用 external_id 或 internal id 匹配
   const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
+    .prepare(`SELECT id, external_id FROM ledgers WHERE external_id = ? AND (user_id = ? OR id IN (SELECT ledger_id FROM ledger_members WHERE user_id = ?))`)
+    .bind(ledgerId, userId, userId)
     .first<{ id: string; external_id: string }>();
 
   if (!ledger) {
