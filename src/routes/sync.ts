@@ -434,7 +434,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
     // ====================== 优化3：批量写入变更（分小批次避免 CPU 超时） ======================
     const conflictList: typeof conflictSamples = [];
-    const BATCH_INSERT_SIZE = 15; // 每批处理 15 个插入
+    const BATCH_INSERT_SIZE = 10; // 每批处理 10 个插入，控制 D1 调用次数
 
     // 批量预加载 member role（避免每条变更都查一次 ledger_members）
     const memberRoleMap = new Map<string, string>();
@@ -1411,18 +1411,6 @@ async function applyUserChangeToProjection(
   }
 
   if (entity_type === 'category') {
-    // Rename cascade：名称变化时级联更新 read_tx_projection 的 denorm 列
-    const newName = (payload.name as string) ?? null;
-    if (newName) {
-      const prevRow = await db.prepare('SELECT name, kind FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
-        .bind(entity_sync_id, userId).first<{ name: string | null; kind: string | null }>();
-      const oldName = prevRow?.name;
-      if (oldName && oldName !== newName) {
-        await db.prepare('UPDATE read_tx_projection SET category_name = ?, category_kind = ? WHERE user_id = ? AND category_sync_id = ?')
-          .bind(newName, payload.kind ?? prevRow?.kind ?? null, userId, entity_sync_id).run();
-      }
-    }
-
     // APP 用 camelCase (parentName)，原版用 snake_case (parent_name)
     const parentName = (payload as any).parentName ?? payload.parent_name ?? null;
     const sortOrder = (payload as any).sortOrder ?? payload.sort_order ?? null;
@@ -1431,7 +1419,7 @@ async function applyUserChangeToProjection(
     const iconCloudFileId = (payload as any).iconCloudFileId ?? payload.icon_cloud_file_id ?? null;
     const iconCloudSha256 = (payload as any).iconCloudSha256 ?? payload.icon_cloud_sha256 ?? null;
 
-    // merge_with_existing：payload 缺失/None 的字段用已有行的旧值补齐
+    // 合并 rename 检查和现有行查询为一次 SELECT
     const existingRow = await db.prepare(
       'SELECT name, kind, level, sort_order, icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256, parent_name FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
     ).bind(entity_sync_id, userId).first<{
@@ -1441,8 +1429,15 @@ async function applyUserChangeToProjection(
       icon_cloud_sha256: string | null; parent_name: string | null;
     }>();
 
+    // Rename cascade
+    const newName = (payload.name as string) ?? null;
+    if (newName && existingRow?.name && existingRow.name !== newName) {
+      await db.prepare('UPDATE read_tx_projection SET category_name = ?, category_kind = ? WHERE user_id = ? AND category_sync_id = ?')
+        .bind(newName, payload.kind ?? existingRow.kind ?? null, userId, entity_sync_id).run();
+    }
+
     const merged = {
-      name: payload.name ?? existingRow?.name ?? null,
+      name: newName ?? existingRow?.name ?? null,
       kind: payload.kind ?? existingRow?.kind ?? null,
       level: payload.level ?? existingRow?.level ?? null,
       sort_order: sortOrder ?? existingRow?.sort_order ?? null,
@@ -1454,50 +1449,20 @@ async function applyUserChangeToProjection(
       parent_name: parentName ?? existingRow?.parent_name ?? null,
     };
 
-    if (existingRow) {
-      await db.prepare(
-        `UPDATE read_category_projection SET name=?, kind=?, level=?, sort_order=?,
-         icon=?, icon_type=?, custom_icon_path=?, icon_cloud_file_id=?, icon_cloud_sha256=?,
-         parent_name=?, source_change_id=?
-         WHERE sync_id=? AND user_id=?`
-      ).bind(
-        merged.name, merged.kind, merged.level, merged.sort_order,
-        merged.icon, merged.icon_type, merged.custom_icon_path,
-        merged.icon_cloud_file_id, merged.icon_cloud_sha256,
-        merged.parent_name, change.change_id ?? 0,
-        entity_sync_id, userId
-      ).run();
-    } else {
-      await db.prepare(
-        `INSERT INTO read_category_projection
-         (ledger_id, sync_id, user_id, name, kind, level, sort_order,
-          icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
-          parent_name, source_change_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        null, entity_sync_id, userId, merged.name, merged.kind,
-        merged.level, merged.sort_order, merged.icon, merged.icon_type,
-        merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
-        merged.parent_name, change.change_id ?? 0
-      ).run();
-    }
+    // 用 INSERT OR REPLACE 替代 SELECT + UPDATE/INSERT，减少一次 D1 查询
+    await db.prepare(
+      `INSERT OR REPLACE INTO read_category_projection
+       (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+        icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+        parent_name, source_change_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      null, entity_sync_id, userId, merged.name, merged.kind,
+      merged.level, merged.sort_order, merged.icon, merged.icon_type,
+      merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
+      merged.parent_name, change.change_id ?? 0
+    ).run();
   } else if (entity_type === 'account') {
-    // Rename cascade：名称变化时级联更新 read_tx_projection 的 account_name 等列
-    const newName = (payload.name as string) ?? null;
-    if (newName) {
-      const prevRow = await db.prepare('SELECT name FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
-        .bind(entity_sync_id, userId).first<{ name: string | null }>();
-      const oldName = prevRow?.name;
-      if (oldName && oldName !== newName) {
-        await db.prepare('UPDATE read_tx_projection SET account_name = ? WHERE user_id = ? AND account_sync_id = ?')
-          .bind(newName, userId, entity_sync_id).run();
-        await db.prepare('UPDATE read_tx_projection SET from_account_name = ? WHERE user_id = ? AND from_account_sync_id = ?')
-          .bind(newName, userId, entity_sync_id).run();
-        await db.prepare('UPDATE read_tx_projection SET to_account_name = ? WHERE user_id = ? AND to_account_sync_id = ?')
-          .bind(newName, userId, entity_sync_id).run();
-      }
-    }
-
     // APP 用 camelCase，原版用 snake_case
     const accountType = (payload as any).accountType ?? payload.account_type ?? (payload as any).type ?? null;
     const initialBalance = (payload as any).initialBalance ?? payload.initial_balance ?? 0;
@@ -1507,7 +1472,7 @@ async function applyUserChangeToProjection(
     const bankName = (payload as any).bankName ?? payload.bank_name ?? null;
     const cardLastFour = (payload as any).cardLastFour ?? payload.card_last_four ?? null;
 
-    // merge_with_existing
+    // 合并 rename 检查和现有行查询为一次 SELECT
     const existingRow = await db.prepare(
       'SELECT name, account_type, currency, initial_balance, note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four FROM read_account_projection WHERE sync_id = ? AND user_id = ?'
     ).bind(entity_sync_id, userId).first<{
@@ -1517,8 +1482,19 @@ async function applyUserChangeToProjection(
       bank_name: string | null; card_last_four: string | null;
     }>();
 
+    // Rename cascade
+    const newName = (payload.name as string) ?? null;
+    if (newName && existingRow?.name && existingRow.name !== newName) {
+      await db.prepare('UPDATE read_tx_projection SET account_name = ? WHERE user_id = ? AND account_sync_id = ?')
+        .bind(newName, userId, entity_sync_id).run();
+      await db.prepare('UPDATE read_tx_projection SET from_account_name = ? WHERE user_id = ? AND from_account_sync_id = ?')
+        .bind(newName, userId, entity_sync_id).run();
+      await db.prepare('UPDATE read_tx_projection SET to_account_name = ? WHERE user_id = ? AND to_account_sync_id = ?')
+        .bind(newName, userId, entity_sync_id).run();
+    }
+
     const merged = {
-      name: payload.name ?? existingRow?.name ?? null,
+      name: newName ?? existingRow?.name ?? null,
       account_type: accountType ?? existingRow?.account_type ?? null,
       currency: payload.currency ?? existingRow?.currency ?? null,
       initial_balance: initialBalance ?? existingRow?.initial_balance ?? 0,
@@ -1530,32 +1506,19 @@ async function applyUserChangeToProjection(
       card_last_four: cardLastFour ?? existingRow?.card_last_four ?? null,
     };
 
-    if (existingRow) {
-      await db.prepare(
-        `UPDATE read_account_projection SET name=?, account_type=?, currency=?, initial_balance=?,
-         note=?, credit_limit=?, billing_day=?, payment_due_day=?, bank_name=?, card_last_four=?,
-         source_change_id=?
-         WHERE sync_id=? AND user_id=?`
-      ).bind(
-        merged.name, merged.account_type, merged.currency, merged.initial_balance,
-        merged.note, merged.credit_limit, merged.billing_day, merged.payment_due_day,
-        merged.bank_name, merged.card_last_four,
-        change.change_id ?? 0, entity_sync_id, userId
-      ).run();
-    } else {
-      await db.prepare(
-        `INSERT INTO read_account_projection
-         (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
-          note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        null, entity_sync_id, userId, merged.name, merged.account_type,
-        merged.currency, merged.initial_balance, merged.note,
-        merged.credit_limit, merged.billing_day,
-        merged.payment_due_day, merged.bank_name,
-        merged.card_last_four, change.change_id ?? 0
-      ).run();
-    }
+    // 用 INSERT OR REPLACE 替代 SELECT + UPDATE/INSERT
+    await db.prepare(
+      `INSERT OR REPLACE INTO read_account_projection
+       (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+        note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      null, entity_sync_id, userId, merged.name, merged.account_type,
+      merged.currency, merged.initial_balance, merged.note,
+      merged.credit_limit, merged.billing_day,
+      merged.payment_due_day, merged.bank_name,
+      merged.card_last_four, change.change_id ?? 0
+    ).run();
   } else if (entity_type === 'tag') {
     // Rename cascade：标签改名时更新 read_tx_projection 的 tags_csv
     const newName = (payload.name as string) ?? null;
@@ -1592,17 +1555,11 @@ async function applyUserChangeToProjection(
       color: payload.color ?? existingRow?.color ?? null,
     };
 
-    if (existingRow) {
-      await db.prepare(
-        `UPDATE read_tag_projection SET name=?, color=?, source_change_id=?
-         WHERE sync_id=? AND user_id=?`
-      ).bind(merged.name, merged.color, change.change_id, entity_sync_id, userId).run();
-    } else {
-      await db.prepare(
-        `INSERT INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
-    }
+    // 用 INSERT OR REPLACE 替代 SELECT + UPDATE/INSERT
+    await db.prepare(
+      `INSERT OR REPLACE INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
   }
 }
 
@@ -1716,93 +1673,48 @@ async function applyChangeToProjection(
         const tagIdsPayload = Array.isArray(payload.tagIds) ? payload.tagIds as string[] : null;
         const resolvedTagsCsv = await resolveTagsCsv(db, tagPayload, tagIdsPayload);
 
-        const existing = await db
-          .prepare('SELECT sync_id FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .first();
-
-        if (existing) {
-          await db
-            .prepare(
-              `UPDATE read_tx_projection SET
-               tx_type = ?, amount = ?, happened_at = ?, note = ?,
-               category_sync_id = ?, category_name = ?, category_kind = ?,
-               account_sync_id = ?, account_name = ?,
-               from_account_sync_id = ?, from_account_name = ?,
-               to_account_sync_id = ?, to_account_name = ?,
-               tags_csv = ?, tag_sync_ids_json = ?, attachments_json = ?,
-               tx_index = ?, last_edited_by_user_id = ?, source_change_id = ?,
-               currency_code = ?, native_amount = ?
-               WHERE ledger_id = ? AND sync_id = ?`
-            )
-            .bind(
-              payload.tx_type ?? payload.txType ?? payload.type ?? 'expense',
-              payload.amount ?? 0,
-              payload.happened_at ?? nowUtc(),
-              payload.note ?? null,
-              payload.categoryId ?? null,
-              payload.categoryName ?? null,
-              payload.categoryKind ?? null,
-              payload.accountId ?? null,
-              payload.accountName ?? null,
-              payload.fromAccountId ?? null,
-              payload.fromAccountName ?? null,
-              payload.toAccountId ?? null,
-              payload.toAccountName ?? null,
-              resolvedTagsCsv,
-              payload.tagIds ? safeJsonStringify(payload.tagIds) : null,
-              payload.attachments ? safeJsonStringify(payload.attachments) : null,
-              payload.tx_index ?? 0,
-              payload.updatedByUserId ?? userId,
-              change.change_id,
-              payload.currency_code ?? payload.currencyCode ?? null,
-              payload.native_amount ?? payload.nativeAmount ?? null,
-              ledgerId,
-              change.entity_sync_id,
-            )
-            .run();
-        } else {
-          await db
-            .prepare(
-              `INSERT INTO read_tx_projection
-               (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
-                category_sync_id, category_name, category_kind,
-                account_sync_id, account_name,
-                from_account_sync_id, from_account_name,
-                to_account_sync_id, to_account_name,
-                tags_csv, tag_sync_ids_json, attachments_json, tx_index,
-                created_by_user_id, last_edited_by_user_id, source_change_id,
-                currency_code, native_amount)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            )
-            .bind(
-              ledgerId,
-              change.entity_sync_id,
-              userId,
-              payload.tx_type ?? payload.txType ?? payload.type ?? 'expense',
-              payload.amount ?? 0,
-              payload.happened_at ?? nowUtc(),
-              payload.note ?? null,
-              payload.categoryId ?? null,
-              payload.categoryName ?? null,
-              payload.categoryKind ?? null,
-              payload.accountId ?? null,
-              payload.accountName ?? null,
-              payload.fromAccountId ?? null,
-              payload.fromAccountName ?? null,
-              payload.toAccountId ?? null,
-              payload.toAccountName ?? null,
-              resolvedTagsCsv,
-              payload.tagIds ? safeJsonStringify(payload.tagIds) : null,
-              payload.attachments ? safeJsonStringify(payload.attachments) : null,
-              payload.tx_index ?? 0,
-              payload.createdByUserId ?? userId,
-              payload.updatedByUserId ?? userId,
-              change.change_id,
-              payload.currency_code ?? payload.currencyCode ?? null,
-              payload.native_amount ?? payload.nativeAmount ?? null,
-            )
-            .run();
+        // 用 INSERT OR REPLACE 替代 SELECT + UPDATE/INSERT
+        await db
+          .prepare(
+            `INSERT OR REPLACE INTO read_tx_projection
+             (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
+              category_sync_id, category_name, category_kind,
+              account_sync_id, account_name,
+              from_account_sync_id, from_account_name,
+              to_account_sync_id, to_account_name,
+              tags_csv, tag_sync_ids_json, attachments_json, tx_index,
+              created_by_user_id, last_edited_by_user_id, source_change_id,
+              currency_code, native_amount)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            ledgerId,
+            change.entity_sync_id,
+            userId,
+            payload.tx_type ?? payload.txType ?? payload.type ?? 'expense',
+            payload.amount ?? 0,
+            payload.happened_at ?? nowUtc(),
+            payload.note ?? null,
+            payload.categoryId ?? null,
+            payload.categoryName ?? null,
+            payload.categoryKind ?? null,
+            payload.accountId ?? null,
+            payload.accountName ?? null,
+            payload.fromAccountId ?? null,
+            payload.fromAccountName ?? null,
+            payload.toAccountId ?? null,
+            payload.toAccountName ?? null,
+            resolvedTagsCsv,
+            payload.tagIds ? safeJsonStringify(payload.tagIds) : null,
+            payload.attachments ? safeJsonStringify(payload.attachments) : null,
+            payload.tx_index ?? 0,
+            payload.createdByUserId ?? userId,
+            payload.updatedByUserId ?? userId,
+            change.change_id,
+            payload.currency_code ?? payload.currencyCode ?? null,
+            payload.native_amount ?? payload.nativeAmount ?? null,
+          )
+          .run();
         }
       }
       break;
@@ -2003,52 +1915,27 @@ async function applyChangeToProjection(
           `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'budget' AND entity_sync_id = ? AND action != 'delete'`
         ).bind(ledgerId, change.entity_sync_id).run();
       } else {
-        const existing = await db
-          .prepare('SELECT sync_id FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .first();
-
-        if (existing) {
-          await db
-            .prepare(
-              `UPDATE read_budget_projection SET
-               budget_type = ?, category_sync_id = ?, amount = ?,
-               period = ?, start_day = ?, enabled = ?, source_change_id = ?
-               WHERE ledger_id = ? AND sync_id = ?`
-            )
-            .bind(
-              payload.budget_type ?? 'total',
-              payload.category_sync_id ?? null,
-              payload.amount ?? 0,
-              payload.period ?? 'monthly',
-              payload.start_day ?? 1,
-              payload.enabled ?? true,
-              change.change_id,
-              ledgerId,
-              change.entity_sync_id,
-            )
-            .run();
-        } else {
-          await db
-            .prepare(
-              `INSERT INTO read_budget_projection
-               (ledger_id, sync_id, user_id, budget_type, category_sync_id, amount,
-                period, start_day, enabled, source_change_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            )
-            .bind(
-              ledgerId,
-              change.entity_sync_id,
-              userId,
-              payload.budget_type ?? 'total',
-              payload.category_sync_id ?? null,
-              payload.amount ?? 0,
-              payload.period ?? 'monthly',
-              payload.start_day ?? 1,
-              payload.enabled ?? true,
-              change.change_id,
-            )
-            .run();
+        // 用 INSERT OR REPLACE 替代 SELECT + UPDATE/INSERT
+        await db
+          .prepare(
+            `INSERT OR REPLACE INTO read_budget_projection
+             (ledger_id, sync_id, user_id, budget_type, category_sync_id, amount,
+              period, start_day, enabled, source_change_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            ledgerId,
+            change.entity_sync_id,
+            userId,
+            payload.budget_type ?? 'total',
+            payload.category_sync_id ?? null,
+            payload.amount ?? 0,
+            payload.period ?? 'monthly',
+            payload.start_day ?? 1,
+            payload.enabled ?? true,
+            change.change_id,
+          )
+          .run();
         }
       }
       break;
