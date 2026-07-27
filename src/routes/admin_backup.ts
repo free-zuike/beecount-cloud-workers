@@ -624,13 +624,6 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
 
   const remoteId = result.meta.last_row_id as number;
 
-  if (req.encrypted) {
-    await db
-      .prepare('UPDATE backup_remotes SET encrypted = 0 WHERE id != ?')
-      .bind(remoteId)
-      .run();
-  }
-
   return c.json({
     id: String(remoteId),
     name: req.name,
@@ -683,13 +676,6 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
     .prepare(`UPDATE backup_remotes SET ${updates.join(', ')} WHERE id = ?`)
     .bind(...params)
     .run();
-
-  if (req.encrypted) {
-    await db
-      .prepare('UPDATE backup_remotes SET encrypted = 0 WHERE id != ?')
-      .bind(remoteId)
-      .run();
-  }
 
   const updated = await db
     .prepare(
