@@ -1728,7 +1728,7 @@ backupRouter.post('/run-now', zValidator('json', RunNowSchema), async (c) => {
     }
   }
 
-  const shouldEncrypt = remoteConfigs.some(rc => (rc.config as any)._encrypted === 1);
+  const shouldEncrypt = remoteConfigs.some(rc => parseInt(rc.config._encrypted as string) === 1);
   const remoteId = remoteConfigs[0]?.remoteId || null;
 
   const runInsertResult = await db
