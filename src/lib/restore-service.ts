@@ -179,6 +179,10 @@ async function importToD1(
       if (userIdMapping && matchedColumns.includes('user_id') && record['user_id'] && userIdMapping[String(record['user_id'])]) {
         record['user_id'] = userIdMapping[String(record['user_id'])];
       }
+      // users 表：跳过已存在邮箱的用户（不覆盖密码/2FA）
+      if (tableName === 'users' && userIdMapping && record['id'] && userIdMapping[String(record['id'])]) {
+        continue;
+      }
       const values = matchedColumns.map(col => record[col] ?? null);
 
       try {
@@ -259,18 +263,15 @@ export async function performRestore(
         emailToId[eu.email.toLowerCase()] = eu.id;
       }
       userIdMapping = {};
-      let skipUsers = false;
+      let hasMatchingEmail = false;
       for (const bu of backupUsers) {
         const buEmail = String(bu.email || '').toLowerCase();
         if (buEmail && emailToId[buEmail]) {
           userIdMapping[String(bu.id)] = emailToId[buEmail];
-          skipUsers = true;
+          hasMatchingEmail = true;
         }
       }
-      // 如果存在邮箱匹配，跳过 users 表导入（不覆盖现有用户记录）
-      if (skipUsers) {
-        delete tables['users'];
-      }
+      // 不跳过 users 表，importToD1 中会跳过已存在邮箱的用户行
     }
 
     const { tablesImported, rowsImported, errors } = await importToD1(db, tables, userIdMapping);
