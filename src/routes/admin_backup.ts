@@ -1714,7 +1714,7 @@ backupRouter.post('/run-now', zValidator('json', RunNowSchema), async (c) => {
     if (remote) {
       const parsedConfig = JSON.parse(remote.config_summary || '{}');
       if (remote.backend_type === 'r2' && c.env.R2) parsedConfig._r2Bucket = c.env.R2;
-      remoteConfigs.push({ remoteId: req.remote_id, config: { backend_type: remote.backend_type, ...parsedConfig } });
+      remoteConfigs.push({ remoteId: req.remote_id, config: { backend_type: remote.backend_type, ...parsedConfig, _encrypted: String(remote.encrypted) } });
     }
   } else {
     // 无指定远端时加载所有远端
@@ -1724,11 +1724,11 @@ backupRouter.post('/run-now', zValidator('json', RunNowSchema), async (c) => {
     for (const remote of allRemotes.results || []) {
       const parsedConfig = JSON.parse(remote.config_summary || '{}');
       if (remote.backend_type === 'r2' && c.env.R2) parsedConfig._r2Bucket = c.env.R2;
-      remoteConfigs.push({ remoteId: remote.id, config: { backend_type: remote.backend_type, ...parsedConfig } });
+      remoteConfigs.push({ remoteId: remote.id, config: { backend_type: remote.backend_type, ...parsedConfig, _encrypted: String(remote.encrypted) } });
     }
   }
 
-  const shouldEncrypt = remoteConfigs.some(rc => (rc.config as any).encrypted === 1);
+  const shouldEncrypt = remoteConfigs.some(rc => (rc.config as any)._encrypted === 1);
   const remoteId = remoteConfigs[0]?.remoteId || null;
 
   const runInsertResult = await db
