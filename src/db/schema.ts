@@ -582,6 +582,11 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     `).run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_exchange_rate_overrides_user ON exchange_rate_overrides(user_id)').run();
 
+    // 迁移：read_account_projection 添加 hidden 列（用于隐藏/归档账户）
+    try {
+      await db.prepare("ALTER TABLE read_account_projection ADD COLUMN hidden INTEGER DEFAULT 0").run();
+    } catch { /* 列已存在则忽略 */ }
+
     console.log('[INIT] Database tables created/verified successfully');
 
   } catch (error) {
