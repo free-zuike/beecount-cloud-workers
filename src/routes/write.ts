@@ -244,6 +244,7 @@ const WriteAccountCreateSchema = WriteBaseSchema.extend({
   payment_due_day: z.number().int().min(1).max(31).nullable().optional(),
   bank_name: z.string().nullable().optional(),
   card_last_four: z.string().max(8).nullable().optional(),
+  hidden: z.boolean().optional(),
 });
 
 /** 更新账户请求 */
@@ -258,6 +259,7 @@ const WriteAccountUpdateSchema = WriteBaseSchema.extend({
   payment_due_day: z.number().int().min(1).max(31).nullable().optional(),
   bank_name: z.string().nullable().optional(),
   card_last_four: z.string().max(8).nullable().optional(),
+  hidden: z.boolean().optional(),
 });
 
 /** 创建分类请求 */
@@ -866,6 +868,7 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
       paymentDueDay: req.payment_due_day ?? null,
       bankName: req.bank_name ?? null,
       cardLastFour: req.card_last_four ?? null,
+      hidden: req.hidden ?? null,
     }), serverNow, userId)
     .run();
 
@@ -883,12 +886,12 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
           `UPDATE read_account_projection SET
            name = ?, account_type = ?, currency = ?, initial_balance = ?,
            note = ?, credit_limit = ?, billing_day = ?, payment_due_day = ?,
-           bank_name = ?, card_last_four = ?, source_change_id = ?
+           bank_name = ?, card_last_four = ?, hidden = ?, source_change_id = ?
            WHERE sync_id = ? AND user_id = ?`
         )
         .bind(req.name, req.account_type ?? null, req.currency ?? null, req.initial_balance ?? 0,
           req.note ?? null, req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
-          req.bank_name ?? null, req.card_last_four ?? null, newChangeId, accountSyncId, userId)
+          req.bank_name ?? null, req.card_last_four ?? null, req.hidden ?? null, newChangeId, accountSyncId, userId)
         .run();
       console.log('[PATCH account] update result:', JSON.stringify(updateResult.meta));
     } else {
@@ -896,13 +899,13 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
         .prepare(
           `INSERT INTO read_account_projection
            (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
-            note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
-           VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
+           VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(accountSyncId, userId, req.name, req.account_type ?? null,
           req.currency ?? null, req.initial_balance ?? 0, req.note ?? null,
           req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
-          req.bank_name ?? null, req.card_last_four ?? null, newChangeId)
+          req.bank_name ?? null, req.card_last_four ?? null, req.hidden ?? null, newChangeId)
         .run();
     }
   } catch (projErr) {
