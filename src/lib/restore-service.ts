@@ -22,17 +22,28 @@ export interface RestoreResult {
 
 /**
  * 从 R2 下载备份并解析 tar.gz
+ * 支持加密备份（.zip 结尾），需提供 password
  */
 async function downloadAndExtractBackup(
   r2: R2Bucket,
   backupPath: string,
+  password?: string,
 ): Promise<{ meta: any; tables: Record<string, unknown[]>; attachments: Map<string, Uint8Array> }> {
-  // 下载 tar.gz
+  // 下载备份文件
   const obj = await r2.get(backupPath);
   if (!obj) throw new Error(`Backup not found: ${backupPath}`);
   
-  const arrayBuffer = await obj.arrayBuffer();
-  const data = new Uint8Array(arrayBuffer);
+  let data = new Uint8Array(await obj.arrayBuffer());
+  
+  // 如果是加密备份（.zip 结尾），先解密
+  const isEncrypted = backupPath.endsWith('.zip');
+  if (isEncrypted) {
+    if (!password) {
+      throw new Error('Backup is encrypted but no password provided');
+    }
+    const { decryptData } = await import('./encryption');
+    data = await decryptData(data, password);
+  }
   
   // 解压 gzip
   const decompressed = await decompressGzip(data);
@@ -240,12 +251,13 @@ export async function performRestore(
   r2: R2Bucket,
   backupPath: string,
   onProgress?: (progress: RestoreProgress) => void,
+  password?: string,
 ): Promise<RestoreResult> {
   try {
-    // Phase 1: 下载并解压
+    // Phase 1: 下载并解压（支持加密备份）
     onProgress?.({ phase: 'downloading', bytesTransferred: 0, bytesTotal: 0 });
     
-    const { meta, tables, attachments } = await downloadAndExtractBackup(r2, backupPath);
+    const { meta, tables, attachments } = await downloadAndExtractBackup(r2, backupPath, password);
     
     const totalBytes = Object.values(tables).reduce((sum, rows) => sum + rows.length, 0) * 500; // 估算
     onProgress?.({ phase: 'downloading', bytesTransferred: totalBytes, bytesTotal: totalBytes });

@@ -471,9 +471,10 @@ backupRouter.post('/restore-from-r2', async (c) => {
     return c.json({ error: 'R2 not configured' }, 400);
   }
 
-  let body: { backupPath?: string } = {};
+  let body: { backupPath?: string; password?: string } = {};
   try { body = await c.req.json(); } catch {}
   const backupPath = body.backupPath;
+  const password = body.password;
 
   let selectedPath = backupPath;
   if (!selectedPath) {
@@ -492,7 +493,7 @@ backupRouter.post('/restore-from-r2', async (c) => {
     var { performRestore } = await import('../lib/restore-service');
     var result = await performRestore(db, r2, selectedPath, function(progress) {
       console.debug('[Restore] ' + progress.phase + ': ' + progress.bytesTransferred + '/' + progress.bytesTotal);
-    });
+    }, password);
 
     return c.json({
       success: result.success,
