@@ -118,10 +118,12 @@ function parseTar(data: Uint8Array): { name: string; size: number; data: Uint8Ar
 /**
  * 导入数据到 D1
  * 策略：先查表的实际列，只导入匹配的列，保留原始 user_id
+ * userIdMapping: 备份中旧 user_id → 现有用户实际 user_id 的映射（按邮箱匹配）
  */
 async function importToD1(
   db: D1Database,
   tables: Record<string, unknown[]>,
+  userIdMapping?: Record<string, string>,
 ): Promise<{ tablesImported: number; rowsImported: number; errors: string[] }> {
   let tablesImported = 0;
   let rowsImported = 0;
@@ -173,6 +175,10 @@ async function importToD1(
     let importedCount = 0;
     for (const row of rows) {
       const record = row as Record<string, unknown>;
+      // 如果指定了 userIdMapping，替换 user_id 列（按邮箱匹配，恢复数据归属当前用户）
+      if (userIdMapping && matchedColumns.includes('user_id') && record['user_id'] && userIdMapping[String(record['user_id'])]) {
+        record['user_id'] = userIdMapping[String(record['user_id'])];
+      }
       const values = matchedColumns.map(col => record[col] ?? null);
 
       try {
@@ -242,8 +248,32 @@ export async function performRestore(
     
     // Phase 2: 导入数据到 D1
     onProgress?.({ phase: 'importing', bytesTransferred: 0, bytesTotal: totalBytes });
-    
-    const { tablesImported, rowsImported, errors } = await importToD1(db, tables);
+
+    // 按邮箱匹配用户：如果备份中的用户 email 已存在于 D1，将备份数据映射到现有用户
+    let userIdMapping: Record<string, string> | undefined;
+    const backupUsers = tables['users'] as Record<string, unknown>[] | undefined;
+    if (backupUsers && backupUsers.length > 0) {
+      const existingUsers = await db.prepare('SELECT id, email FROM users').all<{ id: string; email: string }>();
+      const emailToId: Record<string, string> = {};
+      for (const eu of (existingUsers.results || [])) {
+        emailToId[eu.email.toLowerCase()] = eu.id;
+      }
+      userIdMapping = {};
+      let skipUsers = false;
+      for (const bu of backupUsers) {
+        const buEmail = String(bu.email || '').toLowerCase();
+        if (buEmail && emailToId[buEmail]) {
+          userIdMapping[String(bu.id)] = emailToId[buEmail];
+          skipUsers = true;
+        }
+      }
+      // 如果存在邮箱匹配，跳过 users 表导入（不覆盖现有用户记录）
+      if (skipUsers) {
+        delete tables['users'];
+      }
+    }
+
+    const { tablesImported, rowsImported, errors } = await importToD1(db, tables, userIdMapping);
 
     const errMsg = errors.length > 0 ? ` (${errors.length} errors: ${errors.slice(0, 3).join('; ')})` : '';
     onProgress?.({ phase: 'importing', bytesTransferred: totalBytes, bytesTotal: totalBytes });
