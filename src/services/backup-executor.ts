@@ -412,7 +412,7 @@ export async function performBackupFanOut(
     const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.zipryption_password;
     if (pw) {
       try {
-        backupBytes = await createEncryptedZip(backupBytes, pw);
+        backupBytes = createEncryptedZip(backupBytes, pw);
         encrypted = true;
         logWrap(`[Backup] Encrypted: ${backupBytes.length} bytes`);
       } catch (e) {
@@ -592,7 +592,7 @@ export async function performBackup(
       if (encryptionPassword) {
         try {
           log('[Backup] Encrypting backup with AES-256-GCM...');
-          backupBytes = await createEncryptedZip(backupBytes, encryptionPassword);
+          backupBytes = createEncryptedZip(backupBytes, encryptionPassword);
           encrypted = true;
           log(`[Backup] Backup encrypted: ${backupBytes.length} bytes`);
         } catch (encryptErr) {
