@@ -413,7 +413,7 @@ export async function uploadBackupToRemote(
     const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
     let prefix = '';
     if (remoteConfig.savePath) prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
-    const key = `${prefix}backups/${userId}/${ts}_backup.tar.gz`;
+    const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
     const result = await uploadToWebDav(remoteConfig.url!, remoteConfig.username!, remoteConfig.password!, key, backupBytes);
     return result.ok ? { ok: true, message: 'Upload successful', key } : { ok: false, message: result.message };
   }
@@ -422,7 +422,7 @@ export async function uploadBackupToRemote(
     const bucket = remoteConfig._r2Bucket as unknown as R2Bucket;
     const localTime = new Date(Date.now() + 8 * 3600000);
     const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-    const key = `beecount/backups/${userId}/${ts}_backup.tar.gz`;
+    const key = `beecount/backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
     await bucket.put(key, backupBytes, { httpMetadata: { contentType: 'application/gzip' } });
     return { ok: true, message: 'R2 upload successful', key };
   }
@@ -729,7 +729,7 @@ export async function performBackup(
         basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
       }
 
-      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup.tar.gz`;
+      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${encrypted ? '.zip' : '.tar.gz'}`;
 
       log(`[Backup] Uploading to WebDAV: ${backupKey}`);
 
