@@ -868,7 +868,7 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
       paymentDueDay: req.payment_due_day ?? null,
       bankName: req.bank_name ?? null,
       cardLastFour: req.card_last_four ?? null,
-      hidden: req.hidden ?? null,
+      hidden: req.hidden != null ? (req.hidden ? 1 : 0) : null,
     }), serverNow, userId)
     .run();
 
@@ -891,7 +891,7 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
         )
         .bind(req.name, req.account_type ?? null, req.currency ?? null, req.initial_balance ?? 0,
           req.note ?? null, req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
-          req.bank_name ?? null, req.card_last_four ?? null, req.hidden ?? null, newChangeId, accountSyncId, userId)
+          req.bank_name ?? null, req.card_last_four ?? null, req.hidden != null ? (req.hidden ? 1 : 0) : null, newChangeId, accountSyncId, userId)
         .run();
       console.log('[PATCH account] update result:', JSON.stringify(updateResult.meta));
     } else {
@@ -905,7 +905,7 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
         .bind(accountSyncId, userId, req.name, req.account_type ?? null,
           req.currency ?? null, req.initial_balance ?? 0, req.note ?? null,
           req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
-          req.bank_name ?? null, req.card_last_four ?? null, req.hidden ?? null, newChangeId)
+          req.bank_name ?? null, req.card_last_four ?? null, req.hidden != null ? (req.hidden ? 1 : 0) : null, newChangeId)
         .run();
     }
   } catch (projErr) {
