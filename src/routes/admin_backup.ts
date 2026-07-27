@@ -244,12 +244,14 @@ const RemoteCreateSchema = z.object({
   backend_type: z.string().min(1).max(32),
   config: z.record(z.string()),
   encrypted: z.boolean().optional(),
+  age_passphrase: z.string().optional(),
 });
 
 const RemoteUpdateSchema = z.object({
   name: z.string().min(1).max(64).optional(),
   config: z.record(z.string()).optional(),
   encrypted: z.boolean().optional(),
+  age_passphrase: z.string().optional(),
 });
 
 const RemoteTestSchema = z.object({
@@ -605,7 +607,7 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
-  const configJson = JSON.stringify(req.config);
+  const configJson = JSON.stringify(req.age_passphrase ? { ...req.config, age_passphrase: req.age_passphrase } : req.config);
 
   const result = await db
     .prepare(
@@ -663,7 +665,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
 
   if (req.config !== undefined) {
     updates.push('config_summary = ?');
-    params.push(JSON.stringify(req.config));
+    params.push(JSON.stringify(req.age_passphrase ? { ...req.config, age_passphrase: req.age_passphrase } : req.config));
   }
   if (req.encrypted !== undefined) {
     updates.push('encrypted = ?');
