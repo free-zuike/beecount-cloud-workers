@@ -243,13 +243,13 @@ const RemoteCreateSchema = z.object({
   name: z.string().min(1).max(64),
   backend_type: z.string().min(1).max(32),
   config: z.record(z.string()),
-  is_default: z.boolean().optional(),
+  encrypted: z.boolean().optional(),
 });
 
 const RemoteUpdateSchema = z.object({
   name: z.string().min(1).max(64).optional(),
   config: z.record(z.string()).optional(),
-  is_default: z.boolean().optional(),
+  encrypted: z.boolean().optional(),
 });
 
 const RemoteTestSchema = z.object({
@@ -616,7 +616,7 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
       req.name,
       req.backend_type,
       configJson,
-      req.is_default ? 1 : 0,
+      req.encrypted ? 1 : 0,
       serverNow,
       serverNow
     )
@@ -624,7 +624,7 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
 
   const remoteId = result.meta.last_row_id as number;
 
-  if (req.is_default) {
+  if (req.encrypted) {
     await db
       .prepare('UPDATE backup_remotes SET encrypted = 0 WHERE id != ?')
       .bind(remoteId)
@@ -636,7 +636,7 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
     name: req.name,
     backend_type: req.backend_type,
     config: req.config,
-    is_default: req.is_default ?? false,
+    encrypted: req.encrypted ?? false,
     created_at: serverNow,
     updated_at: serverNow,
   }, 201);
@@ -672,9 +672,9 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
     updates.push('config_summary = ?');
     params.push(JSON.stringify(req.config));
   }
-  if (req.is_default !== undefined) {
+  if (req.encrypted !== undefined) {
     updates.push('encrypted = ?');
-    params.push(req.is_default ? 1 : 0);
+    params.push(req.encrypted ? 1 : 0);
   }
 
   params.push(remoteId);
@@ -684,7 +684,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
     .bind(...params)
     .run();
 
-  if (req.is_default) {
+  if (req.encrypted) {
     await db
       .prepare('UPDATE backup_remotes SET encrypted = 0 WHERE id != ?')
       .bind(remoteId)
