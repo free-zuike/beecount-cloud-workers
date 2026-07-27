@@ -41,8 +41,8 @@ async function downloadAndExtractBackup(
     if (!password) {
       throw new Error('Backup is encrypted but no password provided');
     }
-    const { decryptFromZip } = await import('./encryption');
-    data = await decryptFromZip(data, password);
+    const { decryptData } = await import('./encryption');
+    data = await decryptData(data, password);
   }
   
   // 解压 gzip
