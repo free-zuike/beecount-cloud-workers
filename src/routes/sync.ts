@@ -1715,7 +1715,6 @@ async function applyChangeToProjection(
             payload.native_amount ?? payload.nativeAmount ?? null,
           )
           .run();
-        }
       }
       break;
     }
