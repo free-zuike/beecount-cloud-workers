@@ -8,7 +8,7 @@ import { uploadToS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
-import { createEncryptedZip, extractEncryptedZip } from '../lib/encryption';
+import { encryptData } from '../lib/encryption';
 import { createSqliteWithData } from '../lib/sqlite-writer';
 
 // ===========================
@@ -356,7 +356,7 @@ export async function uploadBackupToRemote(
 
     const localTime = new Date(Date.now() + 8 * 3600000);
     const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-    const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.enc' : '.tar.gz'}`;
 
     const result = await uploadToS3(endpoint, bucket, accessKey, secretKey, region, key, backupBytes, 'application/gzip');
     return result.ok ? { ok: true, message: 'Upload successful', key } : { ok: false, message: result.message };
@@ -367,7 +367,7 @@ export async function uploadBackupToRemote(
     const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
     let prefix = '';
     if (remoteConfig.savePath) prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
-    const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.enc' : '.tar.gz'}`;
     const result = await uploadToWebDav(remoteConfig.url!, remoteConfig.username!, remoteConfig.password!, key, backupBytes);
     return result.ok ? { ok: true, message: 'Upload successful', key } : { ok: false, message: result.message };
   }
@@ -412,7 +412,7 @@ export async function performBackupFanOut(
     const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.zipryption_password;
     if (pw) {
       try {
-        backupBytes = createEncryptedZip(backupBytes, pw);
+        backupBytes = await encryptData(backupBytes, pw);
         encrypted = true;
         logWrap(`[Backup] Encrypted: ${backupBytes.length} bytes`);
       } catch (e) {
@@ -592,7 +592,7 @@ export async function performBackup(
       if (encryptionPassword) {
         try {
           log('[Backup] Encrypting backup with AES-256-GCM...');
-          backupBytes = createEncryptedZip(backupBytes, encryptionPassword);
+          backupBytes = await encryptData(backupBytes, encryptionPassword);
           encrypted = true;
           log(`[Backup] Backup encrypted: ${backupBytes.length} bytes`);
         } catch (encryptErr) {

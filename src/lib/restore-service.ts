@@ -36,13 +36,13 @@ async function downloadAndExtractBackup(
   let data = new Uint8Array(await obj.arrayBuffer());
   
   // 如果是加密备份（.zip 结尾），先解密
-  const isEncrypted = backupPath.endsWith('.zip');
+  const isEncrypted = backupPath.endsWith('.enc');
   if (isEncrypted) {
     if (!password) {
       throw new Error('Backup is encrypted but no password provided');
     }
-    const { extractEncryptedZip } = await import('./encryption');
-    data = extractEncryptedZip(data, password);
+    const { decryptData } = await import('./encryption');
+    data = await decryptData(data, password);
   }
   
   // 解压 gzip
