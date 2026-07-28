@@ -319,10 +319,11 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       console.log('[SYNC] Querying ledgers with placeholders:', ledgerPlaceholders);
       const existingLedgers = await db
         .prepare(
-          `SELECT id, user_id, external_id FROM ledgers
-           WHERE user_id = ? AND external_id IN (${ledgerPlaceholders})`
+          `SELECT l.id, l.user_id, l.external_id FROM ledgers l
+           LEFT JOIN ledger_members lm ON l.id = lm.ledger_id
+           WHERE (l.user_id = ? OR lm.user_id = ?) AND l.external_id IN (${ledgerPlaceholders})`
         )
-        .bind(userId, ...ledgerExternalIds)
+        .bind(userId, userId, ...ledgerExternalIds)
         .all<{ id: string; user_id: string; external_id: string }>();
       
       console.log('[SYNC] existingLedgers found:', existingLedgers.results.length);
