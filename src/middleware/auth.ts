@@ -26,7 +26,10 @@ export const authMiddleware = async (c: any, next: Next) => {
   }
 
   if (!c.env?.JWT_SECRET) {
-    return c.json({ error: 'Server configuration error' }, 500);
+    return c.json({ 
+      error: 'Server configuration: JWT_SECRET not configured',
+      hint: 'Please set JWT_SECRET in your Cloudflare Worker environment variables'
+    }, 500);
   }
 
   const validationResult = await validateAccessToken(token, c.env.JWT_SECRET);
