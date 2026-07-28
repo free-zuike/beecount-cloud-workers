@@ -15,6 +15,7 @@
  */
 
 import { Hono } from 'hono';
+import { serverLogger } from '../lib/logger';
 import { randomUUID } from 'crypto';
 
 // ===========================
@@ -624,7 +625,7 @@ mcpRouter.post('/tools/call', async (c) => {
         )
         .run();
     } catch (logErr) {
-      console.error('[MCP] Failed to log call:', logErr);
+      serverLogger.error('app', '[MCP] Failed to log call:', logErr);
     }
 
     return c.json({
@@ -651,7 +652,7 @@ mcpRouter.post('/tools/call', async (c) => {
         )
         .run();
     } catch (logErr) {
-      console.error('[MCP] Failed to log error call:', logErr);
+      serverLogger.error('app', '[MCP] Failed to log error call:', logErr);
     }
 
     return c.json({

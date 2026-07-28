@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { serverLogger } from '../lib/logger';
 import { hashPassword } from '../auth';
 import { DEFAULT_AI_CONFIG } from '../lib/defaults';
 
@@ -104,7 +105,7 @@ setupRouter.post('/', async (c) => {
       timezone_offset: timezone_offset || 0
     });
   } catch (error) {
-    console.error('[Setup] Error saving settings:', error);
+    serverLogger.error('app', '[Setup] Error saving settings:', error);
     return c.json({
       success: false,
       error: '保存设置失败'

@@ -18,6 +18,7 @@
  */
 
 import { Hono } from 'hono';
+import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
@@ -1153,7 +1154,7 @@ adminRouter.get('/integrity/scan', async (c) => {
       issues,
     });
   } catch (error) {
-    console.error('[INTEGRITY] Scan error:', error);
+    serverLogger.error('app', '[INTEGRITY] Scan error:', error);
     return c.json({
       scanned_at: new Date().toISOString(),
       ledgers_total: 0,

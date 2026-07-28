@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { serverLogger } from '../lib/logger';
 
 type Bindings = {
     DB: D1Database;
@@ -65,7 +66,7 @@ sysConfig.post('/s3', async (c) => {
         try {
             settings = await getUploadConfig(db, c.env);
         } catch (e) {
-            console.error('[S3] Error getting upload config:', e);
+            serverLogger.error('app', '[S3] Error getting upload config:', e);
             settings = { s3: { channels: [], loadBalance: { enabled: false, channels: [] } } };
         }
         
@@ -105,10 +106,10 @@ sysConfig.post('/s3', async (c) => {
             'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime("now")) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
         ).bind('manage@sysConfig@upload', JSON.stringify(saveData)).run();
         
-        console.log('[S3] Config created successfully:', newConfig.id);
+        serverLogger.info('app', '[S3] Config created successfully:', newConfig.id);
         return c.json(newConfig);
     } catch (error: any) {
-        console.error('[S3] Failed to create config:', error);
+        serverLogger.error('app', '[S3] Failed to create config:', error);
         return c.json({ error: 'Failed to create configuration: ' + (error?.message || 'Unknown error') }, 500);
     }
 });
@@ -152,7 +153,7 @@ sysConfig.put('/s3/:id', async (c) => {
         
         return c.json(s3Channels[index]);
     } catch (error) {
-        console.error('Failed to update S3 config:', error);
+        serverLogger.error('app', 'Failed to update S3 config:', error);
         return c.json({ error: 'Failed to update configuration' }, 500);
     }
 });
@@ -184,7 +185,7 @@ sysConfig.post('/s3/:id/toggle', async (c) => {
         
         return c.json(s3Channels[index]);
     } catch (error) {
-        console.error('Failed to toggle S3 config:', error);
+        serverLogger.error('app', 'Failed to toggle S3 config:', error);
         return c.json({ error: 'Failed to toggle configuration' }, 500);
     }
 });
@@ -210,7 +211,7 @@ sysConfig.delete('/s3/:id', async (c) => {
         
         return c.json({ success: true });
     } catch (error) {
-        console.error('Failed to delete S3 config:', error);
+        serverLogger.error('app', 'Failed to delete S3 config:', error);
         return c.json({ error: 'Failed to delete configuration' }, 500);
     }
 });
@@ -237,7 +238,7 @@ sysConfig.post('/upload', async (c) => {
         
         return c.json(body);
     } catch (error) {
-        console.error('Failed to save upload config:', error);
+        serverLogger.error('app', 'Failed to save upload config:', error);
         return c.json({ error: 'Failed to save configuration' }, 500);
     }
 });

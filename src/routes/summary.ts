@@ -13,6 +13,7 @@
  */
 
 import { Hono } from 'hono';
+import { serverLogger } from '../lib/logger';
 
 function nowUtc(): string {
   return new Date().toISOString();
@@ -106,7 +107,7 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
   
   if (sample && sample.cnt > 0) return;
   
-  console.log('[SUMMARY] read_tx_projection is empty, syncing from sync_changes...');
+  serverLogger.info('app', '[SUMMARY] read_tx_projection is empty, syncing from sync_changes...');
   
   const ledgers = await db
     .prepare('SELECT id FROM ledgers WHERE user_id = ?')
@@ -178,12 +179,12 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
           )
           .run();
       } catch (err) {
-        console.error('[SUMMARY] Error syncing transaction:', change.entity_sync_id, err);
+        serverLogger.error('app', '[SUMMARY] Error syncing transaction:', change.entity_sync_id, err);
       }
     }
   }
   
-  console.log('[SUMMARY] Sync completed');
+  serverLogger.info('app', '[SUMMARY] Sync completed');
 }
 
 // GET /read/summary/workspace/ledger-counts - 获取账本统计

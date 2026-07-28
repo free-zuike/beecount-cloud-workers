@@ -18,6 +18,7 @@
  */
 
 import { Hono } from 'hono';
+import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
@@ -209,10 +210,10 @@ twoFactorRouter.get('/status', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   
-  console.log('[2FA] Status request - userId:', userId);
+  serverLogger.info('app', '[2FA] Status request - userId:', userId);
 
   if (!userId) {
-    console.log('[2FA] No userId found in context');
+    serverLogger.info('app', '[2FA] No userId found in context');
     return c.json({ error: 'Unauthorized' }, 401);
   }
 
@@ -221,7 +222,7 @@ twoFactorRouter.get('/status', async (c) => {
     .bind(userId)
     .first<{ totp_enabled: number; totp_enabled_at: string | null }>();
 
-  console.log('[2FA] User query result:', user);
+  serverLogger.info('app', '[2FA] User query result:', user);
 
   if (!user) {
     return c.json({ error: 'User not found' }, 404);
@@ -295,7 +296,7 @@ twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (
 
   const decryptedSecret = await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret);
   const isValid = await verifyTotpCode(decryptedSecret, code);
-  console.log('[2FA] confirm: isValid=', isValid, 'server_ts=', Math.floor(Date.now() / 1000));
+  serverLogger.info('app', '[2FA] confirm: isValid=', isValid, 'server_ts=', Math.floor(Date.now() / 1000));
   if (!isValid) {
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }
@@ -325,7 +326,7 @@ twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (
 
 twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c) => {
   const clientIp = c.req.header('CF-Connecting-IP') || 'unknown';
-  console.log(`[2FA-VERIFY] called from ${clientIp}`);
+  serverLogger.info('app', `[2FA-VERIFY] called from ${clientIp}`);
   if (isRateLimited('2fa-verify', clientIp, 60, 5)) {
     return c.json({ error: 'Too many requests. Try again later.' }, 429);
   }

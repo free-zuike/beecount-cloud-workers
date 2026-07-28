@@ -27,6 +27,7 @@
  */
 
 import { Hono } from 'hono';
+import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
@@ -55,7 +56,7 @@ async function testWebDavConnection(
         const normalizedUrl = url.replace(/\/+$/, '');
         const auth = 'Basic ' + btoa(`${username}:${password}`);
 
-        console.log('[Backup WebDAV Test] Testing connection to:', normalizedUrl);
+        serverLogger.info('app', '[Backup WebDAV Test] Testing connection to:', normalizedUrl);
 
         // PROPFIND to check connectivity
         const propfindResponse = await fetch(normalizedUrl, {
@@ -67,7 +68,7 @@ async function testWebDavConnection(
             },
         });
 
-        console.log('[Backup WebDAV Test] PROPFIND Response status:', propfindResponse.status);
+        serverLogger.info('app', '[Backup WebDAV Test] PROPFIND Response status:', propfindResponse.status);
 
         const propfindBody = await propfindResponse.text().catch(() => '');
 
@@ -84,7 +85,7 @@ async function testWebDavConnection(
             return { ok: false, message: `WebDAV connection failed: HTTP ${propfindResponse.status} ${propfindResponse.statusText}` };
         }
 
-        console.log('[Backup WebDAV Test] PROPFIND test passed');
+        serverLogger.info('app', '[Backup WebDAV Test] PROPFIND test passed');
 
         // Try writing a test file
         const testPath = `__beecount_connection_test__/${Date.now()}.txt`;
@@ -101,7 +102,7 @@ async function testWebDavConnection(
             body: testContent,
         });
 
-        console.log('[Backup WebDAV Test] PUT Response status:', putResponse.status);
+        serverLogger.info('app', '[Backup WebDAV Test] PUT Response status:', putResponse.status);
 
         if (!putResponse.ok && putResponse.status !== 405) {
             return { ok: false, message: `WebDAV write test failed: HTTP ${putResponse.status} ${putResponse.statusText}` };
@@ -113,13 +114,13 @@ async function testWebDavConnection(
                 method: 'DELETE',
                 headers: { 'Authorization': auth },
             });
-            console.log('[Backup WebDAV Test] Cleanup DELETE sent');
+            serverLogger.info('app', '[Backup WebDAV Test] Cleanup DELETE sent');
         }
 
         return { ok: true, message: `WebDAV connection successful: ${normalizedUrl}` };
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        console.error('[Backup WebDAV Test] Error:', errorMsg);
+        serverLogger.error('app', '[Backup WebDAV Test] Error:', errorMsg);
         if (errorMsg.includes('timeout') || errorMsg.includes('Timeout')) {
             return { ok: false, message: `WebDAV connection timeout: Unable to reach ${url}` };
         }
@@ -156,9 +157,9 @@ async function testS3Connection(
             return { ok: false, message: 'Bucket name cannot be empty or only slashes' };
         }
         
-        console.log('[Backup S3 Test] Testing connection to endpoint:', endpoint);
-        console.log('[Backup S3 Test] Bucket:', cleanBucket);
-        console.log('[Backup S3 Test] Region:', region);
+        serverLogger.info('app', '[Backup S3 Test] Testing connection to endpoint:', endpoint);
+        serverLogger.info('app', '[Backup S3 Test] Bucket:', cleanBucket);
+        serverLogger.info('app', '[Backup S3 Test] Region:', region);
         
         // 首先尝试列出 bucket 中的对象，这是更直接的检测方法
         const { url: listUrl, headers: listHeaders } = await signS3Request(
@@ -171,19 +172,19 @@ async function testS3Connection(
             'GET'
         );
         
-        console.log('[Backup S3 Test] Testing with LIST to:', listUrl);
+        serverLogger.info('app', '[Backup S3 Test] Testing with LIST to:', listUrl);
         
         const listResponse = await fetch(listUrl, {
             method: 'GET',
             headers: listHeaders
         });
         
-        console.log('[Backup S3 Test] LIST Response status:', listResponse.status);
-        console.log('[Backup S3 Test] LIST Response headers:', Object.fromEntries(listResponse.headers.entries()));
+        serverLogger.info('app', '[Backup S3 Test] LIST Response status:', listResponse.status);
+        serverLogger.info('app', '[Backup S3 Test] LIST Response headers:', Object.fromEntries(listResponse.headers.entries()));
         
         // 读取响应体以获取更多信息
         const listResponseText = await listResponse.text().catch(() => '');
-        console.log('[Backup S3 Test] LIST Response body:', listResponseText);
+        serverLogger.info('app', '[Backup S3 Test] LIST Response body:', listResponseText);
         
         // 即使状态码是 200，我们也需要验证响应是否真的表示成功
         // 检查响应体是否包含错误信息
@@ -222,12 +223,12 @@ async function testS3Connection(
             return { ok: false, message: errorMessage };
         }
         
-        console.log('[Backup S3 Test] LIST test passed');
+        serverLogger.info('app', '[Backup S3 Test] LIST test passed');
         return { ok: true, message: `S3 connection successful: ${cleanBucket} at ${endpoint}` };
 
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        console.error('[Backup S3 Test] Error:', errorMsg);
+        serverLogger.error('app', '[Backup S3 Test] Error:', errorMsg);
         if (errorMsg.includes('timeout') || errorMsg.includes('Timeout')) {
             return { ok: false, message: `S3 connection timeout: Unable to reach ${endpoint}` };
         }
@@ -314,7 +315,7 @@ async function broadcastViaDO(env: Bindings, userId: string, message: Record<str
       body: JSON.stringify({ message: JSON.stringify(message) }),
     });
   } catch (err) {
-    console.error('[Backup] DO broadcast failed:', (err as Error).message);
+    serverLogger.error('app', '[Backup] DO broadcast failed:', (err as Error).message);
   }
 }
 
@@ -425,7 +426,7 @@ backupRouter.get('/rclone-config', async (c) => {
       },
     });
   } catch (error) {
-    console.error('[rclone-config] Error:', error);
+    serverLogger.error('app', '[rclone-config] Error:', error);
     return c.text('# Error generating rclone config\n', 500);
   }
 });
@@ -593,7 +594,7 @@ backupRouter.get('/remotes', async (c) => {
 
       return c.json(remotes);
     } catch (fallbackError) {
-      console.error('Error fetching backup_remotes (fallback also failed):', fallbackError);
+      serverLogger.error('app', 'Error fetching backup_remotes (fallback also failed):', fallbackError);
       return c.json({ error: String(fallbackError) }, 500);
     }
   }
@@ -997,7 +998,7 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         .run();
     } catch (dbError) {
       // 忽略数据库更新错误，可能是字段还不存在
-      console.log('Could not update backup_remotes test status (table may not have the new columns yet)', dbError);
+      serverLogger.info('app', 'Could not update backup_remotes test status (table may not have the new columns yet)', dbError);
     }
 
     return c.json(testResult);
@@ -1123,7 +1124,7 @@ backupRouter.get('/schedules', async (c) => {
       }>();
   } catch (error) {
     // 如果失败，回退到查询旧字段版本
-    console.log('[Backup] Falling back to query without timezone_offset');
+    serverLogger.info('app', '[Backup] Falling back to query without timezone_offset');
     rows = await db
       .prepare(
         `SELECT s.id, s.name, s.cron_expr, s.remote_ids,
@@ -1189,7 +1190,7 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
         .bind('default').first<{ timezone_offset: number }>();
       if (sysSetting) {
         timezoneOffset = sysSetting.timezone_offset;
-        console.log(`[Backup] Using timezone from system_settings: ${timezoneOffset}`);
+        serverLogger.info('app', `[Backup] Using timezone from system_settings: ${timezoneOffset}`);
       }
     } catch (e) {
       // 表可能不存在，忽略
@@ -1232,7 +1233,7 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
       .run();
   } catch (error) {
     // 如果失败，尝试不带 timezone_offset 的版本
-    console.log('[Backup] Creating schedule without timezone_offset:', error);
+    serverLogger.info('app', '[Backup] Creating schedule without timezone_offset:', error);
     insertResult = await db
       .prepare(
         `INSERT INTO backup_schedules
@@ -1371,7 +1372,7 @@ backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), a
     // 如果错误是关于 timezone_offset 列不存在，则移除该字段重试
     const errorStr = String(error);
     if (errorStr.includes('timezone_offset') && req.timezone_offset !== undefined) {
-      console.log('[Backup] Retrying update without timezone_offset');
+      serverLogger.info('app', '[Backup] Retrying update without timezone_offset');
       // 移除 timezone_offset 相关的更新
       const filteredUpdates = updates.filter(u => !u.includes('timezone_offset'));
       const filteredParams = params.filter((_, i) => i < params.length - 1);
@@ -1459,7 +1460,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
         }
       }
     } catch (err) {
-      console.log('[Backup] Failed to parse remote_ids:', err);
+      serverLogger.info('app', '[Backup] Failed to parse remote_ids:', err);
     }
   }
 
@@ -1543,7 +1544,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
           ).bind(runId, rc.remoteId, finalStatus, serverNow, finishedAt,
                 backupResult.backupSize || null, backupResult.success ? null : backupResult.message).run();
         } catch (e) {
-          console.error('[Backup] Failed to insert backup_run_targets:', (e as Error).message);
+          serverLogger.error('app', '[Backup] Failed to insert backup_run_targets:', (e as Error).message);
         }
       }
 
@@ -1574,10 +1575,10 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
               await db.prepare('DELETE FROM backup_run_targets WHERE run_id = ?').bind(oldRun.id).run();
               await db.prepare('DELETE FROM backup_runs WHERE id = ?').bind(oldRun.id).run();
             }
-            console.log(`[Backup] Retention: cleaned ${oldRuns.results.length} old runs (>${schedule.retention_days} days)`);
+            serverLogger.info('app', `[Backup] Retention: cleaned ${oldRuns.results.length} old runs (>${schedule.retention_days} days)`);
           }
         } catch (e) {
-          console.error('[Backup] Retention cleanup failed (non-fatal):', e);
+          serverLogger.error('app', '[Backup] Retention cleanup failed (non-fatal):', e);
         }
       }
     } catch (err) {
@@ -1672,7 +1673,7 @@ backupRouter.get('/runs', async (c) => {
       ).bind(...runIds).all();
       allTargets = targetResult.results || [];
     } catch (e) {
-      console.error('[Backup] Failed to query backup_run_targets:', (e as Error).message);
+      serverLogger.error('app', '[Backup] Failed to query backup_run_targets:', (e as Error).message);
     }
   }
 
@@ -2018,7 +2019,7 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
         bytesTransferred: run.bytes_total || 0, bytesTotal: run.bytes_total || 0,
       });
     } catch (err) {
-      console.error(`[Restore] Download failed: ${(err as Error).message}`);
+      serverLogger.error('app', `[Restore] Download failed: ${(err as Error).message}`);
       const finishedAt = new Date().toISOString();
       await db.prepare(
         `UPDATE backup_restores SET status = 'failed', finished_at = ?, error_message = ? WHERE id = ?`
@@ -2106,7 +2107,7 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
 
     return c.json({ ok: true, message: result.message }, 200);
   } catch (err) {
-    console.error(`[Restore] Failed: ${(err as Error).message}`);
+    serverLogger.error('app', `[Restore] Failed: ${(err as Error).message}`);
     const finishedAt = new Date().toISOString();
     await db.prepare(
       `UPDATE backup_restores SET status = 'failed', finished_at = ?, error_message = ? WHERE id = ?`
@@ -2476,7 +2477,7 @@ backupRouter.post('/restore-from-r2', async (c) => {
       attachmentsUploaded: result.attachmentsUploaded,
     }, 200);
   } catch (err) {
-    console.error(`[Restore] Failed: ${(err as Error).message}`);
+    serverLogger.error('app', `[Restore] Failed: ${(err as Error).message}`);
     return c.json({ error: (err as Error).message }, 500);
   }
 });

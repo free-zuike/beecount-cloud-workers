@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { serverLogger } from '../lib/logger';
 import { validateAccessToken, base64urlDecode } from '../auth';
 
 type Bindings = {
@@ -61,7 +62,7 @@ wsRouter.get('/', async (c) => {
     // 转发原始请求（保留所有头，包括 Upgrade）
     return doStub.fetch(c.req.raw);
   } catch (error) {
-    console.error('[WS] Connection error:', error);
+    serverLogger.error('app', '[WS] Connection error:', error);
     return c.json({ error: 'WebSocket connection failed' }, 500);
   }
 });

@@ -15,6 +15,7 @@
  */
 
 import { Hono } from 'hono';
+import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
@@ -189,7 +190,7 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
 });
 
 const batchDeleteHandler = async (c: any) => {
-  console.log('[BATCH] batchDeleteHandler matched, url:', c.req.url);
+  serverLogger.info('app', '[BATCH] batchDeleteHandler matched, url:', c.req.url);
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');

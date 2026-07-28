@@ -2,6 +2,7 @@
  * Backup & Data Management Routes
  * 
  * Implements data export/import and data cleanup endpoints
+import { serverLogger } from '../lib/logger';
  */
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
@@ -127,7 +128,7 @@ backupRouter.get('/export', async (c) => {
       },
     });
   } catch (error) {
-    console.error('[BACKUP] Export error:', error);
+    serverLogger.error('app', '[BACKUP] Export error:', error);
     return c.json({ error: 'Export failed' }, 500);
   }
 });
@@ -142,7 +143,7 @@ backupRouter.delete('/clear-data', async (c) => {
   const serverNow = nowUtc();
 
   try {
-    console.log('[BACKUP] Starting data clear for user:', userId);
+    serverLogger.info('app', '[BACKUP] Starting data clear for user:', userId);
 
     // 1. 先提取账户数据（保留）
     const accounts = await db
@@ -150,7 +151,7 @@ backupRouter.delete('/clear-data', async (c) => {
       .bind(userId)
       .all();
 
-    console.log('[BACKUP] Found', accounts.results.length, 'accounts to preserve');
+    serverLogger.info('app', '[BACKUP] Found', accounts.results.length, 'accounts to preserve');
 
     // 2. 删除所有账本（会通过外键级联删除大部分数据）
     const ledgers = await db
@@ -158,7 +159,7 @@ backupRouter.delete('/clear-data', async (c) => {
       .bind(userId)
       .all();
 
-    console.log('[BACKUP] Deleting', ledgers.results.length, 'ledgers');
+    serverLogger.info('app', '[BACKUP] Deleting', ledgers.results.length, 'ledgers');
 
     for (const ledger of ledgers.results) {
       await db
@@ -173,7 +174,7 @@ backupRouter.delete('/clear-data', async (c) => {
       .bind(userId)
       .run();
 
-    console.log('[BACKUP] Deleted sync_changes');
+    serverLogger.info('app', '[BACKUP] Deleted sync_changes');
 
     // 4. 直接清理投影表（确保彻底删除）
     await db.prepare('DELETE FROM read_tx_projection WHERE user_id = ?').bind(userId).run();
@@ -187,7 +188,7 @@ backupRouter.delete('/clear-data', async (c) => {
       .bind(userId)
       .run();
 
-    console.log('[BACKUP] Cleared projections and attachments');
+    serverLogger.info('app', '[BACKUP] Cleared projections and attachments');
 
     // 6. 恢复账户（如果之前有账户的话）
     for (const account of accounts.results) {
@@ -198,7 +199,7 @@ backupRouter.delete('/clear-data', async (c) => {
         .first();
 
       if (!ledgerExists) {
-        console.log('[BACKUP] Skipping account', account.sync_id, 'because ledger was deleted');
+        serverLogger.info('app', '[BACKUP] Skipping account', account.sync_id, 'because ledger was deleted');
         continue;
       }
 
@@ -229,7 +230,7 @@ backupRouter.delete('/clear-data', async (c) => {
         .run();
     }
 
-    console.log('[BACKUP] Data clear completed, restored', accounts.results.length, 'accounts');
+    serverLogger.info('app', '[BACKUP] Data clear completed, restored', accounts.results.length, 'accounts');
 
     return c.json({
       success: true,
@@ -238,7 +239,7 @@ backupRouter.delete('/clear-data', async (c) => {
       cleared_at: serverNow,
     });
   } catch (error) {
-    console.error('[BACKUP] Clear data error:', error);
+    serverLogger.error('app', '[BACKUP] Clear data error:', error);
     return c.json({ 
       error: 'Clear data failed',
       message: error instanceof Error ? error.message : String(error)
@@ -350,13 +351,13 @@ backupRouter.post('/fix-data', async (c) => {
             ).run();
             insertedCount++;
           } catch (err) {
-            console.error(`[FixData] Failed to insert sync_changes for ${pt.entityType} ${row.sync_id}:`, (err as Error).message);
+            serverLogger.error('app', `[FixData] Failed to insert sync_changes for ${pt.entityType} ${row.sync_id}:`, (err as Error).message);
           }
         }
         fixes[`sync_changes_${pt.entityType}`] = insertedCount;
       }
     } catch (err) {
-      console.error(`[FixData] Failed processing ${pt.table}:`, (err as Error).message);
+      serverLogger.error('app', `[FixData] Failed processing ${pt.table}:`, (err as Error).message);
     }
   }
 

@@ -17,6 +17,7 @@
  */
 
 import { Hono } from 'hono';
+import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
@@ -52,11 +53,11 @@ class S3Service {
             if (dbConfig) {
                 this.s3ConfigCache = dbConfig;
                 this.s3ConfigCacheTime = now;
-                console.log('[S3] Using config from database:', dbConfig.name);
+                serverLogger.info('app', '[S3] Using config from database:', dbConfig.name);
                 return dbConfig;
             }
         } catch (error) {
-            console.error('[S3] Error getting config from database:', error);
+            serverLogger.error('app', '[S3] Error getting config from database:', error);
         }
 
         // 尝试从备份配置中读取 S3 配置（用于附件上传）
@@ -88,12 +89,12 @@ class S3Service {
                     };
                     this.s3ConfigCache = backupConfig;
                     this.s3ConfigCacheTime = now;
-                    console.log('[S3] Using config from backup_remotes');
+                    serverLogger.info('app', '[S3] Using config from backup_remotes');
                     return backupConfig;
                 }
             }
         } catch (err) {
-            console.error('[S3] Failed to load config from backup_remotes:', err);
+            serverLogger.error('app', '[S3] Failed to load config from backup_remotes:', err);
         }
 
         // 回退到环境变量配置
@@ -115,11 +116,11 @@ class S3Service {
             };
             this.s3ConfigCache = envConfig;
             this.s3ConfigCacheTime = now;
-            console.log('[S3] Using config from environment variables');
+            serverLogger.info('app', '[S3] Using config from environment variables');
             return envConfig;
         }
 
-        console.log('[S3] No S3 config found');
+        serverLogger.info('app', '[S3] No S3 config found');
         return null;
     }
 
@@ -137,18 +138,18 @@ class S3Service {
     async upload(key: string, body: ArrayBuffer, contentType: string): Promise<boolean> {
         const config = await this.getS3Config();
         if (!config) {
-            console.log('[S3] Not configured, skipping upload');
+            serverLogger.info('app', '[S3] Not configured, skipping upload');
             return false;
         }
 
-        console.log('[S3] Initializing upload with config:');
-        console.log('[S3]   Endpoint:', config.endpoint);
-        console.log('[S3]   Region:', config.region || 'us-east-1');
-        console.log('[S3]   Bucket:', config.bucketName);
-        console.log('[S3]   Key:', key);
+        serverLogger.info('app', '[S3] Initializing upload with config:');
+        serverLogger.info('app', '[S3]   Endpoint:', config.endpoint);
+        serverLogger.info('app', '[S3]   Region:', config.region || 'us-east-1');
+        serverLogger.info('app', '[S3]   Bucket:', config.bucketName);
+        serverLogger.info('app', '[S3]   Key:', key);
 
         try {
-            console.log('[S3] Signing request');
+            serverLogger.info('app', '[S3] Signing request');
             const { url, headers } = await signRequest(
                 config.accessKeyId,
                 config.secretAccessKey,
@@ -161,14 +162,14 @@ class S3Service {
                 body.byteLength
             );
 
-            console.log('[S3] Sending request to:', url);
+            serverLogger.info('app', '[S3] Sending request to:', url);
             const response = await fetch(url, {
                 method: 'PUT',
                 headers,
                 body
             });
 
-            console.log('[S3] Response status:', response.status, response.statusText);
+            serverLogger.info('app', '[S3] Response status:', response.status, response.statusText);
             
             if (!response.ok) {
                 let responseText = '';
@@ -177,14 +178,14 @@ class S3Service {
                 } catch (e) {
                     responseText = '(unable to read response body)';
                 }
-                console.error('[S3] Upload failed:', response.status, response.statusText, responseText);
+                serverLogger.error('app', '[S3] Upload failed:', response.status, response.statusText, responseText);
                 return false;
             }
 
-            console.log('[S3] Upload successful');
+            serverLogger.info('app', '[S3] Upload successful');
             return true;
         } catch (error: any) {
-            console.error('[S3] Upload error:', error);
+            serverLogger.error('app', '[S3] Upload error:', error);
             return false;
         }
     }
@@ -219,7 +220,7 @@ class S3Service {
 
             return response;
         } catch (error) {
-            console.error('[S3] Download error:', error);
+            serverLogger.error('app', '[S3] Download error:', error);
             return null;
         }
     }
@@ -250,7 +251,7 @@ class S3Service {
 
             return response.ok;
         } catch (error) {
-            console.error('[S3] Delete error:', error);
+            serverLogger.error('app', '[S3] Delete error:', error);
             return false;
         }
     }
@@ -288,9 +289,9 @@ const handleUpload = async (c: any) => {
         const ledgerExternalId = formData.get('ledger_id') as string | null;
         const fileName = formData.get('file_name') as string | null;
 
-        console.log('[ATTACHMENT] Upload request received');
-        console.log('[ATTACHMENT] File:', file?.name, 'Size:', file?.size);
-        console.log('[ATTACHMENT] Ledger ID:', ledgerExternalId);
+        serverLogger.info('app', '[ATTACHMENT] Upload request received');
+        serverLogger.info('app', '[ATTACHMENT] File:', file?.name, 'Size:', file?.size);
+        serverLogger.info('app', '[ATTACHMENT] Ledger ID:', ledgerExternalId);
 
         if (!file) {
             return c.json({ error: 'No file provided' }, 400);
@@ -366,20 +367,20 @@ const handleUpload = async (c: any) => {
         const storageKey = s3.getStorageKey(ledger.external_id, fileId, actualFileName, savePath);
 
         if (await s3.isConfigured()) {
-            console.log('[ATTACHMENT] Uploading to S3, key:', storageKey, 'savePath:', savePath);
+            serverLogger.info('app', '[ATTACHMENT] Uploading to S3, key:', storageKey, 'savePath:', savePath);
             const uploadSuccess = await s3.upload(storageKey, fileBuffer, mimeType);
-            console.log('[ATTACHMENT] S3 upload result:', uploadSuccess);
+            serverLogger.info('app', '[ATTACHMENT] S3 upload result:', uploadSuccess);
             if (!uploadSuccess) {
                 return c.json({ error: 'Failed to upload to S3' }, 500);
             }
         } else if (c.env.R2) {
             // 使用 R2 存储附件（与头像共用同一 bucket，不同目录）
             const r2Key = `attachments/${ledger.external_id}/${fileId}_${actualFileName}`;
-            console.log('[ATTACHMENT] Uploading to R2, key:', r2Key);
+            serverLogger.info('app', '[ATTACHMENT] Uploading to R2, key:', r2Key);
             await c.env.R2.put(r2Key, fileBuffer, {
                 httpMetadata: { contentType: mimeType }
             });
-            console.log('[ATTACHMENT] R2 upload successful');
+            serverLogger.info('app', '[ATTACHMENT] R2 upload successful');
         }
 
         const now = new Date().toISOString();
@@ -429,7 +430,7 @@ const handleUpload = async (c: any) => {
 
         return c.json(response);
     } catch (error) {
-        console.error('[ATTACHMENT] Upload error:', error);
+        serverLogger.error('app', '[ATTACHMENT] Upload error:', error);
         return c.json({ error: 'Failed to upload attachment' }, 500);
     }
 };
@@ -503,7 +504,7 @@ attachmentsRouter.post('/batch-exists', async (c) => {
 
         return c.json({ exists: results });
     } catch (error) {
-        console.error('[ATTACHMENT] Batch exists error:', error);
+        serverLogger.error('app', '[ATTACHMENT] Batch exists error:', error);
         return c.json({ error: 'Failed to check attachments' }, 500);
     }
 });
@@ -553,7 +554,7 @@ attachmentsRouter.get('/:id', async (c) => {
     }
 
     // 先尝试 R2（附件存储在 R2 bucket）
-    console.log('[ATTACH] R2 available:', !!c.env.R2, 'storage_path:', row.storage_path);
+    serverLogger.info('app', '[ATTACH] R2 available:', !!c.env.R2, 'storage_path:', row.storage_path);
     if (c.env.R2) {
         // 尝试多种存储路径格式（兼容不同版本的 storage_path）
         const normalizedPath = row.storage_path.replace(/^attachments\/attachments\//, 'attachments/');
@@ -565,12 +566,12 @@ attachmentsRouter.get('/:id', async (c) => {
         ];
         for (const key of possiblePaths) {
             if (!key) continue;
-            console.log('[ATTACH] Trying R2 key:', key);
+            serverLogger.info('app', '[ATTACH] Trying R2 key:', key);
             const obj = await c.env.R2.get(key);
             if (obj) {
                 const ext = (row.file_name || '').split('.').pop()?.toLowerCase() || '';
                 const mimeGuess = ext === 'png' ? 'image/png' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : ext === 'gif' ? 'image/gif' : (obj.httpMetadata?.contentType || row.mime_type || 'application/octet-stream');
-                console.log('[ATTACH] R2 found:', key, 'size:', obj.size, 'mime:', mimeGuess);
+                serverLogger.info('app', '[ATTACH] R2 found:', key, 'size:', obj.size, 'mime:', mimeGuess);
                 return new Response(obj.body, {
                     headers: {
                         'Content-Type': mimeGuess,
@@ -583,7 +584,7 @@ attachmentsRouter.get('/:id', async (c) => {
             }
         }
     }
-    console.log('[ATTACH] R2 not found, returning metadata');
+    serverLogger.info('app', '[ATTACH] R2 not found, returning metadata');
     return c.json({
         ledger_id: row.ledger_external_id,
         sha256: row.sha256,
@@ -767,7 +768,7 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
              VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'category_icon', ?)`
         ).bind(fileId, userId, sha256Hash, size, effectiveMimeType, fileName, r2Key, now).run();
 
-        console.log('[ATTACH] Category icon upload: name=', file.name, 'type=', file.type, 'size=', file.size);
+        serverLogger.info('app', '[ATTACH] Category icon upload: name=', file.name, 'type=', file.type, 'size=', file.size);
         const result = {
             file_id: fileId,
             ledger_id: '',
@@ -777,10 +778,10 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
             file_name: String(fileName),
             created_at: String(now),
         };
-        console.log('[ATTACH] Category icon upload response:', JSON.stringify(result));
+        serverLogger.info('app', '[ATTACH] Category icon upload response:', JSON.stringify(result));
         return c.json(result);
     } catch (error) {
-        console.error('[ATTACHMENT] Category icon upload error:', error);
+        serverLogger.error('app', '[ATTACHMENT] Category icon upload error:', error);
         return c.json({ error: `Upload failed: ${(error as Error).message}` }, 500);
     }
 });

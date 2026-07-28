@@ -2,6 +2,7 @@
  * 个人资料路由模块
  */
 import { Hono } from 'hono';
+import { serverLogger } from '../lib/logger';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { hashPassword } from '../auth';
@@ -170,7 +171,7 @@ profileRouter.post('/avatar', async (c) => {
     const extFromFile = FILE_EXT_MIME[fileExt];
     const ext = extFromMime || extFromFile;
     const actualMime = extFromMime ? mimeLower : extFromFile ? `image/${extFromFile}` : '';
-    console.log('[Avatar] Upload: name=', file.name, 'type=', file.type, 'ext=', fileExt, 'size=', file.size);
+    serverLogger.info('app', '[Avatar] Upload: name=', file.name, 'type=', file.type, 'ext=', fileExt, 'size=', file.size);
     if (!ext) return c.json({ error: `Profile avatar format invalid: ${mimeLower || fileExt || 'unknown'}` }, 400);
 
     const fileBuffer = await file.arrayBuffer();
@@ -219,7 +220,7 @@ profileRouter.post('/avatar', async (c) => {
 
     return c.json({ avatar_url: `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${userId}?v=${ver}`, avatar_version: ver });
   } catch (error) {
-    console.error('[Avatar] Upload error:', error);
+    serverLogger.error('app', '[Avatar] Upload error:', error);
     return c.json({ error: 'Avatar upload failed' }, 500);
   }
 });
