@@ -148,7 +148,7 @@ export function AdminUsersPanel({
       }
       return { ...prev, is_enabled: fresh.is_enabled, is_admin: fresh.is_admin }
     })
-  }, [rowById, edit])
+  }, [rowById, edit?.userId])
 
   const doSaveEdit = async () => {
     if (!edit) return
