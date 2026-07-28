@@ -153,7 +153,7 @@ async function handleSse(c: any) {
 router.get('/sse', handleSse);
 router.post('/messages/', handleRpc);
 router.post('/', handleRpc);
-router.get('/', handleSse);
+router.get('/', (c) => c.json({ jsonrpc: '2.0', result: { serverInfo: { name: 'beecount-mcp', version: '1.0.0' } } }));
 router.get('/tools', (c) => c.json({ tools: TOOLS }));
 router.post('/tools/call', async (c) => {
   const db = c.env.DB; const userId = c.get('userId'); const patId = c.get('patId'); const patPrefix = c.get('patPrefix'); const patName = c.get('patName');
