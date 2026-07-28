@@ -771,17 +771,36 @@ adminRouter.post('/users/:id/password', zValidator('json', z.object({
 adminRouter.get('/logs', async (c) => {
   const db = c.env.DB;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
-  const level = c.req.query('level');
-  const source = c.req.query('source');
   const q = c.req.query('q');
+  const source = c.req.query('source');
+
+  // 将前端 logger 名称前缀映射到 audit_logs action 值
+  // 前端 SOURCE_OPTIONS 用的是原版 Python 的 logger 名称
+  const SOURCE_ACTION_MAP: Record<string, string[]> = {
+    'src.routers.sync': ['sync_push'],
+    'src.routers.write': ['create', 'update', 'delete'],
+    'src.routers.auth': ['login', 'register', 'logout', 'refresh'],
+    'src.routers.admin': ['admin_user_delete', 'backup_'],
+    'src.routers.profile': ['update_profile'],
+    'src.routers.attachments': ['attachment_upload'],
+    'src.routers.read': ['read'],
+    'beecount.access': [],
+    'uvicorn': [],
+  };
 
   let query = `SELECT id, user_id, ledger_id, action, metadata_json, created_at FROM audit_logs`;
   const conditions: string[] = [];
   const params: unknown[] = [];
 
-  if (source) {
-    conditions.push(`action LIKE ?`);
-    params.push(`${source}%`);
+  if (source && SOURCE_ACTION_MAP[source]) {
+    const actions = SOURCE_ACTION_MAP[source];
+    if (actions.length > 0) {
+      const likeClauses = actions.map(a => a.endsWith('_') ? `action LIKE ?` : `action = ?`);
+      conditions.push(`(${likeClauses.join(' OR ')})`);
+      for (const a of actions) {
+        params.push(a.endsWith('_') ? `${a}%` : a);
+      }
+    }
   }
   if (q) {
     conditions.push(`(action LIKE ? OR metadata_json LIKE ?)`);
