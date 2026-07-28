@@ -35,3 +35,7 @@ coverage/
 
 # MiMoCode internal
 .mimocode/
+
+# Backup files downloaded by wrangler r2 object get
+backups/
+beecount/backups/
