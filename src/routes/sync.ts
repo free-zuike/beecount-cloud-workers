@@ -1457,19 +1457,40 @@ async function applyUserChangeToProjection(
       parent_name: parentName ?? existingRow?.parent_name ?? null,
     };
 
-    // 用 INSERT OR REPLACE 替代 SELECT + UPDATE/INSERT，减少一次 D1 查询
-    await db.prepare(
-      `INSERT OR REPLACE INTO read_category_projection
-       (ledger_id, sync_id, user_id, name, kind, level, sort_order,
-        icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
-        parent_name, source_change_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      null, entity_sync_id, userId, merged.name, merged.kind,
-      merged.level, merged.sort_order, merged.icon, merged.icon_type,
-      merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
-      merged.parent_name, change.change_id ?? 0
-    ).run();
+    if (existingRow) {
+      // 动态 UPDATE，只更新提供的字段
+      const sets: string[] = [];
+      const vals: unknown[] = [];
+      if (payload.name !== undefined) { sets.push('name = ?'); vals.push(payload.name); }
+      if (payload.kind !== undefined) { sets.push('kind = ?'); vals.push(payload.kind); }
+      if (payload.level !== undefined) { sets.push('level = ?'); vals.push(payload.level); }
+      if ((payload as any).sortOrder !== undefined) { sets.push('sort_order = ?'); vals.push(sortOrder); }
+      if (payload.icon !== undefined) { sets.push('icon = ?'); vals.push(payload.icon); }
+      if ((payload as any).iconType !== undefined) { sets.push('icon_type = ?'); vals.push(iconType); }
+      if ((payload as any).customIconPath !== undefined) { sets.push('custom_icon_path = ?'); vals.push(customIconPath); }
+      if ((payload as any).iconCloudFileId !== undefined) { sets.push('icon_cloud_file_id = ?'); vals.push(iconCloudFileId); }
+      if ((payload as any).iconCloudSha256 !== undefined) { sets.push('icon_cloud_sha256 = ?'); vals.push(iconCloudSha256); }
+      if (parentName !== undefined) { sets.push('parent_name = ?'); vals.push(parentName); }
+      sets.push('source_change_id = ?');
+      vals.push(change.change_id ?? 0);
+      vals.push(entity_sync_id, userId);
+      await db.prepare(
+        `UPDATE read_category_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+      ).bind(...vals).run();
+    } else {
+      await db.prepare(
+        `INSERT OR REPLACE INTO read_category_projection
+         (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+          icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+          parent_name, source_change_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        null, entity_sync_id, userId, merged.name, merged.kind,
+        merged.level, merged.sort_order, merged.icon, merged.icon_type,
+        merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
+        merged.parent_name, change.change_id ?? 0
+      ).run();
+    }
   } else if (entity_type === 'account') {
     // APP 用 camelCase，原版用 snake_case
     const accountType = (payload as any).accountType ?? payload.account_type ?? (payload as any).type ?? null;
@@ -1515,19 +1536,41 @@ async function applyUserChangeToProjection(
       hidden: (payload as any).hidden ?? existingRow?.hidden ?? null,
     };
 
-    // 用 INSERT OR REPLACE 替代 SELECT + UPDATE/INSERT
-    await db.prepare(
-      `INSERT OR REPLACE INTO read_account_projection
-       (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
-        note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      null, entity_sync_id, userId, merged.name, merged.account_type,
-      merged.currency, merged.initial_balance, merged.note,
-      merged.credit_limit, merged.billing_day,
-      merged.payment_due_day, merged.bank_name,
-      merged.card_last_four, merged.hidden, change.change_id ?? 0
-    ).run();
+    if (existingRow) {
+      // 动态 UPDATE，只更新提供的字段
+      const sets: string[] = [];
+      const vals: unknown[] = [];
+      if (payload.name !== undefined) { sets.push('name = ?'); vals.push(payload.name); }
+      if (accountType !== undefined) { sets.push('account_type = ?'); vals.push(accountType); }
+      if (payload.currency !== undefined) { sets.push('currency = ?'); vals.push(payload.currency); }
+      if (initialBalance !== undefined) { sets.push('initial_balance = ?'); vals.push(initialBalance); }
+      if (payload.note !== undefined) { sets.push('note = ?'); vals.push(payload.note); }
+      if (creditLimit !== undefined) { sets.push('credit_limit = ?'); vals.push(creditLimit); }
+      if (billingDay !== undefined) { sets.push('billing_day = ?'); vals.push(billingDay); }
+      if (paymentDueDay !== undefined) { sets.push('payment_due_day = ?'); vals.push(paymentDueDay); }
+      if (bankName !== undefined) { sets.push('bank_name = ?'); vals.push(bankName); }
+      if (cardLastFour !== undefined) { sets.push('card_last_four = ?'); vals.push(cardLastFour); }
+      if ((payload as any).hidden !== undefined) { sets.push('hidden = ?'); vals.push((payload as any).hidden ? 1 : 0); }
+      sets.push('source_change_id = ?');
+      vals.push(change.change_id ?? 0);
+      vals.push(entity_sync_id, userId);
+      await db.prepare(
+        `UPDATE read_account_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+      ).bind(...vals).run();
+    } else {
+      await db.prepare(
+        `INSERT OR REPLACE INTO read_account_projection
+         (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+          note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        null, entity_sync_id, userId, merged.name, merged.account_type,
+        merged.currency, merged.initial_balance, merged.note,
+        merged.credit_limit, merged.billing_day,
+        merged.payment_due_day, merged.bank_name,
+        merged.card_last_four, merged.hidden, change.change_id ?? 0
+      ).run();
+    }
   } else if (entity_type === 'tag') {
     // Rename cascade：标签改名时更新 read_tx_projection 的 tags_csv
     const newName = (payload.name as string) ?? null;
@@ -1564,11 +1607,24 @@ async function applyUserChangeToProjection(
       color: payload.color ?? existingRow?.color ?? null,
     };
 
-    // 用 INSERT OR REPLACE 替代 SELECT + UPDATE/INSERT
-    await db.prepare(
-      `INSERT OR REPLACE INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
+    if (existingRow) {
+      // 动态 UPDATE，只更新提供的字段
+      const sets: string[] = [];
+      const vals: unknown[] = [];
+      if (payload.name !== undefined) { sets.push('name = ?'); vals.push(payload.name); }
+      if (payload.color !== undefined) { sets.push('color = ?'); vals.push(payload.color); }
+      sets.push('source_change_id = ?');
+      vals.push(change.change_id ?? 0);
+      vals.push(entity_sync_id, userId);
+      await db.prepare(
+        `UPDATE read_tag_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+      ).bind(...vals).run();
+    } else {
+      await db.prepare(
+        `INSERT OR REPLACE INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
+    }
   }
 }
 
