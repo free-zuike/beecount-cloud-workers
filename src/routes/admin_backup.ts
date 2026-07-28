@@ -658,32 +658,22 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
   const remote = await db.prepare(`SELECT id, name, backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?`).bind(remoteId).first();
   if (!remote) return c.json({ error: 'Remote not found' }, 404);
 
-  const updates: string[] = ['updated_at = ?'];
-  const params: (string | number | null)[] = [serverNow];
-
-  if (req.name !== undefined) {
-    updates.push('name = ?');
-    params.push(req.name);
-  }
-
-  // 构建要保存的 config_summary——即使前端没传 config 也要保留原有值
+  // 清理旧记录中可能的错误字段（如 R2 类型的多余 bucket）
   let configToSave: Record<string, string> = {};
-  
   if (req.config !== undefined) {
     configToSave = { ...req.config };
   } else {
-    // 未传 config，取原有的 config_summary
     configToSave = JSON.parse(remote.config_summary || '{}');
+    // 如果是 R2 类型且含有 bucket 字段，删除它（R2 从 binding 获取）
+    if (remote.backend_type === 'r2' && configToSave.bucket) {
+      delete configToSave.bucket;
+    }
   }
   
-  // 更新年龄密码（如果提供）
   if (req.age_passphrase !== undefined) {
     configToSave.age_passphrase = req.age_passphrase;
-  }
-  
-  // 更新加密密码（如果提供）
-  if (req.encryption_password !== undefined) {
-    configToSave.encryption_password = req.encryption_password;
+  } else if (remote.backend_type === 'r2') {
+    // R2 保留原有的 age_passphrase 不删除
   }
   
   // 只有当 config 有变化时才更新 config_summary 字段
