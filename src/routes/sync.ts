@@ -673,7 +673,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
                 action: change.action,
                 payload: change.payload,
                 ledger_id: ledgerRow.id,
-              });
+              }, c.env.R2);
             }
         }
         processedChanges.length = 0; // 清空已处理的列表
@@ -1579,7 +1579,9 @@ async function applyChangeToProjection(
     action: string;
     payload: Record<string, unknown>;
     ledger_id: string;
-  }
+  },
+  r2?: R2Bucket
+)
 ): Promise<void> {
   // 处理 ledger_snapshot delete - 删除整个账本
   if (change.entity_type === 'ledger_snapshot' && change.action === 'delete') {
