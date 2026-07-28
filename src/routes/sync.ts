@@ -320,10 +320,10 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       const existingLedgers = await db
         .prepare(
           `SELECT l.id, l.user_id, l.external_id FROM ledgers l
-           LEFT JOIN ledger_members lm ON l.id = lm.ledger_id
-           WHERE (l.user_id = ? OR lm.user_id = ?) AND l.external_id IN (${ledgerPlaceholders})`
+           JOIN ledger_members lm ON l.id = lm.ledger_id
+           WHERE lm.user_id = ? AND l.external_id IN (${ledgerPlaceholders})`
         )
-        .bind(userId, userId, ...ledgerExternalIds)
+        .bind(userId, ...ledgerExternalIds)
         .all<{ id: string; user_id: string; external_id: string }>();
       
       console.log('[SYNC] existingLedgers found:', existingLedgers.results.length);
