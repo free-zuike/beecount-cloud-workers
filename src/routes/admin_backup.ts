@@ -651,9 +651,8 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
     .bind(remoteId)
     .first();
 
-  if (!existing) {
-    return c.json({ error: 'Remote not found' }, 404);
-  }
+  const remote = await db.prepare(`SELECT id, name, backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?`).bind(remoteId).first();
+  if (!remote) return c.json({ error: 'Remote not found' }, 404);
 
   const updates: string[] = ['updated_at = ?'];
   const params: (string | number | null)[] = [serverNow];
@@ -663,10 +662,27 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
     params.push(req.name);
   }
 
+  // 构建要保存的 config_summary——即使前端没传 config 也要保留原有值
+  let configToSave: Record<string, string> = {};
+  let hasAgePassphrase = false;
+  
   if (req.config !== undefined) {
-    updates.push('config_summary = ?');
-    params.push(JSON.stringify(req.age_passphrase ? { ...req.config, age_passphrase: req.age_passphrase } : req.config));
+    configToSave = req.config;
+    hasAgePassphrase = !!req.age_passphrase;
+  } else {
+    // 未传 config，取原有的 config_summary
+    configToSave = JSON.parse(remote.config_summary || '{}');
   }
+
+  if (hasAgePassphrase) {
+    configToSave.age_passphrase = req.age_passphrase!;
+  }
+
+  if (req.config !== undefined || req.age_passphrase !== undefined) {
+    updates.push('config_summary = ?');
+    params.push(JSON.stringify(configToSave));
+  }
+
   if (req.encrypted !== undefined) {
     updates.push('encrypted = ?');
     params.push(req.encrypted ? 1 : 0);
