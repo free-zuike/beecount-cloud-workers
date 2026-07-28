@@ -5,6 +5,7 @@ import { initializeDatabase } from './db/schema';
 import { authMiddleware } from './middleware/auth';
 import { spaMiddleware } from './middleware/spa';
 import { processBackupSchedule } from './services/backup-scheduler';
+import { initLogger } from './lib/logger';
 
 import setupRouter from './routes/setup';
 import authRouter from './routes/auth';
@@ -66,6 +67,7 @@ let initialized = false;
 app.use('*', async (c, next) => {
   if (!initialized) {
     await initializeDatabase(c.env.DB);
+    initLogger(c.env.DB);
     initialized = true;
   }
   await next();
