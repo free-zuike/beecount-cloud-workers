@@ -9,6 +9,11 @@ crons = ["*/5 * * * *"]
 
 [alias]
 tslib = "tslib"
+"@modelcontextprotocol/sdk/server/index.js" = "./node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js"
+"@modelcontextprotocol/sdk/types.js" = "./node_modules/@modelcontextprotocol/sdk/dist/esm/types.js"
+"@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js" = "./node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js"
+"@modelcontextprotocol/sdk" = "./node_modules/@modelcontextprotocol/sdk/dist/esm/index.js"
+"zod/v4" = "./node_modules/zod/v4/index.js"
 
 [[d1_databases]]
 binding = "DB"
