@@ -831,18 +831,6 @@ adminRouter.get('/logs', async (c) => {
     metadata: JSON.parse(row.metadata_json || '{}'),
   }));
 
-  const items = rows.results.map((row) => ({
-    seq: row.id,
-    ts: row.created_at,
-    level: 'INFO',
-    logger: 'audit',
-    message: row.action,
-    ledger_id: row.ledger_id,
-    user_id: row.user_id,
-    device_id: null,
-    metadata: JSON.parse(row.metadata_json || '{}'),
-  }));
-
   return c.json({
     items,
     capacity: 1000,
