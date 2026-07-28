@@ -143,6 +143,8 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await safeAddColumn('audit_logs', 'entity_id', 'TEXT');
     await safeAddColumn('audit_logs', 'details_json', 'TEXT');
     await safeAddColumn('audit_logs', 'metadata_json', 'TEXT');
+    await safeAddColumn('audit_logs', 'level', 'TEXT DEFAULT \'INFO\'');
+    await safeAddColumn('audit_logs', 'logger', 'TEXT');
 
     // read_tx_projection: add exclude columns
     await safeAddColumn('read_tx_projection', 'exclude_from_stats', 'BOOLEAN DEFAULT 0');

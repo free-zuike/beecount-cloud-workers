@@ -15,15 +15,17 @@ interface AuditLogParams {
   entityId?: string | null;
   details?: Record<string, unknown>;
   logBuffer?: DurableObjectNamespace;
+  level?: string;
+  logger?: string;
 }
 
 export async function insertAuditLog(params: AuditLogParams): Promise<void> {
-  const { db, userId, ledgerId, action, entityType, entityId, details, logBuffer } = params;
+  const { db, userId, ledgerId, action, entityType, entityId, details, logBuffer, level, logger } = params;
   try {
     await db
       .prepare(
-        `INSERT INTO audit_logs (user_id, ledger_id, action, entity_type, entity_id, details_json)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO audit_logs (user_id, ledger_id, action, entity_type, entity_id, details_json, level, logger)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         userId,
@@ -32,6 +34,8 @@ export async function insertAuditLog(params: AuditLogParams): Promise<void> {
         entityType ?? null,
         entityId ?? null,
         details ? JSON.stringify(details) : null,
+        level ?? 'INFO',
+        logger ?? null,
       )
       .run();
 

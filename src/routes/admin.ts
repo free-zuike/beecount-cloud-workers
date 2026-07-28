@@ -771,48 +771,65 @@ adminRouter.post('/users/:id/password', zValidator('json', z.object({
 adminRouter.get('/logs', async (c) => {
   const db = c.env.DB;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
+  const level = c.req.query('level');
   const q = c.req.query('q');
   const source = c.req.query('source');
 
-  // 将前端 logger 名称前缀映射到 audit_logs action 值
-  // 前端 SOURCE_OPTIONS 用的是原版 Python 的 logger 名称
-  const SOURCE_ACTION_MAP: Record<string, string[]> = {
-    'src.routers.sync': ['sync_push'],
-    'src.routers.write': ['create', 'update', 'delete'],
-    'src.routers.auth': ['login', 'register', 'logout', 'refresh'],
-    'src.routers.admin': ['admin_user_delete', 'backup_'],
-    'src.routers.profile': ['update_profile'],
-    'src.routers.attachments': ['attachment_upload'],
-    'src.routers.read': ['read'],
-    'beecount.access': [],
-    'uvicorn': [],
-  };
-
-  let query = `SELECT id, user_id, ledger_id, action, metadata_json, created_at FROM audit_logs`;
+  let query = `SELECT id, user_id, ledger_id, action, level, logger, metadata_json, created_at FROM audit_logs`;
   const conditions: string[] = [];
   const params: unknown[] = [];
 
-  if (source && SOURCE_ACTION_MAP[source]) {
-    const actions = SOURCE_ACTION_MAP[source];
-    if (actions.length > 0) {
-      const likeClauses = actions.map(a => a.endsWith('_') ? `action LIKE ?` : `action = ?`);
+  // 级别过滤：只显示 >= 所选级别的日志
+  if (level && level !== 'ALL') {
+    const LEVEL_RANK: Record<string, number> = { DEBUG: 0, INFO: 1, WARNING: 2, ERROR: 3, CRITICAL: 4 };
+    const minRank = LEVEL_RANK[level.toUpperCase()] ?? 0;
+    // level 列是 TEXT，按 CASE 表达式比较级别
+    conditions.push(`CASE level WHEN 'DEBUG' THEN 0 WHEN 'INFO' THEN 1 WHEN 'WARNING' THEN 2 WHEN 'ERROR' THEN 3 WHEN 'CRITICAL' THEN 4 ELSE 1 END >= ?`);
+    params.push(minRank);
+  }
+
+  // 来源过滤：logger 名称前缀匹配
+  if (source) {
+    // 前端 SOURCE_OPTIONS 的 value 是逗号分隔的 logger 名称前缀
+    const sourceList = source.split(',').map(s => s.trim()).filter(Boolean);
+    if (sourceList.length > 0) {
+      const likeClauses = sourceList.map(() => `logger LIKE ?`);
       conditions.push(`(${likeClauses.join(' OR ')})`);
-      for (const a of actions) {
-        params.push(a.endsWith('_') ? `${a}%` : a);
+      for (const s of sourceList) {
+        params.push(`${s}%`);
       }
     }
   }
+
+  // 关键词搜索
   if (q) {
-    conditions.push(`(action LIKE ? OR metadata_json LIKE ?)`);
-    params.push(`%${q}%`, `%${q}%`);
+    conditions.push(`(action LIKE ? OR logger LIKE ? OR metadata_json LIKE ?)`);
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
   }
+
   if (conditions.length > 0) {
     query += ` WHERE ${conditions.join(' AND ')}`;
   }
   query += ` ORDER BY id DESC LIMIT ?`;
   params.push(limit);
 
-  const rows = await db.prepare(query).bind(...params).all<{ id: number; user_id: string | null; ledger_id: string | null; action: string; metadata_json: string; created_at: string }>();
+  const rows = await db.prepare(query).bind(...params).all<{
+    id: number; user_id: string | null; ledger_id: string | null;
+    action: string; level: string; logger: string | null;
+    metadata_json: string; created_at: string;
+  }>();
+
+  const items = rows.results.map((row) => ({
+    seq: row.id,
+    ts: row.created_at,
+    level: row.level || 'INFO',
+    logger: row.logger || 'audit',
+    message: row.action,
+    ledger_id: row.ledger_id,
+    user_id: row.user_id,
+    device_id: null,
+    metadata: JSON.parse(row.metadata_json || '{}'),
+  }));
 
   const items = rows.results.map((row) => ({
     seq: row.id,
