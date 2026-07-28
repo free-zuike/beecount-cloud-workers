@@ -48,6 +48,9 @@ export const serverLogger = {
     writeLog({ level: 'INFO', logger, message, ...meta }),
   warn: (logger: string, message: string, meta?: { user_id?: string; ledger_id?: string }) =>
     writeLog({ level: 'WARNING', logger, message, ...meta }),
-  error: (logger: string, message: string, meta?: { user_id?: string; ledger_id?: string }) =>
-    writeLog({ level: 'ERROR', logger, message, ...meta }),
+  error: (logger: string, message: string, meta?: any) => {
+    const msg = typeof meta === 'object' && meta?.message ? `${message} ${meta.message}` : message;
+    const logMeta = meta && typeof meta === 'object' && !meta?.message ? meta as any : undefined;
+    writeLog({ level: 'ERROR', logger, message: msg, ...logMeta });
+  },
 };
