@@ -79,11 +79,11 @@ async function execTool(db: D1Database, userId: string, name: string, args: Reco
       default: r = { content: [{ type: 'text', text: JSON.stringify({ error: `Unknown tool: ${name}` }) }], isError: true };
     }
     const d = Date.now() - t;
-    db.prepare(`INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, args_summary, duration_ms, called_at) VALUES (?, ?, ?, ?, ?, 'success', ?, ?, ?)`).bind(userId, patId, patPrefix, patName, name, JSON.stringify(Object.keys(args)), d, nowUtc()).run().catch(() => {});
+    try { await db.prepare(`INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, args_summary, duration_ms, called_at) VALUES (?, ?, ?, ?, ?, 'success', ?, ?, ?)`).bind(userId, patId, patPrefix, patName, name, JSON.stringify(Object.keys(args)), d, nowUtc()).run(); } catch (e) { serverLogger.error('src.routers.mcp', `Failed to log MCP call: ${(e as Error).message}`); }
     return r;
   } catch (err) {
     const d = Date.now() - t;
-    db.prepare(`INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, error_message, args_summary, duration_ms, called_at) VALUES (?, ?, ?, ?, ?, 'error', ?, ?, ?, ?)`).bind(userId, patId, patPrefix, patName, name, (err as Error).message, JSON.stringify(Object.keys(args)), d, nowUtc()).run().catch(() => {});
+    try { await db.prepare(`INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, error_message, args_summary, duration_ms, called_at) VALUES (?, ?, ?, ?, ?, 'error', ?, ?, ?, ?)`).bind(userId, patId, patPrefix, patName, name, (err as Error).message, JSON.stringify(Object.keys(args)), d, nowUtc()).run(); } catch (e) { serverLogger.error('src.routers.mcp', `Failed to log MCP error call: ${(e as Error).message}`); }
     return { content: [{ type: 'text', text: JSON.stringify({ error: (err as Error).message }) }], isError: true };
   }
 }
@@ -106,6 +106,9 @@ async function checkAuth(c: any): Promise<Response | null> {
   if (!p) return new Response('Invalid PAT token', { status: 401, headers: { 'Content-Type': 'text/plain' } });
   if (p.expires_at && p.expires_at < nowUtc()) return new Response('PAT token expired', { status: 401, headers: { 'Content-Type': 'text/plain' } });
   c.set('userId', p.user_id); c.set('patId', p.id); c.set('patPrefix', t.substring(0, 14)); c.set('patName', p.name);
+  // 更新 PAT token 的最后使用时间和 IP
+  const ip = c.req.header('CF-Connecting-IP') || c.req.header('x-real-ip') || 'unknown';
+  c.env.DB.prepare(`UPDATE personal_access_tokens SET last_used_at = ?, last_used_ip = ? WHERE id = ?`).bind(nowUtc(), ip, p.id).run().catch(() => {});
   return null;
 }
 
