@@ -1,6 +1,5 @@
 /**
  * MCP Server - 手动实现 MCP Streamable HTTP 协议
- * 端点: GET /mcp/sse, POST /mcp/messages/, POST /mcp, GET /mcp, GET /mcp/tools, POST /mcp/tools/call
  */
 
 import { Hono } from 'hono';
@@ -8,10 +7,8 @@ import { serverLogger } from '../lib/logger';
 import { randomUUID } from 'crypto';
 
 function nowUtc(): string { return new Date().toISOString(); }
-
-async function hashToken(token: string): Promise<string> {
-  const e = new TextEncoder();
-  const h = await crypto.subtle.digest('SHA-256', e.encode(token));
+async function hashToken(t: string): Promise<string> {
+  const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t));
   return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
@@ -97,53 +94,49 @@ async function execTool(db: D1Database, userId: string, name: string, args: Reco
 
 const router = new Hono<{ Bindings: { DB: D1Database }; Variables: { userId: string; patId: string; patPrefix: string; patName: string } }>();
 
-// 认证辅助函数 - 返回 Response | null
-async function authPat(c: any): Promise<Response | null> {
+// 统一认证：返回 401 text 或 null
+async function checkAuth(c: any): Promise<Response | null> {
   const h = c.req.header('Authorization');
-  if (!h) return c.json({ error: 'Authorization header required' }, 401);
+  if (!h) return new Response('Authorization header required', { status: 401, headers: { 'Content-Type': 'text/plain' } });
   let t: string;
-  if (h.startsWith('Bearer ')) t = h.slice(7); else return c.json({ error: 'Invalid authorization format' }, 401);
-  if (!t.startsWith('bcmcp_')) return c.json({ error: 'Invalid PAT token format' }, 401);
+  if (h.startsWith('Bearer ')) t = h.slice(7); else return new Response('Invalid authorization format', { status: 401, headers: { 'Content-Type': 'text/plain' } });
+  if (!t.startsWith('bcmcp_')) return new Response('Invalid PAT token format', { status: 401, headers: { 'Content-Type': 'text/plain' } });
   const hh = await hashToken(t);
   const p = await c.env.DB.prepare(`SELECT id, user_id, name, scopes_json, expires_at FROM personal_access_tokens WHERE token_hash = ? AND revoked_at IS NULL`).bind(hh).first<{ id: string; user_id: string; name: string; scopes_json: string; expires_at: string | null }>();
-  if (!p) return c.json({ error: 'Invalid PAT token' }, 401);
-  if (p.expires_at && p.expires_at < nowUtc()) return c.json({ error: 'PAT token expired' }, 401);
+  if (!p) return new Response('Invalid PAT token', { status: 401, headers: { 'Content-Type': 'text/plain' } });
+  if (p.expires_at && p.expires_at < nowUtc()) return new Response('PAT token expired', { status: 401, headers: { 'Content-Type': 'text/plain' } });
   c.set('userId', p.user_id); c.set('patId', p.id); c.set('patPrefix', t.substring(0, 14)); c.set('patName', p.name);
-  return null; // 认证成功
+  return null;
 }
 
-// 处理 JSON-RPC 请求
-async function handleRpc(c: any) {
-  const authErr = await authPat(c);
-  if (authErr) return authErr;
-  const db = c.env.DB as D1Database;
-  const userId = c.get('userId') as string;
-  const patId = c.get('patId') as string;
-  const patPrefix = c.get('patPrefix') as string;
-  const patName = c.get('patName') as string;
-
+// 通用 JSON-RPC 处理
+async function jsonRpcHandler(c: any) {
+  const ae = await checkAuth(c);
+  if (ae) return ae;
+  const db = c.env.DB; const userId = c.get('userId'); const patId = c.get('patId'); const patPrefix = c.get('patPrefix'); const patName = c.get('patName');
   let body: any;
-  try { body = await c.req.json(); } catch { return c.json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }, 400); }
-  if (!body || body.jsonrpc !== '2.0' || !body.method) return c.json({ jsonrpc: '2.0', id: body?.id ?? null, error: { code: -32600, message: 'Invalid Request' } }, 400);
-
+  try { body = await c.req.json(); } catch { return new Response(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }), { status: 400, headers: { 'Content-Type': 'application/json' } }); }
+  if (!body || body.jsonrpc !== '2.0' || !body.method) return new Response(JSON.stringify({ jsonrpc: '2.0', id: body?.id ?? null, error: { code: -32600, message: 'Invalid Request' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   const { method, id, params } = body;
   try {
-    if (method === 'initialize') return c.json({ jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'beecount-mcp', version: '1.0.0' } } });
-    if (method === 'tools/list') return c.json({ jsonrpc: '2.0', id, result: { tools: TOOLS } });
+    if (method === 'initialize') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'beecount-mcp', version: '1.0.0' } } }), { headers: { 'Content-Type': 'application/json' } });
+    if (method === 'tools/list') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { tools: TOOLS } }), { headers: { 'Content-Type': 'application/json' } });
     if (method === 'tools/call') {
       const p = (params || {}) as { name?: string; arguments?: Record<string, unknown> };
-      if (!p.name) return c.json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'Tool name required' } }, 400);
+      if (!p.name) return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32602, message: 'Tool name required' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
       const r = await execTool(db, userId, p.name, p.arguments || {}, patId, patPrefix, patName);
-      return c.json({ jsonrpc: '2.0', id, result: r });
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: r }), { headers: { 'Content-Type': 'application/json' } });
     }
-    return c.json({ jsonrpc: '2.0', id, result: {} });
-  } catch (e) { return c.json({ jsonrpc: '2.0', id, error: { code: -32603, message: (e as Error).message } }, 500); }
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: {} }), { headers: { 'Content-Type': 'application/json' } });
+  } catch (e) {
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32603, message: (e as Error).message } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+  }
 }
 
-// 处理 SSE 请求
-async function handleSse(c: any) {
-  const authErr = await authPat(c);
-  if (authErr) return authErr;
+// SSE 处理
+async function sseHandler(c: any) {
+  const ae = await checkAuth(c);
+  if (ae) return ae;
   const { readable, writable } = new TransformStream();
   const w = writable.getWriter();
   const enc = new TextEncoder();
@@ -154,18 +147,18 @@ async function handleSse(c: any) {
 }
 
 // 路由注册
-router.get('/sse', handleSse);
-router.post('/messages/', handleRpc);
-router.post('/', handleRpc);
-router.get('/', async (c) => { const ae = await authPat(c); return ae || c.json({ jsonrpc: '2.0', result: { serverInfo: { name: 'beecount-mcp', version: '1.0.0' } } }); });
-router.get('/tools', async (c) => { const ae = await authPat(c); return ae || c.json({ tools: TOOLS }); });
+router.get('/sse', sseHandler);
+router.post('/messages/', jsonRpcHandler);
+router.post('/', jsonRpcHandler);
+router.get('/', async (c) => { const ae = await checkAuth(c); return ae || new Response(JSON.stringify({ jsonrpc: '2.0', result: { serverInfo: { name: 'beecount-mcp', version: '1.0.0' } } }), { headers: { 'Content-Type': 'application/json' } }); });
+router.get('/tools', async (c) => { const ae = await checkAuth(c); return ae || new Response(JSON.stringify({ tools: TOOLS }), { headers: { 'Content-Type': 'application/json' } }); });
 router.post('/tools/call', async (c) => {
-  const ae = await authPat(c); if (ae) return ae;
+  const ae = await checkAuth(c); if (ae) return ae;
   const db = c.env.DB; const userId = c.get('userId'); const patId = c.get('patId'); const patPrefix = c.get('patPrefix'); const patName = c.get('patName');
-  let body: any; try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON' }, 400); }
-  if (!body?.name) return c.json({ error: 'Tool name required' }, 400);
-  try { return c.json(await execTool(db, userId, body.name, body.arguments || {}, patId, patPrefix, patName)); }
-  catch (e) { return c.json({ error: (e as Error).message }, 500); }
+  let body: any; try { body = await c.req.json(); } catch { return new Response(JSON.stringify({ error: 'Invalid JSON' }), { status: 400, headers: { 'Content-Type': 'application/json' } }); }
+  if (!body?.name) return new Response(JSON.stringify({ error: 'Tool name required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  try { return new Response(JSON.stringify(await execTool(db, userId, body.name, body.arguments || {}, patId, patPrefix, patName)), { headers: { 'Content-Type': 'application/json' } }); }
+  catch (e) { return new Response(JSON.stringify({ error: (e as Error).message }), { status: 500, headers: { 'Content-Type': 'application/json' } }); }
 });
 
 export default router;
