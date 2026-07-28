@@ -607,7 +607,11 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
-  const configJson = JSON.stringify(req.age_passphrase ? { ...req.config, age_passphrase: req.age_passphrase } : req.config);
+  const configJson = JSON.stringify({
+    ...req.config,
+    ...(req.age_passphrase ? { age_passphrase: req.age_passphrase } : {}),
+    ...(req.encryption_password ? { encryption_password: req.encryption_password } : {})
+  });
 
   const result = await db
     .prepare(
@@ -664,21 +668,28 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
 
   // 构建要保存的 config_summary——即使前端没传 config 也要保留原有值
   let configToSave: Record<string, string> = {};
-  let hasAgePassphrase = false;
   
   if (req.config !== undefined) {
-    configToSave = req.config;
-    hasAgePassphrase = !!req.age_passphrase;
+    configToSave = { ...req.config };
   } else {
     // 未传 config，取原有的 config_summary
     configToSave = JSON.parse(remote.config_summary || '{}');
   }
-
-  if (hasAgePassphrase) {
-    configToSave.age_passphrase = req.age_passphrase!;
+  
+  // 更新年龄密码（如果提供）
+  if (req.age_passphrase !== undefined) {
+    configToSave.age_passphrase = req.age_passphrase;
   }
-
-  if (req.config !== undefined || req.age_passphrase !== undefined) {
+  
+  // 更新加密密码（如果提供）
+  if (req.encryption_password !== undefined) {
+    configToSave.encryption_password = req.encryption_password;
+  }
+  
+  // 只有当 config 有变化时才更新 config_summary 字段
+  const originalConfig = remote.config_summary ? JSON.parse(remote.config_summary) : {};
+  const configHasChanged = JSON.stringify(configToSave) !== JSON.stringify(originalConfig);
+  if (configHasChanged) {
     updates.push('config_summary = ?');
     params.push(JSON.stringify(configToSave));
   }
