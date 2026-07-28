@@ -3,8 +3,8 @@ import { validateAccessToken } from '../auth';
 
 export const authMiddleware = async (c: any, next: Next) => {
   const path = c.req.path;
-  // auth 路由自己处理认证（login/refresh/2fa），跳过中间件
-  if (path.startsWith('/api/v1/auth')) {
+  // auth 路由和 MCP 路由自己处理认证，跳过中间件
+  if (path.startsWith('/api/v1/auth') || path.startsWith('/api/v1/mcp')) {
     return next();
   }
 
