@@ -47,7 +47,7 @@ async function webdavMkcol(url: string, auth: string): Promise<{ ok: boolean; st
 }
 
 async function webdavPut(url: string, auth: string, content: string | Uint8Array): Promise<{ ok: boolean; status: number; message: string }> {
-  const body = typeof content === 'string' ? new TextEncoder().zipode(content) : content;
+  const body = typeof content === 'string' ? new TextEncoder().encode(content) : content;
   const response = await fetch(url, {
     method: 'PUT',
     headers: {
@@ -314,12 +314,12 @@ export async function generateBackupBytes(
 
   // 创建 tar.gz
   const tarEntries: { name: string; data: Uint8Array }[] = [];
-  tarEntries.push({ name: 'meta.json', data: new TextEncoder().zipode(JSON.stringify({ schemaVersion: 1, appVersion: '1.0', createdAt: new Date().toISOString(), userId, includeAttachments: true }, null, 2)) });
+  tarEntries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: '1.6.1', createdAt: new Date().toISOString(), userId, includeAttachments: true }, null, 2)) });
   try {
     const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
     tarEntries.push({ name: 'db.sqlite3', data: createMinimalSqliteFile() });
   } catch {}
-  tarEntries.push({ name: 'db.json', data: new TextEncoder().zipode(JSON.stringify({ backup_time: new Date().toISOString(), version: '1.0', schema_version: 1, user_id: userId, tables }, null, 2)) });
+  tarEntries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: new Date().toISOString(), version: '1.0', schema_version: 1, user_id: userId, tables }, null, 2)) });
   for (const [key, value] of attachments) tarEntries.push({ name: key, data: value });
 
   let backupBytes = await withRetry(() => createTarGz(tarEntries), 2, 1000, 'create tar.gz');
@@ -539,7 +539,7 @@ export async function performBackup(
     };
     tarEntries.push({
       name: 'meta.json',
-      data: new TextEncoder().zipode(JSON.stringify(meta, null, 2)),
+      data: new TextEncoder().encode(JSON.stringify(meta, null, 2)),
     });
 
     // 2. 数据库导出 - schema only（完整数据在 db.json 中）
@@ -565,7 +565,7 @@ export async function performBackup(
     };
     tarEntries.push({
       name: 'db.json',
-      data: new TextEncoder().zipode(JSON.stringify(dbExport, null, 2)),
+      data: new TextEncoder().encode(JSON.stringify(dbExport, null, 2)),
     });
     log(`[Backup] db.json created: ${JSON.stringify(dbExport).length} bytes`);
 
