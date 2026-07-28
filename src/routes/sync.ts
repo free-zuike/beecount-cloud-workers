@@ -1736,32 +1736,65 @@ async function applyChangeToProjection(
           .bind(ledgerId, change.entity_sync_id)
           .run();
       } else {
-        // 用 INSERT OR REPLACE 替代 SELECT + UPDATE/INSERT
-        await db
-          .prepare(
-            `INSERT OR REPLACE INTO read_account_projection
-             (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
-              note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            ledgerId,
-            change.entity_sync_id,
-            userId,
-            payload.name ?? null,
-            payload.account_type ?? null,
-            payload.currency ?? null,
-            payload.initial_balance ?? 0,
-            payload.note ?? null,
-            payload.credit_limit ?? null,
-            payload.billing_day ?? null,
-            payload.payment_due_day ?? null,
-            payload.bank_name ?? null,
-            payload.card_last_four ?? null,
-            (payload as any).hidden ?? null,
-            change.change_id,
-          )
-          .run();
+        // 只更新 payload 中提供的字段（与原版 exclude_unset 对齐），避免覆盖未传字段为 NULL
+        const existing = await db
+          .prepare('SELECT sync_id FROM read_account_projection WHERE ledger_id = ? AND sync_id = ?')
+          .bind(ledgerId, change.entity_sync_id)
+          .first();
+        
+        const accountFields: Array<{ col: string; val: unknown }> = [];
+        if (payload.name !== undefined) accountFields.push({ col: 'name', val: payload.name });
+        if (payload.account_type !== undefined) accountFields.push({ col: 'account_type', val: payload.account_type });
+        if (payload.currency !== undefined) accountFields.push({ col: 'currency', val: payload.currency });
+        if (payload.initial_balance !== undefined) accountFields.push({ col: 'initial_balance', val: payload.initial_balance });
+        if (payload.note !== undefined) accountFields.push({ col: 'note', val: payload.note });
+        if (payload.credit_limit !== undefined) accountFields.push({ col: 'credit_limit', val: payload.credit_limit });
+        if (payload.billing_day !== undefined) accountFields.push({ col: 'billing_day', val: payload.billing_day });
+        if (payload.payment_due_day !== undefined) accountFields.push({ col: 'payment_due_day', val: payload.payment_due_day });
+        if (payload.bank_name !== undefined) accountFields.push({ col: 'bank_name', val: payload.bank_name });
+        if (payload.card_last_four !== undefined) accountFields.push({ col: 'card_last_four', val: payload.card_last_four });
+        if ((payload as any).hidden !== undefined) accountFields.push({ col: 'hidden', val: (payload as any).hidden ? 1 : 0 });
+
+        if (existing) {
+          // UPDATE 只更新提供的字段
+          if (accountFields.length > 0) {
+            accountFields.push({ col: 'source_change_id', val: change.change_id });
+            const sets = accountFields.map(f => `${f.col} = ?`).join(', ');
+            const vals = accountFields.map(f => f.val);
+            vals.push(ledgerId, change.entity_sync_id);
+            await db
+              .prepare(`UPDATE read_account_projection SET ${sets} WHERE ledger_id = ? AND sync_id = ?`)
+              .bind(...vals)
+              .run();
+          }
+        } else {
+          // INSERT 需要所有字段，用默认值填充
+          await db
+            .prepare(
+              `INSERT INTO read_account_projection
+               (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+                note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .bind(
+              ledgerId,
+              change.entity_sync_id,
+              userId,
+              payload.name ?? null,
+              payload.account_type ?? null,
+              payload.currency ?? null,
+              payload.initial_balance ?? 0,
+              payload.note ?? null,
+              payload.credit_limit ?? null,
+              payload.billing_day ?? null,
+              payload.payment_due_day ?? null,
+              payload.bank_name ?? null,
+              payload.card_last_four ?? null,
+              (payload as any).hidden ?? null,
+              change.change_id,
+            )
+            .run();
+        }
       }
       break;
     }
