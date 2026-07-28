@@ -771,23 +771,29 @@ adminRouter.post('/users/:id/password', zValidator('json', z.object({
 adminRouter.get('/logs', async (c) => {
   const db = c.env.DB;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
+  const level = c.req.query('level');
+  const source = c.req.query('source');
+  const q = c.req.query('q');
 
-  const rows = await db
-    .prepare(
-      `SELECT id, user_id, ledger_id, action, metadata_json, created_at
-       FROM audit_logs
-       ORDER BY id DESC
-       LIMIT ?`
-    )
-    .bind(limit)
-    .all<{
-      id: number;
-      user_id: string | null;
-      ledger_id: string | null;
-      action: string;
-      metadata_json: string;
-      created_at: string;
-    }>();
+  let query = `SELECT id, user_id, ledger_id, action, metadata_json, created_at FROM audit_logs`;
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (source) {
+    conditions.push(`action LIKE ?`);
+    params.push(`${source}%`);
+  }
+  if (q) {
+    conditions.push(`(action LIKE ? OR metadata_json LIKE ?)`);
+    params.push(`%${q}%`, `%${q}%`);
+  }
+  if (conditions.length > 0) {
+    query += ` WHERE ${conditions.join(' AND ')}`;
+  }
+  query += ` ORDER BY id DESC LIMIT ?`;
+  params.push(limit);
+
+  const rows = await db.prepare(query).bind(...params).all<{ id: number; user_id: string | null; ledger_id: string | null; action: string; metadata_json: string; created_at: string }>();
 
   const items = rows.results.map((row) => ({
     seq: row.id,
