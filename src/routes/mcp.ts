@@ -97,24 +97,25 @@ async function execTool(db: D1Database, userId: string, name: string, args: Reco
 
 const router = new Hono<{ Bindings: { DB: D1Database }; Variables: { userId: string; patId: string; patPrefix: string; patName: string } }>();
 
-// 认证辅助函数
-async function authPat(c: any): Promise<boolean> {
+// 认证辅助函数 - 返回 Response | null
+async function authPat(c: any): Promise<Response | null> {
   const h = c.req.header('Authorization');
-  if (!h) { c.json({ error: 'Authorization header required' }, 401); return false; }
+  if (!h) return c.json({ error: 'Authorization header required' }, 401);
   let t: string;
-  if (h.startsWith('Bearer ')) t = h.slice(7); else { c.json({ error: 'Invalid authorization format' }, 401); return false; }
-  if (!t.startsWith('bcmcp_')) { c.json({ error: 'Invalid PAT token format' }, 401); return false; }
+  if (h.startsWith('Bearer ')) t = h.slice(7); else return c.json({ error: 'Invalid authorization format' }, 401);
+  if (!t.startsWith('bcmcp_')) return c.json({ error: 'Invalid PAT token format' }, 401);
   const hh = await hashToken(t);
   const p = await c.env.DB.prepare(`SELECT id, user_id, name, scopes_json, expires_at FROM personal_access_tokens WHERE token_hash = ? AND revoked_at IS NULL`).bind(hh).first<{ id: string; user_id: string; name: string; scopes_json: string; expires_at: string | null }>();
-  if (!p) { c.json({ error: 'Invalid PAT token' }, 401); return false; }
-  if (p.expires_at && p.expires_at < nowUtc()) { c.json({ error: 'PAT token expired' }, 401); return false; }
+  if (!p) return c.json({ error: 'Invalid PAT token' }, 401);
+  if (p.expires_at && p.expires_at < nowUtc()) return c.json({ error: 'PAT token expired' }, 401);
   c.set('userId', p.user_id); c.set('patId', p.id); c.set('patPrefix', t.substring(0, 14)); c.set('patName', p.name);
-  return true;
+  return null; // 认证成功
 }
 
 // 处理 JSON-RPC 请求
 async function handleRpc(c: any) {
-  if (!(await authPat(c))) return;
+  const authErr = await authPat(c);
+  if (authErr) return authErr;
   const db = c.env.DB as D1Database;
   const userId = c.get('userId') as string;
   const patId = c.get('patId') as string;
@@ -141,7 +142,8 @@ async function handleRpc(c: any) {
 
 // 处理 SSE 请求
 async function handleSse(c: any) {
-  if (!(await authPat(c))) return;
+  const authErr = await authPat(c);
+  if (authErr) return authErr;
   const { readable, writable } = new TransformStream();
   const w = writable.getWriter();
   const enc = new TextEncoder();
@@ -155,10 +157,10 @@ async function handleSse(c: any) {
 router.get('/sse', handleSse);
 router.post('/messages/', handleRpc);
 router.post('/', handleRpc);
-router.get('/', async (c) => { if (!(await authPat(c))) return; return c.json({ jsonrpc: '2.0', result: { serverInfo: { name: 'beecount-mcp', version: '1.0.0' } } }); });
-router.get('/tools', async (c) => { if (!(await authPat(c))) return; return c.json({ tools: TOOLS }); });
+router.get('/', async (c) => { const ae = await authPat(c); return ae || c.json({ jsonrpc: '2.0', result: { serverInfo: { name: 'beecount-mcp', version: '1.0.0' } } }); });
+router.get('/tools', async (c) => { const ae = await authPat(c); return ae || c.json({ tools: TOOLS }); });
 router.post('/tools/call', async (c) => {
-  if (!(await authPat(c))) return;
+  const ae = await authPat(c); if (ae) return ae;
   const db = c.env.DB; const userId = c.get('userId'); const patId = c.get('patId'); const patPrefix = c.get('patPrefix'); const patName = c.get('patName');
   let body: any; try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON' }, 400); }
   if (!body?.name) return c.json({ error: 'Tool name required' }, 400);
