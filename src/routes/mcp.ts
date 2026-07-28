@@ -105,7 +105,7 @@ router.use('/*', async (c, next) => {
   if (!t.startsWith('bcmcp_')) return c.json({ error: 'Invalid PAT token format' }, 401);
   const hh = await hashToken(t);
   const d = c.env.DB;
-  const p = await d.prepare(`SELECT id, user_id, name, scopes, expires_at FROM personal_access_tokens WHERE token_hash = ? AND revoked_at IS NULL`).bind(hh).first<{ id: string; user_id: string; name: string; scopes: string; expires_at: string | null }>();
+  const p = await d.prepare(`SELECT id, user_id, name, scopes_json, expires_at, revoked_at FROM personal_access_tokens WHERE token_hash = ? AND revoked_at IS NULL`).bind(hh).first<{ id: string; user_id: string; name: string; scopes_json: string; expires_at: string | null; revoked_at: string | null }>();
   if (!p) return c.json({ error: 'Invalid PAT token' }, 401);
   if (p.expires_at && p.expires_at < nowUtc()) return c.json({ error: 'PAT token expired' }, 401);
   c.set('userId', p.user_id); c.set('patId', p.id); c.set('patPrefix', t.substring(0, 14)); c.set('patName', p.name);
