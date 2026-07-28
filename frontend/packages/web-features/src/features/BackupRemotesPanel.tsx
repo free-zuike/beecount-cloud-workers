@@ -160,6 +160,14 @@ const BACKEND_FIELDS: Record<string, FieldSpec[]> = {
     { key: 'remote', label: 'Target remote', placeholder: 'other-remote:path' },
   ],
   local: [],
+  r2: [
+    {
+      key: 'bucket',
+      label: 'Bucket',
+      placeholder: 'my-backup-bucket',
+      hint: '存储桶名称。备份文件会落到 <bucket>/<timestamp>.zip（加密时）或 <bucket>/<timestamp>.tar.gz（未加密时）。R2 必填。',
+    },
+  ],
 }
 
 const BACKEND_LABELS: Record<string, string> = {
@@ -173,6 +181,7 @@ const BACKEND_LABELS: Record<string, string> = {
   ftp: 'FTP',
   alias: 'Alias (path 别名)',
   local: 'Local 路径(同机)',
+  r2: 'Cloudflare R2',
 }
 
 type Props = {
