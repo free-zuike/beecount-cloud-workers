@@ -1581,7 +1581,6 @@ async function applyChangeToProjection(
     ledger_id: string;
   },
   r2?: R2Bucket
-)
 ): Promise<void> {
   // 处理 ledger_snapshot delete - 删除整个账本
   if (change.entity_type === 'ledger_snapshot' && change.action === 'delete') {
