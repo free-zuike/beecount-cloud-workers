@@ -50,7 +50,7 @@ jobs:
       - name: Merge upstream changes
         if: steps.check.outputs.status == 'behind'
         run: |
-          git merge upstream/main --no-edit -m "chore: sync with upstream BeeCount-Cloud"
+          git merge upstream/main --no-edit -m "chore: sync with upstream BeeCount-Cloud" --allow-unrelated-histories
           
       - name: Apply R2 frontend patches
         if: steps.check.outputs.status == 'behind'
