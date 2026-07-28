@@ -625,7 +625,7 @@ mcpRouter.post('/tools/call', async (c) => {
         )
         .run();
     } catch (logErr) {
-      serverLogger.error('app', '[MCP] Failed to log call:', logErr);
+      serverLogger.error('src.routers.mcp', '[MCP] Failed to log call:', logErr);
     }
 
     return c.json({
@@ -652,7 +652,7 @@ mcpRouter.post('/tools/call', async (c) => {
         )
         .run();
     } catch (logErr) {
-      serverLogger.error('app', '[MCP] Failed to log error call:', logErr);
+      serverLogger.error('src.routers.mcp', '[MCP] Failed to log error call:', logErr);
     }
 
     return c.json({

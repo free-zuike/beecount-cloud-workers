@@ -1154,7 +1154,7 @@ adminRouter.get('/integrity/scan', async (c) => {
       issues,
     });
   } catch (error) {
-    serverLogger.error('app', '[INTEGRITY] Scan error:', error);
+    serverLogger.error('src.routers.admin', '[INTEGRITY] Scan error:', error);
     return c.json({
       scanned_at: new Date().toISOString(),
       ledgers_total: 0,

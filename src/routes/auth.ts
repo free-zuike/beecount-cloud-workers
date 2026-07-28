@@ -125,7 +125,7 @@ export async function upsertDevice(
   // 检查 device_id 是否被其他用户占用
   const existingAny = await db.prepare('SELECT id, user_id FROM devices WHERE id = ?').bind(targetId).first<{ id: string; user_id: string }>();
   if (existingAny && existingAny.user_id !== userId) {
-    serverLogger.info('app', `[AUTH] device_id cross-user collision id=${targetId} prev_user=${existingAny.user_id} new_user=${userId} -> minting new device_id`);
+    serverLogger.info('src.routers.auth', `[AUTH] device_id cross-user collision id=${targetId} prev_user=${existingAny.user_id} new_user=${userId} -> minting new device_id`);
     targetId = randomUUID();
   }
 
@@ -326,18 +326,18 @@ authRouter.post('/refresh', zValidator('json', z.object({
 
   // 调试日志：追踪 refresh 请求
   const tokenPrefix = refreshToken.substring(0, 8);
-  serverLogger.info('app', `[REFRESH] token=${tokenPrefix}...`);
+  serverLogger.info('src.routers.auth', `[REFRESH] token=${tokenPrefix}...`);
 
   try {
     const decoded = await decodeRefreshToken(refreshToken, db, jwtSecret);
     if (!decoded.valid) {
-      serverLogger.info('app', `[REFRESH] FAILED: ${decoded.reason}`);
+      serverLogger.info('src.routers.auth', `[REFRESH] FAILED: ${decoded.reason}`);
       return c.json({ error: decoded.reason }, 401);
     }
 
     const { userId: tokenUserId, deviceId, clientType } = decoded;
     const tokenScopes = decoded.scopes;
-    serverLogger.info('app', `[REFRESH] OK: user=${tokenUserId} device=${deviceId} client=${clientType}`);
+    serverLogger.info('src.routers.auth', `[REFRESH] OK: user=${tokenUserId} device=${deviceId} client=${clientType}`);
 
     // 与原版对齐：从 JWT claims 获取 user_id（不信任 DB）
     const user = await db.prepare('SELECT id, email, is_admin, is_enabled FROM users WHERE id = ?').bind(tokenUserId).first<{ id: string; email: string; is_admin: number; is_enabled: number }>();

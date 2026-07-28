@@ -62,7 +62,7 @@ wsRouter.get('/', async (c) => {
     // 转发原始请求（保留所有头，包括 Upgrade）
     return doStub.fetch(c.req.raw);
   } catch (error) {
-    serverLogger.error('app', '[WS] Connection error:', error);
+    serverLogger.error('src.routers.ws', '[WS] Connection error:', error);
     return c.json({ error: 'WebSocket connection failed' }, 500);
   }
 });

@@ -369,7 +369,7 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
-  serverLogger.info('app', '[WRITE] /ledgers POST called, userId:', userId, 'req:', JSON.stringify(req));
+  serverLogger.info('src.routers.write', '[WRITE] /ledgers POST called, userId:', userId, 'req:', JSON.stringify(req));
 
   // 如果没有提供 ledger_id，生成一个唯一的
   let ledgerExternalId = req.ledger_id;
@@ -379,7 +379,7 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
     crypto.getRandomValues(randBytes);
     const randStr = Array.from(randBytes).map(b => b.toString(16).padStart(2, '0')).join('');
     ledgerExternalId = 'ledger_' + Date.now() + '_' + randStr;
-    serverLogger.info('app', '[WRITE] Generated new ledgerExternalId:', ledgerExternalId);
+    serverLogger.info('src.routers.write', '[WRITE] Generated new ledgerExternalId:', ledgerExternalId);
   }
 
   const syncId = randomUUID();
@@ -390,16 +390,16 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
     .bind(userId, ledgerExternalId)
     .first<{ id: string; external_id: string }>();
 
-  serverLogger.info('app', '[WRITE] Existing ledger check:', existing);
+  serverLogger.info('src.routers.write', '[WRITE] Existing ledger check:', existing);
 
   if (existing) {
-    serverLogger.info('app', '[WRITE] Ledger already exists, returning 409');
+    serverLogger.info('src.routers.write', '[WRITE] Ledger already exists, returning 409');
     return c.json({ error: 'Ledger already exists', detail: `ledger_id "${ledgerExternalId}" already exists` }, 409);
   }
 
   // 创建账本
   const ledgerId = randomUUID();
-  serverLogger.info('app', '[WRITE] Creating ledger, ledgerId:', ledgerId, 'externalId:', ledgerExternalId, 'name:', req.ledger_name);
+  serverLogger.info('src.routers.write', '[WRITE] Creating ledger, ledgerId:', ledgerId, 'externalId:', ledgerExternalId, 'name:', req.ledger_name);
   
   await db
     .prepare(
@@ -429,7 +429,7 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
     .run();
 
   const newChangeId = changeResult.meta.last_row_id as number;
-  serverLogger.info('app', '[WRITE] Ledger created successfully, changeId:', newChangeId);
+  serverLogger.info('src.routers.write', '[WRITE] Ledger created successfully, changeId:', newChangeId);
 
   await insertAuditLog({
     db, userId, ledgerId, action: 'create', entityType: 'ledger', entityId: ledgerExternalId,
@@ -541,7 +541,7 @@ writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaU
  * 删除交易
  */
 writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', WriteBaseSchema), async (c) => {
-  serverLogger.info('app', '[WRITE] DELETE /ledgers/:ledgerId/transactions/:id matched, url:', c.req.url);
+  serverLogger.info('src.routers.write', '[WRITE] DELETE /ledgers/:ledgerId/transactions/:id matched, url:', c.req.url);
   const userId = c.get('userId');
   const db = c.env.DB;
   const txSyncId = c.req.param('id');
@@ -643,7 +643,7 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
 // ---------------------------------------------------------------------------
 
 writeRouter.delete('/ledgers/:ledgerId', async (c) => {
-  serverLogger.info('app', '[WRITE] DELETE /ledgers/:ledgerId matched, url:', c.req.url, 'ledgerId:', c.req.param('ledgerId'));
+  serverLogger.info('src.routers.write', '[WRITE] DELETE /ledgers/:ledgerId matched, url:', c.req.url, 'ledgerId:', c.req.param('ledgerId'));
   const userId = c.get('userId');
   const db = c.env.DB;
   const r2 = c.env.R2;
@@ -720,7 +720,7 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
-  serverLogger.info('app', '[WRITE] /transactions POST called, userId:', userId, 'req:', JSON.stringify(req));
+  serverLogger.info('src.routers.write', '[WRITE] /transactions POST called, userId:', userId, 'req:', JSON.stringify(req));
 
   // 查找账本
   let ledger;
@@ -736,7 +736,7 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
       .first<{ id: string; external_id: string }>();
   }
 
-  serverLogger.info('app', '[WRITE] Found ledger:', ledger);
+  serverLogger.info('src.routers.write', '[WRITE] Found ledger:', ledger);
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
@@ -808,7 +808,7 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     throw projErr;
   }
 
-  serverLogger.info('app', '[WRITE] Transaction created successfully, syncId:', syncId, 'ledger.id:', ledger.id);
+  serverLogger.info('src.routers.write', '[WRITE] Transaction created successfully, syncId:', syncId, 'ledger.id:', ledger.id);
 
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'create', entityType: 'transaction', entityId: syncId,
@@ -1351,7 +1351,7 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
   const db = c.env.DB;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
-  serverLogger.info('app', '[WRITE] Creating category:', JSON.stringify({ name: req.name, kind: req.kind, parent_name: req.parent_name, icon_cloud_file_id: req.icon_cloud_file_id }));
+  serverLogger.info('src.routers.write', '[WRITE] Creating category:', JSON.stringify({ name: req.name, kind: req.kind, parent_name: req.parent_name, icon_cloud_file_id: req.icon_cloud_file_id }));
 
   const ledger = await db
     .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
@@ -1440,7 +1440,7 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
   try {
     await broadcastWriteEvent(c, ledger.id, newChangeId);
   } catch (broadcastErr) {
-    serverLogger.error('app', '[WRITE] broadcastWriteEvent failed:', broadcastErr);
+    serverLogger.error('src.routers.write', '[WRITE] broadcastWriteEvent failed:', broadcastErr);
   }
 
   return c.json({

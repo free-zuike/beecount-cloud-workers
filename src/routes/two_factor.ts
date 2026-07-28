@@ -210,10 +210,10 @@ twoFactorRouter.get('/status', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   
-  serverLogger.info('app', '[2FA] Status request - userId:', userId);
+  serverLogger.info('src.routers.auth', '[2FA] Status request - userId:', userId);
 
   if (!userId) {
-    serverLogger.info('app', '[2FA] No userId found in context');
+    serverLogger.info('src.routers.auth', '[2FA] No userId found in context');
     return c.json({ error: 'Unauthorized' }, 401);
   }
 
@@ -222,7 +222,7 @@ twoFactorRouter.get('/status', async (c) => {
     .bind(userId)
     .first<{ totp_enabled: number; totp_enabled_at: string | null }>();
 
-  serverLogger.info('app', '[2FA] User query result:', user);
+  serverLogger.info('src.routers.auth', '[2FA] User query result:', user);
 
   if (!user) {
     return c.json({ error: 'User not found' }, 404);
@@ -296,7 +296,7 @@ twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (
 
   const decryptedSecret = await getDecryptedTotpSecret(user.totp_secret_encrypted, jwtSecret);
   const isValid = await verifyTotpCode(decryptedSecret, code);
-  serverLogger.info('app', '[2FA] confirm: isValid=', isValid, 'server_ts=', Math.floor(Date.now() / 1000));
+  serverLogger.info('src.routers.auth', '[2FA] confirm: isValid=', isValid, 'server_ts=', Math.floor(Date.now() / 1000));
   if (!isValid) {
     return c.json({ error: 'Invalid TOTP code.' }, 400);
   }

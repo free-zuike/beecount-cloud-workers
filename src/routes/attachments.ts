@@ -554,7 +554,7 @@ attachmentsRouter.get('/:id', async (c) => {
     }
 
     // 先尝试 R2（附件存储在 R2 bucket）
-    serverLogger.info('app', '[ATTACH] R2 available:', !!c.env.R2, 'storage_path:', row.storage_path);
+    serverLogger.info('src.routers.attachments', '[ATTACH] R2 available:', !!c.env.R2, 'storage_path:', row.storage_path);
     if (c.env.R2) {
         // 尝试多种存储路径格式（兼容不同版本的 storage_path）
         const normalizedPath = row.storage_path.replace(/^attachments\/attachments\//, 'attachments/');
@@ -566,12 +566,12 @@ attachmentsRouter.get('/:id', async (c) => {
         ];
         for (const key of possiblePaths) {
             if (!key) continue;
-            serverLogger.info('app', '[ATTACH] Trying R2 key:', key);
+            serverLogger.info('src.routers.attachments', '[ATTACH] Trying R2 key:', key);
             const obj = await c.env.R2.get(key);
             if (obj) {
                 const ext = (row.file_name || '').split('.').pop()?.toLowerCase() || '';
                 const mimeGuess = ext === 'png' ? 'image/png' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : ext === 'gif' ? 'image/gif' : (obj.httpMetadata?.contentType || row.mime_type || 'application/octet-stream');
-                serverLogger.info('app', '[ATTACH] R2 found:', key, 'size:', obj.size, 'mime:', mimeGuess);
+                serverLogger.info('src.routers.attachments', '[ATTACH] R2 found:', key, 'size:', obj.size, 'mime:', mimeGuess);
                 return new Response(obj.body, {
                     headers: {
                         'Content-Type': mimeGuess,
@@ -584,7 +584,7 @@ attachmentsRouter.get('/:id', async (c) => {
             }
         }
     }
-    serverLogger.info('app', '[ATTACH] R2 not found, returning metadata');
+    serverLogger.info('src.routers.attachments', '[ATTACH] R2 not found, returning metadata');
     return c.json({
         ledger_id: row.ledger_external_id,
         sha256: row.sha256,
@@ -768,7 +768,7 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
              VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'category_icon', ?)`
         ).bind(fileId, userId, sha256Hash, size, effectiveMimeType, fileName, r2Key, now).run();
 
-        serverLogger.info('app', '[ATTACH] Category icon upload: name=', file.name, 'type=', file.type, 'size=', file.size);
+        serverLogger.info('src.routers.attachments', '[ATTACH] Category icon upload: name=', file.name, 'type=', file.type, 'size=', file.size);
         const result = {
             file_id: fileId,
             ledger_id: '',
@@ -778,7 +778,7 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
             file_name: String(fileName),
             created_at: String(now),
         };
-        serverLogger.info('app', '[ATTACH] Category icon upload response:', JSON.stringify(result));
+        serverLogger.info('src.routers.attachments', '[ATTACH] Category icon upload response:', JSON.stringify(result));
         return c.json(result);
     } catch (error) {
         serverLogger.error('app', '[ATTACHMENT] Category icon upload error:', error);

@@ -227,34 +227,34 @@ const syncRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 // ---------------------------------------------------------------------------
 
 syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) => {
-  serverLogger.info('app', `[SYNC] ===== ${CODE_VERSION} START =====`);
+  serverLogger.info('src.routers.sync', `[SYNC] ===== ${CODE_VERSION} START =====`);
   try {
-    serverLogger.info('app', '[SYNC] /sync/push started');
+    serverLogger.info('src.routers.sync', '[SYNC] /sync/push started');
     const userId = c.get('userId');
-    serverLogger.info('app', '[SYNC] userId:', userId);
+    serverLogger.info('src.routers.sync', '[SYNC] userId:', userId);
     const db = c.env.DB;
     const req = c.req.valid('json');
     const entityCounts: Record<string, number> = {};
     for (const ch of (req.changes || [])) {
       entityCounts[ch.entity_type] = (entityCounts[ch.entity_type] || 0) + 1;
     }
-    serverLogger.info('app', '[SYNC] changes count:', req.changes?.length, 'by_type:', JSON.stringify(entityCounts));
+    serverLogger.info('src.routers.sync', '[SYNC] changes count:', req.changes?.length, 'by_type:', JSON.stringify(entityCounts));
     
     // 调试：打印第一条变更的字段名
     if (req.changes && req.changes.length > 0) {
       const first = req.changes[0];
-      serverLogger.info('app', '[SYNC] first change keys:', Object.keys(first));
-      serverLogger.info('app', '[SYNC] first change payload type:', typeof first.payload, 'is_null:', first.payload === null);
-      serverLogger.info('app', '[SYNC] first change entity_sync_id:', first.entity_sync_id, 'type:', typeof first.entity_sync_id);
-      serverLogger.info('app', '[SYNC] first change action:', first.action, 'type:', typeof first.action);
-      serverLogger.info('app', '[SYNC] first change ledger_id:', first.ledger_id, 'type:', typeof first.ledger_id);
+      serverLogger.info('src.routers.sync', '[SYNC] first change keys:', Object.keys(first));
+      serverLogger.info('src.routers.sync', '[SYNC] first change payload type:', typeof first.payload, 'is_null:', first.payload === null);
+      serverLogger.info('src.routers.sync', '[SYNC] first change entity_sync_id:', first.entity_sync_id, 'type:', typeof first.entity_sync_id);
+      serverLogger.info('src.routers.sync', '[SYNC] first change action:', first.action, 'type:', typeof first.action);
+      serverLogger.info('src.routers.sync', '[SYNC] first change ledger_id:', first.ledger_id, 'type:', typeof first.ledger_id);
     }
     
     const serverNow = nowUtc();
 
     // 处理 device_id - 如果未提供，尝试从 header 获取或使用默认值
     const deviceId = req.device_id || c.req.header('X-Device-ID') || 'unknown';
-    serverLogger.info('app', '[SYNC] deviceId:', deviceId);
+    serverLogger.info('src.routers.sync', '[SYNC] deviceId:', deviceId);
 
     // 验证设备有效性（设备必须属于当前用户且未被撤销）
     const device = await db
@@ -265,7 +265,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       .bind(deviceId, userId)
       .first();
 
-    serverLogger.info('app', '[SYNC] device check result:', device);
+    serverLogger.info('src.routers.sync', '[SYNC] device check result:', device);
 
     if (!device) {
       return c.json({ error: 'Invalid device' }, 401);
@@ -312,12 +312,12 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
     // ====================== 优化1：批量预加载账本 ======================
     const ledgerExternalIds = [...new Set(changes.filter(c => c.ledger_id).map(c => c.ledger_id as string))];
-    serverLogger.info('app', '[SYNC] ledgerExternalIds:', ledgerExternalIds);
+    serverLogger.info('src.routers.sync', '[SYNC] ledgerExternalIds:', ledgerExternalIds);
     const ledgerMap: Record<string, { id: string; user_id: string; external_id: string }> = {};
     
     if (ledgerExternalIds.length > 0) {
       const ledgerPlaceholders = ledgerExternalIds.map(() => '?').join(',');
-      serverLogger.info('app', '[SYNC] Querying ledgers with placeholders:', ledgerPlaceholders);
+      serverLogger.info('src.routers.sync', '[SYNC] Querying ledgers with placeholders:', ledgerPlaceholders);
       const existingLedgers = await db
         .prepare(
           `SELECT l.id, l.user_id, l.external_id FROM ledgers l
@@ -327,7 +327,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         .bind(userId, ...ledgerExternalIds)
         .all<{ id: string; user_id: string; external_id: string }>();
       
-      serverLogger.info('app', '[SYNC] existingLedgers found:', existingLedgers.results.length);
+      serverLogger.info('src.routers.sync', '[SYNC] existingLedgers found:', existingLedgers.results.length);
       for (const ledger of existingLedgers.results) {
         ledgerMap[ledger.external_id] = ledger;
       }
@@ -335,7 +335,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       // 创建不存在的账本（批量）
       for (const externalId of ledgerExternalIds) {
         if (!ledgerMap[externalId]) {
-          serverLogger.info('app', '[SYNC] Creating new ledger:', externalId);
+          serverLogger.info('src.routers.sync', '[SYNC] Creating new ledger:', externalId);
           const newLedgerId = randomUUID();
           await db
             .prepare(
@@ -356,7 +356,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         }
       }
     }
-    serverLogger.info('app', '[SYNC] ledgerMap keys:', Object.keys(ledgerMap));
+    serverLogger.info('src.routers.sync', '[SYNC] ledgerMap keys:', Object.keys(ledgerMap));
 
     // ====================== 优化2：批量获取现有变更（分更小的批次） ======================
     const existingChangeMap = new Map<string, { change_id: number; updated_at: string; updated_by_device_id: string | null }>();
@@ -377,7 +377,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
       // 分成更小的批次（每批 30 个，每批 90 个变量，远低于 SQLite 限制）
       const batches = chunkArray(validChangeEntries, 30);
-      serverLogger.info('app', '[SYNC] Split valid entries into', batches.length, 'batches');
+      serverLogger.info('src.routers.sync', '[SYNC] Split valid entries into', batches.length, 'batches');
 
       for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
         const batch = batches[batchIdx];
@@ -394,20 +394,20 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         }
         query += ')';
         
-        serverLogger.info('app', '[SYNC] Querying batch', batchIdx + 1, '/', batches.length, 'with', params.length, 'params');
+        serverLogger.info('src.routers.sync', '[SYNC] Querying batch', batchIdx + 1, '/', batches.length, 'with', params.length, 'params');
         const existingChanges = await db
           .prepare(query)
           .bind(...params)
           .all<{ ledger_id: string; entity_type: string; entity_sync_id: string; change_id: number; updated_at: string; updated_by_device_id: string | null }>();
         
-        serverLogger.info('app', '[SYNC] Batch', batchIdx + 1, 'found', existingChanges.results.length, 'changes');
+        serverLogger.info('src.routers.sync', '[SYNC] Batch', batchIdx + 1, 'found', existingChanges.results.length, 'changes');
         for (const change of existingChanges.results) {
           const key = `${change.ledger_id}:${change.entity_type}:${change.entity_sync_id}`;
           existingChangeMap.set(key, change);
         }
       }
     }
-    serverLogger.info('app', '[SYNC] existingChangeMap size:', existingChangeMap.size);
+    serverLogger.info('src.routers.sync', '[SYNC] existingChangeMap size:', existingChangeMap.size);
 
     // 补充查询 user-global 变更（category/account/tag 不依附 ledger）
     const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override'];
@@ -432,7 +432,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         existingChangeMap.set(key, r);
       }
     }
-    serverLogger.info('app', '[SYNC] existingChangeMap size after user-global:', existingChangeMap.size);
+    serverLogger.info('src.routers.sync', '[SYNC] existingChangeMap size after user-global:', existingChangeMap.size);
 
     // ====================== 优化3：批量写入变更（分小批次避免 CPU 超时） ======================
     const conflictList: typeof conflictSamples = [];
@@ -459,12 +459,12 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
     for (let startIdx = 0; startIdx < changes.length; startIdx += BATCH_INSERT_SIZE) {
       const batchChanges = changes.slice(startIdx, startIdx + BATCH_INSERT_SIZE);
-      serverLogger.info('app', '[SYNC] Processing insertion batch', Math.floor(startIdx / BATCH_INSERT_SIZE) + 1, 'with', batchChanges.length, 'changes');
+      serverLogger.info('src.routers.sync', '[SYNC] Processing insertion batch', Math.floor(startIdx / BATCH_INSERT_SIZE) + 1, 'with', batchChanges.length, 'changes');
       
       // 打印前3条变更的详情（调试用）
       if (startIdx === 0) {
         for (const ch of batchChanges.slice(0, 3)) {
-          serverLogger.info('app', '[SYNC] sample change:', JSON.stringify({
+          serverLogger.info('src.routers.sync', '[SYNC] sample change:', JSON.stringify({
             entity_type: ch.entity_type,
             ledger_id: ch.ledger_id,
             entity_sync_id: ch.entity_sync_id,
@@ -500,7 +500,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         } else {
           const ledgerRow = ledgerMap[change.ledger_id as string];
           if (!ledgerRow) {
-            serverLogger.info('app', '[SYNC] SKIPPED - ledger not found for', change.entity_type, 'ledger_id:', change.ledger_id);
+            serverLogger.info('src.routers.sync', '[SYNC] SKIPPED - ledger not found for', change.entity_type, 'ledger_id:', change.ledger_id);
             continue;
           }
           // Editor 只能推 transaction/budget；ledger/ledger_snapshot 只有 owner 能推（与原版对齐）
@@ -530,7 +530,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         if (existingTuple && existingTuple.ts > incomingTuple.ts) {
           rejected++;
           conflictCount++;
-          serverLogger.info('app', '[SYNC] REJECTED - older change:', change.entity_type, change.entity_sync_id, 'server_ts:', existingTuple.ts, 'incoming_ts:', incomingTuple.ts);
+          serverLogger.info('src.routers.sync', '[SYNC] REJECTED - older change:', change.entity_type, change.entity_sync_id, 'server_ts:', existingTuple.ts, 'incoming_ts:', incomingTuple.ts);
           const conflictSample = {
             reason: 'lww_rejected_older_change',
             ledgerId: change.ledger_id,
@@ -612,7 +612,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         // 检查是否有 undefined 值
         for (let i = 0; i < bindParams.length; i++) {
           if (bindParams[i] === undefined) {
-            serverLogger.error('app', '[SYNC] UNDEFINED at bind index', i, 'for change:', change.entity_type, change.entity_sync_id);
+            serverLogger.error('src.routers.sync', '[SYNC] UNDEFINED at bind index', i, 'for change:', change.entity_type, change.entity_sync_id);
           }
         }
         insertPromises.push({
@@ -704,13 +704,13 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       projection_errors: projectionErrors.length > 0 ? projectionErrors : undefined,
     };
 
-    serverLogger.info('app', '[SYNC] /sync/push result - accepted:', accepted, 'rejected:', rejected, 'conflicts:', conflictCount, 'server_cursor:', maxCursor, 'projection_errors:', projectionErrors.length);
-    serverLogger.info('app', `[SYNC] ===== ${CODE_VERSION} SUCCESS =====`);
+    serverLogger.info('src.routers.sync', '[SYNC] /sync/push result - accepted:', accepted, 'rejected:', rejected, 'conflicts:', conflictCount, 'server_cursor:', maxCursor, 'projection_errors:', projectionErrors.length);
+    serverLogger.info('src.routers.sync', `[SYNC] ===== ${CODE_VERSION} SUCCESS =====`);
 
     // 统计最终状态
     const totalChanges = await db.prepare('SELECT COUNT(*) as cnt FROM sync_changes WHERE user_id = ?').bind(userId).first<{ cnt: number }>();
     const categoryCount = await db.prepare("SELECT COUNT(*) as cnt FROM sync_changes WHERE user_id = ? AND entity_type = 'category'").bind(userId).first<{ cnt: number }>();
-    serverLogger.info('app', '[SYNC] DB totals - all_changes:', totalChanges?.cnt, 'categories:', categoryCount?.cnt);
+    serverLogger.info('src.routers.sync', '[SYNC] DB totals - all_changes:', totalChanges?.cnt, 'categories:', categoryCount?.cnt);
 
     await insertAuditLog({
       db, userId, action: 'sync_push', entityType: 'sync',
@@ -745,7 +745,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           }
         }
       } catch (e) {
-        serverLogger.info('app', '[SYNC] DO broadcast failed (non-fatal):', e);
+        serverLogger.info('src.routers.sync', '[SYNC] DO broadcast failed (non-fatal):', e);
       }
     }
 
@@ -840,7 +840,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           }
         }
       } catch (e) {
-        serverLogger.info('app', '[SYNC] shared_resource fan-out failed (non-fatal):', e);
+        serverLogger.info('src.routers.sync', '[SYNC] shared_resource fan-out failed (non-fatal):', e);
       }
     }
 
@@ -848,23 +848,23 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
   } catch (error: any) {
     // Zod 验证错误返回详细信息
     if (error?.name === 'ZodError' || error?.issues) {
-      serverLogger.error('app', '[SYNC] /sync/push validation error:', JSON.stringify(error.issues || error));
+      serverLogger.error('src.routers.sync', '[SYNC] /sync/push validation error:', JSON.stringify(error.issues || error));
       return c.json({ error: 'Validation failed' }, 400);
     }
-    serverLogger.error('app', '[SYNC] /sync/push error - BEGIN ====================================');
-    serverLogger.error('app', '[SYNC] error:', error);
-    serverLogger.error('app', '[SYNC] typeof error:', typeof error);
+    serverLogger.error('src.routers.sync', '[SYNC] /sync/push error - BEGIN ====================================');
+    serverLogger.error('src.routers.sync', '[SYNC] error:', error);
+    serverLogger.error('src.routers.sync', '[SYNC] typeof error:', typeof error);
     try {
-      serverLogger.error('app', '[SYNC] stringified error:', JSON.stringify(error));
+      serverLogger.error('src.routers.sync', '[SYNC] stringified error:', JSON.stringify(error));
     } catch (e) {
-      serverLogger.error('app', '[SYNC] JSON.stringify failed');
+      serverLogger.error('src.routers.sync', '[SYNC] JSON.stringify failed');
     }
     if (error instanceof Error) {
-      serverLogger.error('app', '[SYNC] Error message:', error.message);
-      serverLogger.error('app', '[SYNC] Error stack:', error.stack);
+      serverLogger.error('src.routers.sync', '[SYNC] Error message:', error.message);
+      serverLogger.error('src.routers.sync', '[SYNC] Error stack:', error.stack);
     }
-    serverLogger.error('app', '[SYNC] /sync/push error - END ======================================');
-    serverLogger.info('app', `[SYNC] ===== ${CODE_VERSION} ERROR =====`);
+    serverLogger.error('src.routers.sync', '[SYNC] /sync/push error - END ======================================');
+    serverLogger.info('src.routers.sync', `[SYNC] ===== ${CODE_VERSION} ERROR =====`);
     
     return c.json({ error: 'Internal server error' }, 500);
   }
@@ -1006,7 +1006,7 @@ syncRouter.get('/pull', async (c) => {
   const ledgerId = c.req.query('ledger_id');
   const deviceId = c.req.query('device_id');
 
-  serverLogger.info('app', '[SYNC] /sync/pull since:', since, 'limit:', limit, 'ledger_id:', ledgerId, 'device_id:', deviceId);
+  serverLogger.info('src.routers.sync', '[SYNC] /sync/pull since:', since, 'limit:', limit, 'ledger_id:', ledgerId, 'device_id:', deviceId);
 
   try {
     // 设备验证 + heartbeat
@@ -1084,14 +1084,14 @@ syncRouter.get('/pull', async (c) => {
     try {
       await enrichTxPayloadsWithUserIds(db, limitedResults);
     } catch (err) {
-      serverLogger.error('app', '[SYNC] /sync/pull enrichTxPayloads error (non-fatal):', err);
+      serverLogger.error('src.routers.sync', '[SYNC] /sync/pull enrichTxPayloads error (non-fatal):', err);
     }
 
     const resultTypeCounts: Record<string, number> = {};
     for (const r of limitedResults) {
       resultTypeCounts[r.entity_type] = (resultTypeCounts[r.entity_type] || 0) + 1;
     }
-    serverLogger.info('app', '[SYNC] /sync/pull returning:', limitedResults.length, 'changes, has_more:', hasMore, 'by_type:', JSON.stringify(resultTypeCounts));
+    serverLogger.info('src.routers.sync', '[SYNC] /sync/pull returning:', limitedResults.length, 'changes, has_more:', hasMore, 'by_type:', JSON.stringify(resultTypeCounts));
 
     // 写回 SyncCursor（per-device per-ledger 游标持久化）
     if (deviceId && limitedResults.length > 0) {
@@ -1115,7 +1115,7 @@ syncRouter.get('/pull', async (c) => {
             payload = JSON.parse(c.payload_json);
             convertBooleans(payload);
           } catch (err) {
-            serverLogger.error('app', '[SYNC] /sync/pull JSON.parse error for change_id:', c.change_id, 'entity_type:', c.entity_type, 'error:', err);
+            serverLogger.error('src.routers.sync', '[SYNC] /sync/pull JSON.parse error for change_id:', c.change_id, 'entity_type:', c.entity_type, 'error:', err);
             payload = {};
           }
         }
@@ -1135,13 +1135,13 @@ syncRouter.get('/pull', async (c) => {
       has_more: hasMore,
     });
   } catch (error) {
-    serverLogger.error('app', '[SYNC] /sync/pull error - BEGIN ====================================');
-    serverLogger.error('app', '[SYNC] error:', error);
+    serverLogger.error('src.routers.sync', '[SYNC] /sync/pull error - BEGIN ====================================');
+    serverLogger.error('src.routers.sync', '[SYNC] error:', error);
     if (error instanceof Error) {
-      serverLogger.error('app', '[SYNC] Error message:', error.message);
-      serverLogger.error('app', '[SYNC] Error stack:', error.stack);
+      serverLogger.error('src.routers.sync', '[SYNC] Error message:', error.message);
+      serverLogger.error('src.routers.sync', '[SYNC] Error stack:', error.stack);
     }
-    serverLogger.error('app', '[SYNC] /sync/pull error - END ======================================');
+    serverLogger.error('src.routers.sync', '[SYNC] /sync/pull error - END ======================================');
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
@@ -1207,7 +1207,7 @@ syncRouter.get('/ledgers', async (c) => {
 
     return c.json(result);
   } catch (error) {
-    serverLogger.error('app', '[SYNC] /sync/ledgers error:', error);
+    serverLogger.error('src.routers.sync', '[SYNC] /sync/ledgers error:', error);
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
@@ -1342,7 +1342,7 @@ syncRouter.get('/full', async (c) => {
       },
     });
   } catch (error) {
-    serverLogger.error('app', '[SYNC] /sync/full error:', error);
+    serverLogger.error('src.routers.sync', '[SYNC] /sync/full error:', error);
     return c.json({ error: 'Internal server error' }, 500);
   }
 });

@@ -253,7 +253,7 @@ readRouter.get('/ledgers', async (c) => {
   const db = c.env.DB;
   const now = nowUtc();
 
-  serverLogger.info('app', '[READ] /ledgers called, userId:', userId);
+  serverLogger.info('src.routers.read', '[READ] /ledgers called, userId:', userId);
 
   // 查询用户账本（含共享账本，与原版 list_accessible_memberships 对齐）
   const ledgers = await db
@@ -276,7 +276,7 @@ readRouter.get('/ledgers', async (c) => {
       role: string;
     }>();
 
-  serverLogger.info('app', '[READ] Found ledgers:', ledgers.results.length);
+  serverLogger.info('src.routers.read', '[READ] Found ledgers:', ledgers.results.length);
 
   // 批量查询：软删除检查、收支汇总、成员数（避免 N+1）
   const ledgerIds = ledgers.results.map(l => l.id);
@@ -337,7 +337,7 @@ readRouter.get('/ledgers', async (c) => {
     }
   }
 
-  serverLogger.info('app', '[READ] Returning result:', result.length, 'ledgers');
+  serverLogger.info('src.routers.read', '[READ] Returning result:', result.length, 'ledgers');
   return c.json(result);
 });
 
@@ -353,7 +353,7 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
   
   if (sample && sample.cnt > 0) return;
   
-  serverLogger.info('app', '[READ] read_tx_projection is empty, syncing from sync_changes...');
+  serverLogger.info('src.routers.read', '[READ] read_tx_projection is empty, syncing from sync_changes...');
   
   const ledgers = await db
     .prepare('SELECT id FROM ledgers WHERE user_id = ?')
@@ -425,12 +425,12 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
           )
           .run();
       } catch (err) {
-        serverLogger.error('app', '[READ] Error syncing transaction:', change.entity_sync_id, err);
+        serverLogger.error('src.routers.read', '[READ] Error syncing transaction:', change.entity_sync_id, err);
       }
     }
   }
   
-  serverLogger.info('app', '[READ] Sync completed');
+  serverLogger.info('src.routers.read', '[READ] Sync completed');
 }
 
 readRouter.get('/workspace/transactions', async (c) => {
@@ -453,7 +453,7 @@ readRouter.get('/workspace/transactions', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') ?? '200', 10), 5000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
 
-  serverLogger.info('app', '[READ] /workspace/transactions called, ledgerId:', ledgerId, 'dateFrom:', dateFrom, 'dateTo:', dateTo, 'limit:', limit, 'offset:', offset);
+  serverLogger.info('src.routers.read', '[READ] /workspace/transactions called, ledgerId:', ledgerId, 'dateFrom:', dateFrom, 'dateTo:', dateTo, 'limit:', limit, 'offset:', offset);
 
   await ensureTxProjectionSynced(db, userId);
 
@@ -918,7 +918,7 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
   const db = c.env.DB;
   const ledgerExternalId = c.req.param('ledgerExternalId');
 
-  serverLogger.info('app', '[READ] /transactions called, ledgerId:', ledgerExternalId, 'userId:', userId);
+  serverLogger.info('src.routers.read', '[READ] /transactions called, ledgerId:', ledgerExternalId, 'userId:', userId);
 
   const txType = c.req.query('tx_type') ?? null;
   const q = c.req.query('q') ?? null;
@@ -958,24 +958,24 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
   }
 
   if (!ledger) {
-    serverLogger.info('app', '[READ] Ledger not found:', ledgerExternalId);
+    serverLogger.info('src.routers.read', '[READ] Ledger not found:', ledgerExternalId);
     return c.json({ error: 'Ledger not found' }, 404);
   }
 
-  serverLogger.info('app', '[READ] Found ledger:', ledger.id, ledger.name, 'external_id:', ledger.external_id);
+  serverLogger.info('src.routers.read', '[READ] Found ledger:', ledger.id, ledger.name, 'external_id:', ledger.external_id);
 
   // 先检查数据库中实际有什么数据
   const allLedgers = await db
     .prepare('SELECT id, external_id, name FROM ledgers WHERE user_id = ?')
     .bind(userId)
     .all<{ id: string; external_id: string; name: string | null }>();
-  serverLogger.info('app', '[READ] All user ledgers:', JSON.stringify(allLedgers.results));
+  serverLogger.info('src.routers.read', '[READ] All user ledgers:', JSON.stringify(allLedgers.results));
 
   const allTx = await db
     .prepare('SELECT ledger_id, sync_id, tx_type, amount FROM read_tx_projection WHERE ledger_id = ?')
     .bind(ledger.id)
     .all<{ ledger_id: string; sync_id: string; tx_type: string; amount: number }>();
-  serverLogger.info('app', '[READ] All transactions for ledger_id:', ledger.id, JSON.stringify(allTx.results));
+  serverLogger.info('src.routers.read', '[READ] All transactions for ledger_id:', ledger.id, JSON.stringify(allTx.results));
 
   // 构建查询
   let ledgerTxQuery = 'SELECT * FROM read_tx_projection WHERE ledger_id = ?';
@@ -1007,7 +1007,7 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
     .bind(...ledgerTxBindings)
     .all<Record<string, unknown>>();
 
-  serverLogger.info('app', '[READ] Found transactions:', rows.results.length);
+  serverLogger.info('src.routers.read', '[READ] Found transactions:', rows.results.length);
 
   // 获取创建者信息
   let ownerInfo = {
@@ -1046,7 +1046,7 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
       };
     }
   } catch (err) {
-    serverLogger.info('app', '[READ] Error getting owner info:', err);
+    serverLogger.info('src.routers.read', '[READ] Error getting owner info:', err);
   }
 
   const result: ReadTransactionOut[] = rows.results.map((row) => {
@@ -1090,7 +1090,7 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
     };
   });
 
-  serverLogger.info('app', '[READ] Returning transactions:', result.length);
+  serverLogger.info('src.routers.read', '[READ] Returning transactions:', result.length);
   return c.json(result);
 });
 
