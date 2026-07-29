@@ -158,9 +158,13 @@ async function callAiChatJson(
   if (data.error) {
     throw new Error(`AI API error: ${data.error.code || 'unknown'} - ${data.error.message || JSON.stringify(data.error)}`);
   }
-  
-  // 检查两种可能的响应路径
+
+  // Cloudflare 格式: { success: false, errors: [...] }
   const raw = data as Record<string, unknown>;
+  if (raw.success === false && Array.isArray(raw.errors)) {
+    const errMsg = raw.errors.map((e: unknown) => (e as { message?: string })?.message ?? String(e)).join('; ');
+    if (errMsg) throw new Error(`AI API error: ${errMsg}`);
+  }
 
   // 路径1: 标准 OpenAI 格式 { choices: [...] }
   // 路径2: Cloudflare 包装格式 { result: { choices: [...] }, success: true }
@@ -179,7 +183,8 @@ async function callAiChatJson(
   const result = raw.result as Record<string, unknown> | undefined;
   if (result?.response) return String(result.response);
 
-  // 兜底：返回空字符串
+  // 兜底：返回空字符串，先打日志看看实际响应
+  console.log('[AI Debug] Raw response from provider:', JSON.stringify(raw));
   return '';
 }
 
