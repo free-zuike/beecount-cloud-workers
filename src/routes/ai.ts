@@ -714,6 +714,29 @@ aiRouter.post('/parse-tx-text', zValidator('json', AiParseTxTextSchema), async (
 });
 
 // ---------------------------------------------------------------------------
+// 速率限制（内存，对齐原版 Python _check_rate_limit）
+// ---------------------------------------------------------------------------
+
+const _rateWindows = new Map<string, number[]>();
+const _RATE_LIMIT_WINDOW_MS = 60_000;
+const _RATE_LIMIT_MAX = 30;
+
+function checkRateLimit(userId: string): boolean {
+  const now = Date.now();
+  let window = _rateWindows.get(userId);
+  if (!window) {
+    window = [];
+    _rateWindows.set(userId, window);
+  }
+  while (window.length > 0 && now - window[0] > _RATE_LIMIT_WINDOW_MS) {
+    window.shift();
+  }
+  if (window.length >= _RATE_LIMIT_MAX) return false;
+  window.push(now);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // POST /ai/test-provider - 测试 AI provider 连通性
 // ---------------------------------------------------------------------------
 
@@ -725,6 +748,17 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
   const db = c.env.DB;
   const req = c.req.valid('json');
   const startTime = Date.now();
+
+  // 速率限制：单用户 60s 内最多 30 次（对齐原版 Python _check_rate_limit）
+  if (!checkRateLimit(userId)) {
+    return c.json({
+      success: false,
+      error_code: 'AI_TEST_RATE_LIMITED',
+      error_message: '测试过于频繁，请 1 分钟后再试',
+      latency_ms: Date.now() - startTime,
+      preview: '',
+    });
+  }
 
   let apiKey = req.api_key ?? '';
   let baseUrl = req.base_url ?? '';
