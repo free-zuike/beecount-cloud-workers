@@ -159,13 +159,25 @@ async function callAiChatJson(
     throw new Error(`AI API error: ${data.error.code || 'unknown'} - ${data.error.message || JSON.stringify(data.error)}`);
   }
   
-  // OpenAI 兼容格式: { choices: [{ message: { content } }] }
-  const openaiContent = data.choices?.[0]?.message?.content;
-  if (openaiContent) return openaiContent;
+  // 检查两种可能的响应路径
+  const raw = data as Record<string, unknown>;
 
-  // Cloudflare Workers AI 格式: { success: true, result: { response: "..." } }
-  const cfResult = (data as Record<string, unknown>).result as Record<string, unknown> | undefined;
-  if (cfResult?.response) return String(cfResult.response);
+  // 路径1: 标准 OpenAI 格式 { choices: [...] }
+  // 路径2: Cloudflare 包装格式 { result: { choices: [...] }, success: true }
+  const choices =
+    data.choices ??
+    ((raw.result as Record<string, unknown> | undefined)?.choices as
+      | Array<{ message?: { content?: string } }>
+      | undefined);
+
+  if (choices) {
+    const content = choices[0]?.message?.content;
+    if (content) return content;
+  }
+
+  // 路径3: Cloudflare Workers AI 原生格式 { success: true, result: { response: "..." } }
+  const result = raw.result as Record<string, unknown> | undefined;
+  if (result?.response) return String(result.response);
 
   // 兜底：返回空字符串
   return '';
