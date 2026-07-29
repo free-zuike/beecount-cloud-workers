@@ -96,6 +96,59 @@ function findProvider(config: AiConfig, kind: 'text' | 'vision'): AiProvider | n
   return provider;
 }
 
+// 自适应参数剥离（对齐原版 Python _post_chat_adaptive + _rejected_param）
+// 不同模型对 OpenAI-compatible 参数有不同约束：推理模型锁 temperature，
+// 部分模型不支持 response_format。与其写死兼容分支，不如听上游报错动态适配。
+const _REQUIRED_KEYS = new Set(['model', 'messages', 'stream']);
+const _MAX_PARAM_STRIPS = 3;
+
+function _rejectedParam(payload: Record<string, unknown>, statusCode: number, body: string): string | null {
+  if (statusCode < 400) return null;
+  // 1) 结构化: {"error": {"param": "temperature", ...}}
+  try {
+    const parsed = JSON.parse(body);
+    const err = parsed?.error;
+    if (err && typeof err === 'object') {
+      const param = err.param;
+      if (typeof param === 'string' && param in payload && !_REQUIRED_KEYS.has(param)) {
+        return param;
+      }
+    }
+  } catch { /* ignore */ }
+  // 2) 文案兜底: 错误信息点了我们发出去的哪个可丢键
+  const low = body.toLowerCase();
+  for (const key of Object.keys(payload)) {
+    if (!_REQUIRED_KEYS.has(key) && low.includes(key.toLowerCase())) {
+      return key;
+    }
+  }
+  return null;
+}
+
+async function _postChatAdaptive(
+  url: string, headers: Record<string, string>, payload: Record<string, unknown>, timeout: number
+): Promise<Response> {
+  let currentPayload = { ...payload };
+  let response = await fetch(url, {
+    method: 'POST', headers, body: JSON.stringify(currentPayload),
+    signal: AbortSignal.timeout(timeout),
+  });
+  for (let i = 0; i < _MAX_PARAM_STRIPS; i++) {
+    if (response.ok) return response;
+    const errText = await response.clone().text();
+    const param = _rejectedParam(currentPayload, response.status, errText);
+    if (param === null) return response;
+    currentPayload = Object.fromEntries(
+      Object.entries(currentPayload).filter(([k]) => k !== param)
+    );
+    response = await fetch(url, {
+      method: 'POST', headers, body: JSON.stringify(currentPayload),
+      signal: AbortSignal.timeout(timeout),
+    });
+  }
+  return response;
+}
+
 /**
  * 通用 AI API 调用（JSON 模式）
  */
@@ -122,34 +175,12 @@ async function callAiChatJson(
     body.response_format = { type: 'json_object' };
   }
   
-  let response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeout),
-  });
-  
-  // 推理模型锁 temperature 时自适应重试（对齐原版 _post_chat_adaptive）
-  if (!response.ok && response.status === 400) {
-    const errText = await response.clone().text();
-    if (errText.includes('temperature')) {
-      delete body.temperature;
-      response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(timeout),
-      });
-    } else {
-      throw new Error(`AI API error: ${response.status} - ${errText.slice(0, 200)}`);
-    }
-  }
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${apiKey}`,
+  };
+
+  const response = await _postChatAdaptive(url, headers, body, timeout);
   
   if (!response.ok) {
     const errorText = await response.text();
@@ -813,7 +844,7 @@ const _TEST_JPEG_DATA_URL = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/
  */
 async function _testVision(baseUrl: string, apiKey: string, model: string): Promise<string> {
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
-  const payload = {
+  const payload: Record<string, unknown> = {
     model,
     messages: [
       {
@@ -828,34 +859,12 @@ async function _testVision(baseUrl: string, apiKey: string, model: string): Prom
     temperature: 0.2,
   };
 
-  let response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(20000),
-  });
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${apiKey}`,
+  };
 
-  // 推理模型锁 temperature 时自适应重试
-  if (!response.ok && response.status === 400) {
-    const errText = await response.clone().text();
-    if (errText.includes('temperature')) {
-      delete (payload as Record<string, unknown>).temperature;
-      response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(20000),
-      });
-    } else {
-      throw new Error(`AI API error: ${response.status} - ${errText.slice(0, 200)}`);
-    }
-  }
+  const response = await _postChatAdaptive(url, headers, payload, 20000);
 
   if (!response.ok) {
     const errorText = await response.text();
