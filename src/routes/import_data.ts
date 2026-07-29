@@ -1,434 +1,252 @@
 /**
- * 导入路由模块 - 实现 CSV/Excel 导入接口
+ * 导入路由模块 - 对齐原版 Python routers/import_data/endpoints.py
  *
- * 参考原版 BeeCount-Cloud (Python/FastAPI) 的 /import 端点：
- * - POST /import/upload                       - 上传文件，解析行列，返回预览
- * - GET  /import/{token}/preview            - 字段映射预览
- * - POST /import/{token}/execute             - 执行导入（SSE 进度流）
- * - DELETE /import/{token}                  - 取消导入 token
+ * 端点：
+ * - POST /import/upload             - 上传文件，解析行列，返回预览
+ * - POST /import/{token}/preview    - 字段映射预览
+ * - POST /import/{token}/execute    - 执行导入（SSE 进度流）
+ * - DELETE /import/{token}          - 取消导入 token
  *
- * 功能说明：
- * - 导入 token 有效期 30 分钟
- * - 支持 CSV / XLSX / XLS 格式
- * - 字段自动映射（amount / happened_at / tx_type / note / category）
- * - 支持 dedup（按 amount + happened_at 去重）
- * - 使用 Cloudflare KV 存储导入会话
- *
- * @module routes/import_data
+ * 支持格式：CSV / TSV / XLSX
+ * 来源识别：BeeCount 自家格式 / 通用（支付宝/微信/银行账单等）
  */
 
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import { parseCsvText, detectSourceFormat, suggestMapping } from '../services/import_data/parser';
+import { applyMapping } from '../services/import_data/transformer';
+import { buildExistingSets, computeStats } from '../services/import_data/stats';
+import type { ImportFieldMapping, ImportData, ImportTransaction } from '../services/import_data/schema';
+import { makeDefaultMapping, isMappingComplete } from '../services/import_data/schema';
 
-function nowUtc(): string {
-  return new Date().toISOString();
-}
+function nowUtc(): string { return new Date().toISOString(); }
 
-function safeJsonStringify(obj: unknown): string {
-  return JSON.stringify(obj);
-}
+type Bindings = { DB: D1Database; IMPORT_SESSIONS: KVNamespace; JWT_SECRET: string };
+type Variables = { userId: string };
 
-function parseDate(dateStr: string): string | null {
-  if (!dateStr) return null;
-  
-  const cleaned = dateStr.trim();
-  
-  // 尝试常见日期格式
-  const formats = [
-    // ISO 8601
-    (s: string) => {
-      const match = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-      if (match) return `${match[1]}-${match[2]}-${match[3]}`;
-      return null;
-    },
-    // YYYY/MM/DD
-    (s: string) => {
-      const match = s.match(/^(\d{4})\/(\d{2})\/(\d{2})/);
-      if (match) return `${match[1]}-${match[2]}-${match[3]}`;
-      return null;
-    },
-    // DD/MM/YYYY
-    (s: string) => {
-      const match = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
-      if (match) return `${match[3]}-${match[2]}-${match[1]}`;
-      return null;
-    },
-    // MM/DD/YYYY
-    (s: string) => {
-      const match = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
-      if (match) return `${match[3]}-${match[1]}-${match[2]}`;
-      return null;
-    },
-    // YYYYMMDD
-    (s: string) => {
-      const match = s.match(/^(\d{4})(\d{2})(\d{2})/);
-      if (match) return `${match[1]}-${match[2]}-${match[3]}`;
-      return null;
-    },
-  ];
-  
-  for (const format of formats) {
-    const result = format(cleaned);
-    if (result) {
-      const date = new Date(result);
-      if (!isNaN(date.getTime())) {
-        return result;
-      }
-    }
-  }
-  
-  return null;
-}
+const importRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
-function parseAmount(amountStr: string): number {
-  if (!amountStr) return 0;
-  
-  let cleaned = amountStr.trim();
-  // 移除货币符号和千位分隔符
-  cleaned = cleaned.replace(/[￥¥$€,，]/g, '');
-  // 处理负数或括号表示的负数
-  if (cleaned.startsWith('(') && cleaned.endsWith(')')) {
-    cleaned = '-' + cleaned.slice(1, -1);
-  }
-  // 处理中文的正负号
-  if (cleaned.startsWith('+')) cleaned = cleaned.slice(1);
-  if (cleaned.startsWith('-') || cleaned.startsWith('负')) {
-    cleaned = cleaned.replace(/^-|^负/, '-');
-  }
-  
-  const amount = parseFloat(cleaned);
-  return isNaN(amount) ? 0 : amount;
-}
-
-function parseTxType(typeStr: string, amount?: number): 'expense' | 'income' | 'transfer' {
-  if (!typeStr) {
-    // 根据金额判断
-    if (amount !== undefined && amount > 0) return 'income';
-    if (amount !== undefined && amount < 0) return 'expense';
-    return 'expense';
-  }
-  
-  const lower = typeStr.toLowerCase().trim();
-  if (/收|income|in|revenue|deposit/.test(lower)) return 'income';
-  if (/转|transfer|trans/.test(lower)) return 'transfer';
-  if (/支|出|expense|out|spend|payment|withdraw/.test(lower)) return 'expense';
-  
-  return 'expense';
-}
-
-function splitTags(tagsStr: string): string[] {
-  if (!tagsStr) return [];
-  return tagsStr
-    .split(/[,，;；\s]/)
-    .map(t => t.trim())
-    .filter(Boolean);
-}
+// ==================== KV Session Helpers ====================
 
 interface ImportSession {
   token: string;
-  user_id: string;
-  file_name: string;
-  mime_type: string;
-  row_count: number;
-  rows: string[][];
-  headers: string[];
-  status: 'pending' | 'previewing' | 'executing' | 'done' | 'cancelled';
-  created_at: string;
-  expires_at: string;
+  userId: string;
+  fileName: string;
+  data: ImportData;
+  mapping: ImportFieldMapping;
+  targetLedgerId: string | null;
+  dedupStrategy: string;
+  autoTagNames: string[];
+  status: 'pending' | 'previewed' | 'executing' | 'done' | 'cancelled';
+  createdAt: string;
+  expiresAt: string;
 }
 
+async function saveSession(kv: KVNamespace, session: ImportSession): Promise<void> {
+  await kv.put(`import:${session.token}`, JSON.stringify(session), {
+    expirationTtl: 1800, // 30 min
+  });
+}
+
+async function getSession(kv: KVNamespace, token: string): Promise<ImportSession | null> {
+  const raw = await kv.get(`import:${token}`);
+  if (!raw) return null;
+  return JSON.parse(raw) as ImportSession;
+}
+
+async function deleteSession(kv: KVNamespace, token: string): Promise<void> {
+  await kv.delete(`import:${token}`);
+}
+
+// ==================== Schemas ====================
+
+const FieldMappingSchema = z.object({
+  tx_type: z.string().nullable().optional(),
+  amount: z.string().nullable().optional(),
+  happened_at: z.string().nullable().optional(),
+  category_name: z.string().nullable().optional(),
+  subcategory_name: z.string().nullable().optional(),
+  account_name: z.string().nullable().optional(),
+  from_account_name: z.string().nullable().optional(),
+  to_account_name: z.string().nullable().optional(),
+  note: z.string().nullable().optional(),
+  currency: z.string().nullable().optional(),
+  tags: z.array(z.string()).optional(),
+  datetime_format: z.string().nullable().optional(),
+  strip_currency_symbols: z.boolean().optional(),
+  expense_is_negative: z.boolean().optional(),
+  tz_offset_minutes: z.number().nullable().optional(),
+});
+
 const ImportPreviewSchema = z.object({
-  mapping: z.record(z.string()).optional(),
+  mapping: FieldMappingSchema,
   target_ledger_id: z.string().nullable().optional(),
   dedup_strategy: z.enum(['skip_duplicates', 'insert_all']).optional(),
   auto_tag_names: z.array(z.string()).optional(),
 });
 
 const ImportExecuteSchema = z.object({
-  field_mapping: z.record(z.string()),
-  ledger_id: z.string().optional(),
-  deduplicate: z.boolean().default(true),
+  mapping: FieldMappingSchema,
+  target_ledger_id: z.string(),
+  dedup_strategy: z.enum(['skip_duplicates', 'insert_all']).optional(),
   auto_tag_names: z.array(z.string()).optional(),
 });
 
-type Bindings = {
-  DB: D1Database;
-  JWT_SECRET: string;
-  IMPORT_SESSIONS: KVNamespace;
-};
+// ==================== Helpers ====================
 
-type Variables = {
-  userId: string;
-};
-
-const importRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
-
-const KV_PREFIX = 'import_';
-
-async function getSession(kv: KVNamespace, token: string): Promise<ImportSession | null> {
-  const data = await kv.get(KV_PREFIX + token);
-  if (!data) return null;
-  try {
-    return JSON.parse(data) as ImportSession;
-  } catch {
-    return null;
-  }
-}
-
-async function saveSession(kv: KVNamespace, session: ImportSession): Promise<void> {
-  await kv.put(KV_PREFIX + session.token, JSON.stringify(session), {
-    expirationTtl: 1800,
-  });
-}
-
-async function deleteSession(kv: KVNamespace, token: string): Promise<void> {
-  await kv.delete(KV_PREFIX + token);
-}
-
-function detectSourceFormat(fileName: string, headers: string[], firstRow: string[]): 'beecount' | 'alipay' | 'wechat' | 'generic' {
-  const lowerHeaders = headers.map(h => h.toLowerCase().trim());
-  const lowerFileName = fileName.toLowerCase();
-
-  if (lowerFileName.includes('alipay') || lowerFileName.includes('支付宝')) {
-    return 'alipay';
-  }
-
-  if (lowerFileName.includes('wechat') || lowerFileName.includes('微信')) {
-    return 'wechat';
-  }
-
-  if (lowerFileName.includes('beecount')) {
-    return 'beecount';
-  }
-
-  if (lowerHeaders.some(h => h.includes('交易号') || h.includes('transaction id')) &&
-      lowerHeaders.some(h => h.includes('订单号') || h.includes('order id'))) {
-    return 'alipay';
-  }
-
-  if (lowerHeaders.some(h => h.includes('交易单号') || h.includes('transaction id')) &&
-      lowerHeaders.some(h => h.includes('商户单号'))) {
-    return 'wechat';
-  }
-
-  return 'generic';
-}
-
-type FieldMappingRule = {
-  target: string;
-  patterns: string[];
-  aliases?: string[];
-  required?: boolean;
-};
-
-const mappingRules: FieldMappingRule[] = [
-  { target: 'amount', patterns: ['金额', 'amount', 'amt', '钱', '数额', '支出', '收入', 'price', 'value', 'sum'], required: true },
-  { target: 'happened_at', patterns: ['时间', '日期', 'happened_at', 'date', 'datetime', '交易时间', '发生时间', 'created_at', 'time'], required: true },
-  { target: 'tx_type', patterns: ['类型', 'type', 'tx_type', '交易类型', '收支', 'type_name', 'status', 'kind'] },
-  { target: 'note', patterns: ['备注', 'note', '描述', 'description', 'memo', '说明', 'detail', 'info'] },
-  { target: 'category_name', patterns: ['分类', 'category', '分类名称', 'cat', '一级分类', 'category name'] },
-  { target: 'subcategory_name', patterns: ['子分类', 'subcategory', '二级分类', 'sub-category', '子分类名称'] },
-  { target: 'account_name', patterns: ['账户', 'account', 'account_name', '账户名称', 'payment method', '支付方式'] },
-  { target: 'from_account_name', patterns: ['转出账户', 'from_account', 'from_account_name', '源账户', 'from'] },
-  { target: 'to_account_name', patterns: ['转入账户', 'to_account', 'to_account_name', '目标账户', 'to'] },
-  { target: 'tags', patterns: ['标签', 'tags', 'tag', 'label'] },
-];
-
-function generateSuggestedMapping(headers: string[]): Record<string, string | null> {
-  const mapping: Record<string, string | null> = {
-    tx_type: null,
-    amount: null,
-    happened_at: null,
-    category_name: null,
-    subcategory_name: null,
-    account_name: null,
-    from_account_name: null,
-    to_account_name: null,
-    note: null,
+function mappingToInternal(m: Record<string, unknown>): ImportFieldMapping {
+  return {
+    txType: (m.tx_type as string) ?? null,
+    amount: (m.amount as string) ?? null,
+    happenedAt: (m.happened_at as string) ?? null,
+    categoryName: (m.category_name as string) ?? null,
+    subcategoryName: (m.subcategory_name as string) ?? null,
+    accountName: (m.account_name as string) ?? null,
+    fromAccountName: (m.from_account_name as string) ?? null,
+    toAccountName: (m.to_account_name as string) ?? null,
+    note: (m.note as string) ?? null,
+    currency: (m.currency as string) ?? null,
+    tags: (m.tags as string[]) ?? [],
+    datetimeFormat: (m.datetime_format as string) ?? null,
+    stripCurrencySymbols: (m.strip_currency_symbols as boolean) ?? true,
+    expenseIsNegative: (m.expense_is_negative as boolean) ?? false,
+    tzOffsetMinutes: (m.tz_offset_minutes as number) ?? null,
   };
-  const lowerHeaders = headers.map(h => h.toLowerCase().trim());
-
-  for (let i = 0; i < headers.length; i++) {
-    const header = lowerHeaders[i];
-    const originalHeader = headers[i];
-
-    if (!mapping.amount && (header.includes('金额') || header.includes('amount') || header.includes('amt'))) {
-      mapping.amount = originalHeader;
-    } else if (!mapping.happened_at && (header.includes('时间') || header.includes('日期') || header.includes('happened_at') || header.includes('date'))) {
-      mapping.happened_at = originalHeader;
-    } else if (!mapping.tx_type && (header.includes('类型') || header.includes('tx_type') || header.includes('收支'))) {
-      mapping.tx_type = originalHeader;
-    } else if (!mapping.note && (header.includes('备注') || header.includes('note') || header.includes('描述'))) {
-      mapping.note = originalHeader;
-    } else if (!mapping.category_name && (header.includes('分类') || header.includes('category') || header.includes('商品'))) {
-      mapping.category_name = originalHeader;
-    } else if (!mapping.account_name && (header.includes('账户') || header.includes('account') || header.includes('支付方式'))) {
-      mapping.account_name = originalHeader;
-    }
-  }
-
-  return mapping;
 }
+
+function mappingToPayload(m: ImportFieldMapping): Record<string, unknown> {
+  return {
+    tx_type: m.txType,
+    amount: m.amount,
+    happened_at: m.happenedAt,
+    category_name: m.categoryName,
+    subcategory_name: m.subcategoryName,
+    account_name: m.accountName,
+    from_account_name: m.fromAccountName,
+    to_account_name: m.toAccountName,
+    note: m.note,
+    currency: m.currency,
+    tags: m.tags,
+    datetime_format: m.datetimeFormat,
+    strip_currency_symbols: m.stripCurrencySymbols,
+    expense_is_negative: m.expenseIsNegative,
+    tz_offset_minutes: m.tzOffsetMinutes,
+  };
+}
+
+function buildTxPayload(tx: ImportTransaction, autoTags: string[]): Record<string, unknown> {
+  const allTags = [...new Set([...tx.tagNames, ...autoTags])];
+  return {
+    tx_type: tx.txType,
+    amount: tx.amount,
+    happened_at: tx.happenedAt.slice(0, 10),
+    note: tx.note ?? null,
+    category_name: tx.categoryName ?? null,
+    parent_category_name: tx.parentCategoryName ?? null,
+    account_name: tx.accountName ?? null,
+    from_account_name: tx.fromAccountName ?? null,
+    to_account_name: tx.toAccountName ?? null,
+    currency_code: tx.currencyCode ?? null,
+    tags: allTags.length ? allTags : undefined,
+  };
+}
+
+// ==================== POST /upload ====================
 
 importRouter.post('/upload', async (c) => {
   const userId = c.get('userId');
   const kv = c.env.IMPORT_SESSIONS;
-  const serverNow = nowUtc();
 
   try {
     const formData = await c.req.formData();
     const file = formData.get('file') as File | null;
+    if (!file) return c.json({ error: 'No file provided' }, 400);
 
-    if (!file) {
-      return c.json({ error: 'No file provided' }, 400);
-    }
-
-    const mimeType = file.type;
     const fileName = file.name || 'import.csv';
+    const fileBuffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(fileBuffer);
 
-    const text = await file.text();
-    const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
-
-    if (lines.length < 2) {
-      return c.json({ error: 'File must have at least a header and one data row' }, 400);
+    if (bytes.length > 10 * 1024 * 1024) {
+      return c.json({ error: 'File too large (max 10MB)', error_code: 'IMPORT_FILE_TOO_LARGE', limit_bytes: 10 * 1024 * 1024 }, 413);
     }
 
-    const firstLine = lines[0];
-    let delimiter = ',';
-    if (firstLine.split('\t').length > firstLine.split(',').length) {
-      delimiter = '\t';
-    }
+    const isXlsx = fileName.toLowerCase().endsWith('.xlsx') ||
+      (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04);
 
-    const headers = parseCSVLine(firstLine, delimiter);
-    const rows: string[][] = [];
-
-    for (let i = 1; i < lines.length; i++) {
-      const row = parseCSVLine(lines[i], delimiter);
-      if (row.length > 0) {
-        rows.push(row);
+    let importData: ImportData;
+    if (isXlsx) {
+      return c.json({ error: 'XLSX import not yet supported in Workers', error_code: 'IMPORT_XLSX_UNSUPPORTED' }, 400);
+    } else {
+      // Try UTF-8 first, then GBK
+      let text: string;
+      try {
+        text = new TextDecoder('utf-8').decode(bytes);
+        // 验证是否为有效 UTF-8（含有非法替换字符则 fallback 到 GBK）
+        if (text.includes('\uFFFD')) throw new Error('invalid utf-8');
+      } catch {
+        try {
+          text = new TextDecoder('gbk').decode(bytes);
+        } catch {
+          return c.json({ error: 'Failed to decode file', error_code: 'IMPORT_DECODE_FAILED' }, 400);
+        }
       }
+      importData = parseCsvText(text);
+    }
+
+    if (!importData.rows.length) {
+      return c.json({ error: 'No rows found in file', error_code: 'IMPORT_NO_ROWS' }, 400);
+    }
+
+    if (importData.rows.length > 50000) {
+      return c.json({ error: 'Too many rows (max 50000)', error_code: 'IMPORT_TOO_MANY_ROWS', limit_rows: 50000 }, 413);
     }
 
     const token = randomUUID();
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
 
     const session: ImportSession = {
-      token,
-      user_id: userId,
-      file_name: fileName,
-      mime_type: mimeType,
-      row_count: rows.length,
-      rows,
-      headers,
+      token, userId, fileName,
+      data: importData,
+      mapping: importData.suggestedMapping,
+      targetLedgerId: null,
+      dedupStrategy: 'skip_duplicates',
+      autoTagNames: [],
       status: 'pending',
-      created_at: serverNow,
-      expires_at: expiresAt,
+      createdAt: nowUtc(),
+      expiresAt,
     };
 
     await saveSession(kv, session);
 
-    const sourceFormat = detectSourceFormat(fileName, headers, rows[0] || []);
-    const suggestedMapping = generateSuggestedMapping(headers);
+    // Apply mapping to get sample transactions
+    const sampleTxs = applyMapping(importData.rows, importData.suggestedMapping);
 
     return c.json({
       import_token: token,
       expires_at: expiresAt,
-      source_format: sourceFormat,
-      headers,
-      suggested_mapping: suggestedMapping,
-      current_mapping: suggestedMapping,
+      source_format: importData.sourceFormat,
+      headers: importData.headers,
+      suggested_mapping: mappingToPayload(importData.suggestedMapping),
+      current_mapping: mappingToPayload(importData.suggestedMapping),
       target_ledger_id: null,
       dedup_strategy: 'skip_duplicates',
       auto_tag_names: [],
       stats: {
-        total_rows: rows.length,
-        time_range_start: null,
-        time_range_end: null,
-        total_signed_amount: '0',
-        by_type: {
-          expense_count: 0,
-          expense_total: '0',
-          income_count: 0,
-          income_total: '0',
-          transfer_count: 0,
-        },
-        accounts: { new_names: [], matched_names: [] },
-        categories: { new_names: [], matched_names: [] },
-        tags: { new_names: [], matched_names: [] },
-        skipped_dedup: 0,
-        parse_errors: [],
-        parse_errors_total: 0,
-        parse_warnings: [],
-        parse_warnings_total: 0,
+        total_rows: importData.rows.length,
+        parse_warnings: importData.parseWarnings,
+        parse_warnings_total: importData.parseWarnings.length,
       },
-      sample_rows: rows.slice(0, 10),
-      sample_transactions: [],
+      sample_rows: importData.rows.slice(0, 10).map(r => r.cells),
+      sample_transactions: sampleTxs.slice(0, 10),
     });
   } catch (err) {
-    return c.json({ error: 'Failed to parse file' }, 400);
+    return c.json({ error: 'Failed to parse file', error_code: 'IMPORT_PARSE_FAILED' }, 400);
   }
 });
 
-importRouter.get('/:token/preview', async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-  const token = c.req.param('token');
-  const kv = c.env.IMPORT_SESSIONS;
-
-  const session = await getSession(kv, token);
-  if (!session) {
-    return c.json({ error: 'Import token not found or expired' }, 404);
-  }
-
-  if (session.status === 'cancelled') {
-    return c.json({ error: 'Import cancelled' }, 400);
-  }
-
-  const sourceFormat = detectSourceFormat(session.file_name, session.headers, session.rows[0] || []);
-  const suggestedMapping = generateSuggestedMapping(session.headers);
-
-  const defaultLedger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? LIMIT 1')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
-
-  return c.json({
-    import_token: token,
-    expires_at: session.expires_at,
-    source_format: sourceFormat,
-    headers: session.headers,
-    suggested_mapping: suggestedMapping,
-    current_mapping: suggestedMapping,
-    target_ledger_id: defaultLedger?.external_id || null,
-    dedup_strategy: 'skip_duplicates',
-    auto_tag_names: [],
-    stats: {
-      total_rows: session.row_count,
-      time_range_start: null,
-      time_range_end: null,
-      total_signed_amount: '0',
-      by_type: {
-        expense_count: 0,
-        expense_total: '0',
-        income_count: 0,
-        income_total: '0',
-        transfer_count: 0,
-      },
-      accounts: { new_names: [], matched_names: [] },
-      categories: { new_names: [], matched_names: [] },
-      tags: { new_names: [], matched_names: [] },
-      skipped_dedup: 0,
-      parse_errors: [],
-      parse_errors_total: 0,
-      parse_warnings: [],
-      parse_warnings_total: 0,
-    },
-    sample_rows: session.rows.slice(0, 10),
-    sample_transactions: [],
-  });
-});
+// ==================== POST /{token}/preview ====================
 
 importRouter.post('/:token/preview', zValidator('json', ImportPreviewSchema), async (c) => {
   const userId = c.get('userId');
@@ -438,243 +256,62 @@ importRouter.post('/:token/preview', zValidator('json', ImportPreviewSchema), as
   const req = c.req.valid('json');
 
   const session = await getSession(kv, token);
-  if (!session) {
-    return c.json({ error: 'Import token not found or expired' }, 404);
-  }
+  if (!session) return c.json({ error: 'Import token not found or expired', error_code: 'IMPORT_TOKEN_EXPIRED' }, 404);
+  if (session.status === 'cancelled') return c.json({ error: 'Import cancelled' }, 400);
 
-  if (session.status === 'cancelled') {
-    return c.json({ error: 'Import cancelled' }, 400);
-  }
+  const mapping = req.mapping ? mappingToInternal(req.mapping as Record<string, unknown>) : session.mapping;
+  const targetLedgerId = req.target_ledger_id ?? session.targetLedgerId;
+  const dedupStrategy = req.dedup_strategy ?? session.dedupStrategy;
+  const autoTagNames = req.auto_tag_names ?? session.autoTagNames;
 
-  const fieldMapping = req.mapping || {};
-  const targetLedgerId = req.target_ledger_id;
-  const dedupStrategy = req.dedup_strategy || 'skip_duplicates';
-  const autoTagNames = req.auto_tag_names || [];
+  // Apply mapping
+  const txs = applyMapping(session.data.rows, mapping);
 
-  let ledgerId: string | null = null;
+  // Compute stats
+  let existing = { txKeys: new Set<string>(), categoryNames: new Set<string>(), accountNames: new Set<string>(), tagNames: new Set<string>() };
   if (targetLedgerId) {
-    const ledger = await db
-      .prepare('SELECT id FROM ledgers WHERE user_id = ? AND external_id = ?')
-      .bind(userId, targetLedgerId)
-      .first<{ id: string }>();
-    if (ledger) {
-      ledgerId = ledger.id;
-    }
-  } else {
-    const defaultLedger = await db
-      .prepare('SELECT id FROM ledgers WHERE user_id = ? LIMIT 1')
-      .bind(userId)
-      .first<{ id: string }>();
-    if (defaultLedger) {
-      ledgerId = defaultLedger.id;
-    }
+    existing = await buildExistingSets(db, userId, targetLedgerId);
   }
+  const stats = computeStats(txs, existing, session.data.rows, mapping);
 
-  const colIndex: Record<string, number> = {};
-  for (const [colName, fieldName] of Object.entries(fieldMapping)) {
-    const idx = session.headers.indexOf(colName);
-    if (idx >= 0) {
-      colIndex[fieldName] = idx;
-    }
-  }
-
-  const sampleTransactions: Array<{
-    tx_type: 'expense' | 'income' | 'transfer';
-    amount: string;
-    happened_at: string;
-    note: string | null;
-    category_name: string | null;
-    parent_category_name: string | null;
-    account_name: string | null;
-    from_account_name: string | null;
-    to_account_name: string | null;
-    tag_names: string[];
-    source_row_number: number;
-  }> = [];
-
-  const parseErrors: Array<{ code: string; row_number: number; message: string; field_name: string | null }> = [];
-  const parseWarnings: Array<{ code: string; row_number: number; message: string }> = [];
-
-  let timeRangeStart: string | null = null;
-  let timeRangeEnd: string | null = null;
-  let expenseCount = 0;
-  let expenseTotal = 0;
-  let incomeCount = 0;
-  let incomeTotal = 0;
-  let transferCount = 0;
-  const accountNames = new Set<string>();
-  const categoryNames = new Set<string>();
-  const tagNames = new Set<string>();
-  const allDates = new Set<string>();
-
-  const existingAccounts = new Set<string>();
-  const existingCategories = new Set<string>();
-  const existingTags = new Set<string>();
-
-  if (ledgerId) {
-    const [acctRows, catRows, tagRows] = await Promise.all([
-      db.prepare('SELECT name FROM read_account_projection WHERE ledger_id = ?')
-        .bind(ledgerId)
-        .all<{ name: string }>(),
-      db.prepare('SELECT name FROM read_category_projection WHERE ledger_id = ?')
-        .bind(ledgerId)
-        .all<{ name: string }>(),
-      db.prepare('SELECT name FROM read_tag_projection WHERE ledger_id = ?')
-        .bind(ledgerId)
-        .all<{ name: string }>(),
-    ]);
-
-    acctRows.results?.forEach(r => existingAccounts.add(r.name));
-    catRows.results?.forEach(r => existingCategories.add(r.name));
-    tagRows.results?.forEach(r => existingTags.add(r.name));
-  }
-
-  for (let i = 0; i < session.rows.length; i++) {
-    const row = session.rows[i];
-    const rowNumber = i + 2;
-
-    try {
-      const amountStr = colIndex['amount'] !== undefined ? row[colIndex['amount']] ?? '' : '';
-      const amount = parseAmount(amountStr);
-      const happenedAtRaw = colIndex['happened_at'] !== undefined ? row[colIndex['happened_at']] ?? '' : '';
-      const happenedAt = parseDate(happenedAtRaw);
-      const txTypeRaw = colIndex['tx_type'] !== undefined ? row[colIndex['tx_type']] ?? '' : '';
-      const note = colIndex['note'] !== undefined ? row[colIndex['note']] ?? '' : '';
-      const categoryName = colIndex['category_name'] !== undefined ? row[colIndex['category_name']] ?? '' : '';
-      const accountName = colIndex['account_name'] !== undefined ? row[colIndex['account_name']] ?? '' : '';
-      const tagsStr = colIndex['tags'] !== undefined ? row[colIndex['tags']] ?? '' : '';
-      const tags = splitTags(tagsStr);
-
-      const txType = parseTxType(txTypeRaw, amount);
-      const absAmount = Math.abs(amount);
-
-      if (!happenedAt) {
-        parseErrors.push({
-          code: 'invalid_date',
-          row_number: rowNumber,
-          message: '无法解析日期',
-          field_name: 'happened_at',
-        });
-      } else {
-        allDates.add(happenedAt);
-      }
-
-      if (isNaN(amount)) {
-        parseErrors.push({
-          code: 'invalid_amount',
-          row_number: rowNumber,
-          message: '无法解析金额',
-          field_name: 'amount',
-        });
-      }
-
-      if (txType === 'expense') {
-        expenseCount++;
-        expenseTotal += absAmount;
-      } else if (txType === 'income') {
-        incomeCount++;
-        incomeTotal += absAmount;
-      } else if (txType === 'transfer') {
-        transferCount++;
-      }
-
-      if (accountName) accountNames.add(accountName);
-      if (categoryName) categoryNames.add(categoryName);
-      tags.forEach(t => tagNames.add(t));
-
-      if (i < 10) {
-        sampleTransactions.push({
-          tx_type: txType,
-          amount: absAmount.toString(),
-          happened_at: happenedAt || new Date().toISOString().slice(0, 10),
-          note: note || null,
-          category_name: categoryName || null,
-          parent_category_name: null,
-          account_name: accountName || null,
-          from_account_name: null,
-          to_account_name: null,
-          tag_names: tags,
-          source_row_number: rowNumber,
-        });
-      }
-    } catch (e) {
-      parseErrors.push({
-        code: 'parse_error',
-        row_number: rowNumber,
-        message: e instanceof Error ? e.message : '解析错误',
-        field_name: null,
-      });
-    }
-  }
-
-  if (allDates.size > 0) {
-    const dates = Array.from(allDates).sort();
-    timeRangeStart = dates[0];
-    timeRangeEnd = dates[dates.length - 1];
-  }
-
-  const matchedAccounts: string[] = [];
-  const newAccounts: string[] = [];
-  accountNames.forEach(name => {
-    if (existingAccounts.has(name)) matchedAccounts.push(name);
-    else newAccounts.push(name);
-  });
-
-  const matchedCategories: string[] = [];
-  const newCategories: string[] = [];
-  categoryNames.forEach(name => {
-    if (existingCategories.has(name)) matchedCategories.push(name);
-    else newCategories.push(name);
-  });
-
-  const matchedTags: string[] = [];
-  const newTagsFromData: string[] = [];
-  tagNames.forEach(name => {
-    if (existingTags.has(name)) matchedTags.push(name);
-    else newTagsFromData.push(name);
-  });
-
-  const allNewTags = new Set([...newTagsFromData, ...autoTagNames]);
-
-  const totalSignedAmount = incomeTotal - expenseTotal;
-
-  const sourceFormat = detectSourceFormat(session.file_name, session.headers, session.rows[0] || []);
+  // Update session
+  session.mapping = mapping;
+  session.targetLedgerId = targetLedgerId;
+  session.dedupStrategy = dedupStrategy;
+  session.autoTagNames = autoTagNames;
+  session.status = 'previewed';
+  await saveSession(kv, session);
 
   return c.json({
     import_token: token,
-    expires_at: session.expires_at,
-    source_format: sourceFormat,
-    headers: session.headers,
-    suggested_mapping: generateSuggestedMapping(session.headers),
-    current_mapping: fieldMapping,
-    target_ledger_id: targetLedgerId || null,
+    expires_at: session.expiresAt,
+    source_format: session.data.sourceFormat,
+    headers: session.data.headers,
+    suggested_mapping: mappingToPayload(session.data.suggestedMapping),
+    current_mapping: mappingToPayload(mapping),
+    target_ledger_id: targetLedgerId,
     dedup_strategy: dedupStrategy,
     auto_tag_names: autoTagNames,
     stats: {
-      total_rows: session.row_count,
-      time_range_start: timeRangeStart,
-      time_range_end: timeRangeEnd,
-      total_signed_amount: totalSignedAmount.toString(),
-      by_type: {
-        expense_count: expenseCount,
-        expense_total: expenseTotal.toString(),
-        income_count: incomeCount,
-        income_total: incomeTotal.toString(),
-        transfer_count: transferCount,
-      },
-      accounts: { new_names: newAccounts, matched_names: matchedAccounts },
-      categories: { new_names: newCategories, matched_names: matchedCategories },
-      tags: { new_names: Array.from(allNewTags), matched_names: matchedTags },
-      skipped_dedup: 0,
-      parse_errors: parseErrors,
-      parse_errors_total: parseErrors.length,
-      parse_warnings: parseWarnings,
-      parse_warnings_total: parseWarnings.length,
+      total_rows: txs.length,
+      new_count: stats.newCount,
+      duplicate_count: stats.duplicateCount,
+      matched_count: stats.matchedCount,
+      category_count: stats.categoryCount,
+      account_count: stats.accountCount,
+      tag_count: stats.tagCount,
+      parse_warnings: session.data.parseWarnings,
+      parse_warnings_total: session.data.parseWarnings.length,
     },
-    sample_rows: session.rows.slice(0, 10),
-    sample_transactions: sampleTransactions,
+    sample_transactions: txs.slice(0, 10),
+    time_range: {
+      start: txs.length ? txs.reduce((a, b) => a.happenedAt < b.happenedAt ? a : b).happenedAt.slice(0, 10) : null,
+      end: txs.length ? txs.reduce((a, b) => a.happenedAt > b.happenedAt ? a : b).happenedAt.slice(0, 10) : null,
+    },
   });
 });
+
+// ==================== POST /{token}/execute ====================
 
 importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), async (c) => {
   const userId = c.get('userId');
@@ -684,452 +321,114 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
   const req = c.req.valid('json');
 
   const session = await getSession(kv, token);
-  if (!session) {
-    return c.json({ error: 'Import token not found or expired' }, 404);
+  if (!session) return c.json({ error: 'Import token not found or expired', error_code: 'IMPORT_TOKEN_EXPIRED' }, 404);
+  if (session.status === 'cancelled') return c.json({ error: 'Import cancelled' }, 400);
+  if (session.status === 'executing') return c.json({ error: 'Import already in progress' }, 409);
+
+  const mapping = req.mapping ? mappingToInternal(req.mapping as Record<string, unknown>) : session.mapping;
+  const targetLedgerId = req.target_ledger_id || session.targetLedgerId;
+  const dedupStrategy = req.dedup_strategy ?? session.dedupStrategy;
+  const autoTagNames = req.auto_tag_names ?? session.autoTagNames;
+
+  if (!targetLedgerId) {
+    return c.json({ error: 'target_ledger_id is required', error_code: 'IMPORT_MISSING_LEDGER' }, 400);
   }
 
-  if (session.status === 'done') {
-    return c.json({ error: 'Import already completed' }, 400);
+  // Validate ledger access
+  const ledger = await db
+    .prepare('SELECT l.id, l.external_id FROM ledgers l INNER JOIN ledger_members lm ON lm.ledger_id = l.id WHERE l.external_id = ? AND lm.user_id = ?')
+    .bind(targetLedgerId, userId)
+    .first<{ id: string; external_id: string }>();
+
+  if (!ledger) {
+    return c.json({ error: 'Ledger not found', error_code: 'IMPORT_LEDGER_NOT_FOUND' }, 404);
   }
 
-  if (session.status === 'executing') {
-    return c.json({ error: 'Import already in progress' }, 400);
-  }
-
-  let ledgerId: string | null = null;
-  let ledgerExternalId = req.ledger_id ?? 'default';
-
-  if (req.ledger_id) {
-    const ledger = await db
-      .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
-      .bind(userId, req.ledger_id)
-      .first<{ id: string; external_id: string }>();
-
-    if (ledger) {
-      ledgerId = ledger.id;
-      ledgerExternalId = ledger.external_id;
-    }
-  } else {
-    const defaultLedger = await db
-      .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? LIMIT 1')
-      .bind(userId)
-      .first<{ id: string; external_id: string }>();
-
-    if (defaultLedger) {
-      ledgerId = defaultLedger.id;
-      ledgerExternalId = defaultLedger.external_id;
-    }
-  }
-
-  if (!ledgerId) {
-    return c.json({ error: 'No ledger found' }, 400);
-  }
-
+  // Mark as executing
   session.status = 'executing';
+  session.mapping = mapping;
+  session.targetLedgerId = targetLedgerId;
+  session.dedupStrategy = dedupStrategy;
+  session.autoTagNames = autoTagNames;
   await saveSession(kv, session);
 
-  const fieldMapping = req.field_mapping;
-  const deduplicate = req.deduplicate;
-  const autoTagNames = req.auto_tag_names || [];
+  // Apply mapping
+  const txs = applyMapping(session.data.rows, mapping);
+
+  // Get existing sets for dedup
+  const existing = await buildExistingSets(db, userId, targetLedgerId);
+
+  // SSE stream for execution progress
   const encoder = new TextEncoder();
-
-  // 缓存已创建的实体，避免重复查询和创建
-  const createdTags = new Map<string, string>(); // name -> sync_id
-  const createdAccounts = new Map<string, string>(); // name -> sync_id
-  const createdCategories = new Map<string, string>(); // name -> sync_id
-
-  // 自动创建 auto_tag_names 中指定的标签（如果不存在）
-  const autoTagSyncIds: string[] = [];
-  for (const tagName of autoTagNames) {
-    if (!tagName.trim()) continue;
-    
-    const existingTag = await db
-      .prepare('SELECT sync_id FROM read_tag_projection WHERE ledger_id = ? AND name = ? LIMIT 1')
-      .bind(ledgerId, tagName)
-      .first<{ sync_id: string }>();
-
-    if (existingTag) {
-      autoTagSyncIds.push(existingTag.sync_id);
-      createdTags.set(tagName, existingTag.sync_id);
-    } else {
-      // 自动创建标签
-      const tagSyncId = randomUUID();
-      const serverNow = nowUtc();
-
-      await db
-        .prepare(
-          `INSERT INTO sync_changes
-           (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(userId, ledgerId, 'tag', tagSyncId, 'upsert', safeJsonStringify({ name: tagName, color: null }), serverNow, userId)
-        .run();
-
-      try {
-        await db
-          .prepare(
-            `INSERT INTO read_tag_projection
-             (ledger_id, sync_id, user_id, name, color, source_change_id)
-             VALUES (?, ?, ?, ?, ?, ?)`
-          )
-          .bind(ledgerId, tagSyncId, userId, tagName, null, 0)
-          .run();
-      } catch (projErr) {
-        await db.prepare('DELETE FROM sync_changes WHERE entity_sync_id = ? AND entity_type = ?').bind(tagSyncId, 'tag').run();
-        throw projErr;
-      }
-
-      autoTagSyncIds.push(tagSyncId);
-      createdTags.set(tagName, tagSyncId);
-    }
-  }
 
   const stream = new ReadableStream({
     async start(controller) {
-      let success = 0;
-      let failed = 0;
-      const total = session.rows.length;
+      const sendEvent = (event: string, data: Record<string, unknown>) => {
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch { /* ignore */ }
+      };
 
-      const colIndex: Record<string, number> = {};
-      for (const [colName, fieldName] of Object.entries(fieldMapping)) {
-        const idx = session.headers.indexOf(colName);
-        if (idx >= 0) {
-          colIndex[fieldName] = idx;
-        }
-      }
-
-      // 统计需要创建的实体数量
-      const allAccountNames = new Set<string>();
-      const allCategoryNames = new Set<string>();
-      const allTagNames = new Set<string>();
-      
-      for (const row of session.rows) {
-        const categoryName = colIndex['category_name'] !== undefined ? row[colIndex['category_name']] ?? '' : '';
-        const accountName = colIndex['account_name'] !== undefined ? row[colIndex['account_name']] ?? '' : '';
-        const tags = colIndex['tags'] !== undefined ? row[colIndex['tags']] ?? '' : '';
-        
-        if (categoryName.trim()) allCategoryNames.add(categoryName.trim());
-        if (accountName.trim()) allAccountNames.add(accountName.trim());
-        splitTags(tags).forEach(t => t.trim() && allTagNames.add(t.trim()));
-      }
-      
-      // 添加自动标签
-      autoTagNames.forEach(t => t.trim() && allTagNames.add(t.trim()));
-
-      // 阶段1: 创建账户
-      const accountNamesArray = Array.from(allAccountNames);
-      controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'accounts', done: 0, total: accountNamesArray.length })}\n\n`));
-      
-      for (let i = 0; i < accountNamesArray.length; i++) {
-        const accountName = accountNamesArray[i];
-        if (!createdAccounts.has(accountName)) {
-          const existingAccount = await db
-            .prepare('SELECT sync_id FROM read_account_projection WHERE ledger_id = ? AND name = ? LIMIT 1')
-            .bind(ledgerId, accountName)
-            .first<{ sync_id: string }>();
-            
-          if (existingAccount) {
-            createdAccounts.set(accountName, existingAccount.sync_id);
-          } else {
-            const accountSyncId = randomUUID();
-            const serverNow = nowUtc();
-            const payload: Record<string, unknown> = {
-              name: accountName,
-              account_type: null,
-              currency: null,
-              initial_balance: 0,
-              note: null,
-              credit_limit: null,
-              billing_day: null,
-              payment_due_day: null,
-              bank_name: null,
-              card_last_four: null,
-            };
-            
-            await db
-              .prepare(
-                `INSERT INTO sync_changes
-                 (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-              )
-              .bind(userId, ledgerId, 'account', accountSyncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
-              .run();
-
-            try {
-              await db
-                .prepare(
-                  `INSERT INTO read_account_projection
-                   (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
-                    note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-                )
-                .bind(ledgerId, accountSyncId, userId, accountName, null, null, 0, null, null, null, null, null, null, 0)
-                .run();
-            } catch (projErr) {
-              await db.prepare('DELETE FROM sync_changes WHERE entity_sync_id = ? AND entity_type = ?').bind(accountSyncId, 'account').run();
-              throw projErr;
-            }
-            
-            createdAccounts.set(accountName, accountSyncId);
-          }
-        }
-        controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'accounts', done: i + 1, total: accountNamesArray.length })}\n\n`));
-      }
-
-      // 阶段2: 创建分类
-      const categoryNamesArray = Array.from(allCategoryNames);
-      controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'categories', done: 0, total: categoryNamesArray.length })}\n\n`));
-      
-      for (let i = 0; i < categoryNamesArray.length; i++) {
-        const categoryName = categoryNamesArray[i];
-        if (!createdCategories.has(categoryName)) {
-          const existingCategory = await db
-            .prepare('SELECT sync_id, kind FROM read_category_projection WHERE ledger_id = ? AND name = ? LIMIT 1')
-            .bind(ledgerId, categoryName)
-            .first<{ sync_id: string; kind: string }>();
-            
-          if (existingCategory) {
-            createdCategories.set(categoryName, existingCategory.sync_id);
-          } else {
-            const categorySyncId = randomUUID();
-            const serverNow = nowUtc();
-            const payload: Record<string, unknown> = {
-              name: categoryName,
-              kind: 'expense',
-              level: null,
-              sort_order: null,
-              icon: null,
-              icon_type: null,
-              custom_icon_path: null,
-              icon_cloud_file_id: null,
-              icon_cloud_sha256: null,
-              parent_name: null,
-            };
-            
-            await db
-              .prepare(
-                `INSERT INTO sync_changes
-                 (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-              )
-              .bind(userId, ledgerId, 'category', categorySyncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
-              .run();
-
-            try {
-              await db
-                .prepare(
-                  `INSERT INTO read_category_projection
-                   (ledger_id, sync_id, user_id, name, kind, level, sort_order,
-                    icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
-                    parent_name, source_change_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-                )
-                .bind(ledgerId, categorySyncId, userId, categoryName, 'expense', null, null, null, null, null, null, null, null, 0)
-                .run();
-            } catch (projErr) {
-              await db.prepare('DELETE FROM sync_changes WHERE entity_sync_id = ? AND entity_type = ?').bind(categorySyncId, 'category').run();
-              throw projErr;
-            }
-            
-            createdCategories.set(categoryName, categorySyncId);
-          }
-        }
-        controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'categories', done: i + 1, total: categoryNamesArray.length })}\n\n`));
-      }
-
-      // 阶段3: 创建标签
-      const tagNamesArray = Array.from(allTagNames);
-      controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'tags', done: 0, total: tagNamesArray.length })}\n\n`));
-      
-      for (let i = 0; i < tagNamesArray.length; i++) {
-        const tagName = tagNamesArray[i];
-        if (!createdTags.has(tagName)) {
-          const existingTag = await db
-            .prepare('SELECT sync_id FROM read_tag_projection WHERE ledger_id = ? AND name = ? LIMIT 1')
-            .bind(ledgerId, tagName)
-            .first<{ sync_id: string }>();
-            
-          if (existingTag) {
-            createdTags.set(tagName, existingTag.sync_id);
-          } else {
-            const tagSyncId = randomUUID();
-            const serverNow = nowUtc();
-            
-            await db
-              .prepare(
-                `INSERT INTO sync_changes
-                 (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-              )
-              .bind(userId, ledgerId, 'tag', tagSyncId, 'upsert', safeJsonStringify({ name: tagName, color: null }), serverNow, userId)
-              .run();
-
-            await db
-              .prepare(
-                `INSERT INTO read_tag_projection
-                 (ledger_id, sync_id, user_id, name, color, source_change_id)
-                 VALUES (?, ?, ?, ?, ?, ?)`
-              )
-              .bind(ledgerId, tagSyncId, userId, tagName, null, 0)
-              .run();
-            
-            createdTags.set(tagName, tagSyncId);
-          }
-        }
-        controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'tags', done: i + 1, total: tagNamesArray.length })}\n\n`));
-      }
-
-      // 阶段4: 创建交易
-      controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'transactions', done: 0, total: total, skipped: 0 })}\n\n`));
-      
-      let skippedCount = 0;
-      let lastChangeId = 0;
-      
       try {
-        for (let i = 0; i < total; i++) {
-          const row = session.rows[i];
+        let imported = 0;
+        let skipped = 0;
+        let errors: Array<{ row: number; message: string }> = [];
+
+        for (let i = 0; i < txs.length; i++) {
+          const tx = txs[i];
+
+          // Check dedup
+          const key = `${tx.amount}|${(tx.happenedAt || '').slice(0, 10)}`;
+          if (dedupStrategy === 'skip_duplicates' && existing.txKeys.has(key)) {
+            skipped++;
+            continue;
+          }
 
           try {
-            const amount = colIndex['amount'] !== undefined ? parseAmount(row[colIndex['amount']] ?? '') : 0;
-            const happenedAtRaw = colIndex['happened_at'] !== undefined ? row[colIndex['happened_at']] ?? '' : '';
-            const happenedAt = parseDate(happenedAtRaw) || new Date().toISOString().split('T')[0];
-            const txTypeRaw = colIndex['tx_type'] !== undefined ? row[colIndex['tx_type']] ?? '' : '';
-            const note = colIndex['note'] !== undefined ? row[colIndex['note']] ?? '' : '';
-            const categoryName = colIndex['category_name'] !== undefined ? row[colIndex['category_name']] ?? '' : '';
-            const accountName = colIndex['account_name'] !== undefined ? row[colIndex['account_name']] ?? '' : '';
-            const tags = colIndex['tags'] !== undefined ? row[colIndex['tags']] ?? '' : '';
-            const currencyCode = colIndex['currency'] !== undefined ? row[colIndex['currency']] ?? null :
-                                 colIndex['currency_code'] !== undefined ? row[colIndex['currency_code']] ?? null : null;
-            const nativeAmountRaw = colIndex['native_amount'] !== undefined ? row[colIndex['native_amount']] ?? null : null;
-            const nativeAmount = nativeAmountRaw != null && nativeAmountRaw !== '' ? Number(nativeAmountRaw) : null;
+            const payload = buildTxPayload(tx, autoTagNames);
 
-            const txType = parseTxType(txTypeRaw, amount);
+            await db.prepare(
+              `INSERT INTO sync_changes
+               (change_id, user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, scope)
+               VALUES (?, ?, ?, ?, ?, 'upsert', ?, ?, 'web-import', 'user')`
+            ).bind(
+              Date.now() + i, userId, ledger.id, 'transaction',
+              randomUUID(), JSON.stringify(payload), nowUtc(),
+            ).run();
 
-            let finalAmount = Math.abs(amount);
-            let finalTxType = txType;
-            let categoryKind: 'expense' | 'income' | 'transfer' = 'expense';
-            
-            if (amount < 0 && txType === 'income') {
-              finalTxType = 'expense';
-            } else if (amount > 0 && txType === 'expense') {
-              // 支出保持正数
-            } else if (txType === 'transfer') {
-              finalAmount = amount;
-            }
-            
-            categoryKind = finalTxType === 'income' ? 'income' : 'expense';
+            imported++;
+          } catch (err) {
+            errors.push({ row: tx.sourceRowNumber, message: String(err) });
+          }
 
-            let skip = false;
-            if (deduplicate) {
-              const existing = await db
-                .prepare('SELECT sync_id FROM read_tx_projection WHERE ledger_id = ? AND amount = ? AND happened_at LIKE ? LIMIT 1')
-                .bind(ledgerId, finalAmount, `${happenedAt}%`)
-                .first();
-
-              if (existing) {
-                skip = true;
-                skippedCount++;
-              }
-            }
-
-            if (!skip) {
-              const syncId = randomUUID();
-              const serverNow = nowUtc();
-
-              const rowTagNames = splitTags(tags);
-              const allTagSyncIds: string[] = [];
-              
-              for (const tagName of rowTagNames) {
-                if (!tagName.trim()) continue;
-                const tagSyncId = createdTags.get(tagName);
-                if (tagSyncId && !allTagSyncIds.includes(tagSyncId)) {
-                  allTagSyncIds.push(tagSyncId);
-                }
-              }
-              
-              for (const tagName of autoTagNames) {
-                if (!tagName.trim()) continue;
-                const tagSyncId = createdTags.get(tagName);
-                if (tagSyncId && !allTagSyncIds.includes(tagSyncId)) {
-                  allTagSyncIds.push(tagSyncId);
-                }
-              }
-              
-              const tagsCsv = allTagSyncIds.length > 0 ? allTagSyncIds.join(',') : null;
-              
-              const accountSyncId = accountName.trim() ? createdAccounts.get(accountName.trim()) || null : null;
-              const categorySyncId = categoryName.trim() ? createdCategories.get(categoryName.trim()) || null : null;
-
-              const payload: Record<string, unknown> = {
-                tx_type: finalTxType,
-                amount: finalAmount,
-                happened_at: happenedAt,
-                note: note || null,
-                category_name: categoryName || null,
-                category_kind: categoryKind,
-                account_name: accountName || null,
-                account_id: accountSyncId,
-                category_id: categorySyncId,
-                tags: tagsCsv,
-                tag_ids: allTagSyncIds.length > 0 ? allTagSyncIds : null,
-              };
-
-              const changeResult = await db
-                .prepare(
-                  `INSERT INTO sync_changes
-                   (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-                )
-                .bind(userId, ledgerId, 'transaction', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
-                .run();
-
-              lastChangeId = changeResult.meta.last_row_id as number;
-
-              try {
-                await db
-                  .prepare(
-                    `INSERT INTO read_tx_projection
-                     (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
-                      category_sync_id, category_name, category_kind,
-                      account_sync_id, account_name,
-                      tags_csv, tag_sync_ids_json, source_change_id,
-                      currency_code, native_amount)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-                  )
-                  .bind(ledgerId, syncId, userId, finalTxType, finalAmount, happenedAt, note || null,
-                        categorySyncId, categoryName || null, categoryKind,
-                        accountSyncId, accountName || null,
-                        tagsCsv, allTagSyncIds.length > 0 ? safeJsonStringify(allTagSyncIds) : null, lastChangeId,
-                        currencyCode, nativeAmount)
-                  .run();
-              } catch (projErr) {
-                await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(lastChangeId).run();
-                throw projErr;
-              }
-
-              success++;
-            }
-            
-            if (i % 10 === 0 || i === total - 1) {
-              controller.enqueue(encoder.encode(`event: stage\ndata: ${JSON.stringify({ stage: 'transactions', done: success + skippedCount, total: total, skipped: skippedCount })}\n\n`));
-            }
-          } catch (rowErr) {
-            failed++;
-            const errorMsg = rowErr instanceof Error ? rowErr.message : 'Unknown error';
-            controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ code: 'ROW_ERROR', row_number: i + 2, field_name: null, message: errorMsg })}\n\n`));
+          // Send progress every 10 rows
+          if (i % 10 === 0 || i === txs.length - 1) {
+            sendEvent('progress', {
+              total: txs.length,
+              imported,
+              skipped,
+              errors: errors.length,
+              errors_detail: errors.slice(-5),
+            });
           }
         }
 
+        // Done
         session.status = 'done';
         await saveSession(kv, session);
 
-        controller.enqueue(encoder.encode(`event: complete\ndata: ${JSON.stringify({ created_tx_count: success, skipped_count: skippedCount, new_change_id: lastChangeId })}\n\n`));
+        sendEvent('complete', {
+          total: txs.length,
+          imported,
+          skipped,
+          errors: errors.length,
+          errors_detail: errors.slice(0, 20),
+        });
         controller.close();
       } catch (err) {
-        session.status = 'cancelled';
+        session.status = 'pending';
         await saveSession(kv, session);
-        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-        controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ code: 'IMPORT_ERROR', row_number: null, field_name: null, message: errorMsg })}\n\n`));
+        sendEvent('error', { message: String(err) });
         controller.close();
       }
     },
@@ -1140,54 +439,24 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
     },
   });
 });
 
+// ==================== DELETE /{token} ====================
+
 importRouter.delete('/:token', async (c) => {
-  const token = c.req.param('token');
   const kv = c.env.IMPORT_SESSIONS;
+  const token = c.req.param('token');
 
   const session = await getSession(kv, token);
-  if (!session) {
-    return c.json({ error: 'Import token not found' }, 404);
+  if (session) {
+    session.status = 'cancelled';
+    await saveSession(kv, session);
   }
 
-  if (session.status === 'executing') {
-    return c.json({ error: 'Cannot cancel while executing' }, 400);
-  }
-
-  session.status = 'cancelled';
-  await saveSession(kv, session);
-
-  return c.json({ cancelled: true });
+  return c.json({ ok: true });
 });
-
-function parseCSVLine(line: string, delimiter: string): string[] {
-  const result: string[] = [];
-  let current = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-
-    if (char === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (char === delimiter && !inQuotes) {
-      result.push(current.trim());
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-
-  result.push(current.trim());
-  return result;
-}
 
 export default importRouter;
