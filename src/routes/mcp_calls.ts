@@ -66,8 +66,10 @@ mcpCallsRouter.get('/', async (c) => {
   }
 
   if (status) {
+    // 前端用 'ok' 表示成功，数据库存 'success'，需要映射
+    const dbStatus = status === 'ok' ? 'success' : status;
     conditions.push('status = ?');
-    params.push(status);
+    params.push(dbStatus);
   }
 
   if (startAt) {
