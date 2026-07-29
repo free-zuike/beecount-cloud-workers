@@ -105,16 +105,18 @@ async function callAiChatJson(
   messages: Array<{ role: string; content: string | Array<unknown> }>,
   timeout: number = 30000,
   useJsonFormat: boolean = true,
-  maxTokens: number = 512
+  maxTokens?: number
 ): Promise<string> {
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
   
   const body: Record<string, unknown> = {
     model,
     messages,
-    max_tokens: maxTokens,
     temperature: 0.2,
   };
+  if (maxTokens !== undefined) {
+    body.max_tokens = maxTokens;
+  }
   if (useJsonFormat) {
     body.response_format = { type: 'json_object' };
   }
@@ -129,7 +131,7 @@ async function callAiChatJson(
     signal: AbortSignal.timeout(timeout),
   });
   
-  // 推理模型锁 temperature 时自适应重试
+  // 推理模型锁 temperature 时自适应重试（对齐原版 _post_chat_adaptive）
   if (!response.ok && response.status === 400) {
     const errText = await response.clone().text();
     if (errText.includes('temperature')) {
@@ -162,32 +164,9 @@ async function callAiChatJson(
     throw new Error(`AI API error: ${data.error.code || 'unknown'} - ${data.error.message || JSON.stringify(data.error)}`);
   }
 
-  // Cloudflare 格式: { success: false, errors: [...] }
-  const raw = data as Record<string, unknown>;
-  if (raw.success === false && Array.isArray(raw.errors)) {
-    const errMsg = raw.errors.map((e: unknown) => (e as { message?: string })?.message ?? String(e)).join('; ');
-    if (errMsg) throw new Error(`AI API error: ${errMsg}`);
-  }
-
-  // 路径1: 标准 OpenAI 格式 { choices: [...] }
-  // 路径2: Cloudflare 包装格式 { result: { choices: [...] }, success: true }
-  const choices =
-    data.choices ??
-    ((raw.result as Record<string, unknown> | undefined)?.choices as
-      | Array<{ message?: { content?: string } }>
-      | undefined);
-
-  if (choices) {
-    const content = choices[0]?.message?.content;
-    if (content) return content;
-  }
-
-  // 路径3: Cloudflare Workers AI 原生格式 { success: true, result: { response: "..." } }
-  const result = raw.result as Record<string, unknown> | undefined;
-  if (result?.response) return String(result.response);
-
-  // 兜底：返回空字符串
-  return '';
+  // 对齐原版: data.get("choices", [{}])[0].get("message", {}).get("content", "")
+  const content = data.choices?.[0]?.message?.content ?? '';
+  return content;
 }
 
 /**
@@ -809,7 +788,7 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
       { role: 'user', content: 'Hi' }
     ];
     
-    const content = await callAiChatJson(baseUrl, apiKey, model || 'gpt-3.5-turbo', messages, 10000, false);
+    const content = await callAiChatJson(baseUrl, apiKey, model || 'gpt-3.5-turbo', messages, 10000, false, 16);
     
     if (!content || content.trim().length === 0) {
       return c.json({
