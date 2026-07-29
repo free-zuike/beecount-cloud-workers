@@ -714,6 +714,69 @@ aiRouter.post('/parse-tx-text', zValidator('json', AiParseTxTextSchema), async (
 });
 
 // ---------------------------------------------------------------------------
+// 测试样本（对齐原版 Python test_samples.py）
+// ---------------------------------------------------------------------------
+
+/** 1 秒 8kHz 16-bit PCM 静音 WAV 的 base64 */
+function _buildTestWavBase64(): string {
+  const sampleRate = 8000;
+  const numSamples = sampleRate; // 1 秒
+  const dataSize = numSamples * 2; // 16-bit
+  const fileSize = 36 + dataSize;
+
+  const buf = new ArrayBuffer(44 + dataSize);
+  const dv = new DataView(buf);
+  let off = 0;
+  const w = (s: string) => { for (let i = 0; i < s.length; i++) dv.setUint8(off++, s.charCodeAt(i)); };
+  w('RIFF');
+  dv.setUint32(off, fileSize, true); off += 4;
+  w('WAVE');
+  w('fmt ');
+  dv.setUint32(off, 16, true); off += 4; // chunk size
+  dv.setUint16(off, 1, true); off += 2; // PCM
+  dv.setUint16(off, 1, true); off += 2; // mono
+  dv.setUint32(off, sampleRate, true); off += 4;
+  dv.setUint32(off, sampleRate * 2, true); off += 4; // byte rate
+  dv.setUint16(off, 2, true); off += 2; // block align
+  dv.setUint16(off, 16, true); off += 2; // bits per sample
+  w('data');
+  dv.setUint32(off, dataSize, true); off += 4;
+  // 剩余字节默认 0（静音 PCM）
+  const wavBytes = new Uint8Array(buf.byteLength);
+  wavBytes.set(new Uint8Array(buf));
+  const binary = Array.from(wavBytes, b => String.fromCharCode(b)).join('');
+  return btoa(binary);
+}
+
+const _TEST_WAV_BASE64 = _buildTestWavBase64();
+
+/**
+ * 语音测试：发 1 秒静音 WAV 到 /audio/transcriptions（对齐原版 _test_speech）
+ */
+async function _testSpeech(baseUrl: string, apiKey: string, model: string, timeout: number): Promise<string> {
+  const whisperUrl = `${baseUrl.replace(/\/$/, '')}/audio/transcriptions`;
+  const wavBytes = Uint8Array.from(atob(_TEST_WAV_BASE64), c => c.charCodeAt(0));
+  const formData = new FormData();
+  formData.append('file', new Blob([wavBytes], { type: 'audio/wav' }), 'silence.wav');
+  formData.append('model', model);
+
+  const response = await fetch(whisperUrl, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}` },
+    body: formData,
+    signal: AbortSignal.timeout(timeout),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`AI API error: ${response.status} - ${errText.slice(0, 200)}`);
+  }
+
+  const data = await response.json() as { text?: string };
+  return (data.text || '').trim();
+}
+
+// ---------------------------------------------------------------------------
 // 速率限制（内存，对齐原版 Python _check_rate_limit）
 // ---------------------------------------------------------------------------
 
@@ -763,6 +826,7 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
   let apiKey = req.api_key ?? '';
   let baseUrl = req.base_url ?? '';
   let model = req.model ?? '';
+  const capability = req.capability || 'text';
   let providerId: string;
   
   // 处理 provider 字段：可以是字符串 ID 或完整对象
@@ -774,15 +838,17 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
       baseUrl: string;
       textModel?: string;
       visionModel?: string;
+      audioModel?: string;
     };
     providerId = providerObj.id;
     apiKey = apiKey || providerObj.apiKey;
     baseUrl = baseUrl || providerObj.baseUrl;
     
     // 根据 capability 选择模型
-    const capability = req.capability || 'text';
     if (capability === 'vision' && providerObj.visionModel) {
       model = model || providerObj.visionModel;
+    } else if (capability === 'speech' && providerObj.audioModel) {
+      model = model || providerObj.audioModel;
     } else {
       model = model || providerObj.textModel || '';
     }
@@ -818,11 +884,18 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
   }
 
   try {
-    const messages = [
-      { role: 'user', content: 'Hi' }
-    ];
-    
-    const content = await callAiChatJson(baseUrl, apiKey, model || 'gpt-3.5-turbo', messages, 10000, false, 16);
+    let content: string;
+
+    if (capability === 'speech') {
+      // 语音测试: 发 1 秒静音 WAV 到 /audio/transcriptions（对齐原版 _test_speech）
+      content = await _testSpeech(baseUrl, apiKey, model || 'whisper-1', 15000);
+    } else {
+      // 文本/视觉测试
+      const messages = [
+        { role: 'user', content: 'Hi' }
+      ];
+      content = await callAiChatJson(baseUrl, apiKey, model || 'gpt-3.5-turbo', messages, 10000, false, 16);
+    }
     
     if (!content || content.trim().length === 0) {
       return c.json({
