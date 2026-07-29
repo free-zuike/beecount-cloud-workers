@@ -1,9 +1,9 @@
 /**
- * ZIP 加密工具 — 使用 jszip 创建 AES-256 加密 ZIP 文件
- * 兼容 7-Zip / WinRAR / Keka 等常见工具
+ * ZIP 加密工具 — 使用 @zip.js/zip.js 创建 AES-256 加密 ZIP 文件
+ * 兼容 7-Zip / WinRAR / Keka 等常见工具，支持 Cloudflare Workers
  */
 
-import JSZip from 'jszip';
+import { ZipWriter, Uint8ArrayWriter, Uint8ArrayReader } from '@zip.js/zip.js';
 
 /**
  * 创建 AES-256 加密 ZIP 文件
@@ -16,19 +16,18 @@ export async function createEncryptedZip(
   files: Array<{ name: string; data: Uint8Array }>,
   password: string,
 ): Promise<Uint8Array> {
-  const zip = new JSZip();
+  const writer = new Uint8ArrayWriter();
+  const zipWriter = new ZipWriter(writer, {
+    password,
+    encryptionStrength: 3, // AES-256
+  });
 
   for (const file of files) {
-    zip.file(file.name, file.data);
+    await zipWriter.add(file.name, new Uint8ArrayReader(file.data));
   }
 
-  const blob = await zip.generateAsync({
-    type: 'blob',
-    password,
-    encryptionStrength: 3,
-  } as any) as Blob;
-
-  return new Uint8Array(await blob.arrayBuffer());
+  await zipWriter.close();
+  return writer.getData() as unknown as Uint8Array;
 }
 
 /**
@@ -37,15 +36,13 @@ export async function createEncryptedZip(
 export async function createZip(
   files: Array<{ name: string; data: Uint8Array }>,
 ): Promise<Uint8Array> {
-  const zip = new JSZip();
+  const writer = new Uint8ArrayWriter();
+  const zipWriter = new ZipWriter(writer);
 
   for (const file of files) {
-    zip.file(file.name, file.data);
+    await zipWriter.add(file.name, new Uint8ArrayReader(file.data));
   }
 
-  const blob = await zip.generateAsync({
-    type: 'blob',
-  } as any) as Blob;
-
-  return new Uint8Array(await blob.arrayBuffer());
+  await zipWriter.close();
+  return writer.getData() as unknown as Uint8Array;
 }

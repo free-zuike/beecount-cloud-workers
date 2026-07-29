@@ -125,7 +125,7 @@ export interface BackupResult {
 }
 
 // ===========================
-// AES-256 加密 ZIP 工具 — 使用 '../lib/zip-lib' 的 createEncryptedZip（基于 jszip）
+// AES-256 加密 ZIP — 使用 '../lib/zip-lib' 的 createEncryptedZip（基于 @zip.js/zip.js）
 // ===========================
 
 async function getEncryptionPassword(
