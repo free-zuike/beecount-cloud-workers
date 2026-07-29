@@ -457,8 +457,8 @@ readRouter.get('/workspace/transactions', async (c) => {
 
   await ensureTxProjectionSynced(db, userId);
 
-  let query = 'SELECT * FROM read_tx_projection WHERE user_id = ?';
-  const bindings: (string | number)[] = [userId];
+  let query = 'SELECT * FROM read_tx_projection';
+  const bindings: (string | number)[] = [];
 
   if (ledgerId) {
     // 支持共享账本 — 与原版 _visible_workspace_ledgers 对齐
@@ -473,6 +473,15 @@ readRouter.get('/workspace/transactions', async (c) => {
         .first<{ id: string }>();
     }
     if (ledger) {
+      query += ' WHERE ledger_id = ?';
+      bindings.push(ledger.id);
+    } else {
+      return c.json({ items: [], total: 0, limit, offset });
+    }
+  } else {
+    query += ' WHERE user_id = ?';
+    bindings.push(userId);
+  }
       query += ' AND ledger_id = ?';
       bindings.push(ledger.id);
     } else {
