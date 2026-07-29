@@ -1196,22 +1196,6 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
       // 表可能不存在，忽略
     }
   }
-  if (timezoneOffset === undefined || timezoneOffset === null) {
-    // 尝试从请求头获取时区（Cloudflare 的 CF-Timezone 或标准 Time-Zone 头）
-    const cfTz = c.req.header('CF-Timezone');
-    if (cfTz) {
-      try {
-        const date = new Date();
-        const utcMs = date.getTime();
-        const tzStr = date.toLocaleString('en-CA', { timeZone: cfTz, hour12: false });
-        const tzMs = new Date(tzStr + ' UTC').getTime();
-        if (!isNaN(tzMs)) {
-          timezoneOffset = Math.round((tzMs - utcMs) / 60000);
-          serverLogger.info('src.routers.admin', `[Backup] Using timezone from CF-Timezone header: ${cfTz} -> ${timezoneOffset}`);
-        }
-      } catch { /* ignore */ }
-    }
-  }
   
   // 验证 cron 表达式（与原版 CronTrigger 对齐）
   const cronCheck = validateCronExpression(req.cron_expr);

@@ -42,6 +42,21 @@ async function broadcastProgress(
   } catch { /* non-critical */ }
 }
 
+/**
+ * 解析时区偏移 — 优先使用 schedule 自身的偏移，否则从 system_settings 读取
+ */
+async function resolveTimezoneOffset(db: D1Database, scheduleOffset: number | null | undefined): Promise<number> {
+  if (scheduleOffset) return scheduleOffset;
+  try {
+    const sysSetting = await db
+      .prepare('SELECT timezone_offset FROM system_settings WHERE id = ?')
+      .bind('default')
+      .first<{ timezone_offset: number }>();
+    if (sysSetting?.timezone_offset) return sysSetting.timezone_offset;
+  } catch { /* ignore */ }
+  return 0;
+}
+
 export async function processBackupSchedule(
   db: D1Database,
   schedule: any,
@@ -82,7 +97,7 @@ export async function processBackupSchedule(
   }
 
   try {
-    const timezoneOffset = schedule.timezone_offset || 0;
+    const timezoneOffset = await resolveTimezoneOffset(db, schedule.timezone_offset);
 
     if (!schedule.next_run_at) {
       const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
