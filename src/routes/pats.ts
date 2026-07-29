@@ -61,14 +61,13 @@ async function hashToken(token: string): Promise<string> {
 const PatCreateSchema = z.object({
   name: z.string().min(1).max(128),
   scopes: z.array(z.enum(['mcp:read', 'mcp:write'])).default(['mcp:read']),
-  expires_in_days: z.number().int().min(1).max(36500).nullable().optional(),
+  expires_in_days: z.number().int().min(1).max(3650).nullable().optional().default(90),
 });
 
 /** 更新 PAT 请求 */
 const PatUpdateSchema = z.object({
   name: z.string().min(1).max(128).optional(),
   scopes: z.array(z.enum(['mcp:read', 'mcp:write'])).optional(),
-  expires_in_days: z.number().int().min(1).max(36500).nullable().optional(),
 });
 
 // ===========================
@@ -269,16 +268,6 @@ patsRouter.patch('/:id', zValidator('json', PatUpdateSchema), async (c) => {
   if (req.scopes !== undefined) {
     updates.push('scopes_json = ?');
     bindings.push(JSON.stringify(req.scopes));
-  }
-
-  if (req.expires_in_days !== undefined) {
-    let expiresAt: string | null = null;
-    if (req.expires_in_days !== null) {
-      const expiresDate = new Date(Date.now() + req.expires_in_days * 24 * 60 * 60 * 1000);
-      expiresAt = expiresDate.toISOString();
-    }
-    updates.push('expires_at = ?');
-    bindings.push(expiresAt);
   }
 
   if (updates.length === 0) {
