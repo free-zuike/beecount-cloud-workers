@@ -23,12 +23,12 @@ export async function createEncryptedZip(
   }
 
   const blob = await zip.generateAsync({
-    type: 'uint8array',
+    type: 'blob',
     password,
-    encryptionStrength: 3, // 3 = AES-256
-  } as any) as Uint8Array;
+    encryptionStrength: 3,
+  } as any) as Blob;
 
-  return blob;
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 /**
@@ -44,8 +44,8 @@ export async function createZip(
   }
 
   const blob = await zip.generateAsync({
-    type: 'uint8array',
-  }) as Uint8Array;
+    type: 'blob',
+  } as any) as Blob;
 
-  return blob;
+  return new Uint8Array(await blob.arrayBuffer());
 }
