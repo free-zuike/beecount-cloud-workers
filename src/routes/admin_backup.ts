@@ -2095,6 +2095,23 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
     }
     if (!backupPath) throw new Error('No backup file found');
 
+    // 查找备份密码（从 backup_remotes 的 config_summary 中读取 age_passphrase）
+    let password: string | undefined;
+    const bp = String(backupPath);
+    if (bp.endsWith('.zip')) {
+      try {
+        const target = await db.prepare(
+          `SELECT t.remote_id, r.config_summary FROM backup_run_targets t
+           LEFT JOIN backup_remotes r ON t.remote_id = r.id
+           WHERE t.run_id = ? AND t.status = 'succeeded' LIMIT 1`
+        ).bind(runId).first<{ remote_id: number; config_summary: string }>();
+        if (target?.config_summary) {
+          const config = JSON.parse(target.config_summary);
+          password = config.age_passphrase || config.zipryption_password;
+        }
+      } catch {}
+    }
+
     await broadcastViaDO(c.env, userId, {
       type: 'restore_progress', runId: strRunId, phase: 'downloading',
       bytesTransferred: 0, bytesTotal: run.bytes_total || 0,
@@ -2105,7 +2122,7 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
         type: 'restore_progress', runId: strRunId, phase: progress.phase,
         bytesTransferred: progress.bytesTransferred, bytesTotal: progress.bytesTotal,
       }).catch(() => {});
-    });
+    }, password);
 
     const finishedAt = new Date().toISOString();
     await db.prepare(
@@ -2453,9 +2470,10 @@ backupRouter.post('/restore-from-r2', async (c) => {
   }
 
   // 支持指定备份路径
-  let body: { backupPath?: string } = {};
+  let body: { backupPath?: string; password?: string } = {};
   try { body = await c.req.json(); } catch {}
   const backupPath = body.backupPath;
+  const password = body.password;
 
   // 查找备份文件
   let selectedPath = backupPath;
@@ -2480,7 +2498,7 @@ backupRouter.post('/restore-from-r2', async (c) => {
 
     const result = await performRestore(db, r2, selectedPath, (progress) => {
       console.debug(`[Restore] ${progress.phase}: ${progress.bytesTransferred}/${progress.bytesTotal}`);
-    });
+    }, password);
 
     return c.json({
       success: result.success,
