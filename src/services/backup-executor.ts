@@ -8,7 +8,7 @@ import { uploadToS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
-import { createEncryptedZip } from '../lib/zip-encrypt';
+import { encryptData } from '../lib/encryption';
 import { createSqliteWithData } from '../lib/sqlite-writer';
 
 // ===========================
@@ -125,10 +125,8 @@ export interface BackupResult {
 }
 
 // ===========================
-// AES-256-GCM 加密工具 — 使用 '../lib/encryption' 的 createEncryptedZip
+// AES-256-GCM 加密工具 — 使用 '../lib/encryption' 的 encryptData
 // ===========================
-
-// 加密函数使用 '../lib/zip-encrypt' 的 createEncryptedZip（AES-256 ZIP）
 
 async function getEncryptionPassword(
   remoteConfig: Record<string, string>,
@@ -411,14 +409,9 @@ export async function performBackupFanOut(
     const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.zipryption_password;
     if (pw) {
       try {
-        // 对齐原版: 生成 AES-256 加密 ZIP（WinZip AES 格式）
-        const zipBytes = await createEncryptedZip(
-          [{ name: 'backup.tar.gz', data: backupBytes }],
-          pw
-        );
-        backupBytes = zipBytes;
+        backupBytes = await encryptData(backupBytes, pw);
         encrypted = true;
-        logWrap(`[Backup] Encrypted (AES-256 ZIP): ${backupBytes.length} bytes`);
+        logWrap(`[Backup] Encrypted: ${backupBytes.length} bytes`);
       } catch (e) {
         logWrap(`[Backup] Encryption failed: ${e}`);
       }
@@ -595,12 +588,8 @@ export async function performBackup(
       const encryptionPassword = remoteConfig.age_passphrase || remoteConfig.zipryption_password;
       if (encryptionPassword) {
         try {
-          log('[Backup] Encrypting backup with AES-256 ZIP...');
-          const zipBytes = await createEncryptedZip(
-            [{ name: 'backup.tar.gz', data: backupBytes }],
-            encryptionPassword
-          );
-          backupBytes = zipBytes;
+          log('[Backup] Encrypting backup with AES-256-GCM...');
+          backupBytes = await encryptData(backupBytes, encryptionPassword);
           encrypted = true;
           log(`[Backup] Backup encrypted: ${backupBytes.length} bytes`);
         } catch (encryptErr) {
