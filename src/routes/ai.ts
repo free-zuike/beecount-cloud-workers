@@ -51,6 +51,7 @@ interface AiProvider {
   baseUrl: string;
   textModel?: string;
   visionModel?: string;
+  audioModel?: string;
   name?: string;
 }
 
@@ -905,11 +906,11 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
     apiKey = apiKey || providerObj.apiKey;
     baseUrl = baseUrl || providerObj.baseUrl;
     
-    // 根据 capability 选择模型
-    if (capability === 'vision' && providerObj.visionModel) {
-      model = model || providerObj.visionModel;
-    } else if (capability === 'speech' && providerObj.audioModel) {
-      model = model || providerObj.audioModel;
+    // 根据 capability 选择模型（对齐原版，model 为空时后续检查 MISSING_FIELDS）
+    if (capability === 'vision') {
+      model = model || providerObj.visionModel || '';
+    } else if (capability === 'speech') {
+      model = model || providerObj.audioModel || '';
     } else {
       model = model || providerObj.textModel || '';
     }
@@ -929,7 +930,14 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
       if (provider) {
         apiKey = apiKey || provider.apiKey;
         baseUrl = baseUrl || provider.baseUrl;
-        model = model || provider.textModel || '';
+        // 根据 capability 选对应模型字段（对齐原版）
+        if (capability === 'vision') {
+          model = model || provider.visionModel || '';
+        } else if (capability === 'speech') {
+          model = model || provider.audioModel || '';
+        } else {
+          model = model || provider.textModel || '';
+        }
       }
     }
   }
@@ -944,21 +952,32 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
     });
   }
 
+  // 模型为空时返回 MISSING_FIELDS（对齐原版）
+  if (!model) {
+    return c.json({
+      success: false,
+      error_code: 'AI_TEST_MISSING_FIELDS',
+      error_message: `${capability} model not configured`,
+      latency_ms: Date.now() - startTime,
+      preview: '',
+    });
+  }
+
   try {
     let content: string;
 
     if (capability === 'speech') {
       // 语音测试: 发 1 秒静音 WAV 到 /audio/transcriptions（对齐原版 _test_speech）
-      content = await _testSpeech(baseUrl, apiKey, model || 'whisper-1', 15000);
+      content = await _testSpeech(baseUrl, apiKey, model, 15000);
     } else if (capability === 'vision') {
       // 视觉测试: 发 64×64 红色 JPEG + "describe" prompt（对齐原版 _test_vision）
-      content = await _testVision(baseUrl, apiKey, model || 'gpt-4-vision-preview');
+      content = await _testVision(baseUrl, apiKey, model);
     } else {
       // 文本测试
       const messages = [
         { role: 'user', content: 'Hi' }
       ];
-      content = await callAiChatJson(baseUrl, apiKey, model || 'gpt-3.5-turbo', messages, 10000, false, 16);
+      content = await callAiChatJson(baseUrl, apiKey, model, messages, 10000, false, 16);
     }
     
     if (!content || content.trim().length === 0) {
