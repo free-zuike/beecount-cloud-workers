@@ -8,7 +8,7 @@ import { uploadToS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
-import { encryptData } from '../lib/encryption';
+import { createEncryptedZip } from '../lib/zip-encrypt';
 import { createSqliteWithData } from '../lib/sqlite-writer';
 
 // ===========================
@@ -128,8 +128,7 @@ export interface BackupResult {
 // AES-256-GCM 加密工具 — 使用 '../lib/encryption' 的 createEncryptedZip
 // ===========================
 
-// 加密函数使用 '../lib/encryption' 的 encryptData（接受 Uint8Array）
-// 本地 encryptData 已废弃，使用导入版本
+// 加密函数使用 '../lib/zip-encrypt' 的 createEncryptedZip（AES-256 ZIP）
 
 async function getEncryptionPassword(
   remoteConfig: Record<string, string>,
@@ -412,9 +411,14 @@ export async function performBackupFanOut(
     const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.zipryption_password;
     if (pw) {
       try {
-        backupBytes = await encryptData(backupBytes, pw);
+        // 对齐原版: 生成 AES-256 加密 ZIP（WinZip AES 格式）
+        const zipBytes = await createEncryptedZip(
+          [{ name: 'backup.tar.gz', data: backupBytes }],
+          pw
+        );
+        backupBytes = zipBytes;
         encrypted = true;
-        logWrap(`[Backup] Encrypted: ${backupBytes.length} bytes`);
+        logWrap(`[Backup] Encrypted (AES-256 ZIP): ${backupBytes.length} bytes`);
       } catch (e) {
         logWrap(`[Backup] Encryption failed: ${e}`);
       }
@@ -591,8 +595,12 @@ export async function performBackup(
       const encryptionPassword = remoteConfig.age_passphrase || remoteConfig.zipryption_password;
       if (encryptionPassword) {
         try {
-          log('[Backup] Encrypting backup with AES-256-GCM...');
-          backupBytes = await encryptData(backupBytes, encryptionPassword);
+          log('[Backup] Encrypting backup with AES-256 ZIP...');
+          const zipBytes = await createEncryptedZip(
+            [{ name: 'backup.tar.gz', data: backupBytes }],
+            encryptionPassword
+          );
+          backupBytes = zipBytes;
           encrypted = true;
           log(`[Backup] Backup encrypted: ${backupBytes.length} bytes`);
         } catch (encryptErr) {
@@ -941,14 +949,16 @@ export function calculateNextRun(cronExpr: string, timezoneOffset: number | stri
     }
 
     // 将 cron 时间视为本地时间（带时区偏移），计算对应的 UTC 时间
-    // timezoneOffset 使用 JS 约定：UTC+8 = -480，所以 UTC = local + offset
+    // timezone_offset 使用 JS 约定（new Date().getTimezoneOffset()）：UTC+8 = -480
+    // 公式：UTC = 本地时间 + timezone_offset（分钟）
+    // 例如：04:00 CST = 04:00 UTC + (-480min) = 04:00 UTC - 8h = 20:00 UTC 前一天
     const now = new Date();
     const nowMs = now.getTime();
 
-    // 创建今天的本地目标时间（UTC+offset）
+    // 创建目标时间（将 cron 的 hour/minute 设为 UTC 时间）
     const targetDate = new Date();
     targetDate.setUTCHours(targetHour, targetMinute, 0, 0);
-    // 加上偏移得到 UTC 时间（JS 约定：UTC+8 = -480，加 -480分钟 = 减8小时）
+    // 加上时区偏移得到实际 UTC 时间（JS 约定：UTC+8 = -480，加 -480分钟 = 减8小时）
     let targetUtcMs = targetDate.getTime() + offsetMs;
 
     // 如果目标时间已过，加一天
