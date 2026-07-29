@@ -927,17 +927,31 @@ export function calculateNextRun(cronExpr: string, timezoneOffset: number | stri
     const targetMinute = minuteStr === '*' ? 0 : parseInt(minuteStr, 10);
     const targetHour = hourStr === '*' ? 0 : parseInt(hourStr, 10);
 
-    // cron 时间是 UTC，直接使用
+    // 解析时区偏移（分钟），支持 IANA 时区名
+    let offsetMs = 0;
+    if (typeof timezoneOffset === 'string' && timezoneOffset) {
+      // IANA 时区名，用 Date 计算当前偏移
+      const now = new Date();
+      const utcMs = now.getTime();
+      const localStr = now.toLocaleString('en-US', { timeZone: timezoneOffset });
+      const localDate = new Date(localStr);
+      offsetMs = localDate.getTime() - utcMs;
+    } else if (typeof timezoneOffset === 'number') {
+      offsetMs = timezoneOffset * 60 * 1000;
+    }
+
+    // 将 cron 时间视为本地时间（带时区偏移），计算对应的 UTC 时间
     const now = new Date();
-    const nowUtcMs = now.getTime();
-    
-    // 创建目标时间（UTC）
+    const nowMs = now.getTime();
+
+    // 创建今天的本地目标时间（UTC+offset）
     const targetDate = new Date();
     targetDate.setUTCHours(targetHour, targetMinute, 0, 0);
-    let targetUtcMs = targetDate.getTime();
-    
+    // 减去偏移得到 UTC 时间
+    let targetUtcMs = targetDate.getTime() - offsetMs;
+
     // 如果目标时间已过，加一天
-    if (targetUtcMs <= nowUtcMs) {
+    if (targetUtcMs <= nowMs) {
       targetUtcMs += 24 * 60 * 60 * 1000;
     }
 
