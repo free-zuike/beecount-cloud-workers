@@ -277,6 +277,9 @@ export async function performRestore(
   password?: string,
 ): Promise<RestoreResult> {
   try {
+    // 禁用外键约束，防止 INSERT OR REPLACE 触发 ON DELETE CASCADE 删除关联数据
+    await db.prepare('PRAGMA foreign_keys = OFF').run();
+
     // Phase 1: 下载并解压（支持加密备份）
     onProgress?.({ phase: 'downloading', bytesTransferred: 0, bytesTotal: 0 });
     
@@ -315,6 +318,9 @@ export async function performRestore(
     onProgress?.({ phase: 'importing', bytesTransferred: totalBytes, bytesTotal: totalBytes });
 
     const attachmentsUploaded = await uploadAttachments(r2, attachments);
+
+    // 重新启用外键约束
+    await db.prepare('PRAGMA foreign_keys = ON').run();
 
     onProgress?.({ phase: 'uploading', bytesTransferred: attachmentsUploaded, bytesTotal: attachments.size });
 
