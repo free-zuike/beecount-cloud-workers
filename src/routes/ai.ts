@@ -776,6 +776,67 @@ async function _testSpeech(baseUrl: string, apiKey: string, model: string, timeo
   return (data.text || '').trim();
 }
 
+// 64×64 红色 JPEG 测试图（对齐原版 test_samples.py）
+const _TEST_JPEG_DATA_URL = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCABAAEADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDyyiiivzo/ssKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooA//2Q==';
+
+/**
+ * 视觉测试：发 64×64 红色 JPEG + "describe" prompt（对齐原版 _test_vision）
+ */
+async function _testVision(baseUrl: string, apiKey: string, model: string): Promise<string> {
+  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const payload = {
+    model,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'describe' },
+          { type: 'image_url', image_url: { url: _TEST_JPEG_DATA_URL } },
+        ],
+      },
+    ],
+    max_tokens: 16,
+    temperature: 0.2,
+  };
+
+  let response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(20000),
+  });
+
+  // 推理模型锁 temperature 时自适应重试
+  if (!response.ok && response.status === 400) {
+    const errText = await response.clone().text();
+    if (errText.includes('temperature')) {
+      delete (payload as Record<string, unknown>).temperature;
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(20000),
+      });
+    } else {
+      throw new Error(`AI API error: ${response.status} - ${errText.slice(0, 200)}`);
+    }
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`AI API error: ${response.status} - ${errorText.slice(0, 200)}`);
+  }
+
+  const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+  return (data.choices?.[0]?.message?.content ?? '').trim();
+}
+
 // ---------------------------------------------------------------------------
 // 速率限制（内存，对齐原版 Python _check_rate_limit）
 // ---------------------------------------------------------------------------
@@ -889,8 +950,11 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
     if (capability === 'speech') {
       // 语音测试: 发 1 秒静音 WAV 到 /audio/transcriptions（对齐原版 _test_speech）
       content = await _testSpeech(baseUrl, apiKey, model || 'whisper-1', 15000);
+    } else if (capability === 'vision') {
+      // 视觉测试: 发 64×64 红色 JPEG + "describe" prompt（对齐原版 _test_vision）
+      content = await _testVision(baseUrl, apiKey, model || 'gpt-4-vision-preview');
     } else {
-      // 文本/视觉测试
+      // 文本测试
       const messages = [
         { role: 'user', content: 'Hi' }
       ];
