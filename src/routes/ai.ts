@@ -322,6 +322,7 @@ const AiTestProviderSchema = z.object({
       baseUrl: z.string(),
       textModel: z.string().optional(),
       visionModel: z.string().optional(),
+      audioModel: z.string().optional(),
       name: z.string().optional(),
     }),
   ]),
