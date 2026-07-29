@@ -941,14 +941,15 @@ export function calculateNextRun(cronExpr: string, timezoneOffset: number | stri
     }
 
     // 将 cron 时间视为本地时间（带时区偏移），计算对应的 UTC 时间
+    // timezoneOffset 使用 JS 约定：UTC+8 = -480，所以 UTC = local + offset
     const now = new Date();
     const nowMs = now.getTime();
 
     // 创建今天的本地目标时间（UTC+offset）
     const targetDate = new Date();
     targetDate.setUTCHours(targetHour, targetMinute, 0, 0);
-    // 减去偏移得到 UTC 时间
-    let targetUtcMs = targetDate.getTime() - offsetMs;
+    // 加上偏移得到 UTC 时间（JS 约定：UTC+8 = -480，加 -480分钟 = 减8小时）
+    let targetUtcMs = targetDate.getTime() + offsetMs;
 
     // 如果目标时间已过，加一天
     if (targetUtcMs <= nowMs) {
