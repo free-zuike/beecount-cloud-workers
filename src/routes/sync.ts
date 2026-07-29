@@ -1276,22 +1276,10 @@ syncRouter.get('/full', async (c) => {
       .first<{ max_id: number | null }>();
 
     // 检查投影表是否有数据——交易、预算、账户、分类、标签都要检查
-    const hasProjectionsById = await db
-      .prepare(`SELECT 1 FROM (
-        SELECT 1 FROM read_tx_projection WHERE ledger_id = ? LIMIT 1
-        UNION ALL
-        SELECT 1 FROM read_budget_projection WHERE ledger_id = ? LIMIT 1
-      ) LIMIT 1`)
-      .bind(ledger.id, ledger.id)
-      .first();
-    const hasProjectionsByExtId = await db
-      .prepare(`SELECT 1 FROM (
-        SELECT 1 FROM read_tx_projection WHERE ledger_id = ? LIMIT 1
-        UNION ALL
-        SELECT 1 FROM read_budget_projection WHERE ledger_id = ? LIMIT 1
-      ) LIMIT 1`)
-      .bind(ledger.external_id, ledger.external_id)
-      .first();
+    const hasProjectionsById = !!(await db.prepare('SELECT 1 FROM read_tx_projection WHERE ledger_id = ? LIMIT 1').bind(ledger.id).first()) ||
+      !!(await db.prepare('SELECT 1 FROM read_budget_projection WHERE ledger_id = ? LIMIT 1').bind(ledger.id).first());
+    const hasProjectionsByExtId = !!(await db.prepare('SELECT 1 FROM read_tx_projection WHERE ledger_id = ? LIMIT 1').bind(ledger.external_id).first()) ||
+      !!(await db.prepare('SELECT 1 FROM read_budget_projection WHERE ledger_id = ? LIMIT 1').bind(ledger.external_id).first());
     const hasProjections = hasProjectionsById || hasProjectionsByExtId;
     // 用实际匹配的值查询
     const effectiveLedgerId = hasProjectionsById ? ledger.id : ledger.external_id;
