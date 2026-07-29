@@ -647,7 +647,7 @@ export async function performBackup(
       const now = new Date();
       const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
       const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const fileExt = encrypted ? '.zip' : '.tar.gz';
+      const fileExt = encrypted ? '.enc' : '.tar.gz';
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
 
       log(`[Backup] Uploading to S3 key: ${backupKey}`);
@@ -739,7 +739,7 @@ export async function performBackup(
       const now = new Date();
       const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
       const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const fileExt = encrypted ? '.zip' : '.tar.gz';
+      const fileExt = encrypted ? '.enc' : '.tar.gz';
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
       
       log(`[Backup] Uploading to R2: ${backupKey} (${backupSize} bytes)`);
@@ -782,7 +782,7 @@ export async function performBackup(
       const now = new Date();
       const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
       const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const fileExt = encrypted ? '.zip' : '.tar.gz';
+      const fileExt = encrypted ? '.enc' : '.tar.gz';
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
 
       log(`[Backup] Uploading to FTP: ${backupKey}`);
@@ -819,7 +819,7 @@ export async function performBackup(
       const now = new Date();
       const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
       const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const fileExt = encrypted ? '.zip' : '.tar.gz';
+      const fileExt = encrypted ? '.enc' : '.tar.gz';
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
 
       log(`[Backup] Uploading to SFTP: ${backupKey}`);
