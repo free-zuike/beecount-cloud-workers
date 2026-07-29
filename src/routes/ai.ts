@@ -159,8 +159,16 @@ async function callAiChatJson(
     throw new Error(`AI API error: ${data.error.code || 'unknown'} - ${data.error.message || JSON.stringify(data.error)}`);
   }
   
-  const content = data.choices?.[0]?.message?.content ?? '';
-  return content;
+  // OpenAI 兼容格式: { choices: [{ message: { content } }] }
+  const openaiContent = data.choices?.[0]?.message?.content;
+  if (openaiContent) return openaiContent;
+
+  // Cloudflare Workers AI 格式: { success: true, result: { response: "..." } }
+  const cfResult = (data as Record<string, unknown>).result as Record<string, unknown> | undefined;
+  if (cfResult?.response) return String(cfResult.response);
+
+  // 兜底：返回空字符串
+  return '';
 }
 
 /**
