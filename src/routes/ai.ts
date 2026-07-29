@@ -104,14 +104,15 @@ async function callAiChatJson(
   model: string,
   messages: Array<{ role: string; content: string | Array<unknown> }>,
   timeout: number = 30000,
-  useJsonFormat: boolean = true
+  useJsonFormat: boolean = true,
+  maxTokens: number = 512
 ): Promise<string> {
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
   
   const body: Record<string, unknown> = {
     model,
     messages,
-    max_tokens: 16,
+    max_tokens: maxTokens,
     temperature: 0.2,
   };
   if (useJsonFormat) {
@@ -183,8 +184,7 @@ async function callAiChatJson(
   const result = raw.result as Record<string, unknown> | undefined;
   if (result?.response) return String(result.response);
 
-  // 兜底：返回空字符串，先打日志看看实际响应
-  console.log('[AI Debug] Raw response from provider:', JSON.stringify(raw));
+  // 兜底：返回空字符串
   return '';
 }
 
