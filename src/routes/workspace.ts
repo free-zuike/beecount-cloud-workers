@@ -294,6 +294,7 @@ workspaceRouter.get('/transactions', async (c) => {
   }
 
   const ledgers = await db.prepare(ledgerQuery).bind(...ledgerParams).all<{ id: string; external_id: string; name: string | null }>();
+  console.log(`[WORKSPACE] TX ledgerQuery: ${ledgerQuery} params: ${JSON.stringify(ledgerParams)} found: ${ledgers.results.length}`);
 
   if (ledgers.results.length === 0) {
     return c.json({ items: [], total: 0, limit, offset });
