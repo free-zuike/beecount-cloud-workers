@@ -1299,6 +1299,20 @@ backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), a
     return c.json({ error: 'Schedule not found' }, 404);
   }
 
+  // 解析时区偏移（对齐原版：优先使用前端传的，否则从 system_settings 读取）
+  let timezoneOffset = req.timezone_offset;
+  if (timezoneOffset === undefined || timezoneOffset === null) {
+    try {
+      const sysSetting = await db
+        .prepare('SELECT timezone_offset FROM system_settings WHERE id = ?')
+        .bind('default')
+        .first<{ timezone_offset: number }>();
+      if (sysSetting) {
+        timezoneOffset = sysSetting.timezone_offset;
+      }
+    } catch { /* ignore */ }
+  }
+
   const updates: string[] = ['updated_at = ?'];
   const params: (string | number | null)[] = [serverNow];
 
@@ -1321,7 +1335,7 @@ backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), a
     updates.push('cron_expr = ?');
     params.push(req.cron_expr);
     // 更新 cron 表达式时重新计算下次运行时间（使用时区偏移）
-    const nextRunAt = calculateNextRun(req.cron_expr, req.timezone_offset ?? 0);
+    const nextRunAt = calculateNextRun(req.cron_expr, timezoneOffset ?? 0);
     updates.push('next_run_at = ?');
     params.push(nextRunAt);
   }
@@ -1353,7 +1367,7 @@ backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), a
       
       if (existingSchedule) {
         const cronToUse = req.cron_expr || existingSchedule.cron_expr;
-        const nextRunAt = calculateNextRun(cronToUse, req.timezone_offset ?? 0);
+        const nextRunAt = calculateNextRun(cronToUse, timezoneOffset ?? 0);
         updates.push('next_run_at = ?');
         params.push(nextRunAt);
       }
