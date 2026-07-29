@@ -35,7 +35,7 @@ function nowUtc(): string {
  * 为指定用户创建 sync_changes 记录（restore 后自动调用）
  * 这样 App 的 sync/pull 就能获取到投影数据
  */
-async function createSyncChangesForUser(db: D1Database, targetUserId: string): Promise<void> {
+export async function createSyncChangesForUser(db: D1Database, targetUserId: string): Promise<void> {
   const projectionTables: Array<{ table: string; entityType: string }> = [
     { table: 'read_category_projection', entityType: 'category' },
     { table: 'read_tag_projection', entityType: 'tag' },

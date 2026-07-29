@@ -2136,6 +2136,16 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
       bytesTransferred: 0, bytesTotal: 0,
     });
 
+    if (result.success) {
+      // 重建 sync_changes，让 App 能同步到恢复后的数据
+      try {
+        const { createSyncChangesForUser } = await import('./backup');
+        await createSyncChangesForUser(db, userId);
+      } catch (e) {
+        serverLogger.error('src.routers.admin', `[Restore] Sync changes creation failed: ${e}`);
+      }
+    }
+
     return c.json({ ok: true, message: result.message }, 200);
   } catch (err) {
     serverLogger.error('src.routers.admin', `[Restore] Failed: ${(err as Error).message}`);
@@ -2499,6 +2509,15 @@ backupRouter.post('/restore-from-r2', async (c) => {
     const result = await performRestore(db, r2, selectedPath, (progress) => {
       console.debug(`[Restore] ${progress.phase}: ${progress.bytesTransferred}/${progress.bytesTotal}`);
     }, password);
+
+    if (result.success) {
+      try {
+        const { createSyncChangesForUser } = await import('./backup');
+        await createSyncChangesForUser(db, userId);
+      } catch (e) {
+        serverLogger.error('src.routers.admin', `[Restore] Sync changes creation failed: ${e}`);
+      }
+    }
 
     return c.json({
       success: result.success,
