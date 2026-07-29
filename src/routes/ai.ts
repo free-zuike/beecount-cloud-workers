@@ -757,14 +757,41 @@ const _TEST_WAV_BASE64 = _buildTestWavBase64();
 async function _testSpeech(baseUrl: string, apiKey: string, model: string, timeout: number): Promise<string> {
   const whisperUrl = `${baseUrl.replace(/\/$/, '')}/audio/transcriptions`;
   const wavBytes = Uint8Array.from(atob(_TEST_WAV_BASE64), c => c.charCodeAt(0));
-  const formData = new FormData();
-  formData.append('file', new Blob([wavBytes], { type: 'audio/wav' }), 'silence.wav');
-  formData.append('model', model);
+
+  // 手动构造 multipart body（Workers 的 FormData 在某些 provider 上兼容性有问题）
+  const boundary = '----WebKitFormBoundary' + Math.random().toString(36).slice(2);
+  const encoder = new TextEncoder();
+  const parts: Uint8Array[] = [];
+
+  const w = (s: string) => parts.push(encoder.encode(s));
+  const wb = (b: Uint8Array) => parts.push(b);
+
+  w('--' + boundary + '\r\n');
+  w('Content-Disposition: form-data; name="file"; filename="silence.wav"\r\n');
+  w('Content-Type: audio/wav\r\n\r\n');
+  wb(wavBytes);
+  w('\r\n');
+  w('--' + boundary + '\r\n');
+  w('Content-Disposition: form-data; name="model"\r\n\r\n');
+  w(model);
+  w('\r\n--' + boundary + '--\r\n');
+
+  // 合并所有 Uint8Array
+  const totalLen = parts.reduce((s, p) => s + p.length, 0);
+  const merged = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const p of parts) {
+    merged.set(p, offset);
+    offset += p.length;
+  }
 
   const response = await fetch(whisperUrl, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${apiKey}` },
-    body: formData,
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+    },
+    body: merged,
     signal: AbortSignal.timeout(timeout),
   });
 
