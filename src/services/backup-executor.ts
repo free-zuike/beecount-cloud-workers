@@ -910,7 +910,7 @@ export function validateCronExpression(cronExpr: string): { valid: boolean; erro
   return { valid: true };
 }
 
-export function calculateNextRun(cronExpr: string, timezoneOffset: number = 0): string {
+export function calculateNextRun(cronExpr: string, timezoneOffset: number | string = 0): string {
   try {
     const parts = cronExpr.trim().split(/\s+/);
 

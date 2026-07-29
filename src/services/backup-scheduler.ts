@@ -22,6 +22,26 @@ async function cleanupStalePendingBackups(db: D1Database): Promise<void> {
   }
 }
 
+/**
+ * 广播进度事件到 WebSocket（对齐原版 _job_fn 的 on_progress 回调）
+ */
+async function broadcastProgress(
+  beeCountDO: DurableObjectNamespace | undefined,
+  userId: string,
+  event: Record<string, unknown>,
+): Promise<void> {
+  if (!beeCountDO) return;
+  try {
+    const doId = beeCountDO.idFromName(`ws-${userId}`);
+    const stub = beeCountDO.get(doId);
+    await stub.fetch(new URL('/broadcast', 'http://do'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: JSON.stringify({ type: 'backup_status', ...event }) }),
+    });
+  } catch { /* non-critical */ }
+}
+
 export async function processBackupSchedule(
   db: D1Database,
   schedule: any,
@@ -136,6 +156,11 @@ export async function processBackupSchedule(
       return;
     }
 
+    // 广播开始事件（对齐原版 on_progress）
+    await broadcastProgress(beeCountDO, schedule.user_id, {
+      status: 'running', runId, scheduleId: schedule.id,
+    });
+
     try {
       console.log(`[CRON] Starting backup for schedule ${schedule.id}, run ${runId}...`);
       const backupResult = await performBackup(db, runId!, schedule.user_id, ledger.id, remoteConfig, shouldEncrypt, r2, logFn, env);
@@ -184,27 +209,13 @@ export async function processBackupSchedule(
         console.error(`[CRON] Update params: ${JSON.stringify(updateParams)}`);
       }
 
-      // WebSocket 广播备份状态（通过 DO）
-      try {
-        if (env?.BEECOUNT_DO) {
-          const doId = env.BEECOUNT_DO.idFromName(`ws-${schedule.user_id}`);
-          const stub = env.BEECOUNT_DO.get(doId);
-          await stub.fetch(new URL('/broadcast', 'http://do'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: JSON.stringify({
-              type: 'backup_status',
-              status: backupResult.success ? 'succeeded' : 'failed',
-              runId: runId,
-              backupSize: backupResult.backupSize,
-              backupPath: backupResult.backupPath,
-            }) }),
-          });
-          logFn(`Broadcast backup status to user ${schedule.user_id}`);
-        }
-      } catch (wsErr) {
-        logFn(`WebSocket broadcast failed (non-fatal): ${(wsErr as Error).message}`);
-      }
+      // 广播完成事件（对齐原版 on_progress）
+      await broadcastProgress(beeCountDO, schedule.user_id, {
+        status: backupResult.success ? 'succeeded' : 'failed',
+        runId, scheduleId: schedule.id,
+        backupSize: backupResult.backupSize,
+        backupPath: backupResult.backupPath,
+      });
 
       // 更新调度状态
       try {
@@ -219,6 +230,11 @@ export async function processBackupSchedule(
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       const finishedAt = new Date().toISOString();
       console.error(`[CRON] Exception during backup for schedule ${schedule.id}:`, error);
+
+      // 广播失败事件
+      await broadcastProgress(beeCountDO, schedule.user_id, {
+        status: 'failed', runId, scheduleId: schedule.id, error: errorMsg,
+      });
       
       try {
         await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?')
