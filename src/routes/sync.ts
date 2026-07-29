@@ -1307,6 +1307,7 @@ syncRouter.get('/full', async (c) => {
       db.prepare('SELECT * FROM read_tag_projection WHERE user_id = ?').bind(userId).all(),
       db.prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?').bind(effectiveLedgerId).all(),
     ]);
+    console.log(`[SYNC] sync/full ledger=${ledger.id} ext=${ledger.external_id} effective=${effectiveLedgerId} txs=${txs.results.length} budgets=${budgets.results.length} userId=${userId}`);
 
     // 检查缓存（与原版 snapshot_cache 对齐）
     let snapshot = snapshotCacheGet(ledger.id, latestCursor) as Record<string, unknown> | null;
