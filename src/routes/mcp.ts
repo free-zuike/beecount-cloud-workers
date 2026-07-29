@@ -79,7 +79,7 @@ async function execTool(db: D1Database, userId: string, name: string, args: Reco
       default: r = { content: [{ type: 'text', text: JSON.stringify({ error: `Unknown tool: ${name}` }) }], isError: true };
     }
     const d = Date.now() - t;
-    try { await db.prepare(`INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, args_summary, duration_ms, called_at) VALUES (?, ?, ?, ?, ?, 'success', ?, ?, ?)`).bind(userId, patId, patPrefix, patName, name, JSON.stringify(Object.keys(args)), d, nowUtc()).run(); } catch (e) { serverLogger.error('src.routers.mcp', `Failed to log MCP call: ${(e as Error).message}`); }
+    try { await db.prepare(`INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, args_summary, duration_ms, called_at) VALUES (?, ?, ?, ?, ?, 'ok', ?, ?, ?)`).bind(userId, patId, patPrefix, patName, name, JSON.stringify(Object.keys(args)), d, nowUtc()).run(); } catch (e) { serverLogger.error('src.routers.mcp', `Failed to log MCP call: ${(e as Error).message}`); }
     return r;
   } catch (err) {
     const d = Date.now() - t;
