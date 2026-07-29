@@ -267,7 +267,7 @@ const ScheduleCreateSchema = z.object({
   enabled: z.boolean().optional(),
   remote_ids: z.array(z.union([z.string(), z.number()])).optional().default([]),
   include_attachments: z.boolean().optional().default(true),
-  timezone_offset: z.number().optional().default(0),
+  timezone_offset: z.number().optional(),
 });
 
 const ScheduleUpdateSchema = z.object({
@@ -1194,6 +1194,22 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
       }
     } catch (e) {
       // 表可能不存在，忽略
+    }
+  }
+  if (timezoneOffset === undefined || timezoneOffset === null) {
+    // 尝试从请求头获取时区（Cloudflare 的 CF-Timezone 或标准 Time-Zone 头）
+    const cfTz = c.req.header('CF-Timezone');
+    if (cfTz) {
+      try {
+        const date = new Date();
+        const utcMs = date.getTime();
+        const tzStr = date.toLocaleString('en-CA', { timeZone: cfTz, hour12: false });
+        const tzMs = new Date(tzStr + ' UTC').getTime();
+        if (!isNaN(tzMs)) {
+          timezoneOffset = Math.round((tzMs - utcMs) / 60000);
+          serverLogger.info('src.routers.admin', `[Backup] Using timezone from CF-Timezone header: ${cfTz} -> ${timezoneOffset}`);
+        }
+      } catch { /* ignore */ }
     }
   }
   
