@@ -21,8 +21,11 @@ export interface RestoreResult {
 }
 
 /**
- * 从 R2 下载备份并解析 tar.gz
- * 支持加密备份（.zip 结尾），需提供 password
+ * 从 R2 下载备份并解析
+ * 支持格式：
+ *   - .zip（AES-256 加密 ZIP，使用 @zip.js/zip.js）
+ *   - .enc（AES-256-GCM 加密 tar.gz）
+ *   - .tar.gz（未加密 tar.gz）
  */
 async function downloadAndExtractBackup(
   r2: R2Bucket,
@@ -34,31 +37,51 @@ async function downloadAndExtractBackup(
   if (!obj) throw new Error(`Backup not found: ${backupPath}`);
   
   let data = new Uint8Array(await obj.arrayBuffer());
-  
-  // 如果是加密备份（.zip 结尾），先解密
-  const isEncrypted = backupPath.endsWith('.enc');
-  if (isEncrypted) {
+  let entries: { name: string; size: number; data: Uint8Array }[];
+
+  // 判断是否为 ZIP 格式（PK\x03\x04 开头）
+  const isZip = data.length > 2 && data[0] === 0x50 && data[1] === 0x4b;
+
+  if (isZip) {
+    // ZIP 格式（AES-256 加密 ZIP）
     if (!password) {
-      throw new Error('Backup is encrypted but no password provided');
+      throw new Error('Encrypted backup requires password');
+    }
+    const zipjs = await import('@zip.js/zip.js');
+    const reader = new zipjs.ZipReader(new zipjs.Uint8ArrayReader(data));
+    const zipEntries = await reader.getEntries();
+    entries = [];
+    for (const ze of zipEntries) {
+      if (ze.directory) continue;
+      const writer = new zipjs.Uint8ArrayWriter();
+      await ze.getData?.(writer, { password });
+      const fileData = writer.getData() as unknown as Uint8Array;
+      entries.push({ name: ze.filename, size: fileData.length, data: fileData });
+    }
+    await reader.close();
+  } else if (backupPath.endsWith('.enc')) {
+    // AES-256-GCM 加密 tar.gz
+    if (!password) {
+      throw new Error('Encrypted backup requires password');
     }
     const { decryptData } = await import('./encryption');
-    data = await decryptData(data, password);
+    data = new Uint8Array(await decryptData(data, password));
+    const decompressed = await decompressGzip(data);
+    entries = parseTar(decompressed);
+  } else {
+    // 未加密 tar.gz
+    const decompressed = await decompressGzip(data);
+    entries = parseTar(decompressed);
   }
-  
-  // 解压 gzip
-  const decompressed = await decompressGzip(data);
-  
-  // 解析 tar
-  const entries = parseTar(decompressed);
-  
+
   // 提取 meta.json
   const metaEntry = entries.find(e => e.name === 'meta.json');
   const meta = metaEntry ? JSON.parse(new TextDecoder().decode(metaEntry.data)) : {};
-  
+
   // 提取 db.json
   const dbJsonEntry = entries.find(e => e.name === 'db.json');
   const dbJson = dbJsonEntry ? JSON.parse(new TextDecoder().decode(dbJsonEntry.data)) : {};
-  
+
   // 提取附件
   const attachments = new Map<string, Uint8Array>();
   for (const entry of entries) {
@@ -66,7 +89,7 @@ async function downloadAndExtractBackup(
       attachments.set(entry.name, entry.data);
     }
   }
-  
+
   return { meta, tables: dbJson.tables || {}, attachments };
 }
 
