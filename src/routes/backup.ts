@@ -41,6 +41,7 @@ export async function createSyncChangesForUser(db: D1Database, targetUserId: str
     { table: 'read_tag_projection', entityType: 'tag' },
     { table: 'read_budget_projection', entityType: 'budget' },
     { table: 'read_account_projection', entityType: 'account' },
+    { table: 'read_tx_projection', entityType: 'transaction' },
   ];
 
   const maxChangeId = await db.prepare('SELECT MAX(change_id) as max_id FROM sync_changes').first<{ max_id: number | null }>();
