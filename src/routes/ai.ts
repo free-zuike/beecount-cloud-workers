@@ -131,7 +131,7 @@ async function callAiChatJson(
   
   // 推理模型锁 temperature 时自适应重试
   if (!response.ok && response.status === 400) {
-    const errText = await response.text();
+    const errText = await response.clone().text();
     if (errText.includes('temperature')) {
       delete body.temperature;
       response = await fetch(url, {
@@ -143,6 +143,8 @@ async function callAiChatJson(
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(timeout),
       });
+    } else {
+      throw new Error(`AI API error: ${response.status} - ${errText.slice(0, 200)}`);
     }
   }
   
