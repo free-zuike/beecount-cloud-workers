@@ -8,7 +8,7 @@ import { uploadToS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
-import { encryptData } from '../lib/encryption';
+import { createEncryptedZip } from '../lib/zip-lib';
 import { createSqliteWithData } from '../lib/sqlite-writer';
 
 // ===========================
@@ -125,7 +125,7 @@ export interface BackupResult {
 }
 
 // ===========================
-// AES-256-GCM 加密工具 — 使用 '../lib/encryption' 的 encryptData
+// AES-256 加密 ZIP 工具 — 使用 '../lib/zip-lib' 的 createEncryptedZip（基于 jszip）
 // ===========================
 
 async function getEncryptionPassword(
@@ -353,7 +353,7 @@ export async function uploadBackupToRemote(
 
     const localTime = new Date(Date.now() + 8 * 3600000);
     const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-    const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.enc' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
 
     const result = await uploadToS3(endpoint, bucket, accessKey, secretKey, region, key, backupBytes, 'application/gzip');
     return result.ok ? { ok: true, message: 'Upload successful', key } : { ok: false, message: result.message };
@@ -364,7 +364,7 @@ export async function uploadBackupToRemote(
     const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
     let prefix = '';
     if (remoteConfig.savePath) prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
-    const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.enc' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
     const result = await uploadToWebDav(remoteConfig.url!, remoteConfig.username!, remoteConfig.password!, key, backupBytes);
     return result.ok ? { ok: true, message: 'Upload successful', key } : { ok: false, message: result.message };
   }
@@ -409,9 +409,12 @@ export async function performBackupFanOut(
     const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.zipryption_password;
     if (pw) {
       try {
-        backupBytes = await encryptData(backupBytes, pw);
+        backupBytes = await createEncryptedZip(
+          [{ name: 'backup.tar.gz', data: backupBytes }],
+          pw
+        );
         encrypted = true;
-        logWrap(`[Backup] Encrypted: ${backupBytes.length} bytes`);
+        logWrap(`[Backup] Encrypted (AES-256 ZIP): ${backupBytes.length} bytes`);
       } catch (e) {
         logWrap(`[Backup] Encryption failed: ${e}`);
       }
@@ -588,8 +591,11 @@ export async function performBackup(
       const encryptionPassword = remoteConfig.age_passphrase || remoteConfig.zipryption_password;
       if (encryptionPassword) {
         try {
-          log('[Backup] Encrypting backup with AES-256-GCM...');
-          backupBytes = await encryptData(backupBytes, encryptionPassword);
+          log('[Backup] Encrypting backup with AES-256 ZIP...');
+          backupBytes = await createEncryptedZip(
+            [{ name: 'backup.tar.gz', data: backupBytes }],
+            encryptionPassword
+          );
           encrypted = true;
           log(`[Backup] Backup encrypted: ${backupBytes.length} bytes`);
         } catch (encryptErr) {
@@ -636,7 +642,7 @@ export async function performBackup(
       const now = new Date();
       const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
       const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const fileExt = encrypted ? '.enc' : '.tar.gz';
+      const fileExt = encrypted ? '.zip' : '.tar.gz';
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
 
       log(`[Backup] Uploading to S3 key: ${backupKey}`);
@@ -728,7 +734,7 @@ export async function performBackup(
       const now = new Date();
       const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
       const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const fileExt = encrypted ? '.enc' : '.tar.gz';
+      const fileExt = encrypted ? '.zip' : '.tar.gz';
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
       
       log(`[Backup] Uploading to R2: ${backupKey} (${backupSize} bytes)`);
@@ -771,7 +777,7 @@ export async function performBackup(
       const now = new Date();
       const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
       const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const fileExt = encrypted ? '.enc' : '.tar.gz';
+      const fileExt = encrypted ? '.zip' : '.tar.gz';
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
 
       log(`[Backup] Uploading to FTP: ${backupKey}`);
@@ -808,7 +814,7 @@ export async function performBackup(
       const now = new Date();
       const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
       const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const fileExt = encrypted ? '.enc' : '.tar.gz';
+      const fileExt = encrypted ? '.zip' : '.tar.gz';
       const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
 
       log(`[Backup] Uploading to SFTP: ${backupKey}`);
