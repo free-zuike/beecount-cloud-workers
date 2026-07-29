@@ -268,6 +268,7 @@ async function withRetry<T>(
 
 export interface GeneratedBackup {
   backupBytes: Uint8Array;
+  entries: Array<{ name: string; data: Uint8Array }>;
   encrypted: boolean;
   backupSize: number;
   logLines: string[];
@@ -309,20 +310,20 @@ export async function generateBackupBytes(
     } catch {}
   }
 
-  // 创建 tar.gz
-  const tarEntries: { name: string; data: Uint8Array }[] = [];
-  tarEntries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: '1.6.1', createdAt: new Date().toISOString(), userId, includeAttachments: true }, null, 2)) });
+  // 构建文件条目（供 tar.gz 或 ZIP 使用）
+  const entries: { name: string; data: Uint8Array }[] = [];
+  entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: '1.6.1', createdAt: new Date().toISOString(), userId, includeAttachments: true }, null, 2)) });
   try {
     const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
-    tarEntries.push({ name: 'db.sqlite3', data: createMinimalSqliteFile() });
+    entries.push({ name: 'db.sqlite3', data: createMinimalSqliteFile() });
   } catch {}
-  tarEntries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: new Date().toISOString(), version: '1.0', schema_version: 1, user_id: userId, tables }, null, 2)) });
-  for (const [key, value] of attachments) tarEntries.push({ name: key, data: value });
+  entries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: new Date().toISOString(), version: '1.0', schema_version: 1, user_id: userId, tables }, null, 2)) });
+  for (const [key, value] of attachments) entries.push({ name: key, data: value });
 
-  let backupBytes = await withRetry(() => createTarGz(tarEntries), 2, 1000, 'create tar.gz');
+  let backupBytes = await withRetry(() => createTarGz(entries), 2, 1000, 'create tar.gz');
   logWrap(`[Backup] tar.gz created: ${backupBytes.length} bytes, ${Object.keys(tables).length} tables`);
 
-  return { backupBytes, encrypted: false, backupSize: backupBytes.length, logLines };
+  return { backupBytes, entries, encrypted: false, backupSize: backupBytes.length, logLines };
 }
 
 /**
@@ -402,17 +403,15 @@ export async function performBackupFanOut(
   const generated = await generateBackupBytes(db, userId, ledgerId, r2, logFn);
   logLines.push(...generated.logLines);
 
-  // 2. 加密（如果需要）
+  // 2. 加密（如果需要）— 对齐原版：直接加密文件到 ZIP，无中间 tar 层
   let backupBytes = generated.backupBytes;
   let encrypted = false;
   if (shouldEncrypt && remoteConfigs.length > 0) {
     const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.zipryption_password;
     if (pw) {
       try {
-        backupBytes = await createEncryptedZip(
-          [{ name: 'backup.tar.gz', data: backupBytes }],
-          pw
-        );
+        // 将文件直接添加到 ZIP（对齐原版 tar_builder.py build_encrypted_zip）
+        backupBytes = await createEncryptedZip(generated.entries, pw);
         encrypted = true;
         logWrap(`[Backup] Encrypted (AES-256 ZIP): ${backupBytes.length} bytes`);
       } catch (e) {
