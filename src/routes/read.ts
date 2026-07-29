@@ -481,14 +481,7 @@ readRouter.get('/workspace/transactions', async (c) => {
   } else {
     query += ' WHERE user_id = ?';
     bindings.push(userId);
-  }
-      query += ' AND ledger_id = ?';
-      bindings.push(ledger.id);
-    } else {
-      // 账本不存在或无权访问，返回空结果
-      return c.json({ rows: [], total: 0 });
-    }
-  } else {
+
     // 无 ledgerId 过滤时，查询用户可访问的所有账本
     const accessibleIds = await db.prepare(
       `SELECT l.id FROM ledgers l WHERE l.user_id = ?
