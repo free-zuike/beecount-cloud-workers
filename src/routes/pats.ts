@@ -328,22 +328,17 @@ patsRouter.patch('/:id', zValidator('json', PatUpdateSchema), async (c) => {
 // ---------------------------------------------------------------------------
 
 /**
- * 撤销指定的 PAT
- *
- * 功能说明：
- * - 设置 revoked_at 为当前时间
- * - 被撤销的 PAT 无法再使用
+ * 删除 PAT（物理删除，与原版 Python 一致）
  */
 patsRouter.delete('/:id', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const patId = c.req.param('id');
-  const serverNow = nowUtc();
 
   // 验证归属
   const pat = await db
     .prepare(
-      'SELECT id FROM personal_access_tokens WHERE id = ? AND user_id = ? AND revoked_at IS NULL'
+      'SELECT id FROM personal_access_tokens WHERE id = ? AND user_id = ?'
     )
     .bind(patId, userId)
     .first<{ id: string }>();
@@ -353,8 +348,8 @@ patsRouter.delete('/:id', async (c) => {
   }
 
   await db
-    .prepare('UPDATE personal_access_tokens SET revoked_at = ? WHERE id = ?')
-    .bind(serverNow, patId)
+    .prepare('DELETE FROM personal_access_tokens WHERE id = ? AND user_id = ?')
+    .bind(patId, userId)
     .run();
 
   return c.json({ success: true });
