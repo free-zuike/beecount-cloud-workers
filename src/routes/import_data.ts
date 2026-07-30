@@ -20,6 +20,7 @@ import { applyMapping } from '../services/import_data/transformer';
 import { buildExistingSets, computeStats } from '../services/import_data/stats';
 import type { ImportFieldMapping, ImportData, ImportTransaction } from '../services/import_data/schema';
 import { makeDefaultMapping, isMappingComplete } from '../services/import_data/schema';
+import { serverLogger } from '../lib/logger';
 
 function nowUtc(): string { return new Date().toISOString(); }
 
@@ -242,6 +243,7 @@ importRouter.post('/upload', async (c) => {
       sample_transactions: sampleTxs.slice(0, 10),
     });
   } catch (err) {
+    serverLogger.error('src.routers.import', '[IMPORT] Upload failed:', err);
     return c.json({ error: 'Failed to parse file', error_code: 'IMPORT_PARSE_FAILED' }, 400);
   }
 });
