@@ -234,6 +234,19 @@ importRouter.post('/upload', async (c) => {
 
     // Apply mapping to get sample transactions
     const sampleTxs = applyMapping(importData.rows, importData.suggestedMapping);
+    const sampleTransactions = sampleTxs.slice(0, 10).map(tx => ({
+      tx_type: tx.txType,
+      amount: String(tx.amount),
+      happened_at: tx.happenedAt,
+      note: tx.note ?? null,
+      category_name: tx.categoryName ?? null,
+      parent_category_name: tx.parentCategoryName ?? null,
+      account_name: tx.accountName ?? null,
+      from_account_name: tx.fromAccountName ?? null,
+      to_account_name: tx.toAccountName ?? null,
+      tag_names: tx.tagNames,
+      source_row_number: tx.sourceRowNumber,
+    }));
 
     return c.json({
       import_token: token,
@@ -251,7 +264,7 @@ importRouter.post('/upload', async (c) => {
         parse_warnings_total: importData.parseWarnings.length,
       },
       sample_rows: importData.rows.slice(0, 10).map(r => r.cells),
-      sample_transactions: sampleTxs.slice(0, 10),
+      sample_transactions: sampleTransactions,
     });
   } catch (err) {
     serverLogger.error('src.routers.import', '[IMPORT] Upload failed:', err);
