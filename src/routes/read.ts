@@ -332,7 +332,7 @@ readRouter.get('/ledgers', async (c) => {
         updated_at: now,
         role: (ledger.role || 'owner') as 'owner' | 'editor' | 'viewer',
         is_shared: memberCount > 0,
-        member_count: memberCount + 1,
+        member_count: memberCount,
       });
     }
   }
@@ -730,7 +730,7 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
     .prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?')
     .bind(ledger.id)
     .first<{ cnt: number }>();
-  const totalMembers = (memberCount?.cnt ?? 0) + 1;
+  const totalMembers = (memberCount?.cnt ?? 0);
 
   const response: ReadLedgerDetailOut = {
     ledger_id: ledger.external_id,
