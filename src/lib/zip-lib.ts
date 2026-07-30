@@ -3,7 +3,10 @@
  * 兼容 7-Zip / WinRAR / Keka 等常见工具，支持 Cloudflare Workers
  */
 
-import { ZipWriter, Uint8ArrayWriter, Uint8ArrayReader } from '@zip.js/zip.js';
+import { configure, ZipWriter, Uint8ArrayWriter, Uint8ArrayReader } from '@zip.js/zip.js/index-native.js';
+
+// 配置 zip.js 不使用 Web Workers（Cloudflare Workers 不支持）
+configure({ useWebWorkers: false });
 
 /**
  * 创建 AES-256 加密 ZIP 文件

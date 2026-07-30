@@ -5,6 +5,11 @@
  * Workers 版本：R2 读取 → 内存解压 → D1 导入 → R2 上传
  */
 
+// 配置 zip.js 必须先于其他导入
+import { configure } from '@zip.js/zip.js';
+configure({ useWebWorkers: false });
+import { ZipReader, Uint8ArrayReader, Uint8ArrayWriter } from '@zip.js/zip.js/index-native.js';
+
 export interface RestoreProgress {
   phase: 'downloading' | 'importing' | 'uploading' | 'done' | 'failed';
   bytesTransferred: number;
@@ -47,13 +52,12 @@ async function downloadAndExtractBackup(
     if (!password) {
       throw new Error('Encrypted backup requires password');
     }
-    const zipjs = await import('@zip.js/zip.js');
-    const reader = new zipjs.ZipReader(new zipjs.Uint8ArrayReader(data));
+    const reader = new ZipReader(new Uint8ArrayReader(data));
     const zipEntries = await reader.getEntries();
     entries = [];
     for (const ze of zipEntries) {
       if (ze.directory) continue;
-      const writer = new zipjs.Uint8ArrayWriter();
+      const writer = new Uint8ArrayWriter();
       await ze.getData?.(writer, { password });
       const fileData = writer.getData() as unknown as Uint8Array;
       entries.push({ name: ze.filename, size: fileData.length, data: fileData });
