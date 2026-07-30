@@ -85,11 +85,11 @@ async function findLedgerForUser(
   db: D1Database,
   ledgerExternalId: string,
   userId: string,
-): Promise<{ id: string; user_id: string; external_id: string; name: string | null; currency: string; is_shared: number } | null> {
+): Promise<{ id: string; user_id: string; external_id: string; name: string | null; currency: string; is_shared: number; month_start_day: number } | null> {
   const ledger = await db
-    .prepare('SELECT id, user_id, external_id, name, currency, is_shared FROM ledgers WHERE external_id = ?')
+    .prepare('SELECT id, user_id, external_id, name, currency, is_shared, month_start_day FROM ledgers WHERE external_id = ?')
     .bind(ledgerExternalId)
-    .first<{ id: string; user_id: string; external_id: string; name: string | null; currency: string; is_shared: number }>();
+    .first<{ id: string; user_id: string; external_id: string; name: string | null; currency: string; is_shared: number; month_start_day: number }>();
 
   if (!ledger) return null;
 
@@ -1777,53 +1777,108 @@ workspaceRouter.get('/ledgers/:id/member-stats', zValidator('query', MemberStats
     return c.json({ error: 'Ledger not found or access denied' }, 404);
   }
 
-  const owner = await db
-    .prepare('SELECT id FROM users WHERE id = ?')
-    .bind(ledger.user_id)
-    .first<{ id: string }>();
-
-  const members = await db
-    .prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ?')
-    .bind(ledger.id)
-    .all<{ user_id: string }>();
-
-  const allUserIds = [
-    ...(owner ? [owner.id] : []),
-    ...members.results.map((m) => m.user_id),
-  ];
-
+  // 计算日期范围（与原版 _analytics_range 对齐）
+  const monthStartDay = Math.min(Math.max(ledger.month_start_day ?? 1, 1), 28);
+  let startAt: string | null = null;
+  let endAt: string | null = null;
+  let normalizedPeriod: string | null = null;
   let dateFilter = '';
   const dateParams: string[] = [];
 
-  if (scope === 'month') {
+  if (scope === 'all') {
+    // scope=all 不设日期范围
+  } else if (scope === 'month') {
     const now = new Date();
     const tzMs = tz_offset_minutes * 60 * 1000;
     const localNow = new Date(now.getTime() + tzMs);
-    const year = localNow.getUTCFullYear();
-    const month = localNow.getUTCMonth() + 1;
-    const startOfMonth = `${year}-${String(month).padStart(2, '0')}-01T00:00:00.000Z`;
-    dateFilter = 'AND happened_at >= ?';
-    dateParams.push(startOfMonth);
+    let targetYear = localNow.getUTCFullYear();
+    let targetMonth = localNow.getUTCMonth() + 1;
+    if (period) {
+      const parts = period.split('-');
+      targetYear = parseInt(parts[0], 10);
+      targetMonth = parseInt(parts[1], 10);
+    } else {
+      // 默认当前周期（与原版对齐）
+      if (localNow.getUTCDate() < monthStartDay) {
+        if (targetMonth === 1) { targetYear--; targetMonth = 12; }
+        else { targetMonth--; }
+      }
+    }
+    normalizedPeriod = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
+    const startLocal = new Date(Date.UTC(targetYear, targetMonth - 1, monthStartDay, 0, 0, 0) - tzMs);
+    const endLocal = new Date(Date.UTC(targetYear, targetMonth, monthStartDay, 0, 0, 0) - tzMs);
+    startAt = startLocal.toISOString();
+    endAt = endLocal.toISOString();
+    dateFilter = 'AND happened_at >= ? AND happened_at < ?';
+    dateParams.push(startAt, endAt);
   } else if (scope === 'year') {
     const now = new Date();
     const tzMs = tz_offset_minutes * 60 * 1000;
     const localNow = new Date(now.getTime() + tzMs);
-    const year = localNow.getUTCFullYear();
-    const startOfYear = `${year}-01-01T00:00:00.000Z`;
-    dateFilter = 'AND happened_at >= ?';
-    dateParams.push(startOfYear);
-  } else if (period) {
-    dateFilter = 'AND happened_at >= ?';
-    dateParams.push(period);
+    let targetYear = localNow.getUTCFullYear();
+    if (period) {
+      targetYear = parseInt(period, 10);
+    } else {
+      // 1月里还没到起始日时归上一年度周期
+      if (localNow.getUTCMonth() === 0 && localNow.getUTCDate() < monthStartDay) {
+        targetYear--;
+      }
+    }
+    normalizedPeriod = String(targetYear);
+    const startLocal = new Date(Date.UTC(targetYear, 0, monthStartDay, 0, 0, 0) - tzMs);
+    const endLocal = new Date(Date.UTC(targetYear + 1, 0, monthStartDay, 0, 0, 0) - tzMs);
+    startAt = startLocal.toISOString();
+    endAt = endLocal.toISOString();
+    dateFilter = 'AND happened_at >= ? AND happened_at < ?';
+    dateParams.push(startAt, endAt);
   }
 
+  // 获取所有成员（含所有者）
+  const owner = await db
+    .prepare('SELECT id, email FROM users WHERE id = ?')
+    .bind(ledger.user_id)
+    .first<{ id: string; email: string }>();
+
+  const memberRows = await db
+    .prepare('SELECT user_id, role FROM ledger_members WHERE ledger_id = ?')
+    .bind(ledger.id)
+    .all<{ user_id: string; role: string }>();
+
+  const roleByUid: Record<string, string> = {};
+  const allUserIds = new Set<string>();
+  if (owner) {
+    allUserIds.add(owner.id);
+    roleByUid[owner.id] = 'owner';
+  }
+  for (const m of memberRows.results) {
+    allUserIds.add(m.user_id);
+    roleByUid[m.user_id] = m.role;
+  }
+
+  // 查询用户信息
+  const uidList = [...allUserIds];
+  const userInfo: Record<string, { email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number }> = {};
+  if (uidList.length > 0) {
+    const placeholders = uidList.map(() => '?').join(',');
+    const users = await db
+      .prepare(`SELECT u.id, u.email, p.display_name, p.avatar_file_id, p.avatar_version
+                FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id
+                WHERE u.id IN (${placeholders})`)
+      .bind(...uidList)
+      .all<{ id: string; email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number }>();
+    for (const u of users.results) {
+      userInfo[u.id] = { email: u.email, display_name: u.display_name, avatar_file_id: u.avatar_file_id, avatar_version: u.avatar_version || 0 };
+    }
+  }
+
+  // 查询交易统计
   const stats: Record<string, { income: number; expense: number; tx_count: number }> = {};
-  for (const uid of allUserIds) {
+  for (const uid of uidList) {
     stats[uid] = { income: 0, expense: 0, tx_count: 0 };
   }
 
-  if (allUserIds.length > 0) {
-    const placeholders = allUserIds.map(() => '?').join(',');
+  if (uidList.length > 0) {
+    const placeholders = uidList.map(() => '?').join(',');
     const txRows = await db
       .prepare(
         `SELECT created_by_user_id, tx_type, COALESCE(native_amount, amount) as effective_amount
@@ -1833,7 +1888,7 @@ workspaceRouter.get('/ledgers/:id/member-stats', zValidator('query', MemberStats
            AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)
            ${dateFilter}`
       )
-      .bind(ledger.id, ...allUserIds, ...dateParams)
+      .bind(ledger.id, ...uidList, ...dateParams)
       .all<{ created_by_user_id: string | null; tx_type: string; effective_amount: number }>();
 
     for (const tx of txRows.results) {
@@ -1848,14 +1903,34 @@ workspaceRouter.get('/ledgers/:id/member-stats', zValidator('query', MemberStats
     }
   }
 
-  const result = allUserIds.map((uid) => ({
-    user_id: uid,
-    income: stats[uid].income,
-    expense: stats[uid].expense,
-    tx_count: stats[uid].tx_count,
-  }));
+  // 构建响应（与原版对齐）
+  const items = uidList.map((uid) => {
+    const info = userInfo[uid] || { email: null, display_name: null, avatar_file_id: null, avatar_version: 0 };
+    return {
+      user_id: uid,
+      email: info.email,
+      display_name: info.display_name,
+      avatar_url: info.avatar_file_id ? `/api/v1/profile/avatar/${uid}?v=${info.avatar_version}` : null,
+      avatar_version: info.avatar_version,
+      role: roleByUid[uid] || 'removed',
+      income_total: stats[uid].income,
+      expense_total: stats[uid].expense,
+      tx_count: stats[uid].tx_count,
+    };
+  });
 
-  return c.json({ member_stats: result });
+  // 排序：支出降序、收入降序、笔数降序、user_id 兜底
+  items.sort((a, b) => b.expense_total - a.expense_total || b.income_total - a.income_total || b.tx_count - a.tx_count || a.user_id.localeCompare(b.user_id));
+
+  return c.json({
+    ledger_id: ledgerExternalId,
+    ledger_currency: ledger.currency || 'CNY',
+    scope,
+    period: normalizedPeriod,
+    start_at: startAt,
+    end_at: endAt,
+    items,
+  });
 });
 
 // ===========================================================================
