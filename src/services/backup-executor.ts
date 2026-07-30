@@ -172,6 +172,8 @@ const BACKUP_TABLES = [
   'personal_access_tokens',
   'backup_remotes',
   'backup_schedules',
+  'backup_runs',
+  'backup_run_targets',
   // 'backup_schedule_remotes', // 表可能不存在，跳过
   'system_settings',
   'recovery_codes',
