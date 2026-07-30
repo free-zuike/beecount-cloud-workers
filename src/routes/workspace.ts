@@ -1643,9 +1643,9 @@ workspaceRouter.get('/ledgers/:id/members', async (c) => {
       SELECT lm.user_id, lm.role, lm.joined_at, u.email
       FROM ledger_members lm
       JOIN users u ON lm.user_id = u.id
-      WHERE lm.ledger_id = ?
+      WHERE lm.ledger_id = ? AND lm.user_id != ?
     `)
-    .bind(ledger.id)
+    .bind(ledger.id, ledger.user_id)
     .all<{ user_id: string; role: string; joined_at: string; email: string }>();
 
   const owner = await db
