@@ -335,11 +335,17 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       // 创建不存在的账本（批量）
       for (const externalId of ledgerExternalIds) {
         if (!ledgerMap[externalId]) {
+          // 先检查是否已存在（避免 UNIQUE 约束错误）
+          const existing = await db.prepare('SELECT id, user_id FROM ledgers WHERE user_id = ? AND external_id = ?').bind(userId, externalId).first<{ id: string; user_id: string }>();
+          if (existing) {
+            ledgerMap[externalId] = { id: existing.id, user_id: existing.user_id, external_id: externalId };
+            continue;
+          }
           serverLogger.info('src.routers.sync', '[SYNC] Creating new ledger:', externalId);
           const newLedgerId = randomUUID();
           await db
             .prepare(
-              `INSERT OR REPLACE INTO ledgers (id, user_id, external_id, name, currency, created_at)
+              `INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
                VALUES (?, ?, ?, ?, 'CNY', ?)`
             )
             .bind(newLedgerId, userId, externalId, externalId, serverNow)
