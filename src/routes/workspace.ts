@@ -399,6 +399,8 @@ workspaceRouter.get('/transactions', async (c) => {
       created_by_display_name: creator?.display_name ?? null,
       created_by_avatar_url: creator?.avatar_file_id ? `/api/v1/profile/avatar/${creatorUid}?v=${creator?.avatar_version}` : null,
       created_by_avatar_version: creator?.avatar_version ?? null,
+      exclude_from_stats: !!(row.exclude_from_stats),
+      exclude_from_budget: !!(row.exclude_from_budget),
     };
   });
 

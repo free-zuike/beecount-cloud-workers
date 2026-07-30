@@ -588,6 +588,8 @@ readRouter.get('/workspace/transactions', async (c) => {
       created_by_user_id: row.created_by_user_id as string | null,
       created_by_avatar_url: null,
       updated_at: row.updated_at as string,
+      exclude_from_stats: !!(row.exclude_from_stats),
+      exclude_from_budget: !!(row.exclude_from_budget),
     };
   });
 
