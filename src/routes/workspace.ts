@@ -927,6 +927,7 @@ workspaceRouter.get('/analytics', async (c) => {
       summary: { transaction_count: 0, income_total: 0, expense_total: 0, balance: 0, distinct_days: 0, first_tx_at: null, last_tx_at: null },
       series: [],
       category_ranks: [],
+      anomaly_months: [],
       range: { scope, metric, period: null, start_at: null, end_at: null },
     });
   }
@@ -944,16 +945,61 @@ workspaceRouter.get('/analytics', async (c) => {
   let txQuery = `SELECT tx_type, COALESCE(native_amount, amount) as effective_amount, happened_at, category_name FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`;
   const txParams: (string | number)[] = [...ledgerInternalIds];
 
-  if (period) {
-    const [yearStr, monthStr] = period.split('-');
+  // 计算日期范围（与原版 _analytics_range 对齐）
+  let startAt: string | null = null;
+  let endAt: string | null = null;
+  let normalizedPeriod: string | null = null;
+
+  if (scope === 'all') {
+    // scope=all 不设日期范围
+  } else if (scope === 'month') {
+    if (period) {
+      normalizedPeriod = period;
+    } else {
+      // 默认当前周期（与原版对齐）
+      const now = new Date();
+      const localNow = new Date(now.getTime() + tzOffsetMinutes * 60000);
+      const localDay = localNow.getUTCDate();
+      let targetYear = localNow.getUTCFullYear();
+      let targetMonth = localNow.getUTCMonth() + 1;
+      if (localDay < monthStartDay) {
+        // 还没到起始日，归上个月周期
+        if (targetMonth === 1) { targetYear--; targetMonth = 12; }
+        else { targetMonth--; }
+      }
+      normalizedPeriod = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
+    }
+    const [yearStr, monthStr] = normalizedPeriod.split('-');
     const year = parseInt(yearStr, 10);
     const month = parseInt(monthStr, 10);
     if (year && month) {
-      // 用 month_start_day 计算账单周期边界（与原版 _analytics_range 对齐）
       const localStart = new Date(Date.UTC(year, month - 1, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000);
       const localEnd = new Date(Date.UTC(year, month, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000);
-      const startAt = localStart.toISOString();
-      const endAt = localEnd.toISOString();
+      startAt = localStart.toISOString();
+      endAt = localEnd.toISOString();
+      txQuery += ' AND happened_at >= ? AND happened_at < ?';
+      txParams.push(startAt, endAt);
+    }
+  } else if (scope === 'year') {
+    if (period) {
+      normalizedPeriod = period;
+    } else {
+      // 默认当前年份（与原版对齐）
+      const now = new Date();
+      const localNow = new Date(now.getTime() + tzOffsetMinutes * 60000);
+      let targetYear = localNow.getUTCFullYear();
+      // 1月里还没到起始日时归上一年度周期
+      if (localNow.getUTCMonth() === 0 && localNow.getUTCDate() < monthStartDay) {
+        targetYear--;
+      }
+      normalizedPeriod = String(targetYear);
+    }
+    const year = parseInt(normalizedPeriod, 10);
+    if (year) {
+      const localStart = new Date(Date.UTC(year, 0, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000);
+      const localEnd = new Date(Date.UTC(year + 1, 0, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000);
+      startAt = localStart.toISOString();
+      endAt = localEnd.toISOString();
       txQuery += ' AND happened_at >= ? AND happened_at < ?';
       txParams.push(startAt, endAt);
     }
@@ -999,9 +1045,15 @@ workspaceRouter.get('/analytics', async (c) => {
         bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}`;
       }
     } else {
-      const weekStart = new Date(localDate);
-      weekStart.setUTCDate(localDate.getUTCDate() - localDate.getUTCDay());
-      bucket = weekStart.toISOString().slice(0, 10);
+      // scope=all 用月度桶（与原版 _bucket_key 对齐：scope != "month" 时走月逻辑）
+      const localDate = new Date(date.getTime() + tzOffsetMinutes * 60000);
+      if (localDate.getUTCDate() < monthStartDay) {
+        const prevMonth = localDate.getUTCMonth() === 0 ? 11 : localDate.getUTCMonth() - 1;
+        const prevYear = localDate.getUTCMonth() === 0 ? localDate.getUTCFullYear() - 1 : localDate.getUTCFullYear();
+        bucket = `${prevYear}-${String(prevMonth + 1).padStart(2, '0')}`;
+      } else {
+        bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}`;
+      }
     }
 
     // distinct_days 用时区调整后的日期
