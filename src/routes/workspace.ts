@@ -1643,22 +1643,13 @@ workspaceRouter.get('/ledgers/:id/members', async (c) => {
       SELECT lm.user_id, lm.role, lm.joined_at, u.email
       FROM ledger_members lm
       JOIN users u ON lm.user_id = u.id
-      WHERE lm.ledger_id = ? AND lm.user_id != ?
+      WHERE lm.ledger_id = ?
+      ORDER BY lm.joined_at ASC
     `)
-    .bind(ledger.id, ledger.user_id)
+    .bind(ledger.id)
     .all<{ user_id: string; role: string; joined_at: string; email: string }>();
 
-  const owner = await db
-    .prepare('SELECT id, email FROM users WHERE id = ?')
-    .bind(ledger.user_id)
-    .first<{ id: string; email: string }>();
-
-  const result = [
-    ...(owner ? [{ user_id: owner.id, role: 'owner', joined_at: '', email: owner.email }] : []),
-    ...members.results,
-  ];
-
-  return c.json(result);
+  return c.json(members.results);
 });
 
 // ===========================================================================
