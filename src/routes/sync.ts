@@ -339,7 +339,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           const newLedgerId = randomUUID();
           await db
             .prepare(
-              `INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
+              `INSERT OR REPLACE INTO ledgers (id, user_id, external_id, name, currency, created_at)
                VALUES (?, ?, ?, ?, 'CNY', ?)`
             )
             .bind(newLedgerId, userId, externalId, externalId, serverNow)
