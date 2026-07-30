@@ -1740,8 +1740,9 @@ async function applyChangeToProjection(
               to_account_sync_id, to_account_name,
               tags_csv, tag_sync_ids_json, attachments_json, tx_index,
               created_by_user_id, last_edited_by_user_id, source_change_id,
-              currency_code, native_amount)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              currency_code, native_amount,
+              exclude_from_stats, exclude_from_budget)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .bind(
             ledgerId,
@@ -1769,6 +1770,8 @@ async function applyChangeToProjection(
             change.change_id,
             payload.currency_code ?? payload.currencyCode ?? null,
             payload.native_amount ?? payload.nativeAmount ?? null,
+            payload.excludeFromStats != null ? (payload.excludeFromStats ? 1 : 0) : null,
+            payload.excludeFromBudget != null ? (payload.excludeFromBudget ? 1 : 0) : null,
           )
           .run();
       }
