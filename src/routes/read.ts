@@ -331,7 +331,7 @@ readRouter.get('/ledgers', async (c) => {
         exported_at: now,
         updated_at: now,
         role: (ledger.role || 'owner') as 'owner' | 'editor' | 'viewer',
-        is_shared: memberCount > 0,
+        is_shared: memberCount > 1,
         member_count: memberCount,
       });
     }
