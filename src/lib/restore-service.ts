@@ -221,6 +221,17 @@ async function importToD1(
       if (tableName === 'users' && userIdMapping && record['id'] && userIdMapping[String(record['id'])]) {
         continue;
       }
+      // users 表：保留现有用户的 password_hash（防止恢复时覆盖密码）
+      if (tableName === 'users' && record['id']) {
+        const existingUser = await db.prepare('SELECT id FROM users WHERE id = ?').bind(record['id']).first<{ id: string }>();
+        if (existingUser) {
+          // 跳过 password_hash 列，保留现有哈希
+          const skipPassword = matchedColumns.indexOf('password_hash');
+          if (skipPassword >= 0) {
+            matchedColumns.splice(skipPassword, 1);
+          }
+        }
+      }
       const values = matchedColumns.map(col => record[col] ?? null);
 
       try {
