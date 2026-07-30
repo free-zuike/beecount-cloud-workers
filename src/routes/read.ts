@@ -1557,7 +1557,7 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
     });
   }
 
-  return c.json(usage);
+  return c.json({ items: usage.map(u => ({ budget_id: u.budget_id, used: u.spent_amount })) });
 });
 
 // ---------------------------------------------------------------------------
