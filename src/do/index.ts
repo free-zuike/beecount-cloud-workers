@@ -76,6 +76,34 @@ export class BeeCountDO extends DurableObject {
       return new Response('ok');
     }
 
+    // ===== 导入会话缓存模式（原版 Python 用内存字典，Worker 用 DO 存储） =====
+    if (path.endsWith('/import/save')) {
+      const { token, data } = await request.json<{ token: string; data: unknown }>();
+      const now = Date.now();
+      const entry = { data, createdAt: now, expiresAt: now + 30 * 60 * 1000 };
+      await this.ctx.storage.put(`import:${token}`, entry);
+      // 30分钟后清理
+      await this.ctx.storage.setAlarm(now + 30 * 60 * 1000);
+      return Response.json({ ok: true });
+    }
+
+    if (path.endsWith('/import/get')) {
+      const token = url.searchParams.get('token') || '';
+      const entry = await this.ctx.storage.get<{ data: unknown; createdAt: number; expiresAt: number } | null>(`import:${token}`);
+      if (!entry) return Response.json({ data: null });
+      if (Date.now() > entry.expiresAt) {
+        await this.ctx.storage.delete(`import:${token}`);
+        return Response.json({ data: null });
+      }
+      return Response.json({ data: entry.data });
+    }
+
+    if (path.endsWith('/import/delete')) {
+      const { token } = await request.json<{ token: string }>();
+      await this.ctx.storage.delete(`import:${token}`);
+      return new Response('ok');
+    }
+
     return new Response('Not found', { status: 404 });
   }
 

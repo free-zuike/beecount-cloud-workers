@@ -24,7 +24,7 @@ import { serverLogger } from '../lib/logger';
 
 function nowUtc(): string { return new Date().toISOString(); }
 
-type Bindings = { DB: D1Database; IMPORT_SESSIONS: KVNamespace; JWT_SECRET: string };
+type Bindings = { DB: D1Database; BEECOUNT_DO: DurableObjectNamespace; JWT_SECRET: string };
 type Variables = { userId: string };
 
 const importRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
@@ -45,20 +45,32 @@ interface ImportSession {
   expiresAt: string;
 }
 
-async function saveSession(kv: KVNamespace, session: ImportSession): Promise<void> {
-  await kv.put(`import:${session.token}`, JSON.stringify(session), {
-    expirationTtl: 1800, // 30 min
+async function saveSession(env: Bindings, userId: string, session: ImportSession): Promise<void> {
+  const doId = env.BEECOUNT_DO.idFromName(`ws-${userId}`);
+  const doStub = env.BEECOUNT_DO.get(doId);
+  await doStub.fetch('http://do/import/save', {
+    method: 'POST',
+    body: JSON.stringify({ token: session.token, data: session }),
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
-async function getSession(kv: KVNamespace, token: string): Promise<ImportSession | null> {
-  const raw = await kv.get(`import:${token}`);
-  if (!raw) return null;
-  return JSON.parse(raw) as ImportSession;
+async function getSession(env: Bindings, userId: string, token: string): Promise<ImportSession | null> {
+  const doId = env.BEECOUNT_DO.idFromName(`ws-${userId}`);
+  const doStub = env.BEECOUNT_DO.get(doId);
+  const res = await doStub.fetch(`http://do/import/get?token=${token}`);
+  const { data } = await res.json<{ data: ImportSession | null }>();
+  return data;
 }
 
-async function deleteSession(kv: KVNamespace, token: string): Promise<void> {
-  await kv.delete(`import:${token}`);
+async function deleteSession(env: Bindings, userId: string, token: string): Promise<void> {
+  const doId = env.BEECOUNT_DO.idFromName(`ws-${userId}`);
+  const doStub = env.BEECOUNT_DO.get(doId);
+  await doStub.fetch('http://do/import/delete', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 // ==================== Schemas ====================
@@ -158,7 +170,6 @@ function buildTxPayload(tx: ImportTransaction, autoTags: string[]): Record<strin
 
 importRouter.post('/upload', async (c) => {
   const userId = c.get('userId');
-  const kv = c.env.IMPORT_SESSIONS;
 
   try {
     const formData = await c.req.formData();
@@ -219,7 +230,7 @@ importRouter.post('/upload', async (c) => {
       expiresAt,
     };
 
-    await saveSession(kv, session);
+    await saveSession(c.env, userId, session);
 
     // Apply mapping to get sample transactions
     const sampleTxs = applyMapping(importData.rows, importData.suggestedMapping);
@@ -253,11 +264,10 @@ importRouter.post('/upload', async (c) => {
 importRouter.post('/:token/preview', zValidator('json', ImportPreviewSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
-  const kv = c.env.IMPORT_SESSIONS;
   const token = c.req.param('token');
   const req = c.req.valid('json');
 
-  const session = await getSession(kv, token);
+  const session = await getSession(c.env, userId, token);
   if (!session) return c.json({ error: 'Import token not found or expired', error_code: 'IMPORT_TOKEN_EXPIRED' }, 404);
   if (session.status === 'cancelled') return c.json({ error: 'Import cancelled' }, 400);
 
@@ -282,7 +292,7 @@ importRouter.post('/:token/preview', zValidator('json', ImportPreviewSchema), as
   session.dedupStrategy = dedupStrategy;
   session.autoTagNames = autoTagNames;
   session.status = 'previewed';
-  await saveSession(kv, session);
+  await saveSession(c.env, userId, session);
 
   return c.json({
     import_token: token,
@@ -318,11 +328,10 @@ importRouter.post('/:token/preview', zValidator('json', ImportPreviewSchema), as
 importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
-  const kv = c.env.IMPORT_SESSIONS;
   const token = c.req.param('token');
   const req = c.req.valid('json');
 
-  const session = await getSession(kv, token);
+  const session = await getSession(c.env, userId, token);
   if (!session) return c.json({ error: 'Import token not found or expired', error_code: 'IMPORT_TOKEN_EXPIRED' }, 404);
   if (session.status === 'cancelled') return c.json({ error: 'Import cancelled' }, 400);
   if (session.status === 'executing') return c.json({ error: 'Import already in progress' }, 409);
@@ -352,7 +361,7 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
   session.targetLedgerId = targetLedgerId;
   session.dedupStrategy = dedupStrategy;
   session.autoTagNames = autoTagNames;
-  await saveSession(kv, session);
+  await saveSession(c.env, userId, session);
 
   // Apply mapping
   const txs = applyMapping(session.data.rows, mapping);
@@ -417,7 +426,7 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
 
         // Done
         session.status = 'done';
-        await saveSession(kv, session);
+        await saveSession(c.env, userId, session);
 
         sendEvent('complete', {
           total: txs.length,
@@ -429,7 +438,7 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
         controller.close();
       } catch (err) {
         session.status = 'pending';
-        await saveSession(kv, session);
+        await saveSession(c.env, userId, session);
         sendEvent('error', { message: String(err) });
         controller.close();
       }
@@ -449,13 +458,13 @@ importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), as
 // ==================== DELETE /{token} ====================
 
 importRouter.delete('/:token', async (c) => {
-  const kv = c.env.IMPORT_SESSIONS;
+  const userId = c.get('userId');
   const token = c.req.param('token');
 
-  const session = await getSession(kv, token);
+  const session = await getSession(c.env, userId, token);
   if (session) {
     session.status = 'cancelled';
-    await saveSession(kv, session);
+    await saveSession(c.env, userId, session);
   }
 
   return c.json({ ok: true });

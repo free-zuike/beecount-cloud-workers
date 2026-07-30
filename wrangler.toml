@@ -28,10 +28,6 @@ class_name = "BeeCountDO"
 binding = "R2"
 bucket_name = "beecount-storage"
 
-[[kv_namespaces]]
-binding = "IMPORT_SESSIONS"
-id = "8369f20cdc9c410aa9348dd14a24a218"
-
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["BeeCountDO"]
