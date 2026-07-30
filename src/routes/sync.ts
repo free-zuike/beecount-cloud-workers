@@ -1756,7 +1756,7 @@ async function applyChangeToProjection(
             userId,
             payload.tx_type ?? payload.txType ?? payload.type ?? 'expense',
             payload.amount ?? 0,
-            payload.happened_at ?? nowUtc(),
+            payload.happened_at ?? payload.happenedAt ?? nowUtc(),
             payload.note ?? null,
             payload.categoryId ?? null,
             payload.categoryName ?? null,

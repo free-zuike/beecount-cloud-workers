@@ -156,7 +156,7 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
             change.user_id,
             payload.tx_type || 'expense',
             Math.round((payload.amount || 0) * 100),
-            payload.happened_at || change.updated_at,
+            payload.happened_at || payload.happenedAt || change.updated_at,
             payload.note || null,
             payload.category_sync_id || null,
             payload.category_name || null,
