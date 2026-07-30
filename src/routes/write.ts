@@ -409,6 +409,15 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
     .bind(ledgerId, userId, ledgerExternalId, req.ledger_name, req.currency, serverNow)
     .run();
 
+  // 与原版对齐：创建者自动 owner（否则 ledger_members 找不到成员）
+  await db
+    .prepare(
+      `INSERT INTO ledger_members (ledger_id, user_id, role, joined_at)
+       VALUES (?, ?, 'owner', ?)`
+    )
+    .bind(ledgerId, userId, serverNow)
+    .run();
+
   // 写入 SyncChange（与原版对齐：entity_type = 'ledger'）
   const changeResult = await db
     .prepare(

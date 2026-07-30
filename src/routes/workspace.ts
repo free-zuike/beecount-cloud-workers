@@ -1458,7 +1458,7 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
     .bind(invite.ledger_id)
     .first<{ cnt: number }>();
 
-  if ((memberCount?.cnt ?? 0) >= 4) {
+  if ((memberCount?.cnt ?? 0) >= 5) {
     return c.json({ error: 'Ledger has reached the maximum member limit' }, 400);
   }
 
@@ -1473,7 +1473,7 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
       // 已是成员（并发请求竞争），返回成功
       const cnt = await db.prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).first<{ cnt: number }>();
       const li = await db.prepare('SELECT currency FROM ledgers WHERE id = ?').bind(invite.ledger_id).first<{ currency: string }>();
-      return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) + 1 });
+      return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) });
     }
     throw err;
   }
@@ -1521,7 +1521,7 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
     ledger_name: invite.ledger_name,
     ledger_currency: ledgerInfo?.currency ?? 'CNY',
     role: invite.target_role,
-    member_count: (updatedCount?.cnt ?? 0) + 1,
+    member_count: (updatedCount?.cnt ?? 0),
   });
 });
 
@@ -1577,7 +1577,7 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
   if (existingMember) {
     const cnt = await db.prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).first<{ cnt: number }>();
     const li = await db.prepare('SELECT currency FROM ledgers WHERE id = ?').bind(invite.ledger_id).first<{ currency: string }>();
-    return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) + 1 });
+    return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) });
   }
 
   // 并发保护：try-catch 捕获 UNIQUE 约束冲突
@@ -1590,7 +1590,7 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
     if ((err as Error).message?.includes('UNIQUE')) {
       const cnt = await db.prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).first<{ cnt: number }>();
       const li = await db.prepare('SELECT currency FROM ledgers WHERE id = ?').bind(invite.ledger_id).first<{ currency: string }>();
-      return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) + 1 });
+      return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) });
     }
     throw err;
   }
@@ -1616,7 +1616,7 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
     ledger_name: invite.ledger_name,
     ledger_currency: ledgerInfo?.currency ?? 'CNY',
     role: invite.target_role,
-    member_count: (updatedCount?.cnt ?? 0) + 1,
+    member_count: (updatedCount?.cnt ?? 0),
   });
 });
 
@@ -1643,9 +1643,9 @@ workspaceRouter.get('/ledgers/:id/members', async (c) => {
       SELECT lm.user_id, lm.role, lm.joined_at, u.email
       FROM ledger_members lm
       JOIN users u ON lm.user_id = u.id
-      WHERE lm.ledger_id = ? AND lm.user_id != ?
+      WHERE lm.ledger_id = ?
     `)
-    .bind(ledger.id, ledger.user_id)
+    .bind(ledger.id)
     .all<{ user_id: string; role: string; joined_at: string; email: string }>();
 
   const owner = await db
