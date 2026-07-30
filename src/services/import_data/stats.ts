@@ -28,8 +28,8 @@ export async function buildExistingSets(
   ledgerId: string,
 ): Promise<ExistingSets> {
   const ledger = await db
-    .prepare('SELECT l.id FROM ledgers l WHERE l.external_id = ? AND (l.user_id = ? OR l.id IN (SELECT ledger_id FROM ledger_members WHERE user_id = ?))')
-    .bind(ledgerId, userId, userId)
+    .prepare('SELECT l.id FROM ledgers l INNER JOIN ledger_members lm ON lm.ledger_id = l.id WHERE l.external_id = ? AND lm.user_id = ?')
+    .bind(ledgerId, userId)
     .first<{ id: string }>();
 
   if (!ledger) {
