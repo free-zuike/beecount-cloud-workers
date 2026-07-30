@@ -770,6 +770,8 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
   };
   const happenedAt = payload.happenedAt as string;
   const resolvedTagsCsv = await resolveTagsCsv(db, req.tags as string | string[] | null, req.tag_ids as string[] | null);
+  // 确保 tags 始终存为字符串（Flutter App 期望 tags 是 String? 而非 List）
+  payload.tags = resolvedTagsCsv ?? null;
 
   const syncChangeResult = await db
     .prepare(
