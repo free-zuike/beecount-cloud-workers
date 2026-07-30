@@ -350,14 +350,16 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
             )
             .bind(newLedgerId, userId, externalId, externalId, serverNow)
             .run();
-          // 与原版对齐：自动创建 owner 成员记录
-          await db
-            .prepare(
-              `INSERT INTO ledger_members (ledger_id, user_id, role, joined_at)
-               VALUES (?, ?, 'owner', ?)`
-            )
-            .bind(newLedgerId, userId, serverNow)
-            .run();
+          // 与原版对齐：自动创建 owner 成员记录（仅当非所有者推送时）
+          if (userId !== (await db.prepare('SELECT user_id FROM ledgers WHERE id = ?').bind(newLedgerId).first<{ user_id: string }>())?.user_id) {
+            await db
+              .prepare(
+                `INSERT INTO ledger_members (ledger_id, user_id, role, joined_at)
+                 VALUES (?, ?, 'owner', ?)`
+              )
+              .bind(newLedgerId, userId, serverNow)
+              .run();
+          }
           ledgerMap[externalId] = { id: newLedgerId, user_id: userId, external_id: externalId };
         }
       }
