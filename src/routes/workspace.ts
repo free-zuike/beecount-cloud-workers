@@ -775,8 +775,45 @@ workspaceRouter.get('/budgets', async (c) => {
 
   const budgetRows = await db.prepare(budgetQuery).bind(...budgetParams).all<Record<string, unknown>>();
 
-  const items = budgetRows.results.map((row) => {
+  const items = await Promise.all(budgetRows.results.map(async (row) => {
     const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
+    const budgetPeriod = row.period as string;
+    const budgetStartDay = (row.start_day as number) || 1;
+    const ledgerId = row.ledger_id as string;
+
+    // 计算预算已用金额（对齐原版：按周期汇总支出）
+    let spent = 0;
+    try {
+      const now = new Date();
+      let periodStart: string;
+      let periodEnd: string;
+
+      if (budgetPeriod === 'monthly') {
+        const startMonth = now.getUTCMonth();
+        const startYear = now.getUTCFullYear();
+        const startDate = new Date(Date.UTC(startYear, startMonth, budgetStartDay));
+        const endDate = new Date(Date.UTC(startYear, startMonth + 1, budgetStartDay));
+        periodStart = startDate.toISOString();
+        periodEnd = endDate.toISOString();
+      } else if (budgetPeriod === 'yearly') {
+        const startYear = now.getUTCFullYear();
+        periodStart = new Date(Date.UTC(startYear, 0, budgetStartDay)).toISOString();
+        periodEnd = new Date(Date.UTC(startYear + 1, 0, budgetStartDay)).toISOString();
+      } else {
+        periodStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 7)).toISOString();
+        periodEnd = now.toISOString();
+      }
+
+      const spentRow = await db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) as total FROM read_tx_projection
+         WHERE ledger_id = ? AND tx_type = 'expense'
+         AND (exclude_from_budget IS NULL OR exclude_from_budget = 0)
+         AND happened_at >= ? AND happened_at < ?`
+      ).bind(ledgerId, periodStart, periodEnd).first<{ total: number }>();
+      spent = spentRow?.total ?? 0;
+    } catch {
+      // 计算失败不影响预算列表
+    }
 
     return {
       id: row.sync_id,
@@ -787,14 +824,14 @@ workspaceRouter.get('/budgets', async (c) => {
       period: row.period,
       start_day: row.start_day,
       enabled: !!row.enabled,
-      spent: 0,
+      spent: spent,
       last_change_id: row.source_change_id,
       ledger_id: ledExtId,
       ledger_name: ledgerMeta[row.ledger_id as string]?.name ?? null,
       created_by_user_id: null,
       created_by_email: null,
     };
-  });
+  }));
 
   return c.json(items);
 });
