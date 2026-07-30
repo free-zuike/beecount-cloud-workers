@@ -790,8 +790,9 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
           account_sync_id, account_name,
           from_account_sync_id, from_account_name,
           to_account_sync_id, to_account_name,
-          tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id,
+          exclude_from_stats, exclude_from_budget)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         ledger.id, syncId, userId, req.tx_type, req.amount, happenedAt,
@@ -801,6 +802,8 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
         req.to_account_id ?? null, req.to_account_name ?? null,
         resolvedTagsCsv, req.tag_ids ? safeJsonStringify(req.tag_ids) : null,
         req.attachments ? safeJsonStringify(req.attachments) : null, 0, newChangeId,
+        req.exclude_from_stats != null ? (req.exclude_from_stats ? 1 : 0) : null,
+        req.exclude_from_budget != null ? (req.exclude_from_budget ? 1 : 0) : null,
       )
       .run();
   } catch (projErr) {
@@ -1180,6 +1183,8 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   if (req.attachments !== undefined) newPayload.attachments = req.attachments;
   if (req.currency_code !== undefined) newPayload.currencyCode = req.currency_code;
   if (req.native_amount !== undefined) newPayload.nativeAmount = req.native_amount;
+  if (req.exclude_from_stats !== undefined) newPayload.excludeFromStats = req.exclude_from_stats;
+  if (req.exclude_from_budget !== undefined) newPayload.excludeFromBudget = req.exclude_from_budget;
 
   // 多币种联动折算（与原版 rescale_native_amount 对齐）：
   // item有nativeAmount且payload未显式传native_amount → 按隐含汇率等比缩放
@@ -1218,6 +1223,7 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
          to_account_sync_id = ?, to_account_name = ?,
          tags_csv = ?, tag_sync_ids_json = ?, attachments_json = ?,
          currency_code = ?, native_amount = ?,
+         exclude_from_stats = ?, exclude_from_budget = ?,
          source_change_id = ?
          WHERE ledger_id = ? AND sync_id = ?`
       )
@@ -1230,6 +1236,8 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
         newPayload.tags ?? null, newPayload.tagIds ? safeJsonStringify(newPayload.tagIds) : null,
         newPayload.attachments ? safeJsonStringify(newPayload.attachments) : null,
         newPayload.currencyCode ?? null, newPayload.nativeAmount ?? null,
+        newPayload.excludeFromStats != null ? (newPayload.excludeFromStats ? 1 : 0) : null,
+        newPayload.excludeFromBudget != null ? (newPayload.excludeFromBudget ? 1 : 0) : null,
         newChangeId, ledger.id, txSyncId,
       )
       .run();
