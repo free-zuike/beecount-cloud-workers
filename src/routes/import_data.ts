@@ -460,10 +460,12 @@ importRouter.post('/:token/execute', async (c) => {
         } catch { /* ignore */ }
       };
 
+      let insertedChangeIds: number[] = [];
       try {
         let imported = 0;
         let skipped = 0;
         let errors: Array<{ row: number; message: string }> = [];
+        insertedChangeIds = [];
 
         for (let i = 0; i < txs.length; i++) {
           const tx = txs[i];
@@ -477,15 +479,21 @@ importRouter.post('/:token/execute', async (c) => {
 
           try {
             const payload = buildTxPayload(tx, autoTagNames);
+            const syncId = randomUUID();
 
-            await db.prepare(
+            const result = await db.prepare(
               `INSERT INTO sync_changes
-               (change_id, user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, scope)
-               VALUES (?, ?, ?, ?, ?, 'upsert', ?, ?, 'web-import', 'user')`
+               (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, scope)
+               VALUES (?, ?, ?, ?, 'upsert', ?, ?, 'web-import', 'user')`
             ).bind(
-              Date.now() + i, userId, ledger.id, 'transaction',
-              randomUUID(), JSON.stringify(payload), nowUtc(),
+              userId, ledger.id, 'transaction',
+              syncId, JSON.stringify(payload), nowUtc(),
             ).run();
+
+            // 记录 change_id 用于回滚
+            if (result.meta.last_row_id) {
+              insertedChangeIds.push(result.meta.last_row_id as number);
+            }
 
             imported++;
           } catch (err) {
@@ -504,8 +512,25 @@ importRouter.post('/:token/execute', async (c) => {
           }
         }
 
-        // Done
-        session.status = 'done';
+        // 如果有错误且已导入部分数据，回滚（删除已插入的 sync_changes）
+        if (errors.length > 0 && insertedChangeIds.length > 0) {
+          for (const cid of insertedChangeIds) {
+            await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(cid).run();
+          }
+          sendEvent('error', {
+            message: `Import failed after ${imported} rows. Rolled back ${insertedChangeIds.length} changes.`,
+            errors_detail: errors.slice(0, 20),
+          });
+          controller.close();
+          return;
+        }
+
+        // 完成回滚后标记 session
+        if (errors.length > 0) {
+          session.status = 'pending';
+        } else {
+          session.status = 'done';
+        }
         await saveSession(c.env, userId, session);
 
         sendEvent('complete', {
@@ -517,9 +542,15 @@ importRouter.post('/:token/execute', async (c) => {
         });
         controller.close();
       } catch (err) {
+        // 回滚已插入的数据
+        try {
+          for (const cid of insertedChangeIds) {
+            await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(cid).run();
+          }
+        } catch { /* ignore rollback errors */ }
         session.status = 'pending';
         await saveSession(c.env, userId, session);
-        sendEvent('error', { message: String(err) });
+        sendEvent('error', { message: String(err), rolled_back: insertedChangeIds.length });
         controller.close();
       }
     },
