@@ -10,6 +10,7 @@ import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
 import { createEncryptedZip } from '../lib/zip-lib';
 import { computeRetentionDeletes, filterBackupFiles } from './backup-retention';
+import { uploadToOAuth2Provider, listOAuth2Files, deleteOAuth2File } from '../lib/oauth2-storage';
 import { createSqliteWithData } from '../lib/sqlite-writer';
 
 // ===========================
@@ -409,6 +410,10 @@ export async function listRemoteFiles(
     return await sftpClient.list(prefix);
   }
 
+  if (config.backend_type === 'drive' || config.backend_type === 'onedrive' || config.backend_type === 'dropbox') {
+    return await listOAuth2Files(config);
+  }
+
   return [];
 }
 
@@ -485,6 +490,10 @@ export async function deleteRemoteFile(
     return await sftpClient.delete(prefix + fileName);
   }
 
+  if (config.backend_type === 'drive' || config.backend_type === 'onedrive' || config.backend_type === 'dropbox') {
+    return await deleteOAuth2File(config, fileName);
+  }
+
   return false;
 }
 
@@ -539,6 +548,19 @@ export async function uploadBackupToRemote(
     const key = `beecount/backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
     await bucket.put(key, backupBytes, { httpMetadata: { contentType: 'application/gzip' } });
     return { ok: true, message: 'R2 upload successful', key };
+  }
+
+  if (remoteConfig.backend_type === 'drive' || remoteConfig.backend_type === 'onedrive' || remoteConfig.backend_type === 'dropbox') {
+    if (!remoteConfig.client_id || !remoteConfig.client_secret || !remoteConfig.refresh_token) {
+      return { ok: false, message: 'OAuth2 configuration incomplete' };
+    }
+    const localTime = new Date(Date.now() + 8 * 3600000);
+    const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+    let prefix = '';
+    if (remoteConfig.savePath) prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
+    const result = await uploadToOAuth2Provider(remoteConfig, key, backupBytes);
+    return result ? { ok: true, message: 'Upload successful', key } : { ok: false, message: 'Upload failed' };
   }
 
   return { ok: true, message: 'Local backup (no upload)' };
@@ -1020,11 +1042,33 @@ export async function performBackup(
         backupPath: backupKey
       };
     } else if (remoteConfig.backend_type === 'drive' || remoteConfig.backend_type === 'onedrive' || remoteConfig.backend_type === 'dropbox') {
-      // OAuth2 后端需要 rclone，当前环境不支持
-      // 用户需要使用 rclone CLI 手动备份
-      return { 
-        success: false, 
-        message: `${remoteConfig.backend_type} backup requires rclone. Please use rclone CLI manually or switch to R2/S3/WebDAV/SFTP/FTP.` 
+      if (!remoteConfig.client_id || !remoteConfig.client_secret || !remoteConfig.refresh_token) {
+        return { success: false, message: `${remoteConfig.backend_type} configuration incomplete (client_id, client_secret, refresh_token required)` };
+      }
+
+      let basePrefix = '';
+      if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' && remoteConfig.savePath.trim() !== '') {
+        basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+      }
+      const now = new Date();
+      const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+      const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+      const fileExt = encrypted ? '.zip' : '.tar.gz';
+      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
+
+      log(`[Backup] Uploading to ${remoteConfig.backend_type}: ${backupKey}`);
+
+      const uploadResult = await uploadToOAuth2Provider(remoteConfig, backupKey, backupBytes);
+
+      if (!uploadResult) {
+        return { success: false, message: `${remoteConfig.backend_type} upload failed` };
+      }
+
+      return {
+        success: true,
+        message: `Backup completed successfully via ${remoteConfig.backend_type}`,
+        backupSize,
+        backupPath: backupKey
       };
     } else {
       return { success: false, message: `Unsupported backend type: ${remoteConfig.backend_type}` };
