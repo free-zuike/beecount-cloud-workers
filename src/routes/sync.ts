@@ -1735,19 +1735,6 @@ async function applyChangeToProjection(
         const tagIdsPayload = Array.isArray(payload.tagIds) ? payload.tagIds as string[] : null;
         const resolvedTagsCsv = await resolveTagsCsv(db, tagPayload, tagIdsPayload);
 
-        // 用当前用户的标签 ID 覆盖 payload.tagIds（原版 Python 按用户解析标签）
-        let resolvedTagIds: string[] | null = null;
-        if (resolvedTagsCsv) {
-          const tagNames = resolvedTagsCsv.split(',').map(t => t.trim()).filter(Boolean);
-          if (tagNames.length > 0) {
-            const placeholders = tagNames.map(() => '?').join(',');
-            const tagRows = await db.prepare(`SELECT sync_id FROM read_tag_projection WHERE user_id = ? AND name IN (${placeholders})`).bind(userId, ...tagNames).all<{ sync_id: string }>();
-            if (tagRows.results.length > 0) {
-              resolvedTagIds = tagRows.results.map(r => r.sync_id);
-            }
-          }
-        }
-
         // 用 INSERT OR REPLACE 替代 SELECT + UPDATE/INSERT
         await db
           .prepare(
@@ -1781,7 +1768,7 @@ async function applyChangeToProjection(
             payload.toAccountId ?? null,
             payload.toAccountName ?? null,
             resolvedTagsCsv,
-            resolvedTagIds ? safeJsonStringify(resolvedTagIds) : null,
+            payload.tagIds ? safeJsonStringify(payload.tagIds) : null,
             payload.attachments ? safeJsonStringify(payload.attachments) : null,
             payload.tx_index ?? 0,
             payload.createdByUserId ?? userId,

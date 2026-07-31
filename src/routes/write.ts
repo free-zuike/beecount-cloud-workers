@@ -786,6 +786,20 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
   // 确保 tags 始终存为字符串（Flutter App 期望 tags 是 String? 而非 List）
   payload.tags = resolvedTagsCsv ?? null;
 
+  // 按当前用户解析标签名称→标签 ID，覆盖前端传入的 tag_ids（共享账本中前端可能传入错误用户的标签 ID）
+  if (resolvedTagsCsv) {
+    const tagNames = resolvedTagsCsv.split(',').map(t => t.trim()).filter(Boolean);
+    if (tagNames.length > 0) {
+      const placeholders = tagNames.map(() => '?').join(',');
+      const tagRows = await db.prepare(`SELECT sync_id FROM read_tag_projection WHERE user_id = ? AND name IN (${placeholders})`).bind(userId, ...tagNames).all<{ sync_id: string }>();
+      if (tagRows.results.length > 0) {
+        payload.tagIds = tagRows.results.map(r => r.sync_id);
+      } else {
+        payload.tagIds = null;
+      }
+    }
+  }
+
   const syncChangeResult = await db
     .prepare(
       `INSERT INTO sync_changes
