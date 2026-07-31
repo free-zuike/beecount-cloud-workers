@@ -284,6 +284,12 @@ workspaceRouter.get('/transactions', async (c) => {
   const accountName = c.req.query('account_name') ?? null;
   const tagSyncId = c.req.query('tag_sync_id') ?? null;
   const categorySyncId = c.req.query('category_sync_id') ?? null;
+  const accountSyncId = c.req.query('account_sync_id') ?? null;
+  const txSyncId = c.req.query('tx_sync_id') ?? null;
+  const dateFrom = c.req.query('date_from') ?? null;
+  const dateTo = c.req.query('date_to') ?? null;
+  const amountMin = c.req.query('amount_min') ?? null;
+  const amountMax = c.req.query('amount_max') ?? null;
   const q = c.req.query('q') ?? null;
   const limit = Math.min(parseInt(c.req.query('limit') ?? '20', 10), 2000);
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
@@ -343,6 +349,45 @@ workspaceRouter.get('/transactions', async (c) => {
   if (categorySyncId) {
     txQuery += ` AND category_sync_id = ?`;
     txParams.push(categorySyncId);
+  }
+
+  // 按 account_sync_id 精确过滤（含 from/to）— 与原版对齐
+  if (accountSyncId) {
+    txQuery += ` AND (account_sync_id = ? OR from_account_sync_id = ? OR to_account_sync_id = ?)`;
+    txParams.push(accountSyncId, accountSyncId, accountSyncId);
+  }
+
+  // 按 tx_sync_id 精确过滤（与原版对齐）
+  if (txSyncId) {
+    txQuery += ` AND sync_id = ?`;
+    txParams.push(txSyncId);
+  }
+
+  // 金额范围 — 按 abs(amount) 比较（与原版对齐）
+  if (amountMin) {
+    txQuery += ` AND amount >= ?`;
+    txParams.push(Number(amountMin));
+  }
+  if (amountMax) {
+    txQuery += ` AND amount <= ?`;
+    txParams.push(Number(amountMax));
+  }
+
+  // 日期范围 — happened_at 是 UTC 存储，date_from 含，date_to 不含（与原版对齐）
+  if (dateFrom) {
+    txQuery += ` AND happened_at >= ?`;
+    txParams.push(dateFrom);
+  }
+  if (dateTo) {
+    txQuery += ` AND happened_at < ?`;
+    txParams.push(dateTo);
+  }
+
+  // 按 user_id 过滤（与原版对齐）
+  const filterUserId = c.req.query('user_id') ?? null;
+  if (filterUserId) {
+    txQuery += ` AND user_id = ?`;
+    txParams.push(filterUserId);
   }
 
   txQuery += ' ORDER BY happened_at DESC, tx_index DESC LIMIT ? OFFSET ?';
