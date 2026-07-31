@@ -40,7 +40,7 @@ export async function buildExistingSets(
   const [txRows, catRows, acctRows, tagRows] = await Promise.all([
     db.prepare('SELECT amount, happened_at FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id).all<{ amount: number; happened_at: string }>(),
     db.prepare('SELECT name FROM read_category_projection WHERE user_id = ?').bind(userId).all<{ name: string }>(),
-    db.prepare('SELECT name FROM read_account_projection WHERE ledger_id = ?').bind(ledger.id).all<{ name: string }>(),
+    db.prepare('SELECT name FROM read_account_projection WHERE ledger_id = ? OR (ledger_id IS NULL AND user_id = ?)').bind(ledger.id, userId).all<{ name: string }>(),
     db.prepare('SELECT name FROM read_tag_projection WHERE user_id = ?').bind(userId).all<{ name: string }>(),
   ]);
 
