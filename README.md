@@ -20,6 +20,8 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 | 定时任务 | APScheduler (Python 线程) | waitUntil (Workers 异步) | 运行时限制 |
 | 并行备份 | rclone fan-out | Promise.allSettled | Workers 原生并行 |
 | 投影事务 | DB transaction rollback | 单条 try/catch | D1 不支持跨语句事务 |
+| 备份加密 | age + pyzipper (WZ_AES) | AES-256-GCM (Web Crypto) | 无法运行 age CLI |
+| OAuth2 备份 | rclone 处理 OAuth2 | 直接调用 REST API | Workers 内实现 |
 | 指标监控 | Prometheus | 无 | 无 statsd 基础设施 |
 | 注册控制 | 环境变量 REGISTRATION_ENABLED | 环境变量 REGISTRATION_ENABLED | 已对齐 |
 
@@ -30,7 +32,8 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 - 🔐 **JWT 认证** — 安全的基于令牌的认证，支持双因素认证 (TOTP)
 - 👤 **自动创建管理员账户** — 首次访问时自动创建默认管理员
 - 📂 **自动创建默认分类** — 创建账本时自动初始化默认分类
-- 📎 **R2/S3/FTP/SFTP/WebDAV** — 支持多种远程备份存储
+- 📎 **多类型远端备份** — S3/B2/R2/WebDAV/FTP/SFTP/Google Drive/OneDrive/Dropbox
+- 🔄 **自动保留策略** — 定时备份后自动清理超期文件
 - 🤖 **AI 集成** — 支持 OpenAI 兼容 API（智谱、DeepSeek 等）
 - 📊 **60+ API 端点** — 覆盖所有 BeeCount Cloud 功能
 - 🔄 **完整同步协议** — 支持增量同步、共享账本、多设备
@@ -92,6 +95,9 @@ JWT_SECRET = "你的JWT密钥"
 
 # 可选：关闭注册
 # REGISTRATION_ENABLED = "false"
+
+# 可选：邀请分享域名（默认自动获取请求域名）
+# INVITE_SHARE_ORIGIN = "https://invite.beecount.qzz.io"
 ```
 
 ### AI 配置
@@ -155,11 +161,31 @@ JWT_SECRET = "你的JWT密钥"
 - `/workspace/*` — 跨账本统计/分析/邀请
 
 ### 备份
+
 - `GET /admin/backup/remotes` — 备份远端列表
 - `POST /admin/backup/remotes` — 创建备份远端
 - `GET /admin/backup/schedules` — 备份计划列表
 - `POST /admin/backup/run-now` — 立即备份
 - `POST /restore-from-r2` — 从 R2 恢复数据
+
+**支持远端类型**：S3、B2、R2、WebDAV、FTP、SFTP、Google Drive、OneDrive、Dropbox
+
+OAuth2 远端（Google Drive/OneDrive/Dropbox）需配置 `client_id`、`client_secret`、`refresh_token`。
+
+### 导入
+
+- `POST /import/upload` — 上传 CSV/TSV/XLSX 文件解析
+- `POST /import/:token/preview` — 预览导入结果
+- `POST /import/:token/execute` — 执行导入（SSE 进度流）
+
+### 共享账本
+
+- `POST /workspace/ledgers/:id/invites` — 生成邀请码
+- `GET /workspace/ledgers/:id/invites` — 列出活跃邀请
+- `DELETE /workspace/ledgers/:id/invites/:code` — 撤销邀请
+- `POST /workspace/invites/:code/preview` — 预览邀请详情
+- `POST /workspace/invites/:code/accept` — 接受邀请
+- `GET /invite/:code` — 邀请链接重定向（需配置 `INVITE_SHARE_ORIGIN`）
 
 ## 项目结构
 
@@ -174,7 +200,12 @@ beecount-cloud-workers/
 │   │   ├── sqlite-writer.ts  # SQLite 文件创建
 │   │   ├── encryption.ts     # AES-256-GCM 加密
 │   │   ├── ws-manager.ts     # WebSocket 管理
-│   │   └── audit.ts          # 审计日志
+│   │   ├── audit.ts          # 审计日志
+│   │   ├── s3.ts             # S3 签名/上传/列出/删除
+│   │   ├── ftp.ts            # FTP 客户端
+│   │   ├── sftp.ts           # SFTP 客户端
+│   │   ├── oauth2-storage.ts # OAuth2 云存储（Google Drive/OneDrive/Dropbox）
+│   │   └── zip-lib.ts        # ZIP 加密
 │   ├── routes/               # API 路由
 │   │   ├── auth.ts           # 认证
 │   │   ├── two_factor.ts     # 2FA
@@ -187,12 +218,17 @@ beecount-cloud-workers/
 │   │   ├── attachments.ts    # 文件管理
 │   │   ├── admin_backup.ts   # 备份管理
 │   │   ├── backup.ts         # 数据修复
+│   │   ├── csv.ts            # CSV 导出
+│   │   ├── import_data.ts    # CSV/TSV/XLSX 导入
 │   │   └── devices.ts        # 设备管理
-│   └── services/
-│       ├── backup-executor.ts # 备份执行
-│       ├── restore-service.ts # 恢复服务
-│       └── data-cleanup/     # 孤立数据清理
-├── schema.sql                # D1 数据库 Schema
+│   ├── services/
+│   │   ├── backup-executor.ts # 备份执行
+│   │   ├── backup-retention.ts# 备份保留策略
+│   │   ├── restore-service.ts # 恢复服务
+│   │   ├── import_data/      # 数据导入（parser/transformer/stats）
+│   │   └── data-cleanup/     # 孤立数据清理
+│   └── do/
+│       └── index.ts          # Durable Object（WS/日志/锁/导入缓存）
 ├── wrangler.toml             # Cloudflare 配置
 └── .github/workflows/        # CI/CD 自动部署
 ```
