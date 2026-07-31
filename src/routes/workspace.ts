@@ -74,6 +74,7 @@ type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
   BEECOUNT_DO: DurableObjectNamespace;
+  INVITE_SHARE_ORIGIN?: string;
 };
 
 type Variables = {
@@ -1227,7 +1228,8 @@ workspaceRouter.post('/ledgers/:id/invites', zValidator('json', InviteSchema), a
     details: { expires_at: expiresAt, target_role: req.target_role },
   });
 
-  const reqOrigin = c.req.header('Origin') || `https://${c.req.header('Host')}` || 'https://beecount.qzz.io';
+  const shareOrigin = (c.env as any).INVITE_SHARE_ORIGIN || c.req.header('Origin') || `https://${c.req.header('Host')}` || 'https://beecount.qzz.io';
+  const shareUrl = `${shareOrigin.replace(/\/+$/, '')}/invite/${inviteCode}`;
 
   return c.json({
     code: inviteCode,
@@ -1235,7 +1237,7 @@ workspaceRouter.post('/ledgers/:id/invites', zValidator('json', InviteSchema), a
     expires_at: expiresAt,
     created_at: nowUtc(),
     target_role: req.target_role,
-    share_url: `${reqOrigin}/invite/${inviteCode}`,
+    share_url: shareUrl,
   });
 });
 
@@ -1280,7 +1282,7 @@ workspaceRouter.get('/ledgers/:id/invites', async (c) => {
       created_at: string;
     }>();
 
-  const reqOrigin = c.req.header('Origin') || `https://${c.req.header('Host')}` || 'https://beecount.qzz.io';
+  const shareOrigin = (c.env as any).INVITE_SHARE_ORIGIN || c.req.header('Origin') || `https://${c.req.header('Host')}` || 'https://beecount.qzz.io';
   const result = invites.results.map((inv) => ({
       id: inv.id,
       code: inv.code,
@@ -1289,7 +1291,7 @@ workspaceRouter.get('/ledgers/:id/invites', async (c) => {
       invited_by_user_id: inv.invited_by,
       expires_at: inv.expires_at,
       created_at: inv.created_at,
-      share_url: `${reqOrigin}/invite/${inv.code}`,
+      share_url: `${shareOrigin.replace(/\/+$/, '')}/invite/${inv.code}`,
     }));
 
   return c.json(result);
