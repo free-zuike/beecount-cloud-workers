@@ -74,7 +74,7 @@ export class GenericParser {
       fromAccountName: grab('fromAccountName'),
       toAccountName: grab('toAccountName'),
       note: grab('note'),
-      tags: grab('tags') ? [grab('tags')!] : [],
+      tags: (() => { const t = grab('tags'); return t ? [t] : []; })(),
     };
   }
 }
