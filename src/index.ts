@@ -177,10 +177,10 @@ app.onError((err, c) => {
 
 app.route('/ws', wsRouter);
 
-// 邀请链接重定向到 Web App（原版 Python 用独立域名处理）
+// 邀请链接重定向到 Web App 账本页面（原版 Python 用独立域名处理）
 app.get('/invite/:code', (c) => {
   const code = c.req.param('code');
-  return c.redirect(`/app/invite?code=${code}`, 302);
+  return c.redirect(`/app/ledgers?invite=${code}`, 302);
 });
 
 app.get('*', spaMiddleware);
