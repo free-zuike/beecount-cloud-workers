@@ -154,8 +154,8 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
     };
 
     const insertResult = await db
-      .prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id)
-        VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, ?, ?)`)
+      .prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+        VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, ?, ?, 'ledger')`)
       .bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, deviceId)
       .run();
 
@@ -231,8 +231,8 @@ const batchDeleteHandler = async (c: any) => {
     await db
       .prepare(
         `INSERT INTO sync_changes
-         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id, scope)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
       )
       .bind(userId, ledgerId, 'transaction', txSyncId, 'delete', '{}', serverNow, deviceId, userId)
       .run();
@@ -315,7 +315,7 @@ batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch', zValidator('json'
     }
 
     const payload: Record<string, unknown> = { tx_type: txType, amount: tx.amount, happened_at: tx.happened_at, note: tx.note || null, category_sync_id: categorySyncId, account_sync_id: accountSyncId, from_account_sync_id: tx.from_account_id || null, to_account_sync_id: tx.to_account_id || null, tags: tx.tags || null, updated_by_user_id: userId, created_by_user_id: userId };
-    const insertResult = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id) VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, ?, ?)`).bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, deviceId).run();
+    const insertResult = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope) VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, ?, ?, 'ledger')`).bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, deviceId).run();
     const changeId = (insertResult as any).lastRowId;
     maxChangeId = Math.max(maxChangeId, changeId);
 

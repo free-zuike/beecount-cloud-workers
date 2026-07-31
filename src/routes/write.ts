@@ -570,8 +570,8 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
     )
     .bind(userId, ledger.id, 'transaction', txSyncId, 'delete', '{}', serverNow, userId)
     .run();
@@ -785,8 +785,8 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
   const syncChangeResult = await db
     .prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
     )
     .bind(userId, ledger.id, 'transaction', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
     .run();
@@ -1214,8 +1214,8 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
     )
     .bind(userId, ledger.id, 'transaction', txSyncId, 'upsert', safeJsonStringify(newPayload), serverNow, userId)
     .run();

@@ -565,7 +565,7 @@ importRouter.post('/:token/execute', async (c) => {
             const result = await db.prepare(
               `INSERT INTO sync_changes
                (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, scope)
-               VALUES (?, ?, ?, ?, 'upsert', ?, ?, 'web-import', 'user')`
+               VALUES (?, ?, ?, ?, 'upsert', ?, ?, 'web-import', 'ledger')`
             ).bind(
               userId, ledger.id, 'transaction',
               syncId, JSON.stringify(payload), now,
