@@ -248,6 +248,24 @@ importRouter.post('/upload', async (c) => {
       source_row_number: tx.sourceRowNumber,
     }));
 
+    // 计算完整统计
+    let expenseTotal = 0, incomeTotal = 0, transferCount = 0;
+    let timeMin: string | null = null, timeMax: string | null = null;
+    const catSet = new Set<string>(), acctSet = new Set<string>(), tagSet = new Set<string>();
+    for (const tx of sampleTxs) {
+      const amt = Number(tx.amount) || 0;
+      if (tx.txType === 'expense') expenseTotal += amt;
+      else if (tx.txType === 'income') incomeTotal += amt;
+      else if (tx.txType === 'transfer') transferCount++;
+      if (!timeMin || tx.happenedAt < timeMin) timeMin = tx.happenedAt;
+      if (!timeMax || tx.happenedAt > timeMax) timeMax = tx.happenedAt;
+      if (tx.categoryName) catSet.add(tx.categoryName);
+      if (tx.accountName) acctSet.add(tx.accountName);
+      if (tx.fromAccountName) acctSet.add(tx.fromAccountName);
+      if (tx.toAccountName) acctSet.add(tx.toAccountName);
+      for (const t of tx.tagNames) tagSet.add(t);
+    }
+
     return c.json({
       import_token: token,
       expires_at: expiresAt,
@@ -260,13 +278,19 @@ importRouter.post('/upload', async (c) => {
       auto_tag_names: [],
       stats: {
         total_rows: importData.rows.length,
-        time_range_start: null,
-        time_range_end: null,
-        total_signed_amount: '0',
-        by_type: { expense_count: 0, expense_total: '0', income_count: 0, income_total: '0', transfer_count: 0 },
-        accounts: { new_names: [], matched_names: [] },
-        categories: { new_names: [], matched_names: [] },
-        tags: { new_names: [], matched_names: [] },
+        time_range_start: timeMin ? timeMin.slice(0, 10) : null,
+        time_range_end: timeMax ? timeMax.slice(0, 10) : null,
+        total_signed_amount: String(incomeTotal - expenseTotal),
+        by_type: {
+          expense_count: sampleTxs.filter(t => t.txType === 'expense').length,
+          expense_total: String(expenseTotal),
+          income_count: sampleTxs.filter(t => t.txType === 'income').length,
+          income_total: String(incomeTotal),
+          transfer_count: transferCount,
+        },
+        accounts: { new_names: [...acctSet], matched_names: [] },
+        categories: { new_names: [...catSet], matched_names: [] },
+        tags: { new_names: [...tagSet], matched_names: [] },
         skipped_dedup: 0,
         parse_errors: [],
         parse_errors_total: 0,
