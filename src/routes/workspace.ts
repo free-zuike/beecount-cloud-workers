@@ -65,6 +65,11 @@ function generateInviteCode(): string {
   return code;
 }
 
+function formatInviteCode(code: string): string {
+  if (code.length === 6) return `${code.slice(0, 3)} ${code.slice(3)}`;
+  return code;
+}
+
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
@@ -1226,7 +1231,7 @@ workspaceRouter.post('/ledgers/:id/invites', zValidator('json', InviteSchema), a
 
   return c.json({
     code: inviteCode,
-    formatted_code: inviteCode,
+    formatted_code: formatInviteCode(inviteCode),
     expires_at: expiresAt,
     created_at: nowUtc(),
     target_role: req.target_role,
@@ -1279,7 +1284,7 @@ workspaceRouter.get('/ledgers/:id/invites', async (c) => {
   const result = invites.results.map((inv) => ({
       id: inv.id,
       code: inv.code,
-      formatted_code: inv.code,
+      formatted_code: formatInviteCode(inv.code),
       target_role: inv.target_role,
       invited_by_user_id: inv.invited_by,
       expires_at: inv.expires_at,
