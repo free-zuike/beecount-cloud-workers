@@ -731,9 +731,13 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
 
   serverLogger.info('src.routers.write', '[WRITE] /transactions POST called, userId:', userId, 'req:', JSON.stringify(req));
 
-  // 查找账本
+  // 查找账本：优先使用 URL 路径参数，其次请求体，最后回退到用户的第一个账本
   let ledger;
-  if (req.ledger_id) {
+  const urlLedgerId = c.req.param('ledgerId');
+  if (urlLedgerId) {
+    ledger = await findLedger(db, userId, urlLedgerId);
+  }
+  if (!ledger && req.ledger_id) {
     ledger = await findLedger(db, userId, req.ledger_id);
   }
   
