@@ -540,9 +540,15 @@ readRouter.get('/workspace/transactions', async (c) => {
     bindings.push(txSyncId);
   }
   if (tagSyncId) {
-    query += ' AND tag_sync_ids_json LIKE ? ESCAPE ?';
-    const escapedTag = tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_');
-    bindings.push(`%"${escapedTag}"%`, '\\');
+    const tagRow = await db.prepare('SELECT name FROM read_tag_projection WHERE sync_id = ?').bind(tagSyncId).first<{ name: string }>();
+    if (tagRow) {
+      const escapedTag = tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_');
+      query += ' AND (tag_sync_ids_json LIKE ? ESCAPE ? OR tags_csv = ?)';
+      bindings.push(`%"${escapedTag}"%`, '\\', tagRow.name);
+    } else {
+      query += ' AND tag_sync_ids_json LIKE ? ESCAPE ?';
+      bindings.push(`%"${tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_')}"%`, '\\');
+    }
   }
   if (accountName) {
     query += ' AND account_name = ?';

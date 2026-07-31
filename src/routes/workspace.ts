@@ -338,11 +338,18 @@ workspaceRouter.get('/transactions', async (c) => {
     txParams.push(pattern, pattern, pattern, pattern);
   }
 
-  // 按 tag_sync_id 精确过滤（与原版对齐）
+  // 按 tag_sync_id 精确过滤（与原版对齐：先查 tag_sync_ids_json，再按名匹配 tags_csv）
   if (tagSyncId) {
-    txQuery += ` AND tag_sync_ids_json LIKE ? ESCAPE ?`;
-    const escapedTag = tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_');
-    txParams.push(`%"${escapedTag}"%`, '\\');
+    const tagRow = await db.prepare('SELECT name FROM read_tag_projection WHERE sync_id = ?').bind(tagSyncId).first<{ name: string }>();
+    if (tagRow) {
+      const escapedTag = tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_');
+      txQuery += ` AND (tag_sync_ids_json LIKE ? ESCAPE ? OR tags_csv = ?)`;
+      txParams.push(`%"${escapedTag}"%`, '\\', tagRow.name);
+    } else {
+      txQuery += ` AND tag_sync_ids_json LIKE ? ESCAPE ?`;
+      const escapedTag = tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_');
+      txParams.push(`%"${escapedTag}"%`, '\\');
+    }
   }
 
   // 按 category_sync_id 精确过滤（原版对齐）
