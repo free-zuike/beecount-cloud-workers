@@ -58,21 +58,24 @@ export async function signS3Request(
   endpoint: string,
   bucket: string,
   key: string,
-  method: string
+  method: string,
+  queryString?: string,
 ): Promise<{ url: string; headers: Record<string, string> }> {
   const now = new Date();
   const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
   const dateStamp = amzDate.slice(0, 8);
   const service = 's3';
 
-  const url = `${endpoint}/${bucket}/${key}`;
+  const url = `${endpoint}/${bucket}/${key}${queryString ? '?' + queryString : ''}`;
   const host = new URL(endpoint).host;
 
+  const canonicalUri = `/${bucket}/${key}`;
+  const canonicalQuery = queryString || '';
   const canonicalHeaders = `host:${host}\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:${amzDate}\n`;
   const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
   const payloadHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
-  const canonicalRequest = `${method}\n/${bucket}/${key}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+  const canonicalRequest = `${method}\n${canonicalUri}\n${canonicalQuery}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
 
   const algorithm = 'AWS4-HMAC-SHA256';
   const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
@@ -195,5 +198,58 @@ export async function uploadToS3(
   } catch (error: unknown) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     return { ok: false, message: `Upload error: ${errorMsg}` };
+  }
+}
+
+export async function listS3Objects(
+  endpoint: string,
+  bucket: string,
+  accessKey: string,
+  secretKey: string,
+  region: string,
+  prefix: string,
+): Promise<Array<{ Name: string; Path: string; IsDir: boolean }>> {
+  try {
+    const { url, headers } = await signS3Request(
+      accessKey, secretKey, region,
+      endpoint, bucket.replace(/^\/+/, ''),
+      '', 'GET', `prefix=${encodeURIComponent(prefix)}`
+    );
+
+    const response = await fetch(url, { method: 'GET', headers });
+    if (!response.ok) return [];
+
+    const text = await response.text();
+    const items: Array<{ Name: string; Path: string; IsDir: boolean }> = [];
+    const keyRegex = /<Key>([^<]+)<\/Key>/g;
+    const isDirRegex = /<IsTruncated>(true|false)<\/IsTruncated>/g;
+    let match;
+    while ((match = keyRegex.exec(text)) !== null) {
+      items.push({ Name: match[1], Path: match[1], IsDir: false });
+    }
+    return items;
+  } catch {
+    return [];
+  }
+}
+
+export async function deleteS3Object(
+  endpoint: string,
+  bucket: string,
+  accessKey: string,
+  secretKey: string,
+  region: string,
+  key: string,
+): Promise<boolean> {
+  try {
+    const { url, headers } = await signS3Request(
+      accessKey, secretKey, region,
+      endpoint, bucket.replace(/^\/+/, ''),
+      key, 'DELETE'
+    );
+    const response = await fetch(url, { method: 'DELETE', headers });
+    return response.ok;
+  } catch {
+    return false;
   }
 }

@@ -4,11 +4,12 @@
  * 被 src/index.ts（定时任务）和 src/routes/admin_backup.ts（管理员手动触发）共用
  */
 
-import { uploadToS3 } from '../lib/s3';
+import { uploadToS3, listS3Objects, deleteS3Object } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
 import { createEncryptedZip } from '../lib/zip-lib';
+import { computeRetentionDeletes, filterBackupFiles } from './backup-retention';
 import { createSqliteWithData } from '../lib/sqlite-writer';
 
 // ===========================
@@ -329,6 +330,111 @@ export async function generateBackupBytes(
 }
 
 /**
+ * 列出远端存储中的文件（用于 retention 清理）
+ */
+export async function listRemoteFiles(
+  config: Record<string, string>,
+): Promise<Array<{ Name?: string; Path?: string; IsDir?: boolean }>> {
+  if (config.backend_type === 's3' || config.backend_type === 'b2') {
+    const endpoint = config.endpoint || (config.backend_type === 'b2' ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
+    const bucket = config.bucket;
+    const accessKey = config.access_key_id || config.key;
+    const secretKey = config.secret_access_key || config.account;
+    const region = config.region || 'auto';
+    let prefix = '';
+    if (config.savePath && config.savePath !== 'custom') prefix = config.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else if (config.root_path) prefix = config.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else prefix = 'beecount/';
+    return await listS3Objects(endpoint, bucket!, accessKey!, secretKey!, region, prefix);
+  }
+
+  if (config.backend_type === 'r2' && config._r2Bucket) {
+    const bucket = config._r2Bucket as unknown as R2Bucket;
+    const prefix = 'beecount/backups/';
+    const objects = await bucket.list({ prefix });
+    return objects.objects.map(o => ({ Name: o.key, Path: o.key, IsDir: false }));
+  }
+
+  if (config.backend_type === 'webdav') {
+    // WebDAV 列出文件（PROPFIND）
+    try {
+      const baseUrl = config.url!;
+      const username = config.username!;
+      const password = config.password!;
+      const auth = 'Basic ' + Buffer.from(username + ':' + password).toString('base64');
+      const response = await fetch(baseUrl, {
+        method: 'PROPFIND',
+        headers: { 'Authorization': auth, 'Depth': '1' },
+      });
+      if (!response.ok) return [];
+      const text = await response.text();
+      const items: Array<{ Name?: string; Path?: string; IsDir?: boolean }> = [];
+      const hrefRegex = /<d:href>([^<]+)<\/d:href>/g;
+      let match;
+      while ((match = hrefRegex.exec(text)) !== null) {
+        const href = match[1];
+        const name = href.split('/').pop() || href;
+        if (name) items.push({ Name: name, Path: href, IsDir: false });
+      }
+      return items;
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+/**
+ * 从远端删除文件（用于 retention 清理）
+ */
+export async function deleteRemoteFile(
+  config: Record<string, string>,
+  fileName: string,
+): Promise<boolean> {
+  if (config.backend_type === 's3' || config.backend_type === 'b2') {
+    const endpoint = config.endpoint || (config.backend_type === 'b2' ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
+    const bucket = config.bucket;
+    const accessKey = config.access_key_id || config.key;
+    const secretKey = config.secret_access_key || config.account;
+    const region = config.region || 'auto';
+    let prefix = '';
+    if (config.savePath && config.savePath !== 'custom') prefix = config.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else if (config.root_path) prefix = config.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else prefix = 'beecount/';
+    return await deleteS3Object(endpoint, bucket!, accessKey!, secretKey!, region, prefix + fileName);
+  }
+
+  if (config.backend_type === 'r2' && config._r2Bucket) {
+    const bucket = config._r2Bucket as unknown as R2Bucket;
+    try {
+      await bucket.delete(fileName);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  if (config.backend_type === 'webdav') {
+    try {
+      const baseUrl = config.url!;
+      const username = config.username!;
+      const password = config.password!;
+      const auth = 'Basic ' + Buffer.from(username + ':' + password).toString('base64');
+      const response = await fetch(baseUrl + fileName, {
+        method: 'DELETE',
+        headers: { 'Authorization': auth },
+      });
+      return response.ok || response.status === 404;
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+/**
  * 上传备份到单个远端（与原版 fan-out 单个 worker 对齐）
  */
 export async function uploadBackupToRemote(
@@ -396,6 +502,7 @@ export async function performBackupFanOut(
   shouldEncrypt?: boolean,
   r2?: R2Bucket,
   logFn?: (msg: string) => void,
+  retentionDays?: number,
 ): Promise<BackupResult> {
   const log = logFn || console.log;
   const logLines: string[] = [];
@@ -455,6 +562,31 @@ export async function performBackupFanOut(
         try { await r2.put(key, data); attachmentsUploaded++; } catch {}
       }
     } catch {}
+  }
+
+  // 6. 保留策略（只在 schedule 模式且有成功上传时执行）
+  if (retentionDays && retentionDays > 0 && successful.length > 0) {
+    logWrap(`[Backup] Retention: running with retention_days=${retentionDays}`);
+    for (const result of successful) {
+      const r = (result as PromiseFulfilledResult<{ remoteId: string; ok: boolean; message: string; key?: string }>).value;
+      const remoteConfig = remoteConfigs.find(rc => rc.remoteId === r.remoteId);
+      if (!remoteConfig) continue;
+      try {
+        const items = await listRemoteFiles(remoteConfig.config);
+        const backupFiles = filterBackupFiles(items);
+        const toDelete = computeRetentionDeletes(backupFiles, retentionDays);
+        for (const f of toDelete) {
+          try {
+            await deleteRemoteFile(remoteConfig.config, f.name);
+            logWrap(`[Backup] Retention deleted: ${f.name}`);
+          } catch (exc) {
+            logWrap(`[Backup] Retention delete failed: ${f.name}: ${exc}`);
+          }
+        }
+      } catch (exc) {
+        logWrap(`[Backup] Retention list failed on ${remoteConfig.config.name || 'remote'}: ${exc}`);
+      }
+    }
   }
 
   const allSucceeded = failed.length === 0;

@@ -1535,7 +1535,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
       logFn(`backup start, run=${runId} label=${serverNow.replace(/[:.]/g, '').slice(0, 15)} remotes=['${remoteId || 'local'}']`);
 
-      const backupResult = await performBackupFanOut(db, runId, schedule.user_id, ledgerId || 'global', remoteConfigs, shouldEncrypt, c.env.R2, logFn);
+      const backupResult = await performBackupFanOut(db, runId, schedule.user_id, ledgerId || 'global', remoteConfigs, shouldEncrypt, c.env.R2, logFn, schedule.retention_days ?? undefined);
       const finishedAt = new Date().toISOString();
       const finalStatus = backupResult.success ? 'succeeded' : 'failed';
 
