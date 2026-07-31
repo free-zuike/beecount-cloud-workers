@@ -121,6 +121,7 @@ app.use('/profile/*', authMiddleware);
 app.use('/attachments/*', authMiddleware);
 app.use('/api/v1/attachments/*', authMiddleware);
 app.use('/import/*', authMiddleware);
+app.use('/api/v1/import/*', authMiddleware);
 app.use('/ai/*', authMiddleware);
 app.use('/backup/*', authMiddleware);
 app.use('/notifications/*', authMiddleware);
