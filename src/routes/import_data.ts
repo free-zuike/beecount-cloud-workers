@@ -329,7 +329,7 @@ importRouter.post('/:token/preview', zValidator('json', ImportPreviewSchema), as
   // Compute stats
   let existing = { txKeys: new Set<string>(), categoryNames: new Set<string>(), accountNames: new Set<string>(), tagNames: new Set<string>() };
   if (targetLedgerId) {
-    existing = await buildExistingSets(db, userId, targetLedgerId);
+    existing = await buildExistingSets(db, targetLedgerId);
   }
   const stats = computeStats(txs, existing, session.data.rows, mapping);
 
@@ -471,7 +471,7 @@ importRouter.post('/:token/execute', async (c) => {
   const txs = applyMapping(session.data.rows, mapping);
 
   // Get existing sets for dedup
-  const existing = await buildExistingSets(db, userId, targetLedgerId);
+  const existing = await buildExistingSets(db, targetLedgerId);
 
   // SSE stream for execution progress
   const encoder = new TextEncoder();

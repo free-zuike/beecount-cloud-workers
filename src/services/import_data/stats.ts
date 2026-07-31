@@ -24,20 +24,19 @@ export interface ExistingSets {
 
 export async function buildExistingSets(
   db: D1Database,
-  userId: string,
   ledgerId: string,
 ): Promise<ExistingSets> {
-  // 先查找账本（支持所有者 + 共享成员），获取所有者 user_id
+  // 直接按 external_id 查找账本，不检查用户权限（由调用方负责）
   const ledger = await db
-    .prepare('SELECT id, user_id FROM ledgers WHERE external_id = ? AND (user_id = ? OR id IN (SELECT ledger_id FROM ledger_members WHERE user_id = ?))')
-    .bind(ledgerId, userId, userId)
+    .prepare('SELECT id, user_id FROM ledgers WHERE external_id = ?')
+    .bind(ledgerId)
     .first<{ id: string; user_id: string }>();
 
   if (!ledger) {
     return { txKeys: new Set(), categoryNames: new Set(), accountNames: new Set(), tagNames: new Set() };
   }
 
-  // 按所有者 user_id 查询（与原版 snapshot builder 一致：accounts/tags/tx 按 ledger.user_id）
+  // 按所有者 user_id 查询（与原版 snapshot builder 一致）
   const ownerId = ledger.user_id;
   const [txRows, catRows, acctRows, tagRows] = await Promise.all([
     db.prepare('SELECT amount, happened_at FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id).all<{ amount: number; happened_at: string }>(),
