@@ -973,11 +973,11 @@ writeRouter.delete('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteBa
   const req = c.req.valid('json');
   const serverNow = nowUtc();
   const accountSyncId = c.req.param('id');
+  const urlLedgerId = c.req.param('ledgerId');
 
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  const ledger = urlLedgerId
+    ? await findLedger(db, userId, urlLedgerId)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
@@ -1026,11 +1026,11 @@ writeRouter.patch('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteTagUpda
   const req = c.req.valid('json');
   const serverNow = nowUtc();
   const tagSyncId = c.req.param('id');
+  const urlLedgerId = c.req.param('ledgerId');
 
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  const ledger = urlLedgerId
+    ? await findLedger(db, userId, urlLedgerId)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
@@ -1090,11 +1090,11 @@ writeRouter.delete('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteBaseSc
   const req = c.req.valid('json');
   const serverNow = nowUtc();
   const tagSyncId = c.req.param('id');
+  const urlLedgerId = c.req.param('ledgerId');
 
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  const ledger = urlLedgerId
+    ? await findLedger(db, userId, urlLedgerId)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
@@ -1288,11 +1288,11 @@ writeRouter.post('/ledgers/:ledgerId/accounts', zValidator('json', WriteAccountC
   const db = c.env.DB;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
+  const urlLedgerId = c.req.param('ledgerId');
 
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  const ledger = urlLedgerId
+    ? await findLedger(db, userId, urlLedgerId)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
@@ -1375,11 +1375,11 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
   const req = c.req.valid('json');
   const serverNow = nowUtc();
   serverLogger.info('src.routers.write', '[WRITE] Creating category:', JSON.stringify({ name: req.name, kind: req.kind, parent_name: req.parent_name, icon_cloud_file_id: req.icon_cloud_file_id }));
+  const urlLedgerId = c.req.param('ledgerId');
 
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  const ledger = urlLedgerId
+    ? await findLedger(db, userId, urlLedgerId)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
@@ -1486,11 +1486,11 @@ writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteC
   const req = c.req.valid('json');
   const serverNow = nowUtc();
   const categorySyncId = c.req.param('id');
+  const urlLedgerId = c.req.param('ledgerId');
 
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  const ledger = urlLedgerId
+    ? await findLedger(db, userId, urlLedgerId)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
@@ -1571,11 +1571,11 @@ writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', Write
   const req = c.req.valid('json');
   const serverNow = nowUtc();
   const categorySyncId = c.req.param('id');
+  const urlLedgerId = c.req.param('ledgerId');
 
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  const ledger = urlLedgerId
+    ? await findLedger(db, userId, urlLedgerId)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
@@ -1646,11 +1646,11 @@ writeRouter.post('/ledgers/:ledgerId/tags', zValidator('json', WriteTagCreateSch
   const db = c.env.DB;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
+  const urlLedgerId = c.req.param('ledgerId');
 
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  const ledger = urlLedgerId
+    ? await findLedger(db, userId, urlLedgerId)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
@@ -1716,11 +1716,11 @@ writeRouter.post('/ledgers/:ledgerId/budgets', zValidator('json', WriteBudgetCre
   const db = c.env.DB;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
+  const urlLedgerId = c.req.param('ledgerId');
 
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  const ledger = urlLedgerId
+    ? await findLedger(db, userId, urlLedgerId)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
@@ -1797,11 +1797,11 @@ writeRouter.patch('/ledgers/:ledgerId/budgets/:id', zValidator('json', WriteBudg
   const req = c.req.valid('json');
   const serverNow = nowUtc();
   const budgetSyncId = c.req.param('id');
+  const urlLedgerId = c.req.param('ledgerId');
 
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  const ledger = urlLedgerId
+    ? await findLedger(db, userId, urlLedgerId)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
@@ -1892,11 +1892,11 @@ writeRouter.delete('/ledgers/:ledgerId/budgets/:id', zValidator('json', WriteBas
   const req = c.req.valid('json');
   const serverNow = nowUtc();
   const budgetSyncId = c.req.param('id');
+  const urlLedgerId = c.req.param('ledgerId');
 
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ id: string; external_id: string }>();
+  const ledger = urlLedgerId
+    ? await findLedger(db, userId, urlLedgerId)
+    : await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?').bind(userId).first<{ id: string; external_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);

@@ -91,7 +91,11 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
       }
       case 'get_transaction': {
         if (!args.sync_id) throw new Error('sync_id required');
-        const tx = await db.prepare('SELECT * FROM read_tx_projection WHERE user_id = ? AND sync_id = ?').bind(userId, args.sync_id).first<any>();
+        // 查询用户可访问账本中的交易（支持共享账本）
+        const access = await db.prepare(`SELECT l.id FROM ledgers l WHERE l.user_id = ? UNION SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?`).bind(userId, userId).all<{ id: string }>();
+        const ids = access.results.map(r => r.id);
+        if (ids.length === 0) { r = null; break; }
+        const tx = await db.prepare(`SELECT * FROM read_tx_projection WHERE ledger_id IN (${ids.map(() => '?').join(',')}) AND sync_id = ?`).bind(...ids, args.sync_id).first<any>();
         if (!tx) { r = null; break; }
         const l = await db.prepare('SELECT name FROM ledgers WHERE id = ?').bind(tx.ledger_id).first<{ name: string }>();
         r = { sync_id: tx.sync_id, tx_type: tx.tx_type, amount: tx.amount, happened_at: tx.happened_at, note: tx.note, category_name: tx.category_name, account_name: tx.account_name, from_account_name: tx.from_account_name, to_account_name: tx.to_account_name, tags: tx.tags_csv || '', ledger: l?.name || null, attachments: tx.attachments_json ? JSON.parse(tx.attachments_json) : [] };
@@ -108,7 +112,10 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
       }
       case 'update_transaction': {
         if (!args.sync_id) throw new Error('sync_id required');
-        const tx = await db.prepare('SELECT * FROM read_tx_projection WHERE user_id = ? AND sync_id = ?').bind(userId, args.sync_id).first<any>();
+        const access = await db.prepare(`SELECT l.id FROM ledgers l WHERE l.user_id = ? UNION SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?`).bind(userId, userId).all<{ id: string }>();
+        const ids = access.results.map(r => r.id);
+        if (ids.length === 0) throw new Error('Transaction not found');
+        const tx = await db.prepare(`SELECT * FROM read_tx_projection WHERE ledger_id IN (${ids.map(() => '?').join(',')}) AND sync_id = ?`).bind(...ids, args.sync_id).first<any>();
         if (!tx) throw new Error('Transaction not found');
         const payload: any = { syncId: args.sync_id };
         if (args.amount !== undefined) payload.amount = args.amount;
@@ -127,7 +134,10 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
       case 'delete_transaction': {
         if (!args.sync_id) throw new Error('sync_id required');
         if (!args.confirm) { r = { status: 'confirmation_required', message: 'Delete transaction requires explicit confirmation. Please confirm with the user, then call again with confirm=true.', sync_id: args.sync_id }; break; }
-        const tx = await db.prepare('SELECT ledger_id FROM read_tx_projection WHERE user_id = ? AND sync_id = ?').bind(userId, args.sync_id).first<any>();
+        const access = await db.prepare('SELECT l.id FROM ledgers l WHERE l.user_id = ? UNION SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?').bind(userId, userId).all<{ id: string }>();
+        const ids = access.results.map(r => r.id);
+        if (ids.length === 0) throw new Error('Transaction not found');
+        const tx = await db.prepare(`SELECT ledger_id FROM read_tx_projection WHERE ledger_id IN (${ids.map(() => '?').join(',')}) AND sync_id = ?`).bind(...ids, args.sync_id).first<any>();
         if (!tx) throw new Error('Transaction not found');
         const sid = randomUUID();
         await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, tx.ledger_id, 'transaction', sid, 'delete', JSON.stringify({ syncId: args.sync_id }), nowUtc(), userId).run();
