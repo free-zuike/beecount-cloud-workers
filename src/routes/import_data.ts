@@ -317,6 +317,42 @@ importRouter.post('/:token/preview', zValidator('json', ImportPreviewSchema), as
   session.status = 'previewed';
   await saveSession(c.env, userId, session);
 
+  // 计算新增字段
+  let expenseTotal = 0, incomeTotal = 0, transferCount = 0;
+  let timeMin: string | null = null, timeMax: string | null = null;
+  for (const tx of txs) {
+    const amt = Number(tx.amount) || 0;
+    if (tx.txType === 'expense') expenseTotal += amt;
+    else if (tx.txType === 'income') incomeTotal += amt;
+    else if (tx.txType === 'transfer') transferCount++;
+    if (!timeMin || tx.happenedAt < timeMin) timeMin = tx.happenedAt;
+    if (!timeMax || tx.happenedAt > timeMax) timeMax = tx.happenedAt;
+  }
+
+  // 计算新账/匹配账
+  const newAccountNames: string[] = [];
+  const matchedAccountNames: string[] = [];
+  const newCategoryNames: string[] = [];
+  const matchedCategoryNames: string[] = [];
+  const newTagNames: string[] = [];
+  const matchedTagNames: string[] = [];
+  if (targetLedgerId) {
+    for (const tx of txs) {
+      if (tx.accountName) {
+        if (existing.accountNames.has(tx.accountName)) matchedAccountNames.push(tx.accountName);
+        else newAccountNames.push(tx.accountName);
+      }
+      if (tx.categoryName) {
+        if (existing.categoryNames.has(tx.categoryName)) matchedCategoryNames.push(tx.categoryName);
+        else newCategoryNames.push(tx.categoryName);
+      }
+      for (const t of tx.tagNames) {
+        if (existing.tagNames.has(t)) matchedTagNames.push(t);
+        else newTagNames.push(t);
+      }
+    }
+  }
+
   return c.json({
     import_token: token,
     expires_at: session.expiresAt,
@@ -329,19 +365,41 @@ importRouter.post('/:token/preview', zValidator('json', ImportPreviewSchema), as
     auto_tag_names: autoTagNames,
     stats: {
       total_rows: txs.length,
-      new_count: stats.newCount,
-      duplicate_count: stats.duplicateCount,
-      matched_count: stats.matchedCount,
-      category_count: stats.categoryCount,
-      account_count: stats.accountCount,
-      tag_count: stats.tagCount,
+      time_range_start: timeMin ? timeMin.slice(0, 10) : null,
+      time_range_end: timeMax ? timeMax.slice(0, 10) : null,
+      total_signed_amount: String(incomeTotal - expenseTotal),
+      by_type: {
+        expense_count: txs.filter(t => t.txType === 'expense').length,
+        expense_total: String(expenseTotal),
+        income_count: txs.filter(t => t.txType === 'income').length,
+        income_total: String(incomeTotal),
+        transfer_count: transferCount,
+      },
+      accounts: { new_names: [...new Set(newAccountNames)], matched_names: [...new Set(matchedAccountNames)] },
+      categories: { new_names: [...new Set(newCategoryNames)], matched_names: [...new Set(matchedCategoryNames)] },
+      tags: { new_names: [...new Set(newTagNames)], matched_names: [...new Set(matchedTagNames)] },
+      skipped_dedup: stats.duplicateCount,
+      parse_errors: [],
+      parse_errors_total: 0,
       parse_warnings: session.data.parseWarnings,
       parse_warnings_total: session.data.parseWarnings.length,
     },
-    sample_transactions: txs.slice(0, 10),
+    sample_transactions: txs.slice(0, 10).map(tx => ({
+      tx_type: tx.txType,
+      amount: String(tx.amount),
+      happened_at: tx.happenedAt,
+      note: tx.note ?? null,
+      category_name: tx.categoryName ?? null,
+      parent_category_name: tx.parentCategoryName ?? null,
+      account_name: tx.accountName ?? null,
+      from_account_name: tx.fromAccountName ?? null,
+      to_account_name: tx.toAccountName ?? null,
+      tag_names: tx.tagNames,
+      source_row_number: tx.sourceRowNumber,
+    })),
     time_range: {
-      start: txs.length ? txs.reduce((a, b) => a.happenedAt < b.happenedAt ? a : b).happenedAt.slice(0, 10) : null,
-      end: txs.length ? txs.reduce((a, b) => a.happenedAt > b.happenedAt ? a : b).happenedAt.slice(0, 10) : null,
+      start: timeMin ? timeMin.slice(0, 10) : null,
+      end: timeMax ? timeMax.slice(0, 10) : null,
     },
   });
 });
