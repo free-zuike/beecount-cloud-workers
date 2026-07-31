@@ -406,21 +406,20 @@ importRouter.post('/:token/preview', zValidator('json', ImportPreviewSchema), as
 
 // ==================== POST /{token}/execute ====================
 
-importRouter.post('/:token/execute', zValidator('json', ImportExecuteSchema), async (c) => {
+importRouter.post('/:token/execute', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const token = c.req.param('token');
-  const req = c.req.valid('json');
 
   const session = await getSession(c.env, userId, token);
-  if (!session) return c.json({ error: 'Import token not found or expired', error_code: 'IMPORT_TOKEN_EXPIRED' }, 404);
+  if (!session) return c.json({ error: 'Import token not found or expired', error_code: 'IMPORT_TOKEN_EXPIRED' }, 410);
   if (session.status === 'cancelled') return c.json({ error: 'Import cancelled' }, 400);
   if (session.status === 'executing') return c.json({ error: 'Import already in progress' }, 409);
 
-  const mapping = req.mapping ? mappingToInternal(req.mapping as Record<string, unknown>) : session.mapping;
-  const targetLedgerId = req.target_ledger_id || session.targetLedgerId;
-  const dedupStrategy = req.dedup_strategy ?? session.dedupStrategy;
-  const autoTagNames = req.auto_tag_names ?? session.autoTagNames;
+  const mapping = session.mapping;
+  const targetLedgerId = session.targetLedgerId;
+  const dedupStrategy = session.dedupStrategy;
+  const autoTagNames = session.autoTagNames;
 
   if (!targetLedgerId) {
     return c.json({ error: 'target_ledger_id is required', error_code: 'IMPORT_MISSING_LEDGER' }, 400);
