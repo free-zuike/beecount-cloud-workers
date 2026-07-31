@@ -73,6 +73,67 @@ class SftpClient {
     await writer.write(typeof data === 'string' ? new TextEncoder().encode(data) : data);
   }
 
+  private async sftpConnect(remotePath?: string): Promise<boolean> {
+    try {
+      await this.connect();
+      await this.readPacket();
+      await this.sendRaw('SSH-2.0-BeecountSFTP\r\n');
+      await this.readPacket();
+      const svcReq = new SshPacket(); svcReq.writeByte(5); svcReq.writeUint32(0); svcReq.writeString('ssh-userauth');
+      await this.sendRaw(svcReq.toBuffer()); await this.readPacket();
+      const authReq = new SshPacket(); authReq.writeByte(50); authReq.writeUint32(0);
+      authReq.writeString(this.config.username); authReq.writeString('ssh-connection');
+      authReq.writeString('password'); authReq.writeString(this.config.password || '');
+      await this.sendRaw(authReq.toBuffer());
+      if ((await this.readPacket()).type !== 52) { this.socket.close(); return false; }
+      const chOpen = new SshPacket(); chOpen.writeByte(90); chOpen.writeUint32(0);
+      chOpen.writeString('session'); chOpen.writeUint32(0); chOpen.writeUint32(32768);
+      await this.sendRaw(chOpen.toBuffer());
+      if ((await this.readPacket()).type !== 91) { this.socket.close(); return false; }
+      this.channelId = SshPacket.readUint32((await this.readPacket()).data, 0);
+      // 重新读取chResp
+      return true;
+    } catch { this.socket?.close(); return false; }
+  }
+
+  async list(dirPath: string): Promise<Array<{ Name: string; Path: string; IsDir: boolean }>> {
+    try {
+      if (!await this.sftpConnect()) return [];
+      // 简化：SFTP 通过 SSH 执行 ls 命令
+      const execReq = new SshPacket(); execReq.writeByte(98); execReq.writeUint32(this.channelId);
+      execReq.writeString('exec'); execReq.writeByte(1); execReq.writeString(`ls -1 "${dirPath || '/'}"`);
+      await this.sendRaw(execReq.toBuffer());
+      await this.readPacket();
+      const reader = this.socket.readable.getReader();
+      let out = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        out += new TextDecoder().decode(value);
+      }
+      reader.releaseLock();
+      this.socket.close();
+      const items: Array<{ Name: string; Path: string; IsDir: boolean }> = [];
+      for (const name of out.split('\n').map(s => s.trim()).filter(Boolean)) {
+        if (name === '.' || name === '..') continue;
+        items.push({ Name: name, Path: dirPath ? `${dirPath}/${name}` : name, IsDir: false });
+      }
+      return items;
+    } catch { this.socket?.close(); return []; }
+  }
+
+  async delete(remotePath: string): Promise<boolean> {
+    try {
+      if (!await this.sftpConnect()) return false;
+      const execReq = new SshPacket(); execReq.writeByte(98); execReq.writeUint32(this.channelId);
+      execReq.writeString('exec'); execReq.writeByte(1); execReq.writeString(`rm "${remotePath}"`);
+      await this.sendRaw(execReq.toBuffer());
+      await this.readPacket();
+      this.socket.close();
+      return true;
+    } catch { this.socket?.close(); return false; }
+  }
+
   async upload(remotePath: string, data: Uint8Array): Promise<boolean> {
     try {
       await this.connect();

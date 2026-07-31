@@ -382,6 +382,33 @@ export async function listRemoteFiles(
     }
   }
 
+  if (config.backend_type === 'ftp') {
+    const ftpClient = createFtpClient({
+      host: config.host || config.hostname || '',
+      port: parseInt(config.port || '21', 10),
+      username: config.username || '',
+      password: config.password || '',
+    });
+    let prefix = '';
+    if (config.savePath && config.savePath !== 'custom') prefix = config.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else if (config.root_path) prefix = config.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+    return await ftpClient.list(prefix);
+  }
+
+  if (config.backend_type === 'sftp') {
+    const sftpClient = createSftpClient({
+      host: config.host || config.hostname || '',
+      port: parseInt(config.port || '22', 10),
+      username: config.username || '',
+      password: config.password || '',
+      privateKey: config.private_key || config.privateKey,
+    });
+    let prefix = '';
+    if (config.savePath && config.savePath !== 'custom') prefix = config.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else if (config.root_path) prefix = config.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+    return await sftpClient.list(prefix);
+  }
+
   return [];
 }
 
@@ -429,6 +456,33 @@ export async function deleteRemoteFile(
     } catch {
       return false;
     }
+  }
+
+  if (config.backend_type === 'ftp') {
+    const ftpClient = createFtpClient({
+      host: config.host || config.hostname || '',
+      port: parseInt(config.port || '21', 10),
+      username: config.username || '',
+      password: config.password || '',
+    });
+    let prefix = '';
+    if (config.savePath && config.savePath !== 'custom') prefix = config.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else if (config.root_path) prefix = config.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+    return await ftpClient.delete(prefix + fileName);
+  }
+
+  if (config.backend_type === 'sftp') {
+    const sftpClient = createSftpClient({
+      host: config.host || config.hostname || '',
+      port: parseInt(config.port || '22', 10),
+      username: config.username || '',
+      password: config.password || '',
+      privateKey: config.private_key || config.privateKey,
+    });
+    let prefix = '';
+    if (config.savePath && config.savePath !== 'custom') prefix = config.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else if (config.root_path) prefix = config.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+    return await sftpClient.delete(prefix + fileName);
   }
 
   return false;

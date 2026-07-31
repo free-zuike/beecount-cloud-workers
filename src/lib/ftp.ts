@@ -61,6 +61,67 @@ class FtpClient {
     return socket;
   }
 
+  async list(dirPath: string): Promise<Array<{ Name: string; Path: string; IsDir: boolean }>> {
+    let socket: any;
+    try {
+      socket = await this.connect();
+      await this.sendCommand(socket, '');
+      await this.sendCommand(socket, `USER ${this.config.username}`);
+      await this.sendCommand(socket, `PASS ${this.config.password}`);
+      await this.sendCommand(socket, 'TYPE A');
+
+      const pasvResponse = await this.sendCommand(socket, 'PASV');
+      const pasvMatch = pasvResponse.match(/\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)/);
+      if (!pasvMatch) { socket.close(); return []; }
+
+      const host = `${pasvMatch[1]}.${pasvMatch[2]}.${pasvMatch[3]}.${pasvMatch[4]}`;
+      const port = parseInt(pasvMatch[5]) * 256 + parseInt(pasvMatch[6]);
+      const dataSocket = connect({ hostname: host, port });
+      await dataSocket.opened;
+
+      await this.sendCommand(socket, `MLSD ${dirPath || '/'}`);
+
+      const reader = dataSocket.readable.getReader();
+      const decoder = new TextDecoder();
+      let listData = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        listData += decoder.decode(value);
+      }
+      reader.releaseLock();
+      dataSocket.close();
+      await this.sendCommand(socket, '');
+      await this.sendCommand(socket, 'QUIT');
+      socket.close();
+
+      const items: Array<{ Name: string; Path: string; IsDir: boolean }> = [];
+      for (const line of listData.split('\n')) {
+        const parts = line.trim().split(';');
+        const namePart = parts[parts.length - 1]?.trim();
+        if (!namePart || namePart === '.' || namePart === '..') continue;
+        const isDir = line.includes('type=dir');
+        const path = dirPath ? `${dirPath}/${namePart}` : namePart;
+        items.push({ Name: namePart, Path: path, IsDir: isDir });
+      }
+      return items;
+    } catch { socket?.close(); return []; }
+  }
+
+  async delete(remotePath: string): Promise<boolean> {
+    let socket: any;
+    try {
+      socket = await this.connect();
+      await this.sendCommand(socket, '');
+      await this.sendCommand(socket, `USER ${this.config.username}`);
+      await this.sendCommand(socket, `PASS ${this.config.password}`);
+      const resp = await this.sendCommand(socket, `DELE ${remotePath}`);
+      await this.sendCommand(socket, 'QUIT');
+      socket.close();
+      return resp.startsWith('2');
+    } catch { socket?.close(); return false; }
+  }
+
   async upload(remotePath: string, data: Uint8Array): Promise<boolean> {
     let socket: any;
     try {
