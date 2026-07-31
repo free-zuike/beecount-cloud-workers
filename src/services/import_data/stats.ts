@@ -26,7 +26,6 @@ export async function buildExistingSets(
   db: D1Database,
   ledgerId: string,
 ): Promise<ExistingSets> {
-  // 直接按 external_id 查找账本，不检查用户权限（由调用方负责）
   const ledger = await db
     .prepare('SELECT id, user_id FROM ledgers WHERE external_id = ?')
     .bind(ledgerId)
@@ -36,7 +35,6 @@ export async function buildExistingSets(
     return { txKeys: new Set(), categoryNames: new Set(), accountNames: new Set(), tagNames: new Set() };
   }
 
-  // 按所有者 user_id 查询（与原版 snapshot builder 一致）
   const ownerId = ledger.user_id;
   const [txRows, catRows, acctRows, tagRows] = await Promise.all([
     db.prepare('SELECT amount, happened_at FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id).all<{ amount: number; happened_at: string }>(),
