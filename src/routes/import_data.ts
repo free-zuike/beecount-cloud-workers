@@ -461,11 +461,13 @@ importRouter.post('/:token/execute', async (c) => {
       };
 
       let insertedChangeIds: number[] = [];
+      let insertedSyncIds: string[] = [];
       try {
         let imported = 0;
         let skipped = 0;
         let errors: Array<{ row: number; message: string }> = [];
         insertedChangeIds = [];
+        insertedSyncIds = [];
 
         for (let i = 0; i < txs.length; i++) {
           const tx = txs[i];
@@ -480,6 +482,8 @@ importRouter.post('/:token/execute', async (c) => {
           try {
             const payload = buildTxPayload(tx, autoTagNames);
             const syncId = randomUUID();
+            const now = nowUtc();
+            const happenedAt = (tx.happenedAt || now).slice(0, 10);
 
             const result = await db.prepare(
               `INSERT INTO sync_changes
@@ -487,13 +491,36 @@ importRouter.post('/:token/execute', async (c) => {
                VALUES (?, ?, ?, ?, 'upsert', ?, ?, 'web-import', 'user')`
             ).bind(
               userId, ledger.id, 'transaction',
-              syncId, JSON.stringify(payload), nowUtc(),
+              syncId, JSON.stringify(payload), now,
             ).run();
 
-            // 记录 change_id 用于回滚
+            // 记录 change_id 和 sync_id 用于回滚
             if (result.meta.last_row_id) {
               insertedChangeIds.push(result.meta.last_row_id as number);
+              insertedSyncIds.push(syncId);
             }
+
+            // 直接写入投影表，确保数据立即可见
+            const allTags = [...new Set([...tx.tagNames, ...autoTagNames])];
+            const tagsCsv = allTags.length ? allTags.join(',') : null;
+            await db.prepare(
+              `INSERT OR REPLACE INTO read_tx_projection
+               (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
+                category_name, account_name, from_account_name, to_account_name,
+                tags_csv, tx_index, created_by_user_id, last_edited_by_user_id, source_change_id,
+                currency_code, native_amount, exclude_from_stats, exclude_from_budget)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
+            ).bind(
+              ledger.id, syncId, userId,
+              tx.txType, tx.amount, happenedAt,
+              tx.note ?? null,
+              tx.categoryName ?? null,
+              tx.accountName ?? null,
+              tx.fromAccountName ?? null,
+              tx.toAccountName ?? null,
+              tagsCsv, 0, userId, userId, result.meta.last_row_id ?? 0,
+              tx.currencyCode ?? null, tx.amount,
+            ).run();
 
             imported++;
           } catch (err) {
@@ -512,10 +539,13 @@ importRouter.post('/:token/execute', async (c) => {
           }
         }
 
-        // 如果有错误且已导入部分数据，回滚（删除已插入的 sync_changes）
+        // 如果有错误且已导入部分数据，回滚（删除已插入的 sync_changes 和投影表）
         if (errors.length > 0 && insertedChangeIds.length > 0) {
-          for (const cid of insertedChangeIds) {
-            await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(cid).run();
+          for (let i = 0; i < insertedChangeIds.length; i++) {
+            await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(insertedChangeIds[i]).run();
+            if (insertedSyncIds[i]) {
+              await db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?').bind(ledger.id, insertedSyncIds[i]).run();
+            }
           }
           sendEvent('error', {
             message: `Import failed after ${imported} rows. Rolled back ${insertedChangeIds.length} changes.`,
@@ -542,8 +572,11 @@ importRouter.post('/:token/execute', async (c) => {
       } catch (err) {
         // 回滚已插入的数据
         try {
-          for (const cid of insertedChangeIds) {
-            await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(cid).run();
+          for (let i = 0; i < insertedChangeIds.length; i++) {
+            await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(insertedChangeIds[i]).run();
+            if (insertedSyncIds[i]) {
+              await db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?').bind(ledger.id, insertedSyncIds[i]).run();
+            }
           }
         } catch { /* ignore rollback errors */ }
         session.status = 'pending';
