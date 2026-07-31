@@ -21,8 +21,15 @@ export function detectSourceFormat(rawText: string): SourceFormat {
 
 export function parseCsvText(rawText: string, forcedSource?: SourceFormat): ImportData {
   const cleaned = stripBomAndNormalize(rawText);
-  const rows2d = parseCsvRows(cleaned);
+  const delimiter = detectDelimiter(cleaned);
+  const rows2d = parseCsvRows(cleaned, delimiter);
   return buildImportData(rows2d, forcedSource);
+}
+
+function detectDelimiter(text: string): string {
+  const firstLine = text.split('\n')[0] || '';
+  if (firstLine.includes('\t')) return '\t';
+  return ','; // default CSV
 }
 
 export function suggestMapping(headers: string[], source: SourceFormat): ImportFieldMapping {
@@ -37,15 +44,15 @@ function stripBomAndNormalize(text: string): string {
   return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
-function parseCsvRows(text: string): string[][] {
+function parseCsvRows(text: string, delimiter = ','): string[][] {
   if (!text.trim()) return [];
   const lines = text.split('\n');
   return lines
     .filter(line => line.trim())
-    .map(line => parseCsvLine(line));
+    .map(line => parseCsvLine(line, delimiter));
 }
 
-function parseCsvLine(line: string): string[] {
+function parseCsvLine(line: string, delimiter = ','): string[] {
   const result: string[] = [];
   let current = '';
   let inQuotes = false;
@@ -59,7 +66,7 @@ function parseCsvLine(line: string): string[] {
       } else {
         inQuotes = !inQuotes;
       }
-    } else if (char === ',' && !inQuotes) {
+    } else if (char === delimiter && !inQuotes) {
       result.push(current.trim());
       current = '';
     } else {

@@ -170,6 +170,7 @@ function buildTxPayload(tx: ImportTransaction, autoTags: string[]): Record<strin
 
 importRouter.post('/upload', async (c) => {
   const userId = c.get('userId');
+  const db = c.env.DB;
 
   try {
     const formData = await c.req.formData();
@@ -183,6 +184,9 @@ importRouter.post('/upload', async (c) => {
     if (bytes.length > 10 * 1024 * 1024) {
       return c.json({ error: 'File too large (max 10MB)', error_code: 'IMPORT_FILE_TOO_LARGE', limit_bytes: 10 * 1024 * 1024 }, 413);
     }
+
+    // 读取前端的 target_ledger_id（原版 Python 支持从 formData 获取）
+    const formTargetLedgerId = (formData.get('target_ledger_id') as string) || null;
 
     const isXlsx = fileName.toLowerCase().endsWith('.xlsx') ||
       (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04);
@@ -222,7 +226,7 @@ importRouter.post('/upload', async (c) => {
       token, userId, fileName,
       data: importData,
       mapping: importData.suggestedMapping,
-      targetLedgerId: null,
+      targetLedgerId: formTargetLedgerId,
       dedupStrategy: 'skip_duplicates',
       autoTagNames: [],
       status: 'pending',
@@ -248,10 +252,20 @@ importRouter.post('/upload', async (c) => {
       source_row_number: tx.sourceRowNumber,
     }));
 
-    // 计算完整统计
+    // 计算完整统计（如果有目标账本，则计算匹配数）
     let expenseTotal = 0, incomeTotal = 0, transferCount = 0;
     let timeMin: string | null = null, timeMax: string | null = null;
     const catSet = new Set<string>(), acctSet = new Set<string>(), tagSet = new Set<string>();
+    let matchedAccountNames: string[] = [];
+    let matchedCategoryNames: string[] = [];
+    let matchedTagNames: string[] = [];
+    let skippedDedup = 0;
+
+    let existing = { txKeys: new Set<string>(), categoryNames: new Set<string>(), accountNames: new Set<string>(), tagNames: new Set<string>() };
+    if (formTargetLedgerId) {
+      existing = await buildExistingSets(db, formTargetLedgerId);
+    }
+
     for (const tx of sampleTxs) {
       const amt = Number(tx.amount) || 0;
       if (tx.txType === 'expense') expenseTotal += amt;
@@ -264,7 +278,20 @@ importRouter.post('/upload', async (c) => {
       if (tx.fromAccountName) acctSet.add(tx.fromAccountName);
       if (tx.toAccountName) acctSet.add(tx.toAccountName);
       for (const t of tx.tagNames) tagSet.add(t);
+
+      // 计算匹配数
+      if (formTargetLedgerId) {
+        const key = `${tx.amount}|${(tx.happenedAt || '').slice(0, 10)}`;
+        if (existing.txKeys.has(key)) skippedDedup++;
+        if (tx.accountName && existing.accountNames.has(tx.accountName)) matchedAccountNames.push(tx.accountName);
+        if (tx.categoryName && existing.categoryNames.has(tx.categoryName)) matchedCategoryNames.push(tx.categoryName);
+        for (const t of tx.tagNames) {
+          if (existing.tagNames.has(t)) matchedTagNames.push(t);
+        }
+      }
     }
+
+    const newAccountNames = [...acctSet].filter(n => !existing.accountNames.has(n));
 
     return c.json({
       import_token: token,
@@ -288,10 +315,19 @@ importRouter.post('/upload', async (c) => {
           income_total: String(incomeTotal),
           transfer_count: transferCount,
         },
-        accounts: { new_names: [...acctSet], matched_names: [] },
-        categories: { new_names: [...catSet], matched_names: [] },
-        tags: { new_names: [...tagSet], matched_names: [] },
-        skipped_dedup: 0,
+        accounts: {
+          new_names: [...new Set(formTargetLedgerId ? newAccountNames : [...acctSet])],
+          matched_names: [...new Set(matchedAccountNames)],
+        },
+        categories: {
+          new_names: [...new Set(formTargetLedgerId ? [...catSet].filter(n => !existing.categoryNames.has(n)) : [...catSet])],
+          matched_names: [...new Set(matchedCategoryNames)],
+        },
+        tags: {
+          new_names: [...new Set(formTargetLedgerId ? [...tagSet].filter(t => !existing.tagNames.has(t)) : [...tagSet])],
+          matched_names: [...new Set(matchedTagNames)],
+        },
+        skipped_dedup: skippedDedup,
         parse_errors: [],
         parse_errors_total: 0,
         parse_warnings: importData.parseWarnings,
