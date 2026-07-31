@@ -323,6 +323,10 @@ importRouter.post('/:token/preview', zValidator('json', ImportPreviewSchema), as
   const dedupStrategy = req.dedup_strategy ?? session.dedupStrategy;
   const autoTagNames = req.auto_tag_names ?? session.autoTagNames;
 
+  serverLogger.info('src.routers.import', '[IMPORT] Preview targetLedgerId: ' + targetLedgerId + ' req: ' + req.target_ledger_id + ' session: ' + session.targetLedgerId);
+
+  console.log('[IMPORT] Preview targetLedgerId:', targetLedgerId, 'req:', req.target_ledger_id, 'session:', session.targetLedgerId);
+
   // Apply mapping
   const txs = applyMapping(session.data.rows, mapping);
 
