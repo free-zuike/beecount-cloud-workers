@@ -94,14 +94,14 @@ const FieldMappingSchema = z.object({
 });
 
 const ImportPreviewSchema = z.object({
-  mapping: FieldMappingSchema,
+  mapping: FieldMappingSchema.optional(),
   target_ledger_id: z.string().nullable().optional(),
   dedup_strategy: z.enum(['skip_duplicates', 'insert_all']).optional(),
   auto_tag_names: z.array(z.string()).optional(),
 });
 
 const ImportExecuteSchema = z.object({
-  mapping: FieldMappingSchema,
+  mapping: FieldMappingSchema.optional(),
   target_ledger_id: z.string(),
   dedup_strategy: z.enum(['skip_duplicates', 'insert_all']).optional(),
   auto_tag_names: z.array(z.string()).optional(),
