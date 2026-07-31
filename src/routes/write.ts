@@ -901,7 +901,7 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
       ...(req.payment_due_day !== undefined && { paymentDueDay: req.payment_due_day }),
       ...(req.bank_name !== undefined && { bankName: req.bank_name }),
       ...(req.card_last_four !== undefined && { cardLastFour: req.card_last_four }),
-      ...(req.hidden !== undefined && { hidden: req.hidden ? 1 : 0 }),
+      ...(req.hidden !== undefined && { hidden: req.hidden }),
     }), serverNow, userId)
     .run();
 
