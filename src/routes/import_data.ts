@@ -300,7 +300,7 @@ importRouter.post('/upload', async (c) => {
       headers: importData.headers,
       suggested_mapping: mappingToPayload(importData.suggestedMapping),
       current_mapping: mappingToPayload(importData.suggestedMapping),
-      target_ledger_id: null,
+      target_ledger_id: formTargetLedgerId,
       dedup_strategy: 'skip_duplicates',
       auto_tag_names: [],
       stats: {
