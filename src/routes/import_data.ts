@@ -534,11 +534,9 @@ importRouter.post('/:token/execute', async (c) => {
         await saveSession(c.env, userId, session);
 
         sendEvent('complete', {
-          total: txs.length,
-          imported,
-          skipped,
-          errors: errors.length,
-          errors_detail: errors.slice(0, 20),
+          created_tx_count: imported,
+          skipped_count: skipped,
+          new_change_id: 0,
         });
         controller.close();
       } catch (err) {
