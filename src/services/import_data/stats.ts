@@ -27,9 +27,10 @@ export async function buildExistingSets(
   userId: string,
   ledgerId: string,
 ): Promise<ExistingSets> {
+  // 先查找账本（支持所有者 + 共享成员）
   const ledger = await db
-    .prepare('SELECT l.id FROM ledgers l INNER JOIN ledger_members lm ON lm.ledger_id = l.id WHERE l.external_id = ? AND lm.user_id = ?')
-    .bind(ledgerId, userId)
+    .prepare('SELECT id FROM ledgers WHERE external_id = ? AND (user_id = ? OR id IN (SELECT ledger_id FROM ledger_members WHERE user_id = ?))')
+    .bind(ledgerId, userId, userId)
     .first<{ id: string }>();
 
   if (!ledger) {

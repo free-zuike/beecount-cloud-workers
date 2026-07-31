@@ -449,10 +449,10 @@ importRouter.post('/:token/execute', async (c) => {
     return c.json({ error: 'target_ledger_id is required', error_code: 'IMPORT_MISSING_LEDGER' }, 400);
   }
 
-  // Validate ledger access（与原版 _resolve_target_ledger 一致：JOIN ledger_members）
+  // Validate ledger access（支持所有者 + 共享成员）
   const ledger = await db
-    .prepare('SELECT l.id, l.external_id FROM ledgers l INNER JOIN ledger_members lm ON lm.ledger_id = l.id WHERE l.external_id = ? AND lm.user_id = ?')
-    .bind(targetLedgerId, userId)
+    .prepare('SELECT l.id, l.external_id FROM ledgers l WHERE l.external_id = ? AND (l.user_id = ? OR l.id IN (SELECT ledger_id FROM ledger_members WHERE user_id = ?))')
+    .bind(targetLedgerId, userId, userId)
     .first<{ id: string; external_id: string }>();
 
   if (!ledger) {
