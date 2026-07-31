@@ -193,7 +193,22 @@ importRouter.post('/upload', async (c) => {
 
     let importData: ImportData;
     if (isXlsx) {
-      return c.json({ error: 'XLSX import not yet supported in Workers', error_code: 'IMPORT_XLSX_UNSUPPORTED' }, 400);
+      // 使用 xlsx 库解析 Excel 文件
+      let text: string;
+      try {
+        const XLSX = require('xlsx');
+        const wb = XLSX.read(fileBuffer, { type: 'array' });
+        const firstSheet = wb.Sheets[wb.SheetNames[0]];
+        if (!firstSheet) {
+          return c.json({ error: 'No sheets found in Excel file', error_code: 'IMPORT_XLSX_PARSE_FAILED' }, 400);
+        }
+        const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+        // 转换为 CSV 格式文本，再用 parseCsvText 解析
+        text = (jsonData as any[]).map((row: any) => (Array.isArray(row) ? row.join(',') : '')).join('\n');
+      } catch (exc) {
+        return c.json({ error: 'Failed to parse Excel file: ' + (exc as Error).message, error_code: 'IMPORT_XLSX_PARSE_FAILED' }, 400);
+      }
+      importData = parseCsvText(text);
     } else {
       // Try UTF-8 first, then GBK
       let text: string;
