@@ -1631,6 +1631,27 @@ async function applyUserChangeToProjection(
          VALUES (?, ?, ?, ?, ?, ?)`
       ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
     }
+  } else if (entity_type === 'exchange_rate_override') {
+    if (change.action === 'delete') {
+      const payload = change.payload;
+      await db.prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
+        .bind(userId, (payload as any).baseCurrency ?? '', (payload as any).quoteCurrency ?? '').run();
+    } else {
+      const payload = change.payload;
+      const baseCurrency = (payload as any).baseCurrency ?? '';
+      const quoteCurrency = (payload as any).quoteCurrency ?? '';
+      const rate = (payload as any).rate ?? 1;
+      const updatedAt = (payload as any).updatedAt ?? new Date().toISOString();
+      const existing = await db.prepare('SELECT base_currency FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
+        .bind(userId, baseCurrency, quoteCurrency).first();
+      if (existing) {
+        await db.prepare('UPDATE exchange_rate_overrides SET rate = ?, updated_at = ? WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
+          .bind(String(rate), updatedAt, userId, baseCurrency, quoteCurrency).run();
+      } else {
+        await db.prepare('INSERT INTO exchange_rate_overrides (user_id, sync_id, base_currency, quote_currency, rate, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+          .bind(userId, entity_sync_id, baseCurrency, quoteCurrency, String(rate), updatedAt).run();
+      }
+    }
   }
 }
 
@@ -1745,7 +1766,52 @@ async function applyChangeToProjection(
         const tagIdsPayload = Array.isArray(payload.tagIds) ? payload.tagIds as string[] : null;
         const resolvedTagsCsv = await resolveTagsCsv(db, tagPayload, tagIdsPayload);
 
-        // 用 INSERT OR REPLACE 替代 SELECT + UPDATE/INSERT
+        // 合并已有行（与原版 _merge_from_spec 对齐）
+        const existingTx = await db.prepare(
+          `SELECT tx_type, amount, happened_at, note, category_sync_id, category_name, category_kind,
+           account_sync_id, account_name, from_account_sync_id, from_account_name,
+           to_account_sync_id, to_account_name, tags_csv, tag_sync_ids_json, attachments_json,
+           tx_index, created_by_user_id, last_edited_by_user_id,
+           exclude_from_stats, exclude_from_budget, currency_code, native_amount
+           FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?`
+        ).bind(ledgerId, change.entity_sync_id).first<Record<string, unknown>>();
+
+        const txMerged = {
+          tx_type: (payload as any).type ?? payload.tx_type ?? payload.txType ?? existingTx?.tx_type ?? 'expense',
+          amount: (payload as any).amount ?? existingTx?.amount ?? 0,
+          happened_at: (payload as any).happenedAt ?? payload.happened_at ?? existingTx?.happened_at ?? nowUtc(),
+          note: (payload as any).note ?? existingTx?.note ?? null,
+          category_sync_id: (payload as any).categoryId ?? existingTx?.category_sync_id ?? null,
+          category_name: (payload as any).categoryName ?? existingTx?.category_name ?? null,
+          category_kind: (payload as any).categoryKind ?? existingTx?.category_kind ?? null,
+          account_sync_id: (payload as any).accountId ?? existingTx?.account_sync_id ?? null,
+          account_name: (payload as any).accountName ?? existingTx?.account_name ?? null,
+          from_account_sync_id: (payload as any).fromAccountId ?? existingTx?.from_account_sync_id ?? null,
+          from_account_name: (payload as any).fromAccountName ?? existingTx?.from_account_name ?? null,
+          to_account_sync_id: (payload as any).toAccountId ?? existingTx?.to_account_sync_id ?? null,
+          to_account_name: (payload as any).toAccountName ?? existingTx?.to_account_name ?? null,
+          tags_csv: resolvedTagsCsv ?? (existingTx?.tags_csv as string) ?? null,
+          tag_sync_ids_json: (payload as any).tagIds ? safeJsonStringify((payload as any).tagIds) : (existingTx?.tag_sync_ids_json as string) ?? null,
+          attachments_json: (payload as any).attachments ? safeJsonStringify((payload as any).attachments) : (existingTx?.attachments_json as string) ?? null,
+          tx_index: (payload as any).txIndex ?? existingTx?.tx_index ?? 0,
+          created_by_user_id: (payload as any).createdByUserId ?? existingTx?.created_by_user_id ?? userId,
+          last_edited_by_user_id: (payload as any).updatedByUserId ?? existingTx?.last_edited_by_user_id ?? userId,
+          exclude_from_stats: (payload as any).excludeFromStats ?? existingTx?.exclude_from_stats ?? 0,
+          exclude_from_budget: (payload as any).excludeFromBudget ?? existingTx?.exclude_from_budget ?? 0,
+          currency_code: (payload as any).currencyCode ?? existingTx?.currency_code ?? null,
+          native_amount: (payload as any).nativeAmount ?? existingTx?.native_amount ?? null,
+        };
+
+        // 与原版 _sync_native_amount_after_merge 对齐：amount 改变时等比缩放 nativeAmount
+        if (existingTx && (payload as any).amount !== undefined && (payload as any).nativeAmount === undefined) {
+          const oldAmount = Number(existingTx.amount ?? 0);
+          const oldNative = Number(existingTx.native_amount ?? 0);
+          const newAmount = Number(txMerged.amount);
+          if (oldAmount !== 0 && oldNative !== oldAmount && newAmount !== oldAmount) {
+            txMerged.native_amount = oldNative / oldAmount * newAmount;
+          }
+        }
+
         await db
           .prepare(
             `INSERT OR REPLACE INTO read_tx_projection
@@ -1764,16 +1830,30 @@ async function applyChangeToProjection(
             ledgerId,
             change.entity_sync_id,
             userId,
-            payload.tx_type ?? payload.txType ?? payload.type ?? 'expense',
-            payload.amount ?? 0,
-            payload.happened_at ?? payload.happenedAt ?? nowUtc(),
-            payload.note ?? null,
-            payload.categoryId ?? null,
-            payload.categoryName ?? null,
-            payload.categoryKind ?? null,
-            payload.accountId ?? null,
-            payload.accountName ?? null,
-            payload.fromAccountId ?? null,
+            txMerged.tx_type,
+            txMerged.amount,
+            txMerged.happened_at,
+            txMerged.note,
+            txMerged.category_sync_id,
+            txMerged.category_name,
+            txMerged.category_kind,
+            txMerged.account_sync_id,
+            txMerged.account_name,
+            txMerged.from_account_sync_id,
+            txMerged.from_account_name,
+            txMerged.to_account_sync_id,
+            txMerged.to_account_name,
+            txMerged.tags_csv,
+            txMerged.tag_sync_ids_json,
+            txMerged.attachments_json,
+            txMerged.tx_index,
+            txMerged.created_by_user_id,
+            txMerged.last_edited_by_user_id,
+            change.change_id,
+            txMerged.currency_code,
+            txMerged.native_amount,
+            txMerged.exclude_from_stats ? 1 : 0,
+            txMerged.exclude_from_budget ? 1 : 0,
             payload.fromAccountName ?? null,
             payload.toAccountId ?? null,
             payload.toAccountName ?? null,
@@ -1992,7 +2072,20 @@ async function applyChangeToProjection(
           `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'budget' AND entity_sync_id = ? AND action != 'delete'`
         ).bind(ledgerId, change.entity_sync_id).run();
       } else {
-        // 用 INSERT OR REPLACE 替代 SELECT + UPDATE/INSERT
+        // 合并已有行（与原版 _merge_from_spec 对齐）
+        const existing = await db.prepare(
+          'SELECT budget_type, category_sync_id, amount, period, start_day, enabled FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?'
+        ).bind(ledgerId, change.entity_sync_id).first<{ budget_type: string; category_sync_id: string | null; amount: number; period: string; start_day: number; enabled: number }>();
+
+        const merged = {
+          budget_type: (payload as any).type ?? existing?.budget_type ?? 'total',
+          category_sync_id: (payload as any).categoryId ?? existing?.category_sync_id ?? null,
+          amount: (payload as any).amount ?? existing?.amount ?? 0,
+          period: (payload as any).period ?? existing?.period ?? 'monthly',
+          start_day: (payload as any).startDay ?? existing?.start_day ?? 1,
+          enabled: (payload as any).enabled ?? (existing ? existing.enabled === 1 : true),
+        };
+
         await db
           .prepare(
             `INSERT OR REPLACE INTO read_budget_projection
@@ -2004,12 +2097,12 @@ async function applyChangeToProjection(
             ledgerId,
             change.entity_sync_id,
             userId,
-            payload.budget_type ?? 'total',
-            payload.category_sync_id ?? null,
-            payload.amount ?? 0,
-            payload.period ?? 'monthly',
-            payload.start_day ?? 1,
-            payload.enabled ?? true,
+            merged.budget_type,
+            merged.category_sync_id,
+            merged.amount,
+            merged.period,
+            merged.start_day,
+            merged.enabled ? 1 : 0,
             change.change_id,
           )
           .run();
