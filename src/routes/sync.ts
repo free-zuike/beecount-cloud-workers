@@ -1417,7 +1417,14 @@ async function applyUserChangeToProjection(
   if (entity_type === 'category') {
     // APP 用 camelCase (parentName, parentSyncId)，原版用 snake_case (parent_name, parent_sync_id)
     const parentName = (payload as any).parentName ?? payload.parent_name ?? null;
-    const parentSyncId = (payload as any).parentSyncId ?? payload.parent_sync_id ?? null;
+    let parentSyncId = (payload as any).parentSyncId ?? payload.parent_sync_id ?? null;
+    // 原版 projection.py:378-386：parentSyncId 缺失时用 parentName + kind + level=1 反查
+    if (parentSyncId === null && parentName) {
+      const parentRow = await db.prepare(
+        'SELECT sync_id FROM read_category_projection WHERE user_id = ? AND name = ? AND kind = ? AND (level IS NULL OR level = 1) LIMIT 1'
+      ).bind(userId, parentName, payload.kind ?? null).first<{ sync_id: string }>();
+      if (parentRow) parentSyncId = parentRow.sync_id;
+    }
     const sortOrder = (payload as any).sortOrder ?? payload.sort_order ?? null;
     const iconType = (payload as any).iconType ?? payload.icon_type ?? null;
     const customIconPath = (payload as any).customIconPath ?? payload.custom_icon_path ?? null;

@@ -81,13 +81,21 @@ function computeAnomalyMonths(
 
   const baseline = median(occurred.map(s => s.expense));
   const out: Array<any> = [];
+  const otherBucketsCache: Record<string, string[]> = {};
+
+  const othersFor = (bucket: string): string[] => {
+    if (otherBucketsCache[bucket]) return otherBucketsCache[bucket];
+    const result = occurred.filter(o => o.bucket !== bucket).map(o => o.bucket);
+    otherBucketsCache[bucket] = result;
+    return result;
+  };
 
   for (const s of occurred) {
     if (s.expense <= baseline * ANOMALY_DEVIATION_MULT) continue;
     if (s.expense - baseline <= ANOMALY_DEVIATION_ABS) continue;
 
     const thisMonthCats = categoryByBucket[s.bucket] || {};
-    const otherBuckets = occurred.filter(o => o.bucket !== s.bucket).map(o => o.bucket);
+    const otherBuckets = othersFor(s.bucket);
     const attributions: Array<[number, any]> = [];
 
     for (const [catName, catAmount] of Object.entries(thisMonthCats)) {
@@ -399,18 +407,11 @@ workspaceRouter.get('/transactions', async (c) => {
     txParams.push(pattern, pattern, pattern, pattern, pattern, pattern);
   }
 
-  // 按 tag_sync_id 精确过滤（与原版对齐：先查 tag_sync_ids_json，再按名匹配 tags_csv）
+  // 按 tag_sync_id 精确过滤（与原版对齐）
   if (tagSyncId) {
-    const tagRow = await db.prepare('SELECT name FROM read_tag_projection WHERE sync_id = ?').bind(tagSyncId).first<{ name: string }>();
-    if (tagRow) {
-      const escapedTag = tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_');
-      txQuery += ` AND (tag_sync_ids_json LIKE ? ESCAPE ? OR tags_csv = ?)`;
-      txParams.push(`%"${escapedTag}"%`, '\\', tagRow.name);
-    } else {
-      txQuery += ` AND tag_sync_ids_json LIKE ? ESCAPE ?`;
-      const escapedTag = tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_');
-      txParams.push(`%"${escapedTag}"%`, '\\');
-    }
+    txQuery += ` AND tag_sync_ids_json LIKE ? ESCAPE ?`;
+    const escapedTag = tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_');
+    txParams.push(`%"${escapedTag}"%`, '\\');
   }
 
   // 按 category_sync_id 精确过滤（原版对齐）
