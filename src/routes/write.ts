@@ -2364,9 +2364,15 @@ writeRouter.delete('/exchange-rate-overrides', async (c) => {
   }
 
   const syncId = randomUUID();
+
+  // 查询现有记录的 sync_id，用于 delete 的 entity_sync_id（与原版一致：App 按 syncId 匹配删除）
+  const existingRow = await db.prepare('SELECT sync_id FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
+    .bind(userId, baseCurrency, quoteCurrency).first<{ sync_id: string }>();
+  const deleteSyncId = existingRow?.sync_id || syncId;
+
   const delResult = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
     VALUES (?, NULL, 'exchange_rate_override', ?, 'delete', ?, ?, ?, 'user')`)
-    .bind(userId, syncId, '{}', serverNow, userId).run();
+    .bind(userId, deleteSyncId, '{}', serverNow, userId).run();
   const delChangeId = delResult.meta.last_row_id as number;
 
   // 直接删除投影表
