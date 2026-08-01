@@ -882,6 +882,13 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
     return c.json({ error: 'No ledger found' }, 400);
   }
 
+  // 只改 hidden 时带上现有 account_type，防止 App 覆写为 null
+  let extraType: Record<string, string> = {};
+  if (req.hidden !== undefined && req.account_type === undefined) {
+    const existing = await db.prepare('SELECT account_type FROM read_account_projection WHERE sync_id = ? AND user_id = ?').bind(accountSyncId, userId).first<{ account_type: string | null }>();
+    if (existing?.account_type) extraType = { type: existing.account_type };
+  }
+
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
@@ -901,6 +908,7 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
       ...(req.bank_name !== undefined && { bankName: req.bank_name }),
       ...(req.card_last_four !== undefined && { cardLastFour: req.card_last_four }),
       ...(req.hidden !== undefined && { hidden: req.hidden }),
+      ...extraType,
     }), serverNow, userId)
     .run();
 
