@@ -2322,8 +2322,34 @@ writeRouter.put('/exchange-rate-overrides', zValidator('json', ExchangeRateSchem
       .bind(userId, syncId, base_currency, quote_currency, String(rate), serverNow).run();
   }
 
+  // WS 广播
+  await broadcastExchangeRateOverride(c, userId, syncId).catch(() => {});
+
   return c.json({ sync_id: syncId, base_currency, quote_currency, rate: String(rate) });
 });
+
+// 广播汇率覆盖变更到当前用户
+async function broadcastExchangeRateOverride(c: any, userId: string, syncId: string): Promise<void> {
+  const payload = {
+    type: 'sync_change',
+    ledgerId: '',
+    serverCursor: 0,
+    serverTimestamp: new Date().toISOString(),
+  };
+  try {
+    const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
+    const doStub = c.env.BEECOUNT_DO.get(doId);
+    await doStub.fetch(new Request('https://dummy/broadcast', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: JSON.stringify(payload) }),
+    }));
+  } catch {}
+  try {
+    const { getWsManager } = await import('../lib/ws-manager');
+    await getWsManager().broadcastToUser(userId, payload);
+  } catch {}
+}
 
 writeRouter.delete('/exchange-rate-overrides', async (c) => {
   const userId = c.get('userId');
@@ -2344,6 +2370,9 @@ writeRouter.delete('/exchange-rate-overrides', async (c) => {
   // 直接删除投影表
   await db.prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
     .bind(userId, baseCurrency, quoteCurrency).run();
+
+  // WS 广播
+  await broadcastExchangeRateOverride(c, userId, syncId).catch(() => {});
 
   return c.json({ sync_id: syncId, base_currency: baseCurrency, quote_currency: quoteCurrency, rate: null });
 });
