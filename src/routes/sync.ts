@@ -1415,8 +1415,9 @@ async function applyUserChangeToProjection(
   }
 
   if (entity_type === 'category') {
-    // APP 用 camelCase (parentName)，原版用 snake_case (parent_name)
+    // APP 用 camelCase (parentName, parentSyncId)，原版用 snake_case (parent_name, parent_sync_id)
     const parentName = (payload as any).parentName ?? payload.parent_name ?? null;
+    const parentSyncId = (payload as any).parentSyncId ?? payload.parent_sync_id ?? null;
     const sortOrder = (payload as any).sortOrder ?? payload.sort_order ?? null;
     const iconType = (payload as any).iconType ?? payload.icon_type ?? null;
     const customIconPath = (payload as any).customIconPath ?? payload.custom_icon_path ?? null;
@@ -1425,12 +1426,12 @@ async function applyUserChangeToProjection(
 
     // 合并 rename 检查和现有行查询为一次 SELECT
     const existingRow = await db.prepare(
-      'SELECT name, kind, level, sort_order, icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256, parent_name FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
+      'SELECT name, kind, level, sort_order, icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256, parent_name, parent_sync_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
     ).bind(entity_sync_id, userId).first<{
       name: string | null; kind: string | null; level: number | null;
       sort_order: number | null; icon: string | null; icon_type: string | null;
       custom_icon_path: string | null; icon_cloud_file_id: string | null;
-      icon_cloud_sha256: string | null; parent_name: string | null;
+      icon_cloud_sha256: string | null; parent_name: string | null; parent_sync_id: string | null;
     }>();
 
     // Rename cascade
@@ -1451,6 +1452,7 @@ async function applyUserChangeToProjection(
       icon_cloud_file_id: iconCloudFileId ?? existingRow?.icon_cloud_file_id ?? null,
       icon_cloud_sha256: iconCloudSha256 ?? existingRow?.icon_cloud_sha256 ?? null,
       parent_name: parentName ?? existingRow?.parent_name ?? null,
+      parent_sync_id: parentSyncId ?? existingRow?.parent_sync_id ?? null,
     };
 
     if (existingRow) {
@@ -1467,6 +1469,7 @@ async function applyUserChangeToProjection(
       if ((payload as any).iconCloudFileId !== undefined) { sets.push('icon_cloud_file_id = ?'); vals.push(iconCloudFileId); }
       if ((payload as any).iconCloudSha256 !== undefined) { sets.push('icon_cloud_sha256 = ?'); vals.push(iconCloudSha256); }
       if (parentName !== undefined) { sets.push('parent_name = ?'); vals.push(parentName); }
+      if ((payload as any).parentSyncId !== undefined || payload.parent_sync_id !== undefined) { sets.push('parent_sync_id = ?'); vals.push(parentSyncId); }
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
@@ -1478,13 +1481,13 @@ async function applyUserChangeToProjection(
         `INSERT OR REPLACE INTO read_category_projection
          (ledger_id, sync_id, user_id, name, kind, level, sort_order,
           icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
-          parent_name, source_change_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          parent_name, parent_sync_id, source_change_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         null, entity_sync_id, userId, merged.name, merged.kind,
         merged.level, merged.sort_order, merged.icon, merged.icon_type,
         merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
-        merged.parent_name, change.change_id ?? 0
+        merged.parent_name, merged.parent_sync_id, change.change_id ?? 0
       ).run();
     }
   } else if (entity_type === 'account') {

@@ -510,6 +510,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         icon_cloud_file_id TEXT,
         icon_cloud_sha256 TEXT,
         parent_name TEXT,
+        parent_sync_id TEXT,
         source_change_id INTEGER DEFAULT 0,
         PRIMARY KEY (ledger_id, sync_id)
       )
@@ -587,6 +588,11 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     // 迁移：read_account_projection 添加 hidden 列（用于隐藏/归档账户）
     try {
       await db.prepare("ALTER TABLE read_account_projection ADD COLUMN hidden INTEGER DEFAULT 0").run();
+    } catch { /* 列已存在则忽略 */ }
+
+    // 迁移：read_category_projection 添加 parent_sync_id 列（用于子分类展开）
+    try {
+      await db.prepare("ALTER TABLE read_category_projection ADD COLUMN parent_sync_id TEXT").run();
     } catch { /* 列已存在则忽略 */ }
 
     console.log('[INIT] Database tables created/verified successfully');
