@@ -1707,6 +1707,7 @@ writeRouter.post('/ledgers/:ledgerId/tags', zValidator('json', WriteTagCreateSch
 
   const syncId = randomUUID();
   const payload: Record<string, unknown> = {
+    syncId,
     name: req.name,
     color: req.color ?? null,
     createdByUserId: userId,
@@ -1857,19 +1858,20 @@ writeRouter.patch('/ledgers/:ledgerId/budgets/:id', zValidator('json', WriteBudg
   }
 
   const existingBudget = await db
-    .prepare('SELECT budget_type, category_sync_id, amount, period, start_day, enabled FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
+    .prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
     .bind(ledger.id, budgetSyncId)
-    .first<{ budget_type: string; category_sync_id: string | null; amount: number; period: string; start_day: number; enabled: number }>();
+    .first<Record<string, unknown>>();
 
   if (!existingBudget) return c.json({ error: 'Budget not found' }, 404);
 
-  const budgetType = existingBudget.budget_type;
-  const categoryId = existingBudget.category_sync_id;
+  const budgetType = existingBudget.budget_type as string;
+  const categoryId = existingBudget.category_sync_id as string | null;
   // 未传字段保留现有值（与原版 exclude_unset=True 对齐）
-  const amount = req.amount !== undefined ? req.amount : existingBudget.amount;
-  const period = req.period !== undefined ? req.period : existingBudget.period;
-  const startDay = req.start_day !== undefined ? req.start_day : existingBudget.start_day;
-  const enabled = req.enabled !== undefined ? req.enabled : (existingBudget.enabled === 1);
+  const amount = req.amount !== undefined ? req.amount : (existingBudget.amount as number);
+  const period = req.period !== undefined ? req.period : (existingBudget.period as string);
+  const startDay = req.start_day !== undefined ? req.start_day : (existingBudget.start_day as number);
+  const enabled = req.enabled !== undefined ? req.enabled : ((existingBudget.enabled as number) === 1);
+  const createdByUserId = existingBudget.created_by_user_id as string | null;
 
   const changeResult = await db
     .prepare(
@@ -1886,6 +1888,7 @@ writeRouter.patch('/ledgers/:ledgerId/budgets/:id', zValidator('json', WriteBudg
       start_day: startDay,
       enabled,
       ledgerSyncId: ledger.external_id,
+      createdByUserId: createdByUserId,
       updatedByUserId: userId,
     }), serverNow, userId)
     .run();
