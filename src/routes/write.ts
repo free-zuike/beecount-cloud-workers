@@ -889,24 +889,30 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
     if (existing?.account_type) extraType = { type: existing.account_type };
   }
 
+  // 取完整账户数据写入 payload（与原版 _diff_entity_list 一致，App 需要完整数据）
+  const full = await db.prepare('SELECT * FROM read_account_projection WHERE sync_id = ? AND user_id = ?').bind(accountSyncId, userId).first<Record<string, unknown>>();
+
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
        (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
        VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
-    .bind(userId, 'account', accountSyncId, 'upsert', safeJsonStringify({
+    .bind(userId, 'account', accountSyncId, 'upsert', full ? safeJsonStringify({
       syncId: accountSyncId,
-      ...(req.name !== undefined && { name: req.name }),
-      ...(req.account_type !== undefined && { type: req.account_type }),
-      ...(req.currency !== undefined && { currency: req.currency }),
-      ...(req.initial_balance !== undefined && { initialBalance: req.initial_balance }),
-      ...(req.note !== undefined && { note: req.note }),
-      ...(req.credit_limit !== undefined && { creditLimit: req.credit_limit }),
-      ...(req.billing_day !== undefined && { billingDay: req.billing_day }),
-      ...(req.payment_due_day !== undefined && { paymentDueDay: req.payment_due_day }),
-      ...(req.bank_name !== undefined && { bankName: req.bank_name }),
-      ...(req.card_last_four !== undefined && { cardLastFour: req.card_last_four }),
+      name: full.name,
+      type: full.account_type,
+      currency: full.currency,
+      initialBalance: full.initial_balance,
+      note: full.note,
+      creditLimit: full.credit_limit,
+      billingDay: full.billing_day,
+      paymentDueDay: full.payment_due_day,
+      bankName: full.bank_name,
+      cardLastFour: full.card_last_four,
+      hidden: req.hidden !== undefined ? req.hidden : Boolean(full.hidden),
+    }) : safeJsonStringify({
+      syncId: accountSyncId,
       ...(req.hidden !== undefined && { hidden: req.hidden }),
       ...extraType,
     }), serverNow, userId)
