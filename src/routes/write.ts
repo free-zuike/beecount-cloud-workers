@@ -2307,9 +2307,10 @@ writeRouter.put('/exchange-rate-overrides', zValidator('json', ExchangeRateSchem
   const serverNow = nowUtc();
 
   const syncId = randomUUID();
-  await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+  const result = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
     VALUES (?, NULL, 'exchange_rate_override', ?, 'upsert', ?, ?, ?, 'user')`)
     .bind(userId, syncId, JSON.stringify({ syncId, baseCurrency: base_currency, quoteCurrency: quote_currency, rate: String(rate), updatedAt: serverNow }), serverNow, userId).run();
+  const changeId = result.meta.last_row_id as number;
 
   // 直接写入投影表，确保立即可见
   const existing = await db.prepare('SELECT base_currency FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
@@ -2323,17 +2324,17 @@ writeRouter.put('/exchange-rate-overrides', zValidator('json', ExchangeRateSchem
   }
 
   // WS 广播
-  await broadcastExchangeRateOverride(c, userId, syncId).catch(() => {});
+  await broadcastExchangeRateOverride(c, userId, changeId).catch(() => {});
 
   return c.json({ sync_id: syncId, base_currency, quote_currency, rate: String(rate) });
 });
 
 // 广播汇率覆盖变更到当前用户
-async function broadcastExchangeRateOverride(c: any, userId: string, syncId: string): Promise<void> {
+async function broadcastExchangeRateOverride(c: any, userId: string, changeId: number): Promise<void> {
   const payload = {
     type: 'sync_change',
-    ledgerId: '',
-    serverCursor: 0,
+    ledgerId: '__user_global__',
+    serverCursor: changeId,
     serverTimestamp: new Date().toISOString(),
   };
   try {
@@ -2363,16 +2364,17 @@ writeRouter.delete('/exchange-rate-overrides', async (c) => {
   }
 
   const syncId = randomUUID();
-  await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+  const delResult = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
     VALUES (?, NULL, 'exchange_rate_override', ?, 'delete', ?, ?, ?, 'user')`)
     .bind(userId, syncId, '{}', serverNow, userId).run();
+  const delChangeId = delResult.meta.last_row_id as number;
 
   // 直接删除投影表
   await db.prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
     .bind(userId, baseCurrency, quoteCurrency).run();
 
   // WS 广播
-  await broadcastExchangeRateOverride(c, userId, syncId).catch(() => {});
+  await broadcastExchangeRateOverride(c, userId, delChangeId).catch(() => {});
 
   return c.json({ sync_id: syncId, base_currency: baseCurrency, quote_currency: quoteCurrency, rate: null });
 });
