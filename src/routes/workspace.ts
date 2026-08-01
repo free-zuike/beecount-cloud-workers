@@ -54,6 +54,67 @@ function parseTagsList(csv: string | null): string[] {
   return csv.split(',').filter((t) => t.trim().length > 0);
 }
 
+const ANOMALY_MIN_MONTHS = 3;
+const ANOMALY_DEVIATION_MULT = 1.2;
+const ANOMALY_DEVIATION_ABS = 200;
+const ANOMALY_TOP_ATTRIBUTIONS = 2;
+
+function median(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+function computeAnomalyMonths(
+  series: Array<{ bucket: string; expense: number; income: number; balance: number }>,
+  categoryByBucket: Record<string, Record<string, number>>
+): Array<{
+  bucket: string;
+  expense: number;
+  baseline: number;
+  deviation_pct: number;
+  top_attributions: Array<{ category_name: string; amount: number; median_others: number; multiplier: number | null }>;
+}> {
+  const occurred = series.filter(s => s.expense > 0);
+  if (occurred.length < ANOMALY_MIN_MONTHS) return [];
+
+  const baseline = median(occurred.map(s => s.expense));
+  const out: Array<any> = [];
+
+  for (const s of occurred) {
+    if (s.expense <= baseline * ANOMALY_DEVIATION_MULT) continue;
+    if (s.expense - baseline <= ANOMALY_DEVIATION_ABS) continue;
+
+    const thisMonthCats = categoryByBucket[s.bucket] || {};
+    const otherBuckets = occurred.filter(o => o.bucket !== s.bucket).map(o => o.bucket);
+    const attributions: Array<[number, any]> = [];
+
+    for (const [catName, catAmount] of Object.entries(thisMonthCats)) {
+      const others = otherBuckets.map(b => (categoryByBucket[b] || {})[catName] || 0);
+      const medianOthers = median(others);
+      const diff = catAmount - medianOthers;
+      if (diff <= 0) continue;
+      const multiplier = medianOthers > 0 ? catAmount / medianOthers : null;
+      attributions.push([diff, { category_name: catName, amount: catAmount, median_others: medianOthers, multiplier }]);
+    }
+
+    attributions.sort(([a], [b]) => b - a);
+    const topAttributions = attributions.slice(0, ANOMALY_TOP_ATTRIBUTIONS).map(([, a]) => a);
+
+    out.push({
+      bucket: s.bucket,
+      expense: s.expense,
+      baseline,
+      deviation_pct: baseline > 0 ? (s.expense - baseline) / baseline : 0,
+      top_attributions: topAttributions,
+    });
+  }
+
+  out.sort((a, b) => (b.expense - b.baseline) - (a.expense - a.baseline));
+  return out;
+}
+
 const INVITE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 function generateInviteCode(): string {
@@ -986,6 +1047,7 @@ workspaceRouter.get('/analytics', async (c) => {
   const metric = c.req.query('metric') ?? 'expense';
   const period = c.req.query('period') ?? null;
   const tzOffsetMinutes = parseInt(c.req.query('tz_offset_minutes') ?? '0', 10);
+  const naturalMonth = c.req.query('natural_month') === 'true';
 
   // 含共享账本
   let ledgerQuery = `SELECT DISTINCT l.id FROM ledgers l
@@ -1014,7 +1076,7 @@ workspaceRouter.get('/analytics', async (c) => {
 
   // 获取 month_start_day（单账本时使用该账本的设置，多账本默认 1）
   let monthStartDay = 1;
-  if (ledgerInternalIds.length === 1) {
+  if (!naturalMonth && ledgerInternalIds.length === 1) {
     const msdRow = await db.prepare('SELECT month_start_day FROM ledgers WHERE id = ?').bind(ledgerInternalIds[0]).first<{ month_start_day: number }>();
     if (msdRow?.month_start_day) monthStartDay = Math.min(Math.max(msdRow.month_start_day, 1), 28);
   }
@@ -1092,6 +1154,7 @@ workspaceRouter.get('/analytics', async (c) => {
   let expenseTotal = 0;
   const seriesMap: Record<string, { expense: number; income: number }> = {};
   const categoryMap: Record<string, { expense: number; income: number; count: number }> = {};
+  const categoryByBucket: Record<string, Record<string, number>> = {};
   const distinctDays = new Set<string>();
   let firstTxAt: string | null = null;
   let lastTxAt: string | null = null;
@@ -1144,6 +1207,9 @@ workspaceRouter.get('/analytics', async (c) => {
     if (!seriesMap[bucket]) {
       seriesMap[bucket] = { expense: 0, income: 0 };
     }
+    if (!categoryByBucket[bucket]) {
+      categoryByBucket[bucket] = {};
+    }
     if (!categoryMap[tx.category_name ?? 'Uncategorized']) {
       categoryMap[tx.category_name ?? 'Uncategorized'] = { expense: 0, income: 0, count: 0 };
     }
@@ -1154,6 +1220,7 @@ workspaceRouter.get('/analytics', async (c) => {
     } else if (tx.tx_type === 'expense') {
       seriesMap[bucket].expense += amt;
       categoryMap[tx.category_name ?? 'Uncategorized'].expense += amt;
+      categoryByBucket[bucket][tx.category_name ?? 'Uncategorized'] = (categoryByBucket[bucket][tx.category_name ?? 'Uncategorized'] ?? 0) + amt;
     }
     categoryMap[tx.category_name ?? 'Uncategorized'].count += 1;
   }
@@ -1166,6 +1233,9 @@ workspaceRouter.get('/analytics', async (c) => {
       income: data.income,
       balance: data.income - data.expense,
     }));
+
+  // 异常月份检测（与原版 _compute_anomaly_months 对齐）
+  const anomalyMonths = computeAnomalyMonths(series, categoryByBucket);
 
   const metricKey = metric === 'income' ? 'income' : 'expense';
   const categoryRanks = Object.entries(categoryMap)
@@ -1189,7 +1259,7 @@ workspaceRouter.get('/analytics', async (c) => {
     },
     series,
     category_ranks: categoryRanks,
-    anomaly_months: [],
+    anomaly_months: anomalyMonths,
     range: { scope, metric, period, start_at: null, end_at: null },
   });
 });
