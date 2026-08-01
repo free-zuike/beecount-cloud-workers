@@ -402,19 +402,21 @@ workspaceRouter.get('/transactions', async (c) => {
 
   const txRows = await db.prepare(txQuery).bind(...txParams).all<Record<string, unknown>>();
 
-  // 收集所有 created_by_user_id 做批量查询
-  const creatorIds = new Set<string>();
+  // 收集所有 created_by_user_id 和 last_edited_by_user_id 做批量查询
+  const actorIds = new Set<string>();
   for (const row of txRows.results) {
     const uid = row.created_by_user_id as string;
-    if (uid) creatorIds.add(uid);
+    if (uid) actorIds.add(uid);
+    const eid = row.last_edited_by_user_id as string;
+    if (eid) actorIds.add(eid);
   }
-  const creatorMap: Record<string, { email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number }> = {};
-  if (creatorIds.size > 0) {
-    const ids = [...creatorIds];
+  const actorMap: Record<string, { email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number }> = {};
+  if (actorIds.size > 0) {
+    const ids = [...actorIds];
     const placeholders = ids.map(() => '?').join(',');
     const users = await db.prepare(`SELECT u.id, u.email, p.display_name, p.avatar_file_id, p.avatar_version FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.id IN (${placeholders})`).bind(...ids).all<{ id: string; email: string; display_name: string | null; avatar_file_id: string | null; avatar_version: number }>();
     for (const u of users.results) {
-      creatorMap[u.id] = { email: u.email, display_name: u.display_name, avatar_file_id: u.avatar_file_id, avatar_version: u.avatar_version || 0 };
+      actorMap[u.id] = { email: u.email, display_name: u.display_name, avatar_file_id: u.avatar_file_id, avatar_version: u.avatar_version || 0 };
     }
   }
 
@@ -425,7 +427,9 @@ workspaceRouter.get('/transactions', async (c) => {
     const tagIds = safeJsonParse<string[]>(row.tag_sync_ids_json as string | null) ?? [];
     const attachments = safeJsonParse<Array<Record<string, unknown>>>(row.attachments_json as string | null);
     const creatorUid = row.created_by_user_id as string | null;
-    const creator = creatorUid ? creatorMap[creatorUid] : null;
+    const editorUid = row.last_edited_by_user_id as string | null;
+    const creator = creatorUid ? actorMap[creatorUid] : null;
+    const editor = editorUid ? actorMap[editorUid] : (creator || null);
 
     return {
       id: row.sync_id,
@@ -457,6 +461,11 @@ workspaceRouter.get('/transactions', async (c) => {
       created_by_display_name: creator?.display_name ?? null,
       created_by_avatar_url: creator?.avatar_file_id ? `/api/v1/profile/avatar/${creatorUid}?v=${creator?.avatar_version}` : null,
       created_by_avatar_version: creator?.avatar_version ?? null,
+      last_edited_by_user_id: editorUid,
+      last_edited_by_email: editor?.email ?? null,
+      last_edited_by_display_name: editor?.display_name ?? null,
+      last_edited_by_avatar_url: editor?.avatar_file_id ? `/api/v1/profile/avatar/${editorUid}?v=${editor?.avatar_version}` : null,
+      last_edited_by_avatar_version: editor?.avatar_version ?? null,
       exclude_from_stats: !!(row.exclude_from_stats),
       exclude_from_budget: !!(row.exclude_from_budget),
     };
@@ -464,7 +473,7 @@ workspaceRouter.get('/transactions', async (c) => {
 
   return c.json({
     items,
-    total: items.length + (hasMore ? 1 : 0) * (items.length > 0 ? (offset + items.length) : 0),
+    total: txRows.results.length,
     limit,
     offset,
     has_more: hasMore,
@@ -529,6 +538,9 @@ workspaceRouter.get('/accounts', async (c) => {
 
   const acctRows = await db.prepare(acctQuery).bind(...acctParams).all<Record<string, unknown>>();
 
+  // 获取当前用户信息（用于 created_by_user_id/created_by_email）
+  const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string }>();
+
   const items = [];
   for (const row of acctRows.results) {
     const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
@@ -559,8 +571,8 @@ workspaceRouter.get('/accounts', async (c) => {
       last_change_id: row.source_change_id,
       ledger_id: ledExtId,
       ledger_name: ledgerMeta[row.ledger_id as string]?.name ?? null,
-      created_by_user_id: null,
-      created_by_email: null,
+      created_by_user_id: currentUser?.id ?? null,
+      created_by_email: currentUser?.email ?? null,
       note: row.note,
       credit_limit: row.credit_limit,
       billing_day: row.billing_day,
@@ -643,6 +655,8 @@ workspaceRouter.get('/categories', async (c) => {
     txCountMap[r.category_sync_id] = r.cnt;
   }
 
+  const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string }>();
+
   const items = catRows.results.map((row) => {
     const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
 
@@ -661,8 +675,8 @@ workspaceRouter.get('/categories', async (c) => {
       last_change_id: row.source_change_id,
       ledger_id: ledExtId,
       ledger_name: ledgerMeta[row.ledger_id as string]?.name ?? null,
-      created_by_user_id: null,
-      created_by_email: null,
+      created_by_user_id: currentUser?.id ?? null,
+      created_by_email: currentUser?.email ?? null,
       tx_count: txCountMap[row.sync_id as string] ?? 0,
     };
   });
@@ -770,6 +784,8 @@ workspaceRouter.get('/tags', async (c) => {
     }
   }
 
+  const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string }>();
+
   const items = tagRows.results.map((row) => {
     const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
     const stats = tagStats[row.sync_id as string] ?? { tx_count: 0, expense_total: 0, income_total: 0 };
@@ -781,8 +797,8 @@ workspaceRouter.get('/tags', async (c) => {
       last_change_id: row.source_change_id,
       ledger_id: ledExtId,
       ledger_name: ledgerMeta[row.ledger_id as string]?.name ?? null,
-      created_by_user_id: null,
-      created_by_email: null,
+      created_by_user_id: currentUser?.id ?? null,
+      created_by_email: currentUser?.email ?? null,
       tx_count: stats.tx_count,
       expense_total: stats.expense_total,
       income_total: stats.income_total,
@@ -834,6 +850,8 @@ workspaceRouter.get('/budgets', async (c) => {
   budgetParams.push(String(limit), String(offset));
 
   const budgetRows = await db.prepare(budgetQuery).bind(...budgetParams).all<Record<string, unknown>>();
+
+  const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string }>();
 
   const items = await Promise.all(budgetRows.results.map(async (row) => {
     const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
@@ -888,8 +906,8 @@ workspaceRouter.get('/budgets', async (c) => {
       last_change_id: row.source_change_id,
       ledger_id: ledExtId,
       ledger_name: ledgerMeta[row.ledger_id as string]?.name ?? null,
-      created_by_user_id: null,
-      created_by_email: null,
+      created_by_user_id: currentUser?.id ?? null,
+      created_by_email: currentUser?.email ?? null,
     };
   }));
 
