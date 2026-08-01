@@ -1063,13 +1063,20 @@ writeRouter.patch('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteTagUpda
     return c.json({ error: 'No ledger found' }, 400);
   }
 
+  // 取完整标签数据写入 payload（与原版 _diff_entity_list 一致）
+  const fullTag = await db.prepare('SELECT * FROM read_tag_projection WHERE sync_id = ? AND user_id = ?').bind(tagSyncId, userId).first<Record<string, unknown>>();
+
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
        (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
        VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
-    .bind(userId, 'tag', tagSyncId, 'upsert', safeJsonStringify({ name: req.name, color: req.color ?? null }), serverNow, userId)
+    .bind(userId, 'tag', tagSyncId, 'upsert', fullTag ? safeJsonStringify({
+      syncId: tagSyncId,
+      name: req.name ?? fullTag.name,
+      color: req.color ?? fullTag.color,
+    }) : safeJsonStringify({ syncId: tagSyncId, name: req.name, color: req.color ?? null }), serverNow, userId)
     .run();
 
   const newChangeId = changeResult.meta.last_row_id as number;
@@ -1523,13 +1530,28 @@ writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteC
     return c.json({ error: 'No ledger found' }, 400);
   }
 
+  // 取完整分类数据写入 payload（与原版 _diff_entity_list 一致）
+  const fullCat = await db.prepare('SELECT * FROM read_category_projection WHERE sync_id = ? AND user_id = ?').bind(categorySyncId, userId).first<Record<string, unknown>>();
+
   const changeResult = await db
     .prepare(
       `INSERT INTO sync_changes
        (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
        VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
     )
-    .bind(userId, 'category', categorySyncId, 'upsert', safeJsonStringify({
+    .bind(userId, 'category', categorySyncId, 'upsert', fullCat ? safeJsonStringify({
+      syncId: categorySyncId,
+      name: req.name ?? fullCat.name,
+      kind: req.kind ?? fullCat.kind,
+      level: req.level ?? fullCat.level,
+      sortOrder: req.sort_order ?? fullCat.sort_order,
+      icon: req.icon ?? fullCat.icon,
+      iconType: req.icon_type ?? fullCat.icon_type,
+      customIconPath: req.custom_icon_path ?? fullCat.custom_icon_path,
+      iconCloudFileId: req.icon_cloud_file_id ?? fullCat.icon_cloud_file_id,
+      iconCloudSha256: req.icon_cloud_sha256 ?? fullCat.icon_cloud_sha256,
+      parentName: req.parent_name ?? fullCat.parent_name,
+    }) : safeJsonStringify({
       syncId: categorySyncId, name: req.name, kind: req.kind, level: req.level ?? null, sortOrder: req.sort_order ?? null,
       icon: req.icon ?? null, iconType: req.icon_type ?? null, customIconPath: req.custom_icon_path ?? null,
       iconCloudFileId: req.icon_cloud_file_id ?? null, iconCloudSha256: req.icon_cloud_sha256 ?? null,
