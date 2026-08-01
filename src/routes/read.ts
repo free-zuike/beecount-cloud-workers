@@ -551,8 +551,9 @@ readRouter.get('/workspace/transactions', async (c) => {
     }
   }
   if (accountName) {
-    query += ' AND account_name = ?';
-    bindings.push(accountName);
+    query += ` AND (account_name LIKE ? OR from_account_name LIKE ? OR to_account_name LIKE ?)`;
+    const pattern = `%${accountName}%`;
+    bindings.push(pattern, pattern, pattern);
   }
 
   query += ' ORDER BY happened_at DESC LIMIT ? OFFSET ?';
@@ -1507,7 +1508,7 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
   const nextMonth = formatDate(periodEnd);
 
   const budgets = await db
-    .prepare('SELECT sync_id, category_sync_id, amount, period FROM read_budget_projection WHERE ledger_id = ? AND enabled = 1')
+    .prepare('SELECT sync_id, category_sync_id, amount, period FROM read_budget_projection WHERE ledger_id = ?')
     .bind(ledger.id)
     .all<{ sync_id: string; category_sync_id: string | null; amount: number; period: string }>();
 

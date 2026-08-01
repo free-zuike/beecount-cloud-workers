@@ -333,9 +333,9 @@ workspaceRouter.get('/transactions', async (c) => {
   }
 
   if (q) {
-    txQuery += ` AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ? OR tags_csv LIKE ?)`;
+    txQuery += ` AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ? OR from_account_name LIKE ? OR to_account_name LIKE ? OR tags_csv LIKE ?)`;
     const pattern = `%${q}%`;
-    txParams.push(pattern, pattern, pattern, pattern);
+    txParams.push(pattern, pattern, pattern, pattern, pattern, pattern);
   }
 
   // 按 tag_sync_id 精确过滤（与原版对齐：先查 tag_sync_ids_json，再按名匹配 tags_csv）
