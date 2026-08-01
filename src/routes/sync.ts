@@ -676,19 +676,6 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
                 action: change.action,
                 payload: change.payload,
               }, c.env.R2);
-              // 广播 exchange_rate_override 变更到 Web（与原版 write 端点一致）
-              if (change.entity_type === 'exchange_rate_override') {
-                try {
-                  const payload = { type: 'sync_change', ledgerId: '__user_global__', serverCursor: newChangeId, serverTimestamp: new Date().toISOString() };
-                  const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
-                  const doStub = c.env.BEECOUNT_DO.get(doId);
-                  await doStub.fetch(new Request('https://dummy/broadcast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: JSON.stringify(payload) }) }));
-                } catch {}
-                try {
-                  const { getWsManager } = await import('../lib/ws-manager');
-                  await getWsManager().broadcastToUser(userId, { type: 'sync_change', ledgerId: '__user_global__', serverCursor: newChangeId, serverTimestamp: new Date().toISOString() });
-                } catch {}
-              }
             } else if (ledgerRow) {
               await applyChangeToProjection(db, ledgerRow.id, userId, {
                 change_id: newChangeId,
