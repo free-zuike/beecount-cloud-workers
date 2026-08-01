@@ -1668,6 +1668,8 @@ readRouter.get('/exchange-rates', async (c) => {
     return c.json({ error: 'Invalid base currency' }, 400);
   }
 
+  const db = c.env.DB;
+
   try {
     // 从外部 API 获取汇率
     const response = await fetch(`https://api.exchangerate-api.com/v4/latest/${base}`);
@@ -1675,6 +1677,13 @@ readRouter.get('/exchange-rates', async (c) => {
       return c.json({ error: 'Failed to fetch rates' }, 502);
     }
     const data = await response.json() as { rates: Record<string, number>; date: string };
+
+    const ratesJson = JSON.stringify(data.rates);
+    // 缓存到数据库（与原版 ExchangeRateCache 对齐）
+    await db.prepare(
+      `INSERT OR REPLACE INTO exchange_rate_cache (base_currency, rate_date, source, payload_json, fetched_at)
+       VALUES (?, ?, 'exchangerate-api.com', ?, ?)`
+    ).bind(base.toUpperCase(), data.date, ratesJson, new Date().toISOString()).run();
 
     return c.json({
       base: base.toUpperCase(),

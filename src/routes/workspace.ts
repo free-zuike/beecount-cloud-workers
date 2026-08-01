@@ -2308,10 +2308,21 @@ workspaceRouter.get('/net-worth-history', async (c) => {
     baseCurrency = [...currencies][0];
   }
 
-  // 构建汇率折算表（与原版一致：base 自身 1.0；手动 override 覆盖自动）
+  // 构建汇率折算表（与原版一致：base 自身 1.0；自动缓存取倒数；手动 override 覆盖自动）
   const ratesToBase: Record<string, number> = {};
   if (baseCurrency) {
     ratesToBase[baseCurrency] = 1.0;
+    // 自动汇率缓存（1 base = x quote，取倒数得 1 quote = x base）
+    const cache = await db.prepare('SELECT payload_json FROM exchange_rate_cache WHERE base_currency = ?').bind(baseCurrency).first<{ payload_json: string }>();
+    if (cache) {
+      try {
+        const payload = JSON.parse(cache.payload_json) as Record<string, string>;
+        for (const [q, x] of Object.entries(payload)) {
+          const xf = parseFloat(x);
+          if (xf > 0) ratesToBase[q.toUpperCase()] = 1.0 / xf;
+        }
+      } catch {}
+    }
     // 手动汇率覆盖
     const overrides = await db.prepare('SELECT quote_currency, rate FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ?').bind(userId, baseCurrency).all<{ quote_currency: string; rate: string }>();
     for (const ov of overrides.results) {
