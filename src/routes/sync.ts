@@ -1537,15 +1537,15 @@ async function applyUserChangeToProjection(
       const sets: string[] = [];
       const vals: unknown[] = [];
       if (payload.name !== undefined) { sets.push('name = ?'); vals.push(payload.name); }
-      if (accountType !== undefined) { sets.push('account_type = ?'); vals.push(accountType); }
+      if ((payload as any).accountType !== undefined || payload.account_type !== undefined || (payload as any).type !== undefined) { sets.push('account_type = ?'); vals.push(accountType); }
       if (payload.currency !== undefined) { sets.push('currency = ?'); vals.push(payload.currency); }
-      if (initialBalance !== undefined) { sets.push('initial_balance = ?'); vals.push(initialBalance); }
+      if ((payload as any).initialBalance !== undefined || payload.initial_balance !== undefined) { sets.push('initial_balance = ?'); vals.push(initialBalance); }
       if (payload.note !== undefined) { sets.push('note = ?'); vals.push(payload.note); }
-      if (creditLimit !== undefined) { sets.push('credit_limit = ?'); vals.push(creditLimit); }
-      if (billingDay !== undefined) { sets.push('billing_day = ?'); vals.push(billingDay); }
-      if (paymentDueDay !== undefined) { sets.push('payment_due_day = ?'); vals.push(paymentDueDay); }
-      if (bankName !== undefined) { sets.push('bank_name = ?'); vals.push(bankName); }
-      if (cardLastFour !== undefined) { sets.push('card_last_four = ?'); vals.push(cardLastFour); }
+      if ((payload as any).creditLimit !== undefined || payload.credit_limit !== undefined) { sets.push('credit_limit = ?'); vals.push(creditLimit); }
+      if ((payload as any).billingDay !== undefined || payload.billing_day !== undefined) { sets.push('billing_day = ?'); vals.push(billingDay); }
+      if ((payload as any).paymentDueDay !== undefined || payload.payment_due_day !== undefined) { sets.push('payment_due_day = ?'); vals.push(paymentDueDay); }
+      if ((payload as any).bankName !== undefined || payload.bank_name !== undefined) { sets.push('bank_name = ?'); vals.push(bankName); }
+      if ((payload as any).cardLastFour !== undefined || payload.card_last_four !== undefined) { sets.push('card_last_four = ?'); vals.push(cardLastFour); }
       if ((payload as any).hidden !== undefined) { sets.push('hidden = ?'); vals.push((payload as any).hidden ? 1 : 0); }
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
