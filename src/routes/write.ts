@@ -1248,6 +1248,9 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
     }
   }
 
+  // 更新操作者（与原版对齐）
+  newPayload.updatedByUserId = userId;
+
   // 写入 SyncChange
   const changeResult = await db
     .prepare(
@@ -1346,6 +1349,7 @@ writeRouter.post('/ledgers/:ledgerId/accounts', zValidator('json', WriteAccountC
     paymentDueDay: req.payment_due_day ?? null,
     bankName: req.bank_name ?? null,
     cardLastFour: req.card_last_four ?? null,
+    hidden: false,
     createdByUserId: userId,
     updatedByUserId: userId,
   };
@@ -1783,7 +1787,7 @@ writeRouter.post('/ledgers/:ledgerId/budgets', zValidator('json', WriteBudgetCre
     categoryId: req.category_id ?? null,
     amount: req.amount,
     period: req.period,
-    start_day: req.start_day,
+    startDay: req.start_day,
     enabled: req.enabled,
     ledgerSyncId: ledger.external_id,
     createdByUserId: userId,
@@ -1885,7 +1889,7 @@ writeRouter.patch('/ledgers/:ledgerId/budgets/:id', zValidator('json', WriteBudg
       categoryId: categoryId,
       amount,
       period,
-      start_day: startDay,
+      startDay: startDay,
       enabled,
       ledgerSyncId: ledger.external_id,
       createdByUserId: createdByUserId,
@@ -2309,7 +2313,7 @@ writeRouter.put('/exchange-rate-overrides', zValidator('json', ExchangeRateSchem
   const syncId = randomUUID();
   await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
     VALUES (?, NULL, 'exchange_rate_override', ?, 'upsert', ?, ?, ?)`)
-    .bind(userId, syncId, JSON.stringify({ base_currency, quote_currency, rate: String(rate) }), serverNow, userId).run();
+    .bind(userId, syncId, JSON.stringify({ syncId, baseCurrency: base_currency, quoteCurrency: quote_currency, rate: String(rate), updatedAt: serverNow }), serverNow, userId).run();
 
   // 直接写入投影表，确保立即可见
   const existing = await db.prepare('SELECT base_currency FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
@@ -2339,7 +2343,7 @@ writeRouter.delete('/exchange-rate-overrides', async (c) => {
   const syncId = randomUUID();
   await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
     VALUES (?, NULL, 'exchange_rate_override', ?, 'delete', ?, ?, ?)`)
-    .bind(userId, syncId, JSON.stringify({ base_currency: baseCurrency, quote_currency: quoteCurrency }), serverNow, userId).run();
+    .bind(userId, syncId, '{}', serverNow, userId).run();
 
   // 直接删除投影表
   await db.prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
