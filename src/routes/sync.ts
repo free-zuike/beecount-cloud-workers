@@ -1636,9 +1636,9 @@ async function applyUserChangeToProjection(
     }
   } else if (entity_type === 'exchange_rate_override') {
     if (change.action === 'delete') {
-      const payload = change.payload;
-      await db.prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-        .bind(userId, (payload as any).baseCurrency ?? '', (payload as any).quoteCurrency ?? '').run();
+      // 与原版 _delete_user_exchange_rate_override 一致：按 sync_id 删除
+      await db.prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND sync_id = ?')
+        .bind(userId, entity_sync_id).run();
     } else {
       const payload = change.payload;
       const baseCurrency = (payload as any).baseCurrency ?? '';
@@ -2124,14 +2124,14 @@ async function applyChangeToProjection(
     }
 
     case 'exchange_rate_override': {
-      const baseCurrency = payload.base_currency ?? payload.baseCurrency ?? '';
-      const quoteCurrency = payload.quote_currency ?? payload.quoteCurrency ?? '';
       if (change.action === 'delete') {
         await db
-          .prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-          .bind(userId, baseCurrency, quoteCurrency)
+          .prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND sync_id = ?')
+          .bind(userId, change.entity_sync_id)
           .run();
       } else {
+        const baseCurrency = (payload as any).baseCurrency ?? '';
+        const quoteCurrency = (payload as any).quoteCurrency ?? '';
         const existing = await db
           .prepare('SELECT base_currency FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
           .bind(userId, baseCurrency, quoteCurrency)
@@ -2140,12 +2140,12 @@ async function applyChangeToProjection(
         if (existing) {
           await db
             .prepare('UPDATE exchange_rate_overrides SET rate = ?, updated_at = ? WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-            .bind(payload.rate ?? 1, new Date().toISOString(), userId, baseCurrency, quoteCurrency)
+            .bind((payload as any).rate ?? 1, new Date().toISOString(), userId, baseCurrency, quoteCurrency)
             .run();
         } else {
           await db
             .prepare('INSERT INTO exchange_rate_overrides (user_id, base_currency, quote_currency, rate, updated_at) VALUES (?, ?, ?, ?, ?)')
-            .bind(userId, baseCurrency, quoteCurrency, payload.rate ?? 1, new Date().toISOString())
+            .bind(userId, baseCurrency, quoteCurrency, (payload as any).rate ?? 1, new Date().toISOString())
             .run();
         }
       }
