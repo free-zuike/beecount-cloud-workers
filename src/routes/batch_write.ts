@@ -138,19 +138,20 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
     }
 
     const payload: Record<string, unknown> = {
-      tx_type: txType,
+      syncId: txSyncId,
+      type: txType,
       amount: tx.amount,
-      happened_at: tx.happened_at,
+      happenedAt: tx.happened_at,
       note: tx.note || null,
-      category_sync_id: categorySyncId,
-      account_sync_id: accountSyncId,
-      from_account_sync_id: tx.from_account_id || null,
-      to_account_sync_id: tx.to_account_id || null,
+      categoryId: categorySyncId,
+      accountId: accountSyncId,
+      fromAccountId: tx.from_account_id || null,
+      toAccountId: tx.to_account_id || null,
       tags: tx.tags || null,
-      tag_ids: tx.tag_ids || null,
+      tagIds: tx.tag_ids || null,
       attachments: tx.attachments || null,
-      updated_by_user_id: userId,
-      created_by_user_id: userId,
+      updatedByUserId: userId,
+      createdByUserId: userId,
     };
 
     const insertResult = await db
@@ -314,7 +315,7 @@ batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch', zValidator('json'
       if (acc) accountSyncId = acc.sync_id;
     }
 
-    const payload: Record<string, unknown> = { tx_type: txType, amount: tx.amount, happened_at: tx.happened_at, note: tx.note || null, category_sync_id: categorySyncId, account_sync_id: accountSyncId, from_account_sync_id: tx.from_account_id || null, to_account_sync_id: tx.to_account_id || null, tags: tx.tags || null, updated_by_user_id: userId, created_by_user_id: userId };
+    const payload: Record<string, unknown> = { syncId: txSyncId, type: txType, amount: tx.amount, happenedAt: tx.happened_at, note: tx.note || null, categoryId: categorySyncId, accountId: accountSyncId, fromAccountId: tx.from_account_id || null, toAccountId: tx.to_account_id || null, tags: tx.tags || null, updatedByUserId: userId, createdByUserId: userId };
     const insertResult = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope) VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, ?, ?, 'ledger')`).bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, deviceId).run();
     const changeId = (insertResult as any).lastRowId;
     maxChangeId = Math.max(maxChangeId, changeId);

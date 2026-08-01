@@ -152,16 +152,15 @@ function mappingToPayload(m: ImportFieldMapping): Record<string, unknown> {
 function buildTxPayload(tx: ImportTransaction, autoTags: string[]): Record<string, unknown> {
   const allTags = [...new Set([...tx.tagNames, ...autoTags])];
   return {
-    tx_type: tx.txType,
+    type: tx.txType,
     amount: tx.amount,
-    happened_at: tx.happenedAt.slice(0, 10),
+    happenedAt: tx.happenedAt.slice(0, 10),
     note: tx.note ?? null,
-    category_name: tx.categoryName ?? null,
-    parent_category_name: tx.parentCategoryName ?? null,
-    account_name: tx.accountName ?? null,
-    from_account_name: tx.fromAccountName ?? null,
-    to_account_name: tx.toAccountName ?? null,
-    currency_code: tx.currencyCode ?? null,
+    categoryName: tx.categoryName ?? null,
+    accountName: tx.accountName ?? null,
+    fromAccountName: tx.fromAccountName ?? null,
+    toAccountName: tx.toAccountName ?? null,
+    currencyCode: tx.currencyCode ?? null,
     tags: allTags.length ? allTags : undefined,
   };
 }

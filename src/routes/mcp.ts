@@ -106,7 +106,7 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         if (!led) throw new Error('No ledger found');
         if (!args.amount || (args.amount as number) <= 0) throw new Error('amount must be positive');
         const sid = randomUUID();
-        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify({ syncId: sid, tx_type: args.tx_type || 'expense', amount: args.amount, happened_at: args.happened_at || nowUtc(), note: args.note || null, categoryName: args.category || null, accountName: args.account || null, tags: args.tags || null, currency_code: args.currency || null }), nowUtc(), userId).run();
+        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify({ syncId: sid, type: args.tx_type || 'expense', amount: args.amount, happenedAt: args.happened_at || nowUtc(), note: args.note || null, categoryName: args.category || null, accountName: args.account || null, tags: args.tags || null, currencyCode: args.currency || null }), nowUtc(), userId).run();
         r = { sync_id: sid, ledger: led.name, tx_type: args.tx_type || 'expense', amount: args.amount, happened_at: args.happened_at || nowUtc(), category: args.category || null, account: args.account || null };
         break;
       }
@@ -239,7 +239,7 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         if (!led) throw new Error('No ledger found');
         const sid = randomUUID();
         const level = args.parent_name ? 2 : 1;
-        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'category', sid, 'upsert', JSON.stringify({ syncId: sid, name: args.name, kind: args.kind || 'expense', level, parent_name: args.parent_name || null, icon: args.icon || null }), nowUtc(), userId).run();
+        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'category', sid, 'upsert', JSON.stringify({ syncId: sid, name: args.name, kind: args.kind || 'expense', level, sortOrder: 0, icon: args.icon || null, iconType: null, parentName: args.parent_name || null }), nowUtc(), userId).run();
         r = { sync_id: sid, name: args.name, kind: args.kind || 'expense' };
         break;
       }
@@ -249,7 +249,7 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         const budget = await db.prepare('SELECT * FROM read_budget_projection WHERE sync_id = ? AND user_id = ?').bind(args.budget_id, userId).first<any>();
         if (!budget) throw new Error('Budget not found');
         const sid = randomUUID();
-        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, budget.ledger_id, 'budget', sid, 'upsert', JSON.stringify({ syncId: sid, budget_id: args.budget_id, amount: args.amount }), nowUtc(), userId).run();
+        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, budget.ledger_id, 'budget', sid, 'upsert', JSON.stringify({ syncId: sid, type: budget.budget_type, categoryId: budget.category_sync_id, amount: args.amount, period: budget.period, startDay: budget.start_day, enabled: !!budget.enabled }), nowUtc(), userId).run();
         r = { sync_id: args.budget_id, amount: args.amount };
         break;
       }
@@ -262,7 +262,7 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         for (const tx of txs.slice(0, 200)) {
           if (!tx.amount || tx.amount <= 0) continue;
           const sid = randomUUID();
-          await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify({ syncId: sid, tx_type: tx.tx_type || 'expense', amount: tx.amount, happened_at: tx.happened_at || nowUtc(), note: tx.note || null, categoryName: tx.category || null, accountName: tx.account || null, tags: tx.tags || null, currency_code: tx.currency || null }), nowUtc(), userId).run();
+          await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify({ syncId: sid, type: tx.tx_type || 'expense', amount: tx.amount, happenedAt: tx.happened_at || nowUtc(), note: tx.note || null, categoryName: tx.category || null, accountName: tx.account || null, tags: tx.tags || null, currencyCode: tx.currency || null }), nowUtc(), userId).run();
           sids.push(sid);
         }
         r = { status: 'created', ledger: led.name, created_count: sids.length, sync_ids: sids };
@@ -278,7 +278,7 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         if (!amountMatch) throw new Error('Could not parse amount from text');
         const amount = parseFloat(amountMatch[1]);
         const sid = randomUUID();
-        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify({ syncId: sid, tx_type: 'expense', amount, happened_at: nowUtc(), note: text, categoryName: null, accountName: null }), nowUtc(), userId).run();
+        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify({ syncId: sid, type: 'expense', amount, happenedAt: nowUtc(), note: text, categoryName: null, accountName: null }), nowUtc(), userId).run();
         r = { status: 'created', parsed: { amount, note: text, tx_type: 'expense' }, transaction: { sync_id: sid, ledger: led.name, amount, tx_type: 'expense' } };
         break;
       }
