@@ -574,11 +574,6 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
 
   const newChangeId = changeResult.meta.last_row_id as number;
 
-  // 清理旧 upsert 历史（与原版 _compact_entity_upsert_events 对齐）
-  await db.prepare(
-    `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'transaction' AND entity_sync_id = ? AND action != 'delete'`
-  ).bind(ledger.id, txSyncId).run();
-
   // 删除前先收集交易关联的附件 fileId，用于清理 R2 文件
   const attRows = await db
     .prepare('SELECT id, storage_path FROM attachment_files WHERE ledger_id = ? AND attachment_kind = ?')
@@ -1021,11 +1016,6 @@ writeRouter.delete('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteBa
     .run();
 
   const newChangeId = changeResult.meta.last_row_id as number;
-
-  // 清理旧 upsert 历史
-  await db.prepare(
-    `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = 'account' AND entity_sync_id = ? AND action != 'delete'`
-  ).bind(userId, accountSyncId).run();
 
   await db
     .prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
@@ -1657,11 +1647,6 @@ writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', Write
     .run();
 
   const newChangeId = changeResult.meta.last_row_id as number;
-
-  // 清理旧 upsert 历史
-  await db.prepare(
-    `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = 'category' AND entity_sync_id = ? AND action != 'delete'`
-  ).bind(userId, categorySyncId).run();
 
   await db
     .prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
