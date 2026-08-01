@@ -2298,20 +2298,42 @@ workspaceRouter.get('/net-worth-history', async (c) => {
 
   // 获取 primary_currency
   const profile = await db.prepare('SELECT primary_currency FROM user_profiles WHERE user_id = ?').bind(userId).first<{ primary_currency: string | null }>();
-  const baseCurrency = profile?.primary_currency || 'CNY';
+  let baseCurrency = (profile?.primary_currency || '').toUpperCase();
 
   // 检查是否多币种
-  const currencies = new Set(accounts.results.map(a => a.currency).filter(Boolean));
+  const currencies = new Set(accounts.results.map(a => (a.currency || 'CNY').toUpperCase()).filter(Boolean));
   const multiCurrency = currencies.size > 1;
+
+  if (!baseCurrency && currencies.size === 1) {
+    baseCurrency = [...currencies][0];
+  }
+
+  // 构建汇率折算表（与原版一致：base 自身 1.0；手动 override 覆盖自动）
+  const ratesToBase: Record<string, number> = {};
+  if (baseCurrency) {
+    ratesToBase[baseCurrency] = 1.0;
+    // 手动汇率覆盖
+    const overrides = await db.prepare('SELECT quote_currency, rate FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ?').bind(userId, baseCurrency).all<{ quote_currency: string; rate: string }>();
+    for (const ov of overrides.results) {
+      const r = parseFloat(ov.rate);
+      if (r > 0) ratesToBase[(ov.quote_currency || '').toUpperCase()] = r;
+    }
+  }
 
   // 区分负债账户（credit_card, loan）— 与原版对齐
   const LIABILITY_TYPES = new Set(['credit_card', 'loan', 'liability']);
   const accountBalances: Record<string, number> = {};
+  const accountCurrency: Record<string, string> = {};
   let totalAssets = 0;
   let totalLiabilities = 0;
 
   for (const acc of accounts.results) {
-    const bal = acc.initial_balance ?? 0;
+    const cur = (acc.currency || 'CNY').toUpperCase();
+    const rate = ratesToBase[cur];
+    // 缺汇率的币种整条剔除（与原版一致）
+    if (baseCurrency && !rate) continue;
+    accountCurrency[acc.sync_id] = cur;
+    const bal = (acc.initial_balance ?? 0) * (rate ?? 1);
     accountBalances[acc.sync_id] = bal;
     if (LIABILITY_TYPES.has(acc.account_type || '')) {
       totalLiabilities += Math.abs(bal);
@@ -2328,30 +2350,36 @@ workspaceRouter.get('/net-worth-history', async (c) => {
     const amt = tx.amount; // 使用 amount（与原版对齐）
 
     if (tx.tx_type === 'income' && tx.account_sync_id) {
-      const acc = accounts.results.find(a => a.sync_id === tx.account_sync_id);
+      const acc = accountCurrency[tx.account_sync_id] ? accounts.results.find(a => a.sync_id === tx.account_sync_id) : null;
       if (acc && !LIABILITY_TYPES.has(acc.account_type || '')) {
+        const rate = ratesToBase[accountCurrency[tx.account_sync_id]] ?? 1;
+        const convertedAmt = amt * rate;
         if (!monthlyChanges[month]) monthlyChanges[month] = { assets: 0, liabilities: 0 };
-        monthlyChanges[month].assets += amt;
-        accountBalances[tx.account_sync_id] = (accountBalances[tx.account_sync_id] ?? 0) + amt;
+        monthlyChanges[month].assets += convertedAmt;
+        accountBalances[tx.account_sync_id] = (accountBalances[tx.account_sync_id] ?? 0) + convertedAmt;
       }
     } else if (tx.tx_type === 'expense' && tx.account_sync_id) {
-      const acc = accounts.results.find(a => a.sync_id === tx.account_sync_id);
+      const acc = accountCurrency[tx.account_sync_id] ? accounts.results.find(a => a.sync_id === tx.account_sync_id) : null;
       if (acc && !LIABILITY_TYPES.has(acc.account_type || '')) {
+        const rate = ratesToBase[accountCurrency[tx.account_sync_id]] ?? 1;
+        const convertedAmt = amt * rate;
         if (!monthlyChanges[month]) monthlyChanges[month] = { assets: 0, liabilities: 0 };
-        monthlyChanges[month].liabilities += amt;
-        accountBalances[tx.account_sync_id] = (accountBalances[tx.account_sync_id] ?? 0) - amt;
+        monthlyChanges[month].liabilities += convertedAmt;
+        accountBalances[tx.account_sync_id] = (accountBalances[tx.account_sync_id] ?? 0) - convertedAmt;
       }
     } else if (tx.tx_type === 'transfer') {
       // 转账：from_account 减少，to_account 增加 — 总净值不变但影响账户余额
       // 不影响 assets/liabilities 聚合（与原版一致）
     } else if (tx.tx_type === 'adjustment' && tx.account_sync_id) {
+      const rate = ratesToBase[accountCurrency[tx.account_sync_id]] ?? 1;
+      const convertedAmt = tx.amount * rate;
       if (!monthlyChanges[month]) monthlyChanges[month] = { assets: 0, liabilities: 0 };
-      if (tx.amount >= 0) {
-        monthlyChanges[month].assets += tx.amount;
+      if (convertedAmt >= 0) {
+        monthlyChanges[month].assets += convertedAmt;
       } else {
-        monthlyChanges[month].liabilities += Math.abs(tx.amount);
+        monthlyChanges[month].liabilities += Math.abs(convertedAmt);
       }
-      accountBalances[tx.account_sync_id] = (accountBalances[tx.account_sync_id] ?? 0) + tx.amount;
+      accountBalances[tx.account_sync_id] = (accountBalances[tx.account_sync_id] ?? 0) + convertedAmt;
     }
   }
 
