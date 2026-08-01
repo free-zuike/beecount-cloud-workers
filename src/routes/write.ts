@@ -145,17 +145,13 @@ function safeJsonStringify(obj: unknown): string {
 
 /** 查找账本：先试 external_id，再试内部 id，支持共享账本（通过 ledger_members） */
 async function findLedger(db: D1Database, userId: string, ledgerId: string): Promise<{ id: string; external_id: string } | null> {
-  const byExt = await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?').bind(userId, ledgerId).first<{ id: string; external_id: string }>();
-  if (byExt) return byExt;
-  const byId = await db.prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND id = ?').bind(userId, ledgerId).first<{ id: string; external_id: string }>();
-  if (byId) return byId;
-  // 共享账本：通过 ledger_members 查找
-  const shared = await db.prepare(
+  // 与原版 get_accessible_ledger_by_external_id 一致：JOIN ledger_members，只查 external_id
+  const row = await db.prepare(
     `SELECT l.id, l.external_id FROM ledgers l
      JOIN ledger_members lm ON l.id = lm.ledger_id
-     WHERE lm.user_id = ? AND (l.external_id = ? OR l.id = ?)`
-  ).bind(userId, ledgerId, ledgerId).first<{ id: string; external_id: string }>();
-  return shared ?? null;
+     WHERE l.external_id = ? AND lm.user_id = ?`
+  ).bind(ledgerId, userId).first<{ id: string; external_id: string }>();
+  return row ?? null;
 }
 
 // ===========================
