@@ -2307,8 +2307,8 @@ writeRouter.put('/exchange-rate-overrides', zValidator('json', ExchangeRateSchem
   const serverNow = nowUtc();
 
   const syncId = randomUUID();
-  await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-    VALUES (?, NULL, 'exchange_rate_override', ?, 'upsert', ?, ?, ?)`)
+  await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+    VALUES (?, NULL, 'exchange_rate_override', ?, 'upsert', ?, ?, ?, 'user')`)
     .bind(userId, syncId, JSON.stringify({ syncId, baseCurrency: base_currency, quoteCurrency: quote_currency, rate: String(rate), updatedAt: serverNow }), serverNow, userId).run();
 
   // 直接写入投影表，确保立即可见
@@ -2337,8 +2337,8 @@ writeRouter.delete('/exchange-rate-overrides', async (c) => {
   }
 
   const syncId = randomUUID();
-  await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-    VALUES (?, NULL, 'exchange_rate_override', ?, 'delete', ?, ?, ?)`)
+  await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+    VALUES (?, NULL, 'exchange_rate_override', ?, 'delete', ?, ?, ?, 'user')`)
     .bind(userId, syncId, '{}', serverNow, userId).run();
 
   // 直接删除投影表
