@@ -2194,13 +2194,16 @@ workspaceRouter.post('/ledgers/:id/transfer', zValidator('json', TransferSchema)
 workspaceRouter.get('/net-worth-history', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
+  const ledgerId = c.req.query('ledger_id') ?? null;
+  const filterUserId = c.req.query('user_id') ?? null;
+  const tzOffsetMinutes = parseInt(c.req.query('tz_offset_minutes') ?? '0', 10);
 
   // 含共享账本
   const ledgers = await db
     .prepare(`SELECT DISTINCT l.id, l.external_id, l.currency FROM ledgers l
       LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-      WHERE (l.user_id = ? OR lm.user_id = ?)`)
-    .bind(userId, userId, userId)
+      WHERE (l.user_id = ? OR lm.user_id = ?)${ledgerId ? ' AND (l.external_id = ? OR l.id = ?)' : ''}`)
+    .bind(userId, userId, userId, ...(ledgerId ? [ledgerId, ledgerId] : []))
     .all<{ id: string; external_id: string; currency: string }>();
 
   if (ledgers.results.length === 0) {
@@ -2211,9 +2214,10 @@ workspaceRouter.get('/net-worth-history', async (c) => {
   const placeholders = ledgerInternalIds.map(() => '?').join(',');
 
   // 获取所有账户（含 hidden 和 account_type）
+  const targetUserId = filterUserId || userId;
   const accounts = await db
     .prepare(`SELECT sync_id, initial_balance, currency, account_type, hidden FROM read_account_projection WHERE user_id = ?`)
-    .bind(userId)
+    .bind(targetUserId)
     .all<{ sync_id: string; initial_balance: number; currency: string | null; account_type: string | null; hidden: number | null }>();
 
   // 获取所有交易（按 happened_at 排序，与原版对齐）
