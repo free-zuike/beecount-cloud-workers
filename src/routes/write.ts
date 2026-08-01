@@ -894,7 +894,6 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
       ...(req.account_type !== undefined && { type: req.account_type }),
       ...(req.currency !== undefined && { currency: req.currency }),
       ...(req.initial_balance !== undefined && { initialBalance: req.initial_balance }),
-      sortOrder: 0,
       ...(req.note !== undefined && { note: req.note }),
       ...(req.credit_limit !== undefined && { creditLimit: req.credit_limit }),
       ...(req.billing_day !== undefined && { billingDay: req.billing_day }),
