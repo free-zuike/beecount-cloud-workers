@@ -1224,7 +1224,7 @@ backupRouter.get('/schedules', async (c) => {
 /**
  * 创建备份调度
  */
-backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async (c) => {
+backupRouter.post('/schedules', apiValidator('json', ScheduleCreateSchema), async (c) => {
   const db = c.env.DB;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
@@ -1332,7 +1332,7 @@ backupRouter.post('/schedules', zValidator('json', ScheduleCreateSchema), async 
 /**
  * 更新备份调度
  */
-backupRouter.patch('/schedules/:id', zValidator('json', ScheduleUpdateSchema), async (c) => {
+backupRouter.patch('/schedules/:id', apiValidator('json', ScheduleUpdateSchema), async (c) => {
   const db = c.env.DB;
   const scheduleId = c.req.param('id');
   const req = c.req.valid('json');
@@ -1773,7 +1773,7 @@ backupRouter.get('/runs', async (c) => {
 /**
  * 手动触发备份
  */
-backupRouter.post('/run-now', zValidator('json', RunNowSchema), async (c) => {
+backupRouter.post('/run-now', apiValidator('json', RunNowSchema), async (c) => {
   const db = c.env.DB;
   const userId = c.get('userId');
   const req = c.req.valid('json');
@@ -2639,7 +2639,7 @@ const UploadSnapshotSchema = z.object({
   metadata: z.record(z.any()).optional(),
 });
 
-backupRouter.post('/upload-snapshot', zValidator('json', UploadSnapshotSchema), async (c) => {
+backupRouter.post('/upload-snapshot', apiValidator('json', UploadSnapshotSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const r2 = c.env.R2;
