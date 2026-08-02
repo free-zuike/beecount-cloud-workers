@@ -243,7 +243,7 @@ async function testS3Connection(
 const RemoteCreateSchema = z.object({
   name: z.string().min(1).max(64),
   backend_type: z.string().min(1).max(32),
-  config: z.record(z.string()),
+  config: z.record(z.any()),
   encrypted: z.boolean().optional(),
   age_passphrase: z.string().optional(),
 });
@@ -257,7 +257,7 @@ const RemoteUpdateSchema = z.object({
 
 const RemoteTestSchema = z.object({
   backend_type: z.string(),
-  config: z.record(z.string()),
+  config: z.record(z.any()),
 });
 
 const ScheduleCreateSchema = z.object({
