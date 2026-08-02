@@ -43,6 +43,12 @@ API_PREFIX = "/api/v1"
 [observability]
 enabled = true
 
+# ssh2 的 .node 原生插件在 try/catch 中加载，wrangler 将其视为数据文件
+[[rules]]
+type = "Data"
+globs = ["**/*.node"]
+fallthrough = true
+
 # 自动构建前端 (CI/CD 中使用)
 # [build]
 # command = "cd frontend && VITE_APP_VERSION=1.6.1 pnpm install --no-frozen-lockfile && VITE_APP_VERSION=1.6.1 pnpm build"
