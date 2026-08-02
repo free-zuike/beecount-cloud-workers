@@ -538,7 +538,9 @@ export async function uploadBackupToRemote(
     let prefix = '';
     if (remoteConfig.savePath) prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
-    const result = await uploadToWebDav(remoteConfig.url!, remoteConfig.username!, remoteConfig.password!, key, backupBytes);
+    const webdavUser = remoteConfig.username || remoteConfig.user;
+    const webdavPass = remoteConfig.password || remoteConfig.pass;
+    const result = await uploadToWebDav(remoteConfig.url!, webdavUser!, webdavPass!, key, backupBytes);
     return result.ok ? { ok: true, message: 'Upload successful', key } : { ok: false, message: result.message };
   }
 
@@ -893,8 +895,8 @@ export async function performBackup(
       };
     } else if (remoteConfig.backend_type === 'webdav') {
       const webdavUrl = remoteConfig.url;
-      const webdavUsername = remoteConfig.username;
-      const webdavPassword = remoteConfig.password;
+      const webdavUsername = remoteConfig.username || remoteConfig.user;
+      const webdavPassword = remoteConfig.password || remoteConfig.pass;
 
       if (!webdavUrl || !webdavUsername || !webdavPassword) {
         return { success: false, message: 'WebDAV configuration incomplete (url, username, password required)' };
@@ -980,8 +982,8 @@ export async function performBackup(
     } else if (remoteConfig.backend_type === 'ftp') {
       const ftpHost = remoteConfig.host || remoteConfig.hostname;
       const ftpPort = parseInt(remoteConfig.port || '21', 10);
-      const ftpUser = remoteConfig.username;
-      const ftpPass = remoteConfig.password;
+      const ftpUser = remoteConfig.username || remoteConfig.user;
+      const ftpPass = remoteConfig.password || remoteConfig.pass;
 
       if (!ftpHost || !ftpUser || !ftpPass) {
         return { success: false, message: 'FTP configuration incomplete (host, username, password required)' };
@@ -1018,9 +1020,9 @@ export async function performBackup(
     } else if (remoteConfig.backend_type === 'sftp') {
       const sftpHost = remoteConfig.host || remoteConfig.hostname;
       const sftpPort = parseInt(remoteConfig.port || '22', 10);
-      const sftpUsername = remoteConfig.username;
-      const sftpPassword = remoteConfig.password;
-      const sftpKey = remoteConfig.private_key || remoteConfig.privateKey;
+      const sftpUsername = remoteConfig.username || remoteConfig.user;
+      const sftpPassword = remoteConfig.password || remoteConfig.pass;
+      const sftpKey = remoteConfig.private_key || remoteConfig.privateKey || remoteConfig.key_file;
 
       if (!sftpHost || !sftpUsername) {
         return { success: false, message: 'SFTP configuration incomplete (host, username required)' };
