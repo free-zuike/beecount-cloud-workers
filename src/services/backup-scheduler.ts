@@ -29,6 +29,7 @@ async function broadcastProgress(
   beeCountDO: DurableObjectNamespace | undefined,
   userId: string,
   event: Record<string, unknown>,
+  type: string = 'backup_status',
 ): Promise<void> {
   if (!beeCountDO) return;
   try {
@@ -37,7 +38,7 @@ async function broadcastProgress(
     await stub.fetch(new URL('/broadcast', 'http://do'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: JSON.stringify({ type: 'backup_status', ...event }) }),
+      body: JSON.stringify({ message: JSON.stringify({ type, ...event }) }),
     });
   } catch { /* non-critical */ }
 }
@@ -179,7 +180,7 @@ export async function processBackupSchedule(
     // 广播开始事件（对齐原版 on_progress）
     await broadcastProgress(beeCountDO, schedule.user_id, {
       status: 'running', runId, scheduleId: schedule.id,
-    });
+    }, 'backup_progress');
 
     try {
       console.log(`[CRON] Starting backup for schedule ${schedule.id}, run ${runId}...`);
