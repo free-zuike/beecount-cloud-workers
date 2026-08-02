@@ -108,9 +108,12 @@ export async function processBackupSchedule(
     }
 
     const now = new Date();
-    const nextRunAt = schedule.next_run_at ? new Date(schedule.next_run_at) : null;
+    // 直接查询数据库获取 next_run_at，避免 Row 对象属性访问问题
+    const scheduleRow = await db.prepare('SELECT next_run_at FROM backup_schedules WHERE id = ?')
+      .bind(schedule.id).first<{ next_run_at: string }>();
+    const nextRunAt = scheduleRow?.next_run_at ? new Date(scheduleRow.next_run_at) : null;
     if (nextRunAt && now < nextRunAt) {
-      console.log(`[CRON] Schedule ${schedule.id} not due yet. Next run: ${schedule.next_run_at}`);
+      console.log(`[CRON] Schedule ${schedule.id} not due yet. Next run: ${scheduleRow?.next_run_at}`);
       return;
     }
 
