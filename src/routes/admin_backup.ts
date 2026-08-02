@@ -708,6 +708,10 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
   // 只有当 config 有变化时才更新 config_summary 字段
   const originalConfig = safeParseConfig(remote.config_summary)
   const configHasChanged = JSON.stringify(configToSave) !== JSON.stringify(originalConfig);
+
+  const updates: string[] = ['name = ?', 'updated_at = ?'];
+  const params: (string | number)[] = [req.name || remote.name, serverNow];
+
   if (configHasChanged) {
     updates.push('config_summary = ?');
     params.push(JSON.stringify(configToSave));
@@ -909,8 +913,8 @@ backupRouter.post('/remotes/:id/test', async (c) => {
 
       case 'webdav':
         const webdavUrl = config.url;
-        const webdavUsername = config.username;
-        const webdavPassword = config.password;
+        const webdavUsername = config.username || config.user;
+        const webdavPassword = config.password || config.pass;
         
         if (!webdavUrl) {
           testResult.ok = false;
@@ -1082,8 +1086,8 @@ backupRouter.post('/remotes/test', zValidator('json', RemoteTestSchema), async (
 
       case 'webdav':
         const webdavUrl = config.url;
-        const webdavUsername = config.username;
-        const webdavPassword = config.password;
+        const webdavUsername = config.username || config.user;
+        const webdavPassword = config.password || config.pass;
         
         if (!webdavUrl) {
           testResult.ok = false;
