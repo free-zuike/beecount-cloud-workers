@@ -598,7 +598,12 @@ export async function performBackupFanOut(
     if (pw) {
       try {
         // 将文件直接添加到 ZIP（对齐原版 tar_builder.py build_encrypted_zip）
-        backupBytes = await createEncryptedZip(generated.entries, pw);
+        // 添加超时防止 @zip.js/zip.js 在 Workers 中挂起
+        const zipPromise = createEncryptedZip(generated.entries, pw);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('encryption timeout')), 15000)
+        );
+        backupBytes = await Promise.race([zipPromise, timeoutPromise]);
         encrypted = true;
         logWrap(`[Backup] Encrypted (AES-256 ZIP): ${backupBytes.length} bytes`);
       } catch (e) {
@@ -806,10 +811,14 @@ export async function performBackup(
       if (encryptionPassword) {
         try {
           log('[Backup] Encrypting backup with AES-256 ZIP...');
-          backupBytes = await createEncryptedZip(
+          const zipPromise = createEncryptedZip(
             [{ name: 'backup.tar.gz', data: backupBytes }],
             encryptionPassword
           );
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('encryption timeout')), 15000)
+          );
+          backupBytes = await Promise.race([zipPromise, timeoutPromise]);
           encrypted = true;
           log(`[Backup] Backup encrypted: ${backupBytes.length} bytes`);
         } catch (encryptErr) {
