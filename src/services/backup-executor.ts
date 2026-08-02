@@ -124,6 +124,7 @@ export interface BackupResult {
   message: string;
   backupSize?: number;
   backupPath?: string;
+  attachmentsUploaded?: number;
 }
 
 // ===========================
@@ -593,6 +594,7 @@ export async function performBackupFanOut(
   let encrypted = false;
   if (shouldEncrypt && remoteConfigs.length > 0) {
     const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.zipryption_password;
+    logWrap(`[Backup] Encryption: shouldEncrypt=${shouldEncrypt}, hasPw=${!!pw}, pwLen=${pw?.length}`);
     if (pw) {
       try {
         // 将文件直接添加到 ZIP（对齐原版 tar_builder.py build_encrypted_zip）
@@ -620,12 +622,15 @@ export async function performBackupFanOut(
   const successful = uploadResults.filter(r => r.status === 'fulfilled' && r.value.ok);
   const failed = uploadResults.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok));
 
-  // 4. 保存到 R2（第一个成功的路径）
+  // 4. 保存到 R2（取第一个有 key 的成功路径）
   let backupPath: string | null = null;
   if (r2 && successful.length > 0) {
-    const successResult = (successful[0] as PromiseFulfilledResult<{ remoteId: string; ok: boolean; message: string; key?: string }>).value;
-    if (successResult.key) {
-      backupPath = successResult.key;
+    for (const result of successful) {
+      const successResult = (result as PromiseFulfilledResult<{ remoteId: string; ok: boolean; message: string; key?: string }>).value;
+      if (successResult.key) {
+        backupPath = successResult.key;
+        break;
+      }
     }
   }
 
