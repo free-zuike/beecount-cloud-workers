@@ -43,7 +43,12 @@ function apiValidator<T extends z.ZodTypeAny>(target: 'json' | 'query' | 'form',
   return zValidator(target, schema, (result, c) => {
     if (result.success) return;
     return c.json({
-      detail: result.error.issues.map(i => ({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Request validation failed',
+      },
+      detail: 'Request validation failed',
+      validation: result.error.issues.map(i => ({
         loc: ['body', ...i.path.map(p => String(p))],
         msg: i.message,
         type: 'value_error',
