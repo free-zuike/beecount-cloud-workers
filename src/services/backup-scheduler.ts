@@ -109,7 +109,6 @@ export async function processBackupSchedule(
 
     const now = new Date();
     const nextRunAt = schedule.next_run_at ? new Date(schedule.next_run_at) : null;
-    console.log(`[CRON] Schedule ${schedule.id}: next_run_at=${schedule.next_run_at}, now=${now.toISOString()}, due=${!nextRunAt || now >= nextRunAt}`);
     if (nextRunAt && now < nextRunAt) {
       console.log(`[CRON] Schedule ${schedule.id} not due yet. Next run: ${schedule.next_run_at}`);
       return;
