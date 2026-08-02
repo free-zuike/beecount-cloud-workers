@@ -71,6 +71,7 @@ class SftpClient {
   private async sendRaw(data: string | Uint8Array): Promise<void> {
     const writer = this.socket.writable.getWriter();
     await writer.write(typeof data === 'string' ? new TextEncoder().encode(data) : data);
+    writer.releaseLock();
   }
 
   private async sftpConnect(remotePath?: string): Promise<boolean> {
