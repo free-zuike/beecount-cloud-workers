@@ -273,14 +273,14 @@ const RemoteCreateSchema = z.object({
   backend_type: z.string().min(1).max(32),
   config: z.record(z.any()),
   encrypted: z.boolean().optional(),
-  age_passphrase: z.string().optional(),
+  age_passphrase: z.string().optional().nullable(),
 });
 
 const RemoteUpdateSchema = z.object({
   name: z.string().min(1).max(64).optional(),
   config: z.record(z.string()).optional(),
   encrypted: z.boolean().optional(),
-  age_passphrase: z.string().optional(),
+  age_passphrase: z.string().optional().nullable(),
 });
 
 const RemoteTestSchema = z.object({
