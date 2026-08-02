@@ -1531,10 +1531,10 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
   const runInsertResult = await db
     .prepare(
-      `INSERT INTO backup_runs (schedule_id, user_id, ledger_id, remote_id, status, started_at)
-       VALUES (?, ?, ?, ?, 'running', ?)`
+      `INSERT INTO backup_runs (user_id, ledger_id, remote_id, status, started_at)
+       VALUES (?, ?, ?, 'running', ?)`
     )
-    .bind(scheduleId, schedule.user_id, ledgerId || '', remoteId, serverNow)
+    .bind(schedule.user_id, ledgerId || '', remoteId, serverNow)
     .run();
 
   const runId = runInsertResult.meta.last_row_id as number;
