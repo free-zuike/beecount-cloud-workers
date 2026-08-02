@@ -953,8 +953,8 @@ backupRouter.post('/remotes/:id/test', async (c) => {
       case 'ftp':
         const ftpHost = config.host || config.hostname;
         const ftpPort = parseInt(config.port || '21', 10);
-        const ftpUsername = config.username;
-        const ftpPassword = config.password;
+        const ftpUsername = config.username || config.user;
+        const ftpPassword = config.password || config.pass;
 
         if (!ftpHost) {
           testResult.ok = false;
@@ -1007,8 +1007,8 @@ backupRouter.post('/remotes/:id/test', async (c) => {
       case 'sftp':
         const sftpHost = config.host || config.hostname;
         const sftpPort = parseInt(config.port || '22', 10);
-        const sftpUsername = config.username;
-        const sftpPassword = config.password;
+        const sftpUsername = config.username || config.user;
+        const sftpPassword = config.password || config.pass;
 
         if (!sftpHost) {
           testResult.ok = false;
