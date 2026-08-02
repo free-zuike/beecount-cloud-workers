@@ -2306,7 +2306,10 @@ writeRouter.put('/exchange-rate-overrides', zValidator('json', ExchangeRateSchem
   const { base_currency, quote_currency, rate } = c.req.valid('json');
   const serverNow = nowUtc();
 
-  const syncId = randomUUID();
+  // 与原版一致：更新时复用现有 sync_id，新建时生成新 UUID
+  const existingPair = await db.prepare('SELECT sync_id FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
+    .bind(userId, base_currency, quote_currency).first<{ sync_id: string }>();
+  const syncId = existingPair?.sync_id || randomUUID();
   const result = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
     VALUES (?, NULL, 'exchange_rate_override', ?, 'upsert', ?, ?, ?, 'user')`)
     .bind(userId, syncId, JSON.stringify({ syncId, baseCurrency: base_currency, quoteCurrency: quote_currency, rate: String(rate), updatedAt: serverNow }), serverNow, userId).run();
