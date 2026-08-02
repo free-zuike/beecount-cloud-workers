@@ -1636,9 +1636,26 @@ async function applyUserChangeToProjection(
     }
   } else if (entity_type === 'exchange_rate_override') {
     if (change.action === 'delete') {
-      // 与原版 _delete_user_exchange_rate_override 一致：按 sync_id 删除
-      await db.prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND sync_id = ?')
+      // 先按 sync_id 删除（与原版 _delete_user_exchange_rate_override 一致）
+      const result = await db.prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND sync_id = ?')
         .bind(userId, entity_sync_id).run();
+      // 如果 sync_id 不匹配（App 端 syncId 未同步），按币对回退删除
+      if (result.meta.changes === 0) {
+        const prev = await db.prepare(
+          `SELECT payload_json FROM sync_changes WHERE user_id = ? AND entity_type = 'exchange_rate_override' AND entity_sync_id = ? AND action = 'upsert' ORDER BY change_id DESC LIMIT 1`
+        ).bind(userId, entity_sync_id).first<{ payload_json: string }>();
+        if (prev) {
+          try {
+            const p = JSON.parse(prev.payload_json);
+            const base = (p as any).baseCurrency ?? '';
+            const quote = (p as any).quoteCurrency ?? '';
+            if (base && quote) {
+              await db.prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
+                .bind(userId, base, quote).run();
+            }
+          } catch {}
+        }
+      }
     } else {
       const payload = change.payload;
       const baseCurrency = (payload as any).baseCurrency ?? '';
