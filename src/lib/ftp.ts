@@ -23,6 +23,7 @@ class FtpClient {
     const writer = socket.writable.getWriter();
     const encoder = new TextEncoder();
     await writer.write(encoder.encode(command + '\r\n'));
+    writer.releaseLock();
 
     const reader = socket.readable.getReader();
     const decoder = new TextDecoder();
