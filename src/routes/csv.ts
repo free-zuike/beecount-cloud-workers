@@ -287,14 +287,15 @@ csvRouter.get('/workspace/transactions.csv', zValidator('query', ExportQuerySche
     : `${periodFrom}_${periodTo}`;
   const filename = `beecount-${primaryName}-${periodSegment}.csv`;
 
-  // 简单 ASCII fallback（与原版对齐：非 ASCII 替换为 _）
+  // 简单 ASCII fallback + UTF-8 编码（与原版对齐）
   const asciiFilename = filename.replace(/[^\x20-\x7e]/g, '_');
+  const encodedFilename = encodeURIComponent(filename);
 
   return new Response(csvContent, {
     status: 200,
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="${asciiFilename}"`,
+      'Content-Disposition': `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodedFilename}`,
       'Cache-Control': 'no-store',
     },
   });
