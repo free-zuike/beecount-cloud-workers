@@ -37,6 +37,22 @@ import { performBackup, performBackupFanOut, calculateNextRun, validateCronExpre
 import { insertAuditLog } from '../lib/audit';
 
 /**
+ * 带 FastAPI 兼容错误格式的 zValidator 包装
+ */
+function apiValidator<T extends z.ZodTypeAny>(target: 'json' | 'query' | 'form', schema: T) {
+  return zValidator(target, schema, (result, c) => {
+    if (result.success) return;
+    return c.json({
+      detail: result.error.issues.map(i => ({
+        loc: ['body', ...i.path.map(p => String(p))],
+        msg: i.message,
+        type: 'value_error',
+      })),
+    }, 422);
+  });
+}
+
+/**
  * 安全解析 config_summary，兼容旧的非 JSON 格式（如 {key:value}）
  */
 function safeParseConfig(summary: string | null | undefined): Record<string, any> {
@@ -631,7 +647,7 @@ backupRouter.get('/remotes', async (c) => {
 /**
  * 创建备份远程配置
  */
-backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) => {
+backupRouter.post('/remotes', apiValidator('json', RemoteCreateSchema), async (c) => {
   const db = c.env.DB;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
@@ -673,7 +689,7 @@ backupRouter.post('/remotes', zValidator('json', RemoteCreateSchema), async (c) 
 /**
  * 更新备份远程配置
  */
-backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async (c) => {
+backupRouter.patch('/remotes/:id', apiValidator('json', RemoteUpdateSchema), async (c) => {
   const db = c.env.DB;
   const remoteId = c.req.param('id');
   const req = c.req.valid('json');
@@ -1046,7 +1062,7 @@ backupRouter.post('/remotes/:id/test', async (c) => {
 /**
  * 测试备份远程配置连通性
  */
-backupRouter.post('/remotes/test', zValidator('json', RemoteTestSchema), async (c) => {
+backupRouter.post('/remotes/test', apiValidator('json', RemoteTestSchema), async (c) => {
   const req = c.req.valid('json');
   const backendType = req.backend_type;
   const config = req.config;
