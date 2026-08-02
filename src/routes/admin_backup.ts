@@ -1563,7 +1563,9 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
       logFn(`backup start, run=${runId} label=${serverNow.replace(/[:.]/g, '').slice(0, 15)} remotes=['${remoteId || 'local'}']`);
 
-      const backupResult = await performBackupFanOut(db, runId, schedule.user_id, ledgerId || 'global', remoteConfigs, shouldEncrypt, c.env.R2, logFn, schedule.retention_days ?? undefined);
+      const backupResult = await performBackupFanOut(db, runId, schedule.user_id, ledgerId || 'global', remoteConfigs, shouldEncrypt, c.env.R2, logFn, schedule.retention_days ?? undefined, (phase) => {
+        broadcastViaDO(c.env, schedule.user_id, { type: 'backup_progress', phase, runId }).catch(() => {});
+      });
       const finishedAt = new Date().toISOString();
       const finalStatus = backupResult.success ? 'succeeded' : 'failed';
 
@@ -1808,7 +1810,9 @@ backupRouter.post('/run-now', zValidator('json', RunNowSchema), async (c) => {
     const logLines: string[] = [];
     const logFn = (msg: string) => { logLines.push(`[${new Date().toISOString()}] ${msg}`); };
     try {
-      const backupResult = await performBackupFanOut(db, runId, userId, ledger.id, remoteConfigs, shouldEncrypt, c.env.R2, logFn);
+      const backupResult = await performBackupFanOut(db, runId, userId, ledger.id, remoteConfigs, shouldEncrypt, c.env.R2, logFn, undefined, (phase) => {
+        broadcastViaDO(c.env, userId, { type: 'backup_progress', phase, runId }).catch(() => {});
+      });
       const finishedAt = new Date().toISOString();
       const finalStatus = backupResult.success ? 'succeeded' : 'failed';
 

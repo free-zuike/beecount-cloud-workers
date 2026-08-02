@@ -184,7 +184,9 @@ export async function processBackupSchedule(
 
     try {
       console.log(`[CRON] Starting backup for schedule ${schedule.id}, run ${runId}...`);
-      const backupResult = await performBackupFanOut(db, runId!, schedule.user_id, ledger.id, remoteConfigs, shouldEncrypt, r2, logFn, schedule.retention_days ?? undefined);
+      const backupResult = await performBackupFanOut(db, runId!, schedule.user_id, ledger.id, remoteConfigs, shouldEncrypt, r2, logFn, schedule.retention_days ?? undefined, (phase) => {
+        broadcastProgress(beeCountDO, schedule.user_id, { phase, runId, scheduleId: schedule.id }, 'backup_progress').catch(() => {});
+      });
       const finishedAt = new Date().toISOString();
 
       console.log(`[CRON] Backup result: success=${backupResult.success}, size=${backupResult.backupSize}, path=${backupResult.backupPath}`);

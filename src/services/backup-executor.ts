@@ -580,14 +580,20 @@ export async function performBackupFanOut(
   r2?: R2Bucket,
   logFn?: (msg: string) => void,
   retentionDays?: number,
+  progressFn?: (phase: string, meta?: Record<string, unknown>) => void,
 ): Promise<BackupResult> {
   const log = logFn || console.log;
   const logLines: string[] = [];
   const logWrap = (msg: string) => { log(msg); logLines.push(`[${new Date().toISOString()}] ${msg}`); };
 
+  progressFn?.('starting');
+
   // 1. 生成一次备份字节
   const generated = await generateBackupBytes(db, userId, ledgerId, r2, logFn);
   logLines.push(...generated.logLines);
+  progressFn?.('snapshot_db');
+  progressFn?.('snapshot_attachments');
+  progressFn?.('packing');
 
   // 2. 加密（如果需要）— 对齐原版：直接加密文件到 ZIP，无中间 tar 层
   let backupBytes = generated.backupBytes;
@@ -609,9 +615,11 @@ export async function performBackupFanOut(
   // 3. 并行上传到所有远端（与原版 ThreadPoolExecutor fan-out 对齐）
   const remoteIds = remoteConfigs.map(r => r.remoteId);
   logWrap(`[Backup] Fan-out to ${remoteConfigs.length} remotes: ${remoteIds.join(', ')}`);
+  progressFn?.('fan_out_start');
 
   const uploadResults = await Promise.allSettled(
     remoteConfigs.map(async ({ remoteId, config }) => {
+      progressFn?.('uploading', { remoteId });
       const result = await uploadBackupToRemote(backupBytes, encrypted, config, userId, logWrap);
       logWrap(`[Backup] Remote ${remoteId}: ${result.ok ? 'success' : 'failed'} ${result.message}`);
       return { remoteId, ...result };
