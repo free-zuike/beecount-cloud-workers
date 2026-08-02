@@ -23,7 +23,6 @@ import importRouter from './routes/import_data';
 import aiRouter from './routes/ai';
 import backupRouter from './routes/backup';
 import adminBackupRouter from './routes/admin_backup';
-import notificationsRouter from './routes/notifications';
 import mcpCallsRouter from './routes/mcp_calls';
 import mcpRouter from './routes/mcp';
 import adminRouter from './routes/admin';
@@ -124,7 +123,6 @@ app.use('/import/*', authMiddleware);
 app.use('/api/v1/import/*', authMiddleware);
 app.use('/ai/*', authMiddleware);
 app.use('/backup/*', authMiddleware);
-app.use('/notifications/*', authMiddleware);
 app.use('/sys-config/*', authMiddleware);
 app.use('/export/*', authMiddleware);
 
@@ -144,7 +142,6 @@ app.route('/api/v1/attachments', attachmentsRouter);
 app.route('/api/v1/import', importRouter);
 app.route('/api/v1/ai', aiRouter);
 app.route('/api/v1/backup', backupRouter);
-app.route('/api/v1/notifications', notificationsRouter);
 app.route('/api/v1/mcp-calls', mcpCallsRouter);
 app.route('/api/v1/admin/backup', adminBackupRouter);
 app.route('/api/v1/admin', adminRouter);
@@ -164,7 +161,6 @@ app.route('/attachments', attachmentsRouter);
 app.route('/import', importRouter);
 app.route('/ai', aiRouter);
 app.route('/backup', backupRouter);
-app.route('/notifications', notificationsRouter);
 app.route('/export', csvRouter);
 
 app.onError((err, c) => {
