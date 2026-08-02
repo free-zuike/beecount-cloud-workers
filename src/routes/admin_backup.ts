@@ -36,6 +36,34 @@ import { signS3Request } from '../lib/s3';
 import { performBackup, performBackupFanOut, calculateNextRun, validateCronExpression } from '../services/backup-executor';
 import { insertAuditLog } from '../lib/audit';
 
+/**
+ * 安全解析 config_summary，兼容旧的非 JSON 格式（如 {key:value}）
+ */
+function safeParseConfig(summary: string | null | undefined): Record<string, any> {
+  if (!summary) return {};
+  try {
+    return JSON.parse(summary);
+  } catch {
+    // 兼容旧格式：{key:value,key2:value2} → {"key":"value","key2":"value2"}
+    try {
+      const inner = summary.replace(/^\{|\}$/g, '');
+      const pairs = inner.split(',');
+      const obj: Record<string, string> = {};
+      for (const pair of pairs) {
+        const colonIdx = pair.indexOf(':');
+        if (colonIdx > 0) {
+          const key = pair.slice(0, colonIdx).trim();
+          const val = pair.slice(colonIdx + 1).trim();
+          obj[key] = val;
+        }
+      }
+      return obj;
+    } catch {
+      return {};
+    }
+  }
+}
+
 // ===========================
 // WebDAV 连通性测试
 // ===========================
@@ -371,7 +399,7 @@ backupRouter.get('/rclone-config', async (c) => {
       
       let config: Record<string, string> = {};
       try {
-        config = JSON.parse(row.config_summary || '{}');
+        config = safeParseConfig(row.config_summary);
         // 移除内部字段
         delete config._secrets;
       } catch {}
@@ -518,7 +546,7 @@ backupRouter.get('/remotes', async (c) => {
     const remotes = (rows.results || []).map((row) => {
       let config: Record<string, string> = {};
       try {
-        config = JSON.parse(row.config_summary || '{}');
+        config = safeParseConfig(row.config_summary);
       } catch {}
       const maskedConfig: Record<string, string> = {};
       for (const [key, value] of Object.entries(config)) {
@@ -567,7 +595,7 @@ backupRouter.get('/remotes', async (c) => {
       const remotes = (rows.results || []).map((row) => {
         let config: Record<string, string> = {};
         try {
-          config = JSON.parse(row.config_summary || '{}');
+          config = safeParseConfig(row.config_summary);
         } catch {}
         const maskedConfig: Record<string, string> = {};
         for (const [key, value] of Object.entries(config)) {
@@ -664,7 +692,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
   if (req.config !== undefined) {
     configToSave = { ...req.config };
   } else {
-    configToSave = JSON.parse(remote.config_summary || '{}');
+    configToSave = safeParseConfig(remote.config_summary);
     // 如果是 R2 类型且含有 bucket 字段，删除它（R2 从 binding 获取）
     if (remote.backend_type === 'r2' && configToSave.bucket) {
       delete configToSave.bucket;
@@ -678,7 +706,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
   }
   
   // 只有当 config 有变化时才更新 config_summary 字段
-  const originalConfig = remote.config_summary ? JSON.parse(remote.config_summary) : {};
+  const originalConfig = safeParseConfig(remote.config_summary)
   const configHasChanged = JSON.stringify(configToSave) !== JSON.stringify(originalConfig);
   if (configHasChanged) {
     updates.push('config_summary = ?');
@@ -717,7 +745,7 @@ backupRouter.patch('/remotes/:id', zValidator('json', RemoteUpdateSchema), async
     id: updated ? String(updated.id) : '',
     name: updated?.name,
     backend_type: updated?.backend_type,
-    config: updated?.config_summary ? JSON.parse(updated.config_summary) : {},
+    config: updated?.config_summary ? safeParseConfig(updated.config_summary) : {},
     encrypted: Boolean(updated?.encrypted),
     created_at: updated?.created_at,
     updated_at: updated?.updated_at,
@@ -791,7 +819,7 @@ backupRouter.get('/remotes/:id/reveal', async (c) => {
     id: String(remote.id),
     name: remote.name,
     backend_type: remote.backend_type,
-    config: JSON.parse(remote.config_summary || '{}'),
+    config: safeParseConfig(remote.config_summary),
     encrypted: Boolean(remote.encrypted),
     created_at: remote.created_at,
     updated_at: remote.updated_at,
@@ -822,7 +850,7 @@ backupRouter.post('/remotes/:id/test', async (c) => {
     return c.json({ error: 'Remote not found' }, 404);
   }
 
-  const config = JSON.parse(remote.config_summary || '{}');
+  const config = safeParseConfig(remote.config_summary);
 
   try {
     let testResult = {
@@ -1464,7 +1492,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
           .first<{ backend_type: string; config_summary: string; encrypted: number }>();
 
         if (remote) {
-          const parsedConfig = JSON.parse(remote.config_summary || '{}');
+          const parsedConfig = safeParseConfig(remote.config_summary);
           // 补充 R2 Bucket 绑定
           if (remote.backend_type === 'r2' && c.env.R2) {
             parsedConfig._r2Bucket = c.env.R2;
@@ -1746,7 +1774,7 @@ backupRouter.post('/run-now', zValidator('json', RunNowSchema), async (c) => {
       .bind(req.remote_id)
       .first<{ backend_type: string; config_summary: string; encrypted: number }>();
     if (remote) {
-      const parsedConfig = JSON.parse(remote.config_summary || '{}');
+      const parsedConfig = safeParseConfig(remote.config_summary);
       if (remote.backend_type === 'r2' && c.env.R2) parsedConfig._r2Bucket = c.env.R2;
       remoteConfigs.push({ remoteId: req.remote_id, config: { backend_type: remote.backend_type, ...parsedConfig, _encrypted: String(remote.encrypted) } });
     }
@@ -1756,7 +1784,7 @@ backupRouter.post('/run-now', zValidator('json', RunNowSchema), async (c) => {
       .prepare('SELECT id, backend_type, config_summary, encrypted FROM backup_remotes')
       .all<{ id: string; backend_type: string; config_summary: string; encrypted: number }>();
     for (const remote of allRemotes.results || []) {
-      const parsedConfig = JSON.parse(remote.config_summary || '{}');
+      const parsedConfig = safeParseConfig(remote.config_summary);
       if (remote.backend_type === 'r2' && c.env.R2) parsedConfig._r2Bucket = c.env.R2;
       remoteConfigs.push({ remoteId: remote.id, config: { backend_type: remote.backend_type, ...parsedConfig, _encrypted: String(remote.encrypted) } });
     }
@@ -2106,7 +2134,7 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
            WHERE t.run_id = ? AND t.status = 'succeeded' LIMIT 1`
         ).bind(runId).first<{ remote_id: number; config_summary: string }>();
         if (target?.config_summary) {
-          const config = JSON.parse(target.config_summary);
+          const config = safeParseConfig(target.config_summary);
           password = config.age_passphrase || config.zipryption_password;
         }
       } catch {}

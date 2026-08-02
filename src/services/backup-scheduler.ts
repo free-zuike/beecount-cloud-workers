@@ -139,7 +139,7 @@ export async function processBackupSchedule(
           const remote = await db.prepare('SELECT backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?')
             .bind(remoteId).first<{ backend_type: string; config_summary: string; encrypted: number }>();
           if (remote) {
-            const parsedConfig = JSON.parse(remote.config_summary || '{}');
+            const parsedConfig = (() => { try { return JSON.parse(remote.config_summary || '{}'); } catch { return {}; } })();
             remoteConfig = { backend_type: remote.backend_type, ...parsedConfig,
               savePath: parsedConfig.root_path ? parsedConfig.root_path.replace(/^\/+|\/+$/g, '') : 'custom' };
             shouldEncrypt = remote.encrypted === 1;

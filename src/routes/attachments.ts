@@ -70,7 +70,7 @@ class S3Service {
                 .first<{ config_summary: string }>();
 
             if (backupRemote && backupRemote.config_summary) {
-                const config = JSON.parse(backupRemote.config_summary);
+                const config = (() => { try { return JSON.parse(backupRemote.config_summary); } catch { return {}; } })();
                 if (config.access_key_id && config.secret_access_key && config.bucket) {
                     const backupConfig = {
                         id: 'backup_remote',
