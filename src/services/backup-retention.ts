@@ -9,7 +9,7 @@
  *   - 老格式: 20260612-040000Z.tar.gz / 20260612-040000Z.tar.gz.age
  */
 
-const TAR_NAME_RE = /^(\d{8})-(\d{6})(Z?)(?:\.zip|\.tar\.gz(?:\.age)?)$/;
+const TAR_NAME_RE = /^(\d{14})_backup(?:\.zip|\.tar\.gz(?:\.age)?)$/;
 
 export interface RemoteFile {
   name: string;
@@ -20,24 +20,20 @@ export interface RemoteFile {
  * 解析备份文件名中的时间戳
  */
 export function parseBackupFilename(name: string): Date | null {
-  const m = TAR_NAME_RE.exec(name);
+  // 只取文件名部分（去掉路径前缀）
+  const basename = name.split('/').pop() || name;
+  const m = TAR_NAME_RE.exec(basename);
   if (!m) return null;
-  const dateStr = m[1]; // YYYYMMDD
-  const timeStr = m[2]; // HHMMSS
-  const hasZ = m[3] === 'Z';
+  const dateStr = m[1]; // YYYYMMDDHHMMSS (14 digits)
 
   const year = parseInt(dateStr.slice(0, 4), 10);
   const month = parseInt(dateStr.slice(4, 6), 10) - 1;
   const day = parseInt(dateStr.slice(6, 8), 10);
-  const hour = parseInt(timeStr.slice(0, 2), 10);
-  const min = parseInt(timeStr.slice(2, 4), 10);
-  const sec = parseInt(timeStr.slice(4, 6), 10);
+  const hour = parseInt(dateStr.slice(8, 10), 10);
+  const min = parseInt(dateStr.slice(10, 12), 10);
+  const sec = parseInt(dateStr.slice(12, 14), 10);
 
-  if (hasZ) {
-    // 带 Z 后缀: UTC 时间
-    return new Date(Date.UTC(year, month, day, hour, min, sec));
-  }
-  // 无 Z 后缀: 本地时间，当作 UTC 处理（与原版对齐）
+  // TS 版使用 UTC+8 本地时间生成时间戳，当作 UTC 处理
   return new Date(Date.UTC(year, month, day, hour, min, sec));
 }
 
