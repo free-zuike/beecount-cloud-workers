@@ -1,8 +1,11 @@
 /**
- * SFTP 客户端 - 基于 Cloudflare Workers TCP Sockets
- * 实现 SSH2 连接和 SFTP 文件上传
+ * SFTP 客户端 - 基于 ssh2 库 + Cloudflare Workers TCP Sockets
+ * 参考 tafeng (https://github.com/619dev/tafeng) 的架构实现
  */
 import { connect } from 'cloudflare:sockets';
+import { Client } from 'ssh2';
+import { Duplex } from 'stream';
+import { Buffer } from 'buffer';
 
 export interface SftpConfig {
   host: string;
@@ -12,241 +15,167 @@ export interface SftpConfig {
   privateKey?: string;
 }
 
-const SSH_MSG_DISCONNECT = 1;
-const SSH_MSG_SERVICE_REQUEST = 5;
-const SSH_MSG_SERVICE_ACCEPT = 6;
-const SSH_MSG_USERAUTH_REQUEST = 50;
-const SSH_MSG_USERAUTH_SUCCESS = 52;
-const SSH_MSG_CHANNEL_OPEN = 90;
-const SSH_MSG_CHANNEL_OPEN_CONFIRMATION = 91;
-const SSH_MSG_CHANNEL_REQUEST = 98;
-const SSH_MSG_CHANNEL_SUCCESS = 99;
-const SFTP_INIT = 1;
-const SFTP_VERSION = 3;
+class CloudflareSocketDuplex extends Duplex {
+  private reader: ReadableStreamDefaultReader<Uint8Array>;
+  private writer: WritableStreamDefaultWriter<Uint8Array>;
+  private destroyedByClose = false;
 
-class SshPacket {
-  private buffer: number[] = [];
-  writeUint32(v: number) { this.buffer.push((v >> 24) & 0xff, (v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff); }
-  writeByte(v: number) { this.buffer.push(v & 0xff); }
-  writeString(s: string) { const b = new TextEncoder().encode(s); this.writeUint32(b.length); this.buffer.push(...b); }
-  writeBytes(data: Uint8Array) { this.writeUint32(data.length); this.buffer.push(...data); }
-  toBuffer(): Uint8Array {
-    const payload = new Uint8Array(this.buffer);
-    const len = new Uint8Array(4);
-    len[0] = (payload.length >> 24) & 0xff; len[1] = (payload.length >> 16) & 0xff;
-    len[2] = (payload.length >> 8) & 0xff; len[3] = payload.length & 0xff;
-    const r = new Uint8Array(4 + payload.length); r.set(len, 0); r.set(payload, 4); return r;
+  constructor(tcpSocket: ReturnType<typeof connect>) {
+    super();
+    this.reader = tcpSocket.readable.getReader();
+    this.writer = tcpSocket.writable.getWriter();
+    void this.pump();
   }
-  static fromBuffer(buf: Uint8Array, off = 0): { type: number; data: Uint8Array } {
-    const len = (buf[off] << 24) | (buf[off + 1] << 16) | (buf[off + 2] << 8) | buf[off + 3];
-    return { type: buf[off + 4], data: buf.slice(off + 4, off + 4 + len) };
+
+  _read() {}
+
+  _write(chunk: Buffer | Uint8Array | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void) {
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk, _encoding) : new Uint8Array(chunk);
+    this.writer.write(bytes).then(() => callback(), callback);
   }
-  static readUint32(buf: Uint8Array, off: number): number {
-    return (buf[off] << 24) | (buf[off + 1] << 16) | (buf[off + 2] << 8) | buf[off + 3];
+
+  _final(callback: (error?: Error | null) => void) {
+    this.writer.close().then(() => callback(), callback);
+  }
+
+  _destroy(error: Error | null, callback: (error?: Error | null) => void) {
+    this.destroyedByClose = true;
+    Promise.allSettled([this.reader.cancel(), this.writer.abort(error ?? undefined)])
+      .then(() => callback(error))
+      .catch((closeError) => callback(closeError instanceof Error ? closeError : error));
+  }
+
+  private async pump() {
+    try {
+      while (!this.destroyedByClose) {
+        const { value, done } = await this.reader.read();
+        if (done) break;
+        if (value) this.push(Buffer.from(value));
+      }
+      this.push(null);
+    } catch (err) {
+      if (!this.destroyedByClose) this.destroy(err instanceof Error ? err : new Error(String(err)));
+    }
   }
 }
 
 class SftpClient {
   private config: SftpConfig;
-  private socket: any = null;
-  private channelId = 0;
-  private requestId = 0;
-  private responseBuf = new Uint8Array(0);
+  private conn: Client | null = null;
 
-  constructor(config: SftpConfig) { this.config = config; }
-
-  private async connect(): Promise<void> {
-    this.socket = connect({ hostname: this.config.host, port: this.config.port });
-    await this.socket.opened;
+  constructor(config: SftpConfig) {
+    this.config = config;
   }
 
-  private async readPacket(): Promise<{ type: number; data: Uint8Array }> {
-    const reader = this.socket.readable.getReader();
-    const { value } = await reader.read();
-    reader.releaseLock();
-    this.responseBuf = new Uint8Array([...this.responseBuf, ...value]);
-    return SshPacket.fromBuffer(this.responseBuf, 0);
-  }
+  private async withSftp<T>(fn: (sftp: any) => Promise<T>): Promise<T> {
+    const tcpSocket = connect({ hostname: this.config.host, port: this.config.port });
+    await tcpSocket.opened;
+    const duplex = new CloudflareSocketDuplex(tcpSocket);
+    const conn = new Client();
 
-  private async sendRaw(data: string | Uint8Array): Promise<void> {
-    const writer = this.socket.writable.getWriter();
-    await writer.write(typeof data === 'string' ? new TextEncoder().encode(data) : data);
-    writer.releaseLock();
-  }
+    return new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        conn.end();
+        reject(new Error('SSH connection timeout'));
+      }, 20000);
 
-  private async sftpConnect(remotePath?: string): Promise<boolean> {
-    try {
-      await this.connect();
-      await this.readPacket();
-      await this.sendRaw('SSH-2.0-BeecountSFTP\r\n');
-      await this.readPacket();
-      const svcReq = new SshPacket(); svcReq.writeByte(5); svcReq.writeUint32(0); svcReq.writeString('ssh-userauth');
-      await this.sendRaw(svcReq.toBuffer()); await this.readPacket();
-      const authReq = new SshPacket(); authReq.writeByte(50); authReq.writeUint32(0);
-      authReq.writeString(this.config.username); authReq.writeString('ssh-connection');
-      authReq.writeString('password'); authReq.writeString(this.config.password || '');
-      await this.sendRaw(authReq.toBuffer());
-      if ((await this.readPacket()).type !== 52) { this.socket.close(); return false; }
-      const chOpen = new SshPacket(); chOpen.writeByte(90); chOpen.writeUint32(0);
-      chOpen.writeString('session'); chOpen.writeUint32(0); chOpen.writeUint32(32768);
-      await this.sendRaw(chOpen.toBuffer());
-      if ((await this.readPacket()).type !== 91) { this.socket.close(); return false; }
-      this.channelId = SshPacket.readUint32((await this.readPacket()).data, 0);
-      // 重新读取chResp
-      return true;
-    } catch { this.socket?.close(); return false; }
+      conn.on('ready', () => {
+        conn.sftp((err, sftp) => {
+          if (err) {
+            clearTimeout(timeout);
+            conn.end();
+            reject(err);
+            return;
+          }
+          fn(sftp).then((result) => {
+            clearTimeout(timeout);
+            sftp.end();
+            conn.end();
+            resolve(result);
+          }).catch((err) => {
+            clearTimeout(timeout);
+            sftp.end();
+            conn.end();
+            reject(err);
+          });
+        });
+      });
+
+      conn.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+
+      conn.connect({
+        host: this.config.host,
+        port: this.config.port,
+        sock: duplex,
+        username: this.config.username,
+        password: this.config.password || undefined,
+        privateKey: this.config.privateKey || undefined,
+        readyTimeout: 20000,
+        algorithms: {
+          cipher: ['aes128-ctr', 'aes192-ctr', 'aes256-ctr', 'aes128-cbc', 'aes256-cbc', '3des-cbc'],
+          hmac: ['hmac-sha2-256', 'hmac-sha2-512', 'hmac-sha1'],
+        },
+      });
+    });
   }
 
   async list(dirPath: string): Promise<Array<{ Name: string; Path: string; IsDir: boolean }>> {
-    try {
-      if (!await this.sftpConnect()) return [];
-      // 简化：SFTP 通过 SSH 执行 ls 命令
-      const execReq = new SshPacket(); execReq.writeByte(98); execReq.writeUint32(this.channelId);
-      execReq.writeString('exec'); execReq.writeByte(1); execReq.writeString(`ls -1 "${dirPath || '/'}"`);
-      await this.sendRaw(execReq.toBuffer());
-      await this.readPacket();
-      const reader = this.socket.readable.getReader();
-      let out = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        out += new TextDecoder().decode(value);
-      }
-      reader.releaseLock();
-      this.socket.close();
-      const items: Array<{ Name: string; Path: string; IsDir: boolean }> = [];
-      for (const name of out.split('\n').map(s => s.trim()).filter(Boolean)) {
-        if (name === '.' || name === '..') continue;
-        items.push({ Name: name, Path: dirPath ? `${dirPath}/${name}` : name, IsDir: false });
-      }
-      return items;
-    } catch { this.socket?.close(); return []; }
+    return this.withSftp((sftp) => {
+      return new Promise((resolve, reject) => {
+        sftp.readdir(dirPath || '/', (err: Error | undefined, list: any[]) => {
+          if (err) return reject(err);
+          const items = list.map((item) => {
+            const parentPath = (dirPath || '/').replace(/\/$/, '');
+            return {
+              Name: item.filename,
+              Path: `${parentPath}/${item.filename}`,
+              IsDir: item.attrs?.isDirectory?.() || false,
+            };
+          });
+          resolve(items);
+        });
+      });
+    });
   }
 
   async delete(remotePath: string): Promise<boolean> {
-    try {
-      if (!await this.sftpConnect()) return false;
-      const execReq = new SshPacket(); execReq.writeByte(98); execReq.writeUint32(this.channelId);
-      execReq.writeString('exec'); execReq.writeByte(1); execReq.writeString(`rm "${remotePath}"`);
-      await this.sendRaw(execReq.toBuffer());
-      await this.readPacket();
-      this.socket.close();
-      return true;
-    } catch { this.socket?.close(); return false; }
+    return this.withSftp((sftp) => {
+      return new Promise((resolve, reject) => {
+        sftp.unlink(remotePath, (err: Error | undefined) => {
+          if (err) return reject(err);
+          resolve(true);
+        });
+      });
+    });
   }
 
   async upload(remotePath: string, data: Uint8Array): Promise<boolean> {
-    try {
-      await this.connect();
-      await this.readPacket();
-      await this.sendRaw('SSH-2.0-BeecountSFTP\r\n');
-      const ver = await this.readPacket();
-
-      const svcReq = new SshPacket();
-      svcReq.writeByte(5); svcReq.writeUint32(0); svcReq.writeString('ssh-userauth');
-      await this.sendRaw(svcReq.toBuffer());
-      await this.readPacket();
-
-      const authReq = new SshPacket();
-      authReq.writeByte(50); authReq.writeUint32(0);
-      authReq.writeString(this.config.username);
-      authReq.writeString('ssh-connection');
-      authReq.writeString('password');
-      authReq.writeString(this.config.password || '');
-      await this.sendRaw(authReq.toBuffer());
-      const authResp = await this.readPacket();
-      if (authResp.type !== 52) { this.socket.close(); return false; }
-
-      const chOpen = new SshPacket();
-      chOpen.writeByte(90); chOpen.writeUint32(0); chOpen.writeString('session');
-      chOpen.writeUint32(0); chOpen.writeUint32(32768);
-      await this.sendRaw(chOpen.toBuffer());
-      const chResp = await this.readPacket();
-      if (chResp.type !== 91) { this.socket.close(); return false; }
-      this.channelId = SshPacket.readUint32(chResp.data, 0);
-
-      const sftpReq = new SshPacket();
-      sftpReq.writeByte(98); sftpReq.writeUint32(this.channelId);
-      sftpReq.writeString('subsystem'); sftpReq.writeByte(1); sftpReq.writeString('sftp');
-      await this.sendRaw(sftpReq.toBuffer());
-      await this.readPacket();
-
-      const sftpInit = new SshPacket();
-      sftpInit.writeByte(SFTP_INIT); sftpInit.writeUint32(SFTP_VERSION);
-      const chData = new SshPacket();
-      chData.writeByte(94); chData.writeUint32(this.channelId);
-      chData.writeBytes(sftpInit.toBuffer());
-      await this.sendRaw(chData.toBuffer());
-      await this.readPacket();
-
-      const dir = remotePath.substring(0, remotePath.lastIndexOf('/')) || '/';
-      if (dir !== '/') {
-        const mkReq = new SshPacket();
-        mkReq.writeByte(94); mkReq.writeUint32(this.channelId);
-        const mkSftp = new SshPacket();
-        mkSftp.writeByte(8); mkSftp.writeUint32(++this.requestId);
-        mkSftp.writeString(dir); mkSftp.writeUint32(0);
-        mkReq.writeBytes(mkSftp.toBuffer());
-        await this.sendRaw(mkReq.toBuffer());
-        await this.readPacket();
-      }
-
-      const openId = ++this.requestId;
-      const openPkt = new SshPacket();
-      openPkt.writeByte(94); openPkt.writeUint32(this.channelId);
-      const openSftp = new SshPacket();
-      openSftp.writeByte(3); openSftp.writeUint32(openId);
-      openSftp.writeString(remotePath); openSftp.writeUint32(2); openSftp.writeUint32(0);
-      openPkt.writeBytes(openSftp.toBuffer());
-      await this.sendRaw(openPkt.toBuffer());
-      const openResp = await this.readPacket();
-
-      const wrtId = ++this.requestId;
-      const wrtPkt = new SshPacket();
-      wrtPkt.writeByte(94); wrtPkt.writeUint32(this.channelId);
-      const wrtSftp = new SshPacket();
-      wrtSftp.writeByte(6); wrtSftp.writeUint32(wrtId);
-      wrtSftp.writeBytes(openResp.data.slice(5));
-      wrtSftp.writeUint32(0); wrtSftp.writeBytes(data);
-      wrtPkt.writeBytes(wrtSftp.toBuffer());
-      await this.sendRaw(wrtPkt.toBuffer());
-      await this.readPacket();
-
-      await this.sendRaw(new Uint8Array([1, 0, 0, 0, 0]));
-      this.socket.close();
-      return true;
-    } catch (e) {
-      console.error('[SFTP] Upload error:', e);
-      this.socket?.close();
-      return false;
-    }
+    return this.withSftp((sftp) => {
+      return new Promise((resolve, reject) => {
+        sftp.writeFile(remotePath, Buffer.from(data), (err: Error | undefined) => {
+          if (err) return reject(err);
+          resolve(true);
+        });
+      });
+    });
   }
 
   async test(): Promise<{ success: boolean; message: string }> {
     try {
-      await this.connect();
-      await this.readPacket();
-      await this.sendRaw('SSH-2.0-BeecountSFTP\r\n');
-      await this.readPacket();
-      const svcReq = new SshPacket();
-      svcReq.writeByte(5); svcReq.writeUint32(0); svcReq.writeString('ssh-userauth');
-      await this.sendRaw(svcReq.toBuffer());
-      await this.readPacket();
-      const authReq = new SshPacket();
-      authReq.writeByte(50); authReq.writeUint32(0);
-      authReq.writeString(this.config.username);
-      authReq.writeString('ssh-connection');
-      authReq.writeString('password');
-      authReq.writeString(this.config.password || '');
-      await this.sendRaw(authReq.toBuffer());
-      const resp = await this.readPacket();
-      this.socket.close();
-      return resp.type === 52
-        ? { success: true, message: 'SFTP authentication successful' }
-        : { success: false, message: 'SFTP authentication failed' };
-    } catch (e) {
-      this.socket?.close();
-      return { success: false, message: `SFTP connection failed: ${(e as Error).message}` };
+      await this.withSftp((sftp) => {
+        return new Promise<void>((resolve, reject) => {
+          sftp.realpath('.', (err: Error | undefined) => {
+            if (err) return reject(err);
+            resolve();
+          });
+        });
+      });
+      return { success: true, message: 'SFTP connection successful' };
+    } catch (error) {
+      return { success: false, message: `SFTP connection failed: ${(error as Error).message}` };
     }
   }
 }
