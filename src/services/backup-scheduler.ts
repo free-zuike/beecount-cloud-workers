@@ -179,7 +179,7 @@ export async function processBackupSchedule(
 
     // 广播开始事件（对齐原版 on_progress）
     await broadcastProgress(beeCountDO, schedule.user_id, {
-      status: 'running', runId, scheduleId: schedule.id,
+      status: 'running', runId, scheduleId: schedule.id, phase: 'starting',
     }, 'backup_progress');
 
     try {
