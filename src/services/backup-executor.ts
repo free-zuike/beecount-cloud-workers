@@ -592,8 +592,10 @@ export async function performBackupFanOut(
   // 2. 加密（如果需要）— 对齐原版：直接加密文件到 ZIP，无中间 tar 层
   let backupBytes = generated.backupBytes;
   let encrypted = false;
+  logWrap(`[Backup] Encryption check: shouldEncrypt=${shouldEncrypt}, remotes=${remoteConfigs.length}, firstPw=${remoteConfigs[0]?.config?.age_passphrase ? 'set' : 'empty'}`);
   if (shouldEncrypt && remoteConfigs.length > 0) {
     const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.zipryption_password;
+    logWrap(`[Backup] Encryption pw: ${pw ? 'found' : 'not found'}, len=${pw?.length}`);
     if (pw) {
       try {
         // 将文件直接添加到 ZIP（对齐原版 tar_builder.py build_encrypted_zip）
