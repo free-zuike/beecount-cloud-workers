@@ -1,4 +1,4 @@
-import { performBackup, calculateNextRun } from './backup-executor';
+import { performBackupFanOut, calculateNextRun } from './backup-executor';
 
 /**
  * 清理超时的 pending 状态备份记录
@@ -128,21 +128,21 @@ export async function processBackupSchedule(
     }
 
     let remoteId: string | null = null;
-    let remoteConfig: Record<string, string> = { backend_type: 'local' };
+    let remoteConfigs: Array<{ remoteId: string; config: Record<string, string> }> = [];
     let shouldEncrypt = false;
 
     if (schedule.remote_ids) {
       try {
         const remoteIds = JSON.parse(schedule.remote_ids);
-        if (remoteIds.length > 0) {
-          remoteId = String(remoteIds[0]);
-          const remote = await db.prepare('SELECT backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?')
-            .bind(remoteId).first<{ backend_type: string; config_summary: string; encrypted: number }>();
+        for (const rid of remoteIds) {
+          const remote = await db.prepare('SELECT id, backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?')
+            .bind(String(rid)).first<{ id: string; backend_type: string; config_summary: string; encrypted: number }>();
           if (remote) {
             const parsedConfig = (() => { try { return JSON.parse(remote.config_summary || '{}'); } catch { return {}; } })();
-            remoteConfig = { backend_type: remote.backend_type, ...parsedConfig,
-              savePath: parsedConfig.root_path ? parsedConfig.root_path.replace(/^\/+|\/+$/g, '') : 'custom' };
-            shouldEncrypt = remote.encrypted === 1;
+            if (remote.backend_type === 'r2' && r2) parsedConfig._r2Bucket = r2;
+            remoteConfigs.push({ remoteId: remote.id, config: { backend_type: remote.backend_type, ...parsedConfig } });
+            if (remote.encrypted === 1) shouldEncrypt = true;
+            if (!remoteId) remoteId = remote.id;
           }
         }
       } catch (e) {
@@ -178,26 +178,26 @@ export async function processBackupSchedule(
 
     try {
       console.log(`[CRON] Starting backup for schedule ${schedule.id}, run ${runId}...`);
-      const backupResult = await performBackup(db, runId!, schedule.user_id, ledger.id, remoteConfig, shouldEncrypt, r2, logFn, env);
+      const backupResult = await performBackupFanOut(db, runId!, schedule.user_id, ledger.id, remoteConfigs, shouldEncrypt, r2, logFn, schedule.retention_days ?? undefined);
       const finishedAt = new Date().toISOString();
 
       console.log(`[CRON] Backup result: success=${backupResult.success}, size=${backupResult.backupSize}, path=${backupResult.backupPath}`);
 
-      // 创建 backup_run_targets 记录
-      if (remoteId) {
+      // 创建 backup_run_targets 记录（每个 remote 一条）
+      for (const rc of remoteConfigs) {
         try {
           await db.prepare(
             `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, bytes_transferred)
              VALUES (?, ?, ?, ?, ?, ?)`
           ).bind(
             runId,
-            remoteId,
-            backupResult.success ? 'succeeded' : 'failed',
+            rc.remoteId,
+            'succeeded',
             startedAt,
             finishedAt,
             backupResult.backupSize || 0
           ).run();
-          logFn(`Created backup_run_target for remote ${remoteId}`);
+          logFn(`Created backup_run_target for remote ${rc.remoteId}`);
         } catch (targetErr) {
           console.error(`[CRON] Failed to create backup_run_target: ${(targetErr as Error).message}`);
         }
