@@ -223,8 +223,8 @@ export async function processBackupSchedule(
         : 'UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ?, log_text = ? WHERE id = ?';
       
       const updateParams = backupResult.success
-        ? ['succeeded', finishedAt, backupResult.backupSize, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath, logText, runId]
-        : ['failed', finishedAt, backupResult.message, logText, runId];
+        ? ['succeeded', finishedAt, backupResult.backupSize || null, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null, logText, runId]
+        : ['failed', finishedAt, backupResult.message || null, logText, runId];
 
       console.log(`[CRON] Updating backup_runs: id=${runId}, status=${backupResult.success ? 'succeeded' : 'failed'}`);
       

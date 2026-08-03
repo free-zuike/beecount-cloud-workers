@@ -631,9 +631,9 @@ export async function performBackupFanOut(
   const successful = uploadResults.filter(r => r.status === 'fulfilled' && r.value.ok);
   const failed = uploadResults.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok));
 
-  // 4. 保存到 R2（取第一个有 key 的成功路径）
+  // 4. 取第一个有 key 的成功路径（不限于 R2）
   let backupPath: string | null = null;
-  if (r2 && successful.length > 0) {
+  if (successful.length > 0) {
     for (const result of successful) {
       const successResult = (result as PromiseFulfilledResult<{ remoteId: string; ok: boolean; message: string; key?: string }>).value;
       if (successResult.key) {
