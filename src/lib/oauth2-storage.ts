@@ -51,7 +51,7 @@ export async function uploadToDrive(
   fileName: string,
   data: Uint8Array,
 ): Promise<boolean> {
-  const token = await refreshAccessToken('drive', config.client_id!, config.client_secret!, config.refresh_token || config.token!);
+  const token = await refreshAccessToken('drive', config.client_id!, config.client_secret!, config.token!);
   if (!token) return false;
 
   try {
@@ -83,7 +83,7 @@ export async function uploadToDrive(
 export async function listDriveFiles(
   config: Record<string, string>,
 ): Promise<Array<{ Name: string; Path: string; IsDir: boolean }>> {
-  const token = await refreshAccessToken('drive', config.client_id!, config.client_secret!, config.refresh_token || config.token!);
+  const token = await refreshAccessToken('drive', config.client_id!, config.client_secret!, config.token!);
   if (!token) return [];
 
   try {
@@ -104,7 +104,7 @@ export async function deleteDriveFile(
   config: Record<string, string>,
   fileId: string,
 ): Promise<boolean> {
-  const token = await refreshAccessToken('drive', config.client_id!, config.client_secret!, config.refresh_token || config.token!);
+  const token = await refreshAccessToken('drive', config.client_id!, config.client_secret!, config.token!);
   if (!token) return false;
 
   try {
@@ -125,7 +125,7 @@ export async function uploadToOneDrive(
   fileName: string,
   data: Uint8Array,
 ): Promise<boolean> {
-  const token = await refreshAccessToken('onedrive', config.client_id!, config.client_secret!, config.refresh_token || config.token!);
+  const token = await refreshAccessToken('onedrive', config.client_id!, config.client_secret!, config.token!);
   if (!token) return false;
 
   try {
@@ -150,7 +150,7 @@ export async function uploadToOneDrive(
 export async function listOneDriveFiles(
   config: Record<string, string>,
 ): Promise<Array<{ Name: string; Path: string; IsDir: boolean }>> {
-  const token = await refreshAccessToken('onedrive', config.client_id!, config.client_secret!, config.refresh_token || config.token!);
+  const token = await refreshAccessToken('onedrive', config.client_id!, config.client_secret!, config.token!);
   if (!token) return [];
 
   try {
@@ -171,7 +171,7 @@ export async function deleteOneDriveFile(
   config: Record<string, string>,
   fileId: string,
 ): Promise<boolean> {
-  const token = await refreshAccessToken('onedrive', config.client_id!, config.client_secret!, config.refresh_token || config.token!);
+  const token = await refreshAccessToken('onedrive', config.client_id!, config.client_secret!, config.token!);
   if (!token) return false;
 
   try {
@@ -192,7 +192,7 @@ export async function uploadToDropbox(
   fileName: string,
   data: Uint8Array,
 ): Promise<boolean> {
-  const token = await refreshAccessToken('dropbox', config.client_id!, config.client_secret!, config.refresh_token || config.token!);
+  const token = await refreshAccessToken('dropbox', config.client_id!, config.client_secret!, config.token!);
   if (!token) return false;
 
   try {
@@ -215,7 +215,7 @@ export async function uploadToDropbox(
 export async function listDropboxFiles(
   config: Record<string, string>,
 ): Promise<Array<{ Name: string; Path: string; IsDir: boolean }>> {
-  const token = await refreshAccessToken('dropbox', config.client_id!, config.client_secret!, config.refresh_token || config.token!);
+  const token = await refreshAccessToken('dropbox', config.client_id!, config.client_secret!, config.token!);
   if (!token) return [];
 
   try {
@@ -240,7 +240,7 @@ export async function deleteDropboxFile(
   config: Record<string, string>,
   filePath: string,
 ): Promise<boolean> {
-  const token = await refreshAccessToken('dropbox', config.client_id!, config.client_secret!, config.refresh_token || config.token!);
+  const token = await refreshAccessToken('dropbox', config.client_id!, config.client_secret!, config.token!);
   if (!token) return false;
 
   try {

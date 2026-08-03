@@ -572,7 +572,7 @@ export async function uploadBackupToRemote(
   }
 
   if (remoteConfig.backend_type === 'drive' || remoteConfig.backend_type === 'onedrive' || remoteConfig.backend_type === 'dropbox') {
-    if (!remoteConfig.client_id || !remoteConfig.client_secret || !(remoteConfig.refresh_token || remoteConfig.token)) {
+    if (!remoteConfig.client_id || !remoteConfig.client_secret || !remoteConfig.token) {
       return { ok: false, message: 'OAuth2 configuration incomplete' };
     }
     const localTime = new Date(Date.now() + 8 * 3600000);

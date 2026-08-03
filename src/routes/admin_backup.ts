@@ -1051,9 +1051,9 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         if (!config.client_id || !config.client_secret) {
           testResult.ok = false;
           testResult.message = 'OAuth2 configuration incomplete (client_id, client_secret required)';
-        } else if (!config.refresh_token && !config.token) {
+        } else if (!config.token) {
           testResult.ok = false;
-          testResult.message = 'OAuth2 configuration incomplete (refresh_token required)';
+          testResult.message = 'OAuth2 configuration incomplete (token required)';
         } else {
           testResult.ok = true;
           testResult.message = `${remote.backend_type} configured (OAuth2 token valid)`;
