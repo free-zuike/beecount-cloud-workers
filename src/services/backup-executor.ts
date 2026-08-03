@@ -566,6 +566,32 @@ export async function uploadBackupToRemote(
     return result ? { ok: true, message: 'Upload successful', key } : { ok: false, message: 'Upload failed' };
   }
 
+  if (remoteConfig.backend_type === 'ftp') {
+    const ftpHost = remoteConfig.host || remoteConfig.hostname;
+    const ftpPort = parseInt(remoteConfig.port || '21', 10);
+    const ftpUser = remoteConfig.username || remoteConfig.user;
+    const ftpPass = remoteConfig.password || remoteConfig.pass;
+
+    if (!ftpHost || !ftpUser || !ftpPass) {
+      return { ok: false, message: 'FTP configuration incomplete (host, username, password required)' };
+    }
+
+    const localTime = new Date(Date.now() + 8 * 3600000);
+    const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+    let prefix = '';
+    if (remoteConfig.savePath) prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
+
+    try {
+      const { createFtpClient } = await import('../lib/ftp');
+      const ftpClient = createFtpClient({ host: ftpHost, port: ftpPort, username: ftpUser, password: ftpPass });
+      const ok = await ftpClient.upload(key, backupBytes);
+      return ok ? { ok: true, message: 'Upload successful', key } : { ok: false, message: 'FTP upload failed' };
+    } catch (e) {
+      return { ok: false, message: `FTP upload failed: ${(e as Error).message}` };
+    }
+  }
+
   if (remoteConfig.backend_type === 'sftp') {
     const sftpHost = remoteConfig.host || remoteConfig.hostname;
     const sftpPort = parseInt(remoteConfig.port || '22', 10);
