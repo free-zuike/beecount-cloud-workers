@@ -1,6 +1,6 @@
 {
   "name": "beecount-cloud-workers",
-  "version": "1.0.0",
+  "version": "1.6.2",
   "description": "BeeCount Cloud implementation on Cloudflare Workers",
   "main": "src/index.ts",
   "scripts": {
