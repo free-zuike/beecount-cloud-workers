@@ -910,8 +910,8 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         // Backblaze B2 使用 S3 兼容 API
         const b2Endpoint = config.endpoint || 'https://s3.us-west-004.backblazeb2.com';
         const b2Bucket = config.bucket;
-        const b2Key = config.key || config.access_key_id;
-        const b2AccountId = config.account || config.secret_access_key;
+        const b2Key = (config.key || config.access_key_id || '').trim();
+        const b2AccountId = (config.account || config.secret_access_key || '').trim();
         
         if (!b2Bucket) {
           testResult.ok = false;
