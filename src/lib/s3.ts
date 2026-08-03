@@ -29,6 +29,12 @@ export async function sha256Hex(data: string): Promise<string> {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+export async function sha256HexBytes(data: Uint8Array): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 export async function hmacHex(key: Uint8Array, data: string): Promise<string> {
   const signature = await hmac(key, data);
   return Array.from(signature).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -74,7 +80,7 @@ export async function signS3Request(
   const bodyBytes = body !== undefined
     ? (typeof body === 'string' ? new TextEncoder().encode(body) : body)
     : new Uint8Array();
-  const payloadHashHex = await sha256Hex(new TextDecoder().decode(bodyBytes));
+  const payloadHashHex = await sha256HexBytes(bodyBytes);
 
   const headers: Record<string, string> = {
     host,
