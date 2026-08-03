@@ -33,7 +33,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { getFirstEnabledS3Config } from './sys_config';
 import { signS3Request } from '../lib/s3';
-import { performBackup, performBackupFanOut, calculateNextRun, validateCronExpression } from '../services/backup-executor';
+import { performBackupFanOut, calculateNextRun, validateCronExpression } from '../services/backup-executor';
 import { insertAuditLog } from '../lib/audit';
 
 /**

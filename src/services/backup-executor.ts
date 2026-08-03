@@ -1,7 +1,7 @@
 /**
- * 备份执行器 - 提取公共的备份执行逻辑
+ * 备份执行�?- 提取公共的备份执行逻辑
  *
- * 被 src/index.ts（定时任务）和 src/routes/admin_backup.ts（管理员手动触发）共用
+ * �?src/index.ts（定时任务）�?src/routes/admin_backup.ts（管理员手动触发）共�?
  */
 
 import { uploadToS3, listS3Objects, deleteS3Object } from '../lib/s3';
@@ -128,7 +128,7 @@ export interface BackupResult {
 }
 
 // ===========================
-// AES-256 加密 ZIP — 使用 '../lib/zip-lib' 的 createEncryptedZip（基于 @zip.js/zip.js）
+// AES-256 加密 ZIP �?使用 '../lib/zip-lib' �?createEncryptedZip（基�?@zip.js/zip.js�?
 // ===========================
 
 async function getEncryptionPassword(
@@ -153,9 +153,9 @@ async function getEncryptionPassword(
 }
 
 /**
- * 需要备份的用户数据表（排除运维类表，与原版 db_snapshot.py DEFAULT_EXCLUDED_TABLES 对齐）
+ * 需要备份的用户数据表（排除运维类表，与原版 db_snapshot.py DEFAULT_EXCLUDED_TABLES 对齐�?
  * 排除：backup_runs, backup_run_targets, sync_push_idempotency, audit_logs, refresh_tokens, mcp_call_logs
- * 保留：PAT 表（用户 LLM 配置依赖）, backup_remotes/schedules（配置保留）, 所有用户数据表
+ * 保留：PAT 表（用户 LLM 配置依赖�? backup_remotes/schedules（配置保留）, 所有用户数据表
  */
 const BACKUP_TABLES = [
   'users',
@@ -177,7 +177,7 @@ const BACKUP_TABLES = [
   'backup_schedules',
   'backup_runs',
   'backup_run_targets',
-  // 'backup_schedule_remotes', // 表可能不存在，跳过
+  // 'backup_schedule_remotes', // 表可能不存在，跳�?
   'system_settings',
   'recovery_codes',
   'exchange_rate_overrides',
@@ -189,7 +189,7 @@ const BACKUP_TABLES = [
 const D1_BATCH_SIZE = 1000;
 
 /**
- * 导出单张表的所有数据（分批查询，处理 D1 行数限制）
+ * 导出单张表的所有数据（分批查询，处�?D1 行数限制�?
  */
 async function exportTable(db: D1Database, tableName: string): Promise<unknown[]> {
   const allRows: unknown[] = [];
@@ -208,8 +208,8 @@ async function exportTable(db: D1Database, tableName: string): Promise<unknown[]
 }
 
 /**
- * 从 R2 获取所有附件文件
- * 返回 { name: Uint8Array } 映射，name 是 tar 中的路径
+ * �?R2 获取所有附件文�?
+ * 返回 { name: Uint8Array } 映射，name �?tar 中的路径
  */
 async function fetchR2Attachments(r2: R2Bucket): Promise<Map<string, Uint8Array>> {
   const attachments = new Map<string, Uint8Array>();
@@ -315,7 +315,7 @@ export async function generateBackupBytes(
     } catch {}
   }
 
-  // 构建文件条目（供 tar.gz 或 ZIP 使用）
+  // 构建文件条目（供 tar.gz �?ZIP 使用�?
   const entries: { name: string; data: Uint8Array }[] = [];
   entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: '1.6.1', createdAt: new Date().toISOString(), userId, includeAttachments: true }, null, 2)) });
   try {
@@ -332,7 +332,7 @@ export async function generateBackupBytes(
 }
 
 /**
- * 列出远端存储中的文件（用于 retention 清理）
+ * 列出远端存储中的文件（用�?retention 清理�?
  */
 export async function listRemoteFiles(
   config: Record<string, string>,
@@ -359,7 +359,7 @@ export async function listRemoteFiles(
   }
 
   if (config.backend_type === 'webdav') {
-    // WebDAV 列出文件（PROPFIND）
+    // WebDAV 列出文件（PROPFIND�?
     try {
       const baseUrl = config.url!;
       const username = config.username!;
@@ -420,7 +420,7 @@ export async function listRemoteFiles(
 }
 
 /**
- * 从远端删除文件（用于 retention 清理）
+ * 从远端删除文件（用于 retention 清理�?
  */
 export async function deleteRemoteFile(
   config: Record<string, string>,
@@ -501,7 +501,7 @@ export async function deleteRemoteFile(
 }
 
 /**
- * 上传备份到单个远端（与原版 fan-out 单个 worker 对齐）
+ * 上传备份到单个远端（与原�?fan-out 单个 worker 对齐�?
  */
 export async function uploadBackupToRemote(
   backupBytes: Uint8Array,
@@ -515,7 +515,7 @@ export async function uploadBackupToRemote(
   if (remoteConfig.backend_type === 's3' || remoteConfig.backend_type === 'b2') {
     const isB2 = remoteConfig.backend_type === 'b2';
     let endpoint = remoteConfig.endpoint;
-    // B2 从 API 获取 S3 兼容端点（原版 rclone 方式）
+    // B2 �?API 获取 S3 兼容端点（原�?rclone 方式�?
     if (isB2 && !endpoint) {
       try {
         const b2Auth = await fetch('https://api.backblazeb2.com/b2api/v2/b2_authorize_account', {
@@ -529,7 +529,7 @@ export async function uploadBackupToRemote(
     }
     if (!endpoint) endpoint = isB2 ? 'https://s3.eu-central-003.backblazeb2.com' : 'https://s3.amazonaws.com';
     const bucket = remoteConfig.bucket;
-    // B2 用 account/key 字段名（rclone 风格），S3 用 access_key_id/secret_access_key
+    // B2 �?account/key 字段名（rclone 风格），S3 �?access_key_id/secret_access_key
     const accessKey = (isB2 ? (remoteConfig.account || remoteConfig.access_key_id) : (remoteConfig.access_key_id || remoteConfig.key))?.trim();
     const secretKey = (isB2 ? (remoteConfig.key || remoteConfig.secret_access_key) : (remoteConfig.secret_access_key || remoteConfig.account))?.trim();
     const region = isB2
@@ -647,7 +647,7 @@ export async function uploadBackupToRemote(
 }
 
 /**
- * 并行上传备份到多个远端（与原版 fan-out ThreadPoolExecutor 对齐）
+ * 并行上传备份到多个远端（与原�?fan-out ThreadPoolExecutor 对齐�?
  */
 export async function performBackupFanOut(
   db: D1Database,
@@ -667,21 +667,21 @@ export async function performBackupFanOut(
 
   progressFn?.('starting');
 
-  // 1. 生成一次备份字节
+  // 1. 生成一次备份字�?
   const generated = await generateBackupBytes(db, userId, ledgerId, r2, logFn);
   logLines.push(...generated.logLines);
   progressFn?.('snapshot_db');
   progressFn?.('snapshot_attachments');
   progressFn?.('packing');
 
-  // 2. 加密（如果需要）— 对齐原版：直接加密文件到 ZIP，无中间 tar 层
+  // 2. 加密（如果需要）�?对齐原版：直接加密文件到 ZIP，无中间 tar �?
   let backupBytes = generated.backupBytes;
   let encrypted = false;
   if (shouldEncrypt && remoteConfigs.length > 0) {
     const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.zipryption_password;
     if (pw) {
       try {
-        // 将文件直接添加到 ZIP（对齐原版 tar_builder.py build_encrypted_zip）
+        // 将文件直接添加到 ZIP（对齐原�?tar_builder.py build_encrypted_zip�?
         backupBytes = await createEncryptedZip(generated.entries, pw);
         encrypted = true;
         logWrap(`[Backup] Encrypted (AES-256 ZIP): ${backupBytes.length} bytes`);
@@ -691,7 +691,7 @@ export async function performBackupFanOut(
     }
   }
 
-  // 3. 并行上传到所有远端（与原版 ThreadPoolExecutor fan-out 对齐）
+  // 3. 并行上传到所有远端（与原�?ThreadPoolExecutor fan-out 对齐�?
   const remoteIds = remoteConfigs.map(r => r.remoteId);
   logWrap(`[Backup] Fan-out to ${remoteConfigs.length} remotes: ${remoteIds.join(', ')}`);
   progressFn?.('fan_out_start');
@@ -708,7 +708,7 @@ export async function performBackupFanOut(
   const successful = uploadResults.filter(r => r.status === 'fulfilled' && r.value.ok);
   const failed = uploadResults.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok));
 
-  // 4. 取第一个有 key 的成功路径（不限于 R2）
+  // 4. 取第一个有 key 的成功路径（不限�?R2�?
   let backupPath: string | null = null;
   if (successful.length > 0) {
     for (const result of successful) {
@@ -720,7 +720,7 @@ export async function performBackupFanOut(
     }
   }
 
-  // 5. 上传附件到 R2
+  // 5. 上传附件�?R2
   let attachmentsUploaded = 0;
   if (r2) {
     try {
@@ -731,7 +731,7 @@ export async function performBackupFanOut(
     } catch {}
   }
 
-  // 6. 保留策略（只在 schedule 模式且有成功上传时执行）
+  // 6. 保留策略（只�?schedule 模式且有成功上传时执行）
   if (retentionDays && retentionDays > 0 && successful.length > 0) {
     logWrap(`[Backup] Retention: running with retention_days=${retentionDays}`);
     for (const result of successful) {
@@ -770,417 +770,16 @@ export async function performBackupFanOut(
   };
 }
 
-export async function performBackup(
-  db: D1Database,
-  runId: number,
-  userId: string,
-  ledgerId: string,
-  remoteConfig: Record<string, string>,
-  shouldEncrypt?: boolean,
-  r2?: R2Bucket,
-  logFn?: (msg: string) => void,
-  env?: { CLOUDFLARE_API_TOKEN?: string },
-): Promise<BackupResult> {
-  const log = logFn || console.log;
-  try {
-    log(`[Backup] Starting full database backup, user: ${userId}`);
-
-    // 导出所有用户数据表（带重试）
-    const tables: Record<string, unknown[]> = {};
-    for (const tableName of BACKUP_TABLES) {
-      try {
-        const rows = await withRetry(
-          () => exportTable(db, tableName),
-          3,
-          1000,
-          `export ${tableName}`
-        );
-        if (rows.length > 0) {
-          tables[tableName] = rows;
-          log(`[Backup] ${tableName}: ${rows.length} rows`);
-        }
-      } catch (err) {
-        // 表可能不存在（老版本 DB 还没跑过 migration），跳过
-        log(`[Backup] Skipping ${tableName}: ${(err as Error).message}`);
-      }
-    }
-
-    const totalRows = Object.values(tables).reduce((sum, rows) => sum + rows.length, 0);
-    console.debug(`[Backup] Total: ${Object.keys(tables).length} tables, ${totalRows} rows`);
-    console.debug(`[Backup] Tables keys: ${Object.keys(tables).join(', ')}`);
-
-    // 获取 R2 附件文件（带重试）
-    let attachments = new Map<string, Uint8Array>();
-    if (r2) {
-      try {
-        attachments = await withRetry(
-          () => fetchR2Attachments(r2),
-          2,
-          2000,
-          'fetch R2 attachments'
-        );
-        log(`[Backup] R2 attachments included: ${attachments.size} files`);
-      } catch (err) {
-        console.error(`[Backup] Failed to fetch R2 attachments: ${(err as Error).message}`);
-        // 继续备份，附件缺失不阻止数据库备份
-      }
-    }
-
-    // 创建 tar.gz 归档（与原版格式对齐）
-    const tarEntries: { name: string; data: Uint8Array }[] = [];
-
-    // 1. meta.json
-    const meta = {
-      schemaVersion: 1,
-      appVersion: '1.0',
-      createdAt: new Date().toISOString(),
-      userId: userId,
-      includeAttachments: true,
-    };
-    tarEntries.push({
-      name: 'meta.json',
-      data: new TextEncoder().encode(JSON.stringify(meta, null, 2)),
-    });
-
-    // 2. 数据库导出 - schema only（完整数据在 db.json 中）
-    try {
-      const { createMinimalSqliteFile } = await import('../lib/sqlite-writer');
-      const sqliteData = createMinimalSqliteFile();
-      tarEntries.push({
-        name: 'db.sqlite3',
-        data: sqliteData,
-      });
-      console.debug(`[Backup] db.sqlite3 created: ${sqliteData.length} bytes`);
-    } catch (err) {
-      console.error(`[Backup] SQLite writer failed: ${(err as Error).message}`);
-    }
-
-    // 始终包含 db.json 作为备份
-    const dbExport = {
-      backup_time: new Date().toISOString(),
-      version: '1.0',
-      schema_version: 1,
-      user_id: userId,
-      tables,
-    };
-    tarEntries.push({
-      name: 'db.json',
-      data: new TextEncoder().encode(JSON.stringify(dbExport, null, 2)),
-    });
-    log(`[Backup] db.json created: ${JSON.stringify(dbExport).length} bytes`);
-
-    // 3. 附件文件
-    for (const [key, value] of attachments) {
-      tarEntries.push({
-        name: key,
-        data: value,
-      });
-    }
-
-    log(`[Backup] Creating tar.gz with ${tarEntries.length} entries`);
-    let backupBytes = await withRetry(
-      () => createTarGz(tarEntries),
-      2,
-      1000,
-      'create tar.gz'
-    );
-    let encrypted = false;
-
-    // 加密备份文件
-    if (shouldEncrypt) {
-      const encryptionPassword = remoteConfig.age_passphrase || remoteConfig.zipryption_password;
-      if (encryptionPassword) {
-        try {
-          log('[Backup] Encrypting backup with AES-256 ZIP...');
-          backupBytes = await createEncryptedZip(
-            [{ name: 'backup.tar.gz', data: backupBytes }],
-            encryptionPassword
-          );
-          encrypted = true;
-          log(`[Backup] Backup encrypted: ${backupBytes.length} bytes`);
-        } catch (encryptErr) {
-          console.error(`[Backup] Encryption failed: ${(encryptErr as Error).message}`);
-          // 加密失败继续上传未加密的备份
-        }
-      } else {
-        log('[Backup] No encryption password found, skipping encryption');
-      }
-    }
-
-    const backupSize = backupBytes.length;
-
-    log(`[Backup] Backup content size: ${backupSize} bytes`);
-
-    if (remoteConfig.backend_type === 's3' || remoteConfig.backend_type === 'b2') {
-      // B2 使用 S3 兼容 API
-      const isB2 = remoteConfig.backend_type === 'b2';
-      const s3Endpoint = remoteConfig.endpoint || (isB2 ? 'https://s3.eu-central-003.backblazeb2.com' : 'https://s3.amazonaws.com');
-      const s3Bucket = remoteConfig.bucket;
-      const s3AccessKey = (isB2 ? (remoteConfig.account || remoteConfig.access_key_id) : (remoteConfig.access_key_id || remoteConfig.key))?.trim();
-      const s3SecretKey = (isB2 ? (remoteConfig.key || remoteConfig.secret_access_key) : (remoteConfig.secret_access_key || remoteConfig.account))?.trim();
-      const s3Region = remoteConfig.region || 'auto';
-
-      if (!s3Bucket || !s3AccessKey || !s3SecretKey) {
-        return { success: false, message: 'S3 configuration incomplete' };
-      }
-
-      let basePrefix = '';
-      const DEFAULT_PREFIX = 'beecount';
-      if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' &&
-          remoteConfig.savePath.trim() !== '' && remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
-        basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
-        log(`[Backup] Using savePath: ${basePrefix}`);
-      } else if (remoteConfig.root_path && typeof remoteConfig.root_path === 'string' && remoteConfig.root_path.trim() !== '') {
-        basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
-        log(`[Backup] Using root_path: ${basePrefix}`);
-      } else {
-        basePrefix = DEFAULT_PREFIX + '/';
-        log(`[Backup] Using default prefix: ${basePrefix}`);
-      }
-
-      // 使用本地时间（UTC+8）生成时间戳
-      const now = new Date();
-      const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
-      const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const fileExt = encrypted ? '.zip' : '.tar.gz';
-      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
-
-      log(`[Backup] Uploading to S3 key: ${backupKey}`);
-
-      const uploadResult = await uploadToS3(
-        s3Endpoint,
-        s3Bucket,
-        s3AccessKey,
-        s3SecretKey,
-        s3Region,
-        backupKey,
-        backupBytes,
-        'application/gzip'
-      );
-
-      if (!uploadResult.ok) {
-        return { success: false, message: uploadResult.message };
-      }
-
-      log(`[Backup] Upload successful: ${backupKey}`);
-
-      return {
-        success: true,
-        message: 'Backup completed successfully',
-        backupSize,
-        backupPath: backupKey
-      };
-    } else if (remoteConfig.backend_type === 'webdav') {
-      const webdavUrl = remoteConfig.url;
-      const webdavUsername = remoteConfig.username || remoteConfig.user;
-      const webdavPassword = remoteConfig.password || remoteConfig.pass;
-
-      if (!webdavUrl || !webdavUsername || !webdavPassword) {
-        return { success: false, message: 'WebDAV configuration incomplete (url, username, password required)' };
-      }
-
-      const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      let basePrefix = '';
-      if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' &&
-          remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
-        basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
-      } else if (remoteConfig.root_path && typeof remoteConfig.root_path === 'string' && remoteConfig.root_path.trim() !== '') {
-        basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
-      }
-
-      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${encrypted ? '.zip' : '.tar.gz'}`;
-
-      log(`[Backup] Uploading to WebDAV: ${backupKey}`);
-
-      const uploadResult = await uploadToWebDav(webdavUrl, webdavUsername, webdavPassword, backupKey, backupBytes);
-
-      if (!uploadResult.ok) {
-        return { success: false, message: uploadResult.message };
-      }
-
-      log(`[Backup] WebDAV upload successful: ${backupKey}`);
-
-      return {
-        success: true,
-        message: 'Backup completed successfully via WebDAV',
-        backupSize,
-        backupPath: backupKey
-      };
-    } else if (remoteConfig.backend_type === 'local') {
-      log('[Backup] Local backend - skipping upload (simulated)');
-      return {
-        success: true,
-        message: 'Backup completed (local storage)',
-        backupSize,
-        backupPath: `local://backup_${runId}.tar.gz`
-      };
-    } else if (remoteConfig.backend_type === 'r2') {
-      if (!r2) {
-        return { success: false, message: 'R2 bucket not configured' };
-      }
-
-      let basePrefix = '';
-      const DEFAULT_PREFIX = 'beecount';
-      if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' &&
-          remoteConfig.savePath.trim() !== '' && remoteConfig.savePath !== 'custom' && remoteConfig.savePath !== 'environment variable') {
-        basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
-      } else if (remoteConfig.root_path && typeof remoteConfig.root_path === 'string' && remoteConfig.root_path.trim() !== '') {
-        basePrefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
-      } else {
-        basePrefix = DEFAULT_PREFIX + '/';
-      }
-
-      // 使用本地时间（UTC+8）生成时间戳
-      const now = new Date();
-      const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
-      const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const fileExt = encrypted ? '.zip' : '.tar.gz';
-      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
-      
-      log(`[Backup] Uploading to R2: ${backupKey} (${backupSize} bytes)`);
-      try {
-        await withRetry(
-          () => r2.put(backupKey, backupBytes, { httpMetadata: { contentType: 'application/gzip' } }),
-          3,
-          2000,
-          'R2 upload'
-        );
-        log(`[Backup] R2 upload successful: ${backupKey}`);
-        return {
-          success: true,
-          message: 'Backup uploaded to R2',
-          backupSize,
-          backupPath: backupKey
-        };
-      } catch (r2Err) {
-        console.error(`[Backup] R2 upload failed after retries: ${(r2Err as Error).message}`);
-        return { success: false, message: `R2 upload failed: ${(r2Err as Error).message}` };
-      }
-    } else if (remoteConfig.backend_type === 'ftp') {
-      const ftpHost = remoteConfig.host || remoteConfig.hostname;
-      const ftpPort = parseInt(remoteConfig.port || '21', 10);
-      const ftpUser = remoteConfig.username || remoteConfig.user;
-      const ftpPass = remoteConfig.password || remoteConfig.pass;
-
-      if (!ftpHost || !ftpUser || !ftpPass) {
-        return { success: false, message: 'FTP configuration incomplete (host, username, password required)' };
-      }
-
-      const ftpClient = createFtpClient({ host: ftpHost, port: ftpPort, username: ftpUser, password: ftpPass });
-
-      let basePrefix = '';
-      if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' && remoteConfig.savePath.trim() !== '') {
-        basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
-      }
-
-      // 使用本地时间（UTC+8）生成时间戳
-      const now = new Date();
-      const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
-      const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const fileExt = encrypted ? '.zip' : '.tar.gz';
-      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
-
-      log(`[Backup] Uploading to FTP: ${backupKey}`);
-
-      const uploadResult = await ftpClient.upload(backupKey, backupBytes);
-
-      if (!uploadResult) {
-        return { success: false, message: 'FTP upload failed' };
-      }
-
-      return {
-        success: true,
-        message: 'Backup completed successfully via FTP',
-        backupSize,
-        backupPath: backupKey
-      };
-    } else if (remoteConfig.backend_type === 'sftp') {
-      const sftpHost = remoteConfig.host || remoteConfig.hostname;
-      const sftpPort = parseInt(remoteConfig.port || '22', 10);
-      const sftpUsername = remoteConfig.username || remoteConfig.user;
-      const sftpPassword = remoteConfig.password || remoteConfig.pass;
-      const sftpKey = remoteConfig.private_key || remoteConfig.privateKey || remoteConfig.key_file;
-
-      if (!sftpHost || !sftpUsername) {
-        return { success: false, message: 'SFTP configuration incomplete (host, username required)' };
-      }
-
-      let basePrefix = '';
-      if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' && remoteConfig.savePath.trim() !== '') {
-        basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
-      }
-
-      // 使用本地时间（UTC+8）生成时间戳
-      const now = new Date();
-      const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
-      const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const fileExt = encrypted ? '.zip' : '.tar.gz';
-      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
-
-      log(`[Backup] Uploading to SFTP: ${backupKey}`);
-
-      const sftpClient = createSftpClient({ host: sftpHost, port: sftpPort, username: sftpUsername, password: sftpPassword, privateKey: sftpKey });
-      const uploadResult = await sftpClient.upload(backupKey, backupBytes);
-
-      if (!uploadResult) {
-        return { success: false, message: 'SFTP upload failed' };
-      }
-
-      return {
-        success: true,
-        message: 'Backup completed successfully via SFTP',
-        backupSize,
-        backupPath: backupKey
-      };
-    } else if (remoteConfig.backend_type === 'drive' || remoteConfig.backend_type === 'onedrive' || remoteConfig.backend_type === 'dropbox') {
-      if (!remoteConfig.client_id || !remoteConfig.client_secret || !remoteConfig.refresh_token) {
-        return { success: false, message: `${remoteConfig.backend_type} configuration incomplete (client_id, client_secret, refresh_token required)` };
-      }
-
-      let basePrefix = '';
-      if (remoteConfig.savePath && typeof remoteConfig.savePath === 'string' && remoteConfig.savePath.trim() !== '') {
-        basePrefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
-      }
-      const now = new Date();
-      const localTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
-      const timestamp = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
-      const fileExt = encrypted ? '.zip' : '.tar.gz';
-      const backupKey = `${basePrefix}backups/${userId}/${timestamp}_backup${fileExt}`;
-
-      log(`[Backup] Uploading to ${remoteConfig.backend_type}: ${backupKey}`);
-
-      const uploadResult = await uploadToOAuth2Provider(remoteConfig, backupKey, backupBytes);
-
-      if (!uploadResult) {
-        return { success: false, message: `${remoteConfig.backend_type} upload failed` };
-      }
-
-      return {
-        success: true,
-        message: `Backup completed successfully via ${remoteConfig.backend_type}`,
-        backupSize,
-        backupPath: backupKey
-      };
-    } else {
-      return { success: false, message: `Unsupported backend type: ${remoteConfig.backend_type}` };
-    }
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    console.error('[Backup] Error:', errorMsg);
-    return { success: false, message: `Backup error: ${errorMsg}` };
-  }
-}
-
 /**
  * 计算下次运行时间
- * Cron 表达式格式: 分钟 小时 日期 月份 星期
- * cronExpr 中的时间是 UTC 时间
- * @param cronExpr cron表达式（UTC时间）
- * @param timezoneOffset 用户时区偏移（分钟，东八区为-480，仅用于显示）
+ * Cron 表达式格�? 分钟 小时 日期 月份 星期
+ * cronExpr 中的时间�?UTC 时间
+ * @param cronExpr cron表达式（UTC时间�?
+ * @param timezoneOffset 用户时区偏移（分钟，东八区为-480，仅用于显示�?
  */
 /**
- * 验证 cron 表达式是否合法（5 字段：分 时 日 月 周）
- * 与原版 APScheduler CronTrigger.from_crontab() 对齐
+ * 验证 cron 表达式是否合法（5 字段：分 �?�?�?周）
+ * 与原�?APScheduler CronTrigger.from_crontab() 对齐
  */
 export function validateCronExpression(cronExpr: string): { valid: boolean; error?: string } {
   const parts = cronExpr.trim().split(/\s+/);
@@ -1222,7 +821,7 @@ export function validateCronExpression(cronExpr: string): { valid: boolean; erro
       continue;
     }
 
-    // 处理逗号分隔的值
+    // 处理逗号分隔的�?
     const values = field.split(',');
     for (const v of values) {
       const num = parseInt(v, 10);
@@ -1252,10 +851,10 @@ export function calculateNextRun(cronExpr: string, timezoneOffset: number | stri
     const targetMinute = minuteStr === '*' ? 0 : parseInt(minuteStr, 10);
     const targetHour = hourStr === '*' ? 0 : parseInt(hourStr, 10);
 
-    // 解析时区偏移（分钟），支持 IANA 时区名
+    // 解析时区偏移（分钟），支�?IANA 时区�?
     let offsetMs = 0;
     if (typeof timezoneOffset === 'string' && timezoneOffset) {
-      // IANA 时区名，用 Date 计算当前偏移
+      // IANA 时区名，�?Date 计算当前偏移
       const now = new Date();
       const utcMs = now.getTime();
       const localStr = now.toLocaleString('en-US', { timeZone: timezoneOffset });
@@ -1265,20 +864,20 @@ export function calculateNextRun(cronExpr: string, timezoneOffset: number | stri
       offsetMs = timezoneOffset * 60 * 1000;
     }
 
-    // 将 cron 时间视为本地时间（带时区偏移），计算对应的 UTC 时间
+    // �?cron 时间视为本地时间（带时区偏移），计算对应�?UTC 时间
     // timezone_offset 使用 JS 约定（new Date().getTimezoneOffset()）：UTC+8 = -480
     // 公式：UTC = 本地时间 + timezone_offset（分钟）
-    // 例如：04:00 CST = 04:00 UTC + (-480min) = 04:00 UTC - 8h = 20:00 UTC 前一天
+    // 例如�?4:00 CST = 04:00 UTC + (-480min) = 04:00 UTC - 8h = 20:00 UTC 前一�?
     const now = new Date();
     const nowMs = now.getTime();
 
-    // 创建目标时间（将 cron 的 hour/minute 设为 UTC 时间）
+    // 创建目标时间（将 cron �?hour/minute 设为 UTC 时间�?
     const targetDate = new Date();
     targetDate.setUTCHours(targetHour, targetMinute, 0, 0);
-    // 加上时区偏移得到实际 UTC 时间（JS 约定：UTC+8 = -480，加 -480分钟 = 减8小时）
+    // 加上时区偏移得到实际 UTC 时间（JS 约定：UTC+8 = -480，加 -480分钟 = �?小时�?
     let targetUtcMs = targetDate.getTime() + offsetMs;
 
-    // 如果目标时间已过，加一天
+    // 如果目标时间已过，加一�?
     if (targetUtcMs <= nowMs) {
       targetUtcMs += 24 * 60 * 60 * 1000;
     }
@@ -1304,3 +903,4 @@ export function calculateNextRun(cronExpr: string, timezoneOffset: number | stri
     return nextDate.toISOString();
   }
 }
+
