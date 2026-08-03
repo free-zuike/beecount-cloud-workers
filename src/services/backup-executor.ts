@@ -514,12 +514,14 @@ export async function uploadBackupToRemote(
 
   if (remoteConfig.backend_type === 's3' || remoteConfig.backend_type === 'b2') {
     const isB2 = remoteConfig.backend_type === 'b2';
-    const endpoint = remoteConfig.endpoint || (isB2 ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
+    const endpoint = remoteConfig.endpoint || (isB2 ? 'https://s3.eu-central-003.backblazeb2.com' : 'https://s3.amazonaws.com');
     const bucket = remoteConfig.bucket;
     // B2 用 account/key 字段名（rclone 风格），S3 用 access_key_id/secret_access_key
     const accessKey = (isB2 ? (remoteConfig.account || remoteConfig.access_key_id) : (remoteConfig.access_key_id || remoteConfig.key))?.trim();
     const secretKey = (isB2 ? (remoteConfig.key || remoteConfig.secret_access_key) : (remoteConfig.secret_access_key || remoteConfig.account))?.trim();
-    const region = remoteConfig.region || 'auto';
+    const region = isB2
+      ? (() => { try { const m = new URL(endpoint).hostname.match(/^s3\.([^.]+)\.backblazeb2\.com$/); return m ? m[1] : 'auto'; } catch { return 'auto'; }})()
+      : (remoteConfig.region || 'auto');
     if (!bucket || !accessKey || !secretKey) return { ok: false, message: 'S3 configuration incomplete' };
 
     let prefix = '';
@@ -899,7 +901,7 @@ export async function performBackup(
     if (remoteConfig.backend_type === 's3' || remoteConfig.backend_type === 'b2') {
       // B2 使用 S3 兼容 API
       const isB2 = remoteConfig.backend_type === 'b2';
-      const s3Endpoint = remoteConfig.endpoint || (isB2 ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
+      const s3Endpoint = remoteConfig.endpoint || (isB2 ? 'https://s3.eu-central-003.backblazeb2.com' : 'https://s3.amazonaws.com');
       const s3Bucket = remoteConfig.bucket;
       const s3AccessKey = (isB2 ? (remoteConfig.account || remoteConfig.access_key_id) : (remoteConfig.access_key_id || remoteConfig.key))?.trim();
       const s3SecretKey = (isB2 ? (remoteConfig.key || remoteConfig.secret_access_key) : (remoteConfig.secret_access_key || remoteConfig.account))?.trim();
