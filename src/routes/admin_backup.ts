@@ -439,7 +439,7 @@ backupRouter.get('/rclone-config', async (c) => {
         configContent += `provider = Cloudflare\n`;
       } else if (row.backend_type === 'b2') {
         // B2 使用 S3 兼容 API
-        configContent += `endpoint = ${config.endpoint || 'https://s3.us-west-004.backblazeb2.com'}\n`;
+        configContent += `endpoint = ${config.endpoint || 'https://s3.eu-central-003.backblazeb2.com'}\n`;
         if (config.access_key_id) configContent += `access_key_id = ${config.access_key_id}\n`;
         if (config.secret_access_key) configContent += `secret_access_key = ${config.secret_access_key}\n`;
         if (config.bucket) configContent += `bucket = ${config.bucket}\n`;
@@ -908,7 +908,7 @@ backupRouter.post('/remotes/:id/test', async (c) => {
 
       case 'b2':
         // Backblaze B2 使用 S3 兼容 API
-        const b2Endpoint = config.endpoint || 'https://s3.us-west-004.backblazeb2.com';
+        const b2Endpoint = config.endpoint || 'https://s3.eu-central-003.backblazeb2.com';
         const b2Bucket = config.bucket;
         const b2Key = (config.key || config.access_key_id || '').trim();
         const b2AccountId = (config.account || config.secret_access_key || '').trim();

@@ -339,7 +339,7 @@ export async function listRemoteFiles(
 ): Promise<Array<{ Name?: string; Path?: string; IsDir?: boolean }>> {
   if (config.backend_type === 's3' || config.backend_type === 'b2') {
     const isB2 = config.backend_type === 'b2';
-    const endpoint = config.endpoint || (isB2 ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
+    const endpoint = config.endpoint || (isB2 ? 'https://s3.eu-central-003.backblazeb2.com' : 'https://s3.amazonaws.com');
     const bucket = config.bucket;
     const accessKey = isB2 ? (config.account || config.access_key_id)?.trim() : (config.access_key_id || config.key)?.trim();
     const secretKey = isB2 ? (config.key || config.secret_access_key)?.trim() : (config.secret_access_key || config.account)?.trim();
@@ -428,7 +428,7 @@ export async function deleteRemoteFile(
 ): Promise<boolean> {
   if (config.backend_type === 's3' || config.backend_type === 'b2') {
     const isB2 = config.backend_type === 'b2';
-    const endpoint = config.endpoint || (isB2 ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
+    const endpoint = config.endpoint || (isB2 ? 'https://s3.eu-central-003.backblazeb2.com' : 'https://s3.amazonaws.com');
     const bucket = config.bucket;
     const accessKey = isB2 ? (config.account || config.access_key_id)?.trim() : (config.access_key_id || config.key)?.trim();
     const secretKey = isB2 ? (config.key || config.secret_access_key)?.trim() : (config.secret_access_key || config.account)?.trim();
