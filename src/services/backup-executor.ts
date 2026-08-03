@@ -566,6 +566,39 @@ export async function uploadBackupToRemote(
     return result ? { ok: true, message: 'Upload successful', key } : { ok: false, message: 'Upload failed' };
   }
 
+  if (remoteConfig.backend_type === 'sftp') {
+    const sftpHost = remoteConfig.host || remoteConfig.hostname;
+    const sftpPort = parseInt(remoteConfig.port || '22', 10);
+    const sftpUsername = remoteConfig.username || remoteConfig.user;
+    const sftpPassword = remoteConfig.password || remoteConfig.pass;
+    const sftpKey = remoteConfig.private_key || remoteConfig.privateKey || remoteConfig.key_file;
+
+    if (!sftpHost || !sftpUsername) {
+      return { ok: false, message: 'SFTP configuration incomplete (host, username required)' };
+    }
+
+    const localTime = new Date(Date.now() + 8 * 3600000);
+    const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+    let prefix = '';
+    if (remoteConfig.savePath) prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
+
+    try {
+      const { createSftpClient } = await import('../lib/sftp');
+      const sftpClient = createSftpClient({
+        host: sftpHost,
+        port: sftpPort,
+        username: sftpUsername,
+        password: sftpPassword || undefined,
+        privateKey: sftpKey || undefined,
+      });
+      const ok = await sftpClient.upload(key, backupBytes);
+      return ok ? { ok: true, message: 'SFTP upload successful', key } : { ok: false, message: 'SFTP upload failed' };
+    } catch (e) {
+      return { ok: false, message: `SFTP upload failed: ${(e as Error).message}` };
+    }
+  }
+
   return { ok: true, message: 'Local backup (no upload)' };
 }
 
