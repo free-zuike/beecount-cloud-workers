@@ -110,6 +110,22 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
   });
 });
 
+// ---- 请求日志中间件（对齐原版 Python install_request_middleware） ----
+app.use('*', async (c, next) => {
+  const requestId = c.req.header('cf-ray') || crypto.randomUUID();
+  const start = performance.now();
+  try {
+    await next();
+  } finally {
+    const elapsed = performance.now() - start;
+    const status = c.res.status;
+    const userId = c.get('userId') || '-';
+    console.log(`[ACCESS] ${c.req.method} ${c.req.path} → ${status} ${elapsed.toFixed(1)}ms req=${requestId} user=${userId}`);
+    c.res.headers.set('X-Request-ID', requestId);
+    c.res.headers.set('X-Response-Time-Ms', elapsed.toFixed(2));
+  }
+});
+
 // ---- OAuth2 回调（不需要认证，被 OAuth 提供商直接调用） ----
 app.get('/api/v1/admin/backup/remotes/oauth2/callback', async (c) => {
   const code = c.req.query('code');
