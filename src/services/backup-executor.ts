@@ -593,9 +593,9 @@ export async function uploadBackupToRemote(
         privateKey: sftpKey || undefined,
       });
       const ok = await sftpClient.upload(key, backupBytes);
-      return ok ? { ok: true, message: 'SFTP upload successful', key } : { ok: false, message: 'SFTP upload failed' };
+      return ok ? { ok: true, message: 'SFTP upload successful', key } : { ok: false, message: 'Update Create failed: permission denied' };
     } catch (e) {
-      return { ok: false, message: `SFTP upload failed: ${(e as Error).message}` };
+      return { ok: false, message: `Update Create failed: ${(e as Error).message}` };
     }
   }
 
