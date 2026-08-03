@@ -81,6 +81,7 @@ export async function signS3Request(
     ? (typeof body === 'string' ? new TextEncoder().encode(body) : body)
     : new Uint8Array();
   const payloadHashHex = await sha256HexBytes(bodyBytes);
+  console.log('[S3] signS3Request:', { method, bucket, key, url, host, payloadHashHex, accessKey: accessKey.slice(0, 8) + '...' });
 
   const headers: Record<string, string> = {
     host,
