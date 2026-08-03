@@ -53,12 +53,8 @@ type = "Data"
 globs = ["**/*.node"]
 fallthrough = true
 
-# ssh2 的 poly1305 WebAssembly 模块在 Workers 中不可用，标记为数据文件
-# 实际不会被调用（已限制 cipher 为 CTR/CBC）
-[[rules]]
-type = "Data"
-globs = ["**/ssh2/**/poly1305.js"]
-fallthrough = true
+[alias]
+"ssh2/lib/protocol/crypto/poly1305.js" = "./shims/ssh2-poly1305.js"
 
 # 自动构建前端 (CI/CD 中使用)
 # [build]
