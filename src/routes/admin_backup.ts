@@ -2770,4 +2770,35 @@ backupRouter.get('/restore/:runId/info', async (c) => {
   });
 });
 
+/**
+ * OAuth2 回调端点 — 处理授权码并返回 token JSON
+ */
+backupRouter.get('/remotes/oauth2/callback', async (c) => {
+  const code = c.req.query('code');
+  const provider = c.req.query('provider') || 'drive';
+  const clientId = c.req.query('client_id');
+  const clientSecret = c.req.query('client_secret');
+  if (!code) return c.text('Missing authorization code', 400);
+  if (!clientId || !clientSecret) return c.text('Missing client_id or client_secret', 400);
+  const tokenEndpoints: Record<string, string> = {
+    drive: 'https://oauth2.googleapis.com/token',
+    onedrive: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+    dropbox: 'https://api.dropbox.com/oauth2/token',
+  };
+  const tokenUrl = tokenEndpoints[provider];
+  if (!tokenUrl) return c.text(`Unsupported provider: ${provider}`, 400);
+  const redirectUri = `${new URL(c.req.url).origin}/api/v1/admin/backup/remotes/oauth2/callback`;
+  try {
+    const resp = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: 'authorization_code' }),
+    });
+    const tokenData = await resp.json();
+    return c.json(tokenData, resp.ok ? 200 : 400);
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 500);
+  }
+});
+
 export default backupRouter;
