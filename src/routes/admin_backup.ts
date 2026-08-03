@@ -912,6 +912,14 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         const b2Bucket = config.bucket;
         const b2Key = (config.key || config.access_key_id || '').trim();
         const b2AccountId = (config.account || config.secret_access_key || '').trim();
+        // 从 endpoint 提取 region（如 s3.us-west-004.backblazeb2.com → us-west-004）
+        const b2Region = (() => {
+          try {
+            const hostname = new URL(b2Endpoint).hostname;
+            const m = hostname.match(/^s3\.([^.]+)\.backblazeb2\.com$/);
+            return m ? m[1] : 'auto';
+          } catch { return 'auto'; }
+        })();
         
         if (!b2Bucket) {
           testResult.ok = false;
@@ -920,7 +928,7 @@ backupRouter.post('/remotes/:id/test', async (c) => {
           testResult.ok = false;
           testResult.message = 'Application Key and Account ID are required';
         } else {
-          const result = await testS3Connection(b2Endpoint, b2Bucket, b2AccountId, b2Key, 'auto');
+          const result = await testS3Connection(b2Endpoint, b2Bucket, b2AccountId, b2Key, b2Region);
           testResult.ok = result.ok;
           testResult.message = result.ok ? 'Backblaze B2 accessible' : result.message;
         }
