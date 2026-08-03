@@ -155,7 +155,9 @@ class SftpClient {
   async upload(remotePath: string, data: Uint8Array): Promise<boolean> {
     return this.withSftp((sftp) => {
       return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Upload timeout')), 30000);
         sftp.writeFile(remotePath, Buffer.from(data), (err: Error | undefined) => {
+          clearTimeout(timeout);
           if (err) return reject(err);
           resolve(true);
         });
