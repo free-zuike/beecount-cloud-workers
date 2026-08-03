@@ -111,7 +111,7 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
 });
 
 // ---- OAuth2 回调（不需要认证，被 OAuth 提供商直接调用） ----
-app.get('/backup/remotes/oauth2/callback', async (c) => {
+app.get('/api/v1/admin/backup/remotes/oauth2/callback', async (c) => {
   const code = c.req.query('code');
   const provider = c.req.query('provider') || 'drive';
   if (!code) return c.text('Missing authorization code', 400);
@@ -125,7 +125,7 @@ app.get('/backup/remotes/oauth2/callback', async (c) => {
   -d '{"code":"${code}","provider":"${provider}","client_id":"你的client_id","client_secret":"你的client_secret"}'</pre>
   </body></html>`);
 });
-app.post('/backup/remotes/oauth2/token', async (c) => {
+app.post('/api/v1/admin/backup/remotes/oauth2/token', async (c) => {
   const { code, provider, client_id, client_secret } = await c.req.json();
   if (!code || !client_id || !client_secret) return c.json({ error: 'Missing required fields' }, 400);
   const tokenEndpoints: Record<string, string> = { drive: 'https://oauth2.googleapis.com/token', onedrive: 'https://login.microsoftonline.com/common/oauth2/v2.0/token', dropbox: 'https://api.dropbox.com/oauth2/token' };
