@@ -31,15 +31,19 @@ async function broadcastProgress(
   event: Record<string, unknown>,
   type: string = 'backup_status',
 ): Promise<void> {
-  if (!beeCountDO) return;
+  if (!beeCountDO || !userId) return;
   try {
     const doId = beeCountDO.idFromName(`ws-${userId}`);
     const stub = beeCountDO.get(doId);
-    await stub.fetch(new URL('/broadcast', 'http://do'), {
+    const fetchPromise = stub.fetch(new URL('/broadcast', 'http://do'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: JSON.stringify({ type, ...event }) }),
     });
+    const timeoutPromise = new Promise<Response>((_, reject) =>
+      setTimeout(() => reject(new Error('broadcast timeout')), 5000)
+    );
+    await Promise.race([fetchPromise, timeoutPromise]);
   } catch { /* non-critical */ }
 }
 
@@ -100,22 +104,22 @@ export async function processBackupSchedule(
   try {
     const timezoneOffset = await resolveTimezoneOffset(db, schedule.timezone_offset);
 
-    if (!schedule.next_run_at) {
-      const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
+    if (!schedule['next_run_at']) {
+      const nextRun = calculateNextRun(schedule['cron_expr'], resolveTimezoneOffset(db, schedule['timezone_offset']));
       await db.prepare('UPDATE backup_schedules SET next_run_at = ? WHERE id = ?')
-        .bind(nextRun, schedule.id).run();
-      console.log(`[CRON] Set initial next_run_at for schedule ${schedule.id}: ${nextRun}`);
+        .bind(nextRun, schedule['id']).run();
+      console.log(`[CRON] Set initial next_run_at for schedule ${schedule['id']}: ${nextRun}`);
       return;
     }
 
     const now = new Date();
     // 直接查询数据库获取 next_run_at，避免 Row 对象属性访问问题
     const scheduleRow = await db.prepare('SELECT next_run_at FROM backup_schedules WHERE id = ?')
-      .bind(schedule.id).first<{ next_run_at: string }>();
-    console.log(`[CRON] Schedule ${schedule.id}: DB next_run_at=${JSON.stringify(scheduleRow)}, now=${now.toISOString()}`);
+      .bind(schedule['id']).first<{ next_run_at: string }>();
+    console.log(`[CRON] Schedule ${schedule['id']}: DB next_run_at=${JSON.stringify(scheduleRow)}, now=${now.toISOString()}`);
     const nextRunAt = scheduleRow?.next_run_at ? new Date(scheduleRow.next_run_at) : null;
     if (nextRunAt && now < nextRunAt) {
-      console.log(`[CRON] Schedule ${schedule.id} not due yet. Next run: ${scheduleRow?.next_run_at}`);
+      console.log(`[CRON] Schedule ${schedule['id']} not due yet. Next run: ${scheduleRow?.next_run_at}`);
       return;
     }
 
@@ -185,6 +189,7 @@ export async function processBackupSchedule(
     try {
       console.log(`[CRON] Starting backup for schedule ${schedule.id}, run ${runId}...`);
       const backupResult = await performBackupFanOut(db, runId!, schedule.user_id, ledger.id, remoteConfigs, shouldEncrypt, r2, logFn, schedule.retention_days ?? undefined, (phase) => {
+        // 进度广播不能阻塞备份流程
         broadcastProgress(beeCountDO, schedule.user_id, { phase, runId, scheduleId: schedule.id }, 'backup_progress').catch(() => {});
       });
       const finishedAt = new Date().toISOString();
