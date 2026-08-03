@@ -28,26 +28,26 @@ class FtpClient {
     const reader = socket.readable.getReader();
     const decoder = new TextDecoder();
     let response = '';
-    const timeout = setTimeout(() => reader.cancel(), 10000);
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const readPromise = reader.read();
+        const timeoutPromise = new Promise<{ done: boolean; value?: Uint8Array }>((_, reject) =>
+          setTimeout(() => reject(new Error('FTP response timeout')), 10000)
+        );
+        const { done, value } = await Promise.race([readPromise, timeoutPromise]);
         if (done) break;
         response += decoder.decode(value);
-        // FTP responses end with a line starting with 3 digits followed by space or newline
         const lines = response.split('\r\n');
         const lastLine = lines[lines.length - 2] || lines[lines.length - 1];
         if (lastLine && /^\d{3}\s/.test(lastLine) && !lastLine.startsWith('1')) {
           break;
         }
         if (lastLine && /^\d{3}-/.test(lastLine)) {
-          // Multi-line response, continue reading
           continue;
         }
       }
     } finally {
-      clearTimeout(timeout);
       reader.releaseLock();
     }
     return response;
