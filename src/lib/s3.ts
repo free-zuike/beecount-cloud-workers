@@ -61,6 +61,7 @@ export async function signS3Request(
   method: string,
   queryString?: string,
   contentType?: string,
+  body?: Uint8Array | string,
 ): Promise<{ url: string; headers: Record<string, string> }> {
   const now = new Date();
   const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
@@ -70,9 +71,14 @@ export async function signS3Request(
   const url = `${endpoint}/${bucket}/${key}${queryString ? '?' + queryString : ''}`;
   const host = new URL(endpoint).host;
 
+  const bodyBytes = body !== undefined
+    ? (typeof body === 'string' ? new TextEncoder().encode(body) : body)
+    : new Uint8Array();
+  const payloadHashHex = await sha256Hex(new TextDecoder().decode(bodyBytes));
+
   const headers: Record<string, string> = {
     host,
-    'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
+    'x-amz-content-sha256': payloadHashHex,
     'x-amz-date': amzDate,
   };
   if (contentType) headers['content-type'] = contentType;
@@ -81,7 +87,7 @@ export async function signS3Request(
   const canonicalHeaders = headerEntries.map(([n, v]) => `${n}:${v}`).join('\n') + '\n';
   const signedHeaders = headerEntries.map(([n]) => n).join(';');
 
-  const canonicalRequest = `${method}\n/${bucket}/${key}\n${queryString || ''}\n${canonicalHeaders}\n${signedHeaders}\nUNSIGNED-PAYLOAD`;
+  const canonicalRequest = `${method}\n/${bucket}/${key}\n${queryString || ''}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHashHex}`;
 
   const algorithm = 'AWS4-HMAC-SHA256';
   const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
@@ -99,7 +105,7 @@ export async function signS3Request(
     headers: {
       'Host': host,
       'x-amz-date': amzDate,
-      'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
+      'x-amz-content-sha256': payloadHashHex,
       ...(contentType ? { 'Content-Type': contentType } : {}),
       'Authorization': authorizationHeader
     }
@@ -182,7 +188,8 @@ export async function uploadToS3(
       key,
       'PUT',
       undefined,
-      contentType
+      contentType,
+      content
     );
 
     const contentLength = typeof content === 'string' ? content.length : content.length;
