@@ -797,7 +797,7 @@ adminRouter.get('/logs', async (c) => {
       const likeClauses = sourceList.map(() => `logger LIKE ?`);
       conditions.push(`(${likeClauses.join(' OR ')})`);
       for (const s of sourceList) {
-        params.push(`${s}%`);
+        params.push(`%${s}%`);
       }
     }
   }
