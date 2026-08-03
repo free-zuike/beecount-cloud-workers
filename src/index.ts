@@ -110,6 +110,41 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
   });
 });
 
+// ---- OAuth2 回调（不需要认证，被 OAuth 提供商直接调用） ----
+app.get('/backup/remotes/oauth2/callback', async (c) => {
+  const code = c.req.query('code');
+  const provider = c.req.query('provider') || 'drive';
+  if (!code) return c.text('Missing authorization code', 400);
+  // 跳转到回调页面，用前端 POST 换取 token
+  return c.html(`<!DOCTYPE html><html><body>
+    <h2>授权成功</h2>
+    <p>授权码: <code style="word-break:break-all">${code}</code></p>
+    <p>使用以下命令换取 token:</p>
+    <pre>curl -X POST https://beecount.qzz.io/api/v1/admin/backup/remotes/oauth2/token \\
+  -H "Content-Type: application/json" \\
+  -d '{"code":"${code}","provider":"${provider}","client_id":"你的client_id","client_secret":"你的client_secret"}'</pre>
+  </body></html>`);
+});
+app.post('/backup/remotes/oauth2/token', async (c) => {
+  const { code, provider, client_id, client_secret } = await c.req.json();
+  if (!code || !client_id || !client_secret) return c.json({ error: 'Missing required fields' }, 400);
+  const tokenEndpoints: Record<string, string> = { drive: 'https://oauth2.googleapis.com/token', onedrive: 'https://login.microsoftonline.com/common/oauth2/v2.0/token', dropbox: 'https://api.dropbox.com/oauth2/token' };
+  const tokenUrl = tokenEndpoints[provider || 'drive'];
+  if (!tokenUrl) return c.json({ error: `Unsupported provider: ${provider}` }, 400);
+  try {
+    const resp = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, client_id, client_secret, redirect_uri: 'https://beecount.qzz.io/api/v1/admin/backup/remotes/oauth2/callback', grant_type: 'authorization_code' }),
+    });
+    const tokenData = await resp.json();
+    if (!resp.ok) return c.json({ error: 'Token exchange failed', details: tokenData }, 400);
+    return c.json({ message: 'Token obtained successfully', token: tokenData });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 500);
+  }
+});
+
 // ---- 鉴权中间件 ----
 app.use('/api/v1/*', authMiddleware);
 app.use('/sync/*', authMiddleware);
