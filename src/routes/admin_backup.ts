@@ -46,6 +46,7 @@ function apiValidator<T extends z.ZodTypeAny>(target: 'json' | 'query' | 'form',
       error: {
         code: 'VALIDATION_ERROR',
         message: 'Request validation failed',
+        request_id: c.req.header('cf-ray') || '',
       },
       detail: 'Request validation failed',
       validation: result.error.issues.map(i => ({
@@ -1686,7 +1687,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
     log_text: null,
     targets: [],
     message: 'Backup started',
-  }, 200);
+  }, 202);
 });
 
 // ---------------------------------------------------------------------------

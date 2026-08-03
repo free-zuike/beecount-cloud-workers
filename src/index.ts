@@ -165,9 +165,14 @@ app.route('/export', csvRouter);
 
 app.onError((err, c) => {
   console.error('[ERROR]', err.message);
+  const requestId = c.req.header('cf-ray') || '';
   return c.json({
-    error: 'Internal Server Error',
-    timestamp: new Date().toISOString(),
+    error: {
+      code: 'INTERNAL_ERROR',
+      message: 'Internal Server Error',
+      request_id: requestId,
+    },
+    detail: 'Internal Server Error',
   }, 500);
 });
 
