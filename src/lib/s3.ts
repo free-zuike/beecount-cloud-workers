@@ -60,6 +60,7 @@ export async function signS3Request(
   key: string,
   method: string,
   queryString?: string,
+  contentType?: string,
 ): Promise<{ url: string; headers: Record<string, string> }> {
   const now = new Date();
   const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
@@ -69,13 +70,18 @@ export async function signS3Request(
   const url = `${endpoint}/${bucket}/${key}${queryString ? '?' + queryString : ''}`;
   const host = new URL(endpoint).host;
 
-  const canonicalUri = `/${bucket}/${key}`;
-  const canonicalQuery = queryString || '';
-  const canonicalHeaders = `host:${host}\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:${amzDate}\n`;
-  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
-  const payloadHash = 'UNSIGNED-PAYLOAD';
+  const headers: Record<string, string> = {
+    host,
+    'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
+    'x-amz-date': amzDate,
+  };
+  if (contentType) headers['content-type'] = contentType;
 
-  const canonicalRequest = `${method}\n${canonicalUri}\n${canonicalQuery}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+  const headerEntries = Object.entries(headers).sort(([a], [b]) => a.localeCompare(b));
+  const canonicalHeaders = headerEntries.map(([n, v]) => `${n}:${v}`).join('\n') + '\n';
+  const signedHeaders = headerEntries.map(([n]) => n).join(';');
+
+  const canonicalRequest = `${method}\n/${bucket}/${key}\n${queryString || ''}\n${canonicalHeaders}\n${signedHeaders}\nUNSIGNED-PAYLOAD`;
 
   const algorithm = 'AWS4-HMAC-SHA256';
   const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
@@ -93,7 +99,8 @@ export async function signS3Request(
     headers: {
       'Host': host,
       'x-amz-date': amzDate,
-      'x-amz-content-sha256': payloadHash,
+      'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
+      ...(contentType ? { 'Content-Type': contentType } : {}),
       'Authorization': authorizationHeader
     }
   };
@@ -173,7 +180,9 @@ export async function uploadToS3(
       endpoint,
       bucket.replace(/^\/+/, ''),
       key,
-      'PUT'
+      'PUT',
+      undefined,
+      contentType
     );
 
     const contentLength = typeof content === 'string' ? content.length : content.length;
