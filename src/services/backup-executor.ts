@@ -338,10 +338,11 @@ export async function listRemoteFiles(
   config: Record<string, string>,
 ): Promise<Array<{ Name?: string; Path?: string; IsDir?: boolean }>> {
   if (config.backend_type === 's3' || config.backend_type === 'b2') {
-    const endpoint = config.endpoint || (config.backend_type === 'b2' ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
+    const isB2 = config.backend_type === 'b2';
+    const endpoint = config.endpoint || (isB2 ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
     const bucket = config.bucket;
-    const accessKey = config.access_key_id || config.key;
-    const secretKey = config.secret_access_key || config.account;
+    const accessKey = isB2 ? (config.account || config.access_key_id) : (config.access_key_id || config.key);
+    const secretKey = isB2 ? (config.key || config.secret_access_key) : (config.secret_access_key || config.account);
     const region = config.region || 'auto';
     let prefix = '';
     if (config.savePath && config.savePath !== 'custom') prefix = config.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
@@ -426,10 +427,11 @@ export async function deleteRemoteFile(
   fileName: string,
 ): Promise<boolean> {
   if (config.backend_type === 's3' || config.backend_type === 'b2') {
-    const endpoint = config.endpoint || (config.backend_type === 'b2' ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
+    const isB2 = config.backend_type === 'b2';
+    const endpoint = config.endpoint || (isB2 ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
     const bucket = config.bucket;
-    const accessKey = config.access_key_id || config.key;
-    const secretKey = config.secret_access_key || config.account;
+    const accessKey = isB2 ? (config.account || config.access_key_id) : (config.access_key_id || config.key);
+    const secretKey = isB2 ? (config.key || config.secret_access_key) : (config.secret_access_key || config.account);
     const region = config.region || 'auto';
     let prefix = '';
     if (config.savePath && config.savePath !== 'custom') prefix = config.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
@@ -514,8 +516,9 @@ export async function uploadBackupToRemote(
     const isB2 = remoteConfig.backend_type === 'b2';
     const endpoint = remoteConfig.endpoint || (isB2 ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
     const bucket = remoteConfig.bucket;
-    const accessKey = remoteConfig.access_key_id || remoteConfig.key;
-    const secretKey = remoteConfig.secret_access_key || remoteConfig.account;
+    // B2 用 account/key 字段名（rclone 风格），S3 用 access_key_id/secret_access_key
+    const accessKey = isB2 ? (remoteConfig.account || remoteConfig.access_key_id) : (remoteConfig.access_key_id || remoteConfig.key);
+    const secretKey = isB2 ? (remoteConfig.key || remoteConfig.secret_access_key) : (remoteConfig.secret_access_key || remoteConfig.account);
     const region = remoteConfig.region || 'auto';
     if (!bucket || !accessKey || !secretKey) return { ok: false, message: 'S3 configuration incomplete' };
 
@@ -898,8 +901,8 @@ export async function performBackup(
       const isB2 = remoteConfig.backend_type === 'b2';
       const s3Endpoint = remoteConfig.endpoint || (isB2 ? 'https://s3.us-west-004.backblazeb2.com' : 'https://s3.amazonaws.com');
       const s3Bucket = remoteConfig.bucket;
-      const s3AccessKey = remoteConfig.access_key_id || remoteConfig.key;
-      const s3SecretKey = remoteConfig.secret_access_key || remoteConfig.account;
+      const s3AccessKey = isB2 ? (remoteConfig.account || remoteConfig.access_key_id) : (remoteConfig.access_key_id || remoteConfig.key);
+      const s3SecretKey = isB2 ? (remoteConfig.key || remoteConfig.secret_access_key) : (remoteConfig.secret_access_key || remoteConfig.account);
       const s3Region = remoteConfig.region || 'auto';
 
       if (!s3Bucket || !s3AccessKey || !s3SecretKey) {
