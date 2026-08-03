@@ -18,6 +18,7 @@ tslib = "tslib"
 "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js" = "./node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js"
 "@modelcontextprotocol/sdk" = "./node_modules/@modelcontextprotocol/sdk/dist/esm/index.js"
 "zod/v4" = "./node_modules/zod/v4/index.js"
+"ssh2/lib/protocol/crypto/poly1305.js" = "./shims/ssh2-poly1305.js"
 
 [[d1_databases]]
 binding = "DB"
@@ -52,9 +53,6 @@ enabled = true
 type = "Data"
 globs = ["**/*.node"]
 fallthrough = true
-
-[alias]
-"ssh2/lib/protocol/crypto/poly1305.js" = "./shims/ssh2-poly1305.js"
 
 # 自动构建前端 (CI/CD 中使用)
 # [build]
