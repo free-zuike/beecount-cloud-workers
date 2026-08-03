@@ -907,8 +907,19 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         break;
 
       case 'b2':
-        // Backblaze B2 使用 S3 兼容 API
-        const b2Endpoint = config.endpoint || 'https://s3.eu-central-003.backblazeb2.com';
+        // Backblaze B2 使用 S3 兼容 API（从 B2 API 获取 S3 端点）
+        const b2Endpoint = config.endpoint || await (async () => {
+          try {
+            const b2Key = (config.key || config.access_key_id || '').trim();
+            const b2AccountId = (config.account || config.secret_access_key || '').trim();
+            const auth = btoa(`${b2AccountId}:${b2Key}`);
+            const res = await fetch('https://api.backblazeb2.com/b2api/v2/b2_authorize_account', {
+              headers: { 'Authorization': `Basic ${auth}` },
+            });
+            if (res.ok) { const d = await res.json() as { s3ApiUrl?: string }; if (d.s3ApiUrl) return d.s3ApiUrl; }
+          } catch {}
+          return 'https://s3.eu-central-003.backblazeb2.com';
+        })();
         const b2Bucket = config.bucket;
         const b2Key = (config.key || config.access_key_id || '').trim();
         const b2AccountId = (config.account || config.secret_access_key || '').trim();

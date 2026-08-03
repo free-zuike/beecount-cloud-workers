@@ -514,7 +514,20 @@ export async function uploadBackupToRemote(
 
   if (remoteConfig.backend_type === 's3' || remoteConfig.backend_type === 'b2') {
     const isB2 = remoteConfig.backend_type === 'b2';
-    const endpoint = remoteConfig.endpoint || (isB2 ? 'https://s3.eu-central-003.backblazeb2.com' : 'https://s3.amazonaws.com');
+    let endpoint = remoteConfig.endpoint;
+    // B2 从 API 获取 S3 兼容端点（原版 rclone 方式）
+    if (isB2 && !endpoint) {
+      try {
+        const b2Auth = await fetch('https://api.backblazeb2.com/b2api/v2/b2_authorize_account', {
+          headers: { 'Authorization': 'Basic ' + btoa(`${(remoteConfig.account || remoteConfig.access_key_id || '').trim()}:${(remoteConfig.key || remoteConfig.secret_access_key || '').trim()}`) },
+        });
+        if (b2Auth.ok) {
+          const b2Data = await b2Auth.json() as { s3ApiUrl?: string };
+          if (b2Data.s3ApiUrl) endpoint = b2Data.s3ApiUrl;
+        }
+      } catch {}
+    }
+    if (!endpoint) endpoint = isB2 ? 'https://s3.eu-central-003.backblazeb2.com' : 'https://s3.amazonaws.com';
     const bucket = remoteConfig.bucket;
     // B2 用 account/key 字段名（rclone 风格），S3 用 access_key_id/secret_access_key
     const accessKey = (isB2 ? (remoteConfig.account || remoteConfig.access_key_id) : (remoteConfig.access_key_id || remoteConfig.key))?.trim();
