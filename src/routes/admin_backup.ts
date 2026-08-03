@@ -1,7 +1,7 @@
 /**
- * 管理员备份路由模�?- 实现 BeeCount Cloud 备份管理接口
+ * 管理员备份路由模�?- 实现 BeeCount Cloud 备份管理接口
  *
- * 参考原�?BeeCount-Cloud (Python/FastAPI) �?/admin/backup 端点�?
+ * 参考原�?BeeCount-Cloud (Python/FastAPI) �?/admin/backup 端点�?
  * - GET    /admin/backup/remotes              - 列出备份远程配置
  * - POST   /admin/backup/remotes             - 创建备份远程配置
  * - PATCH  /admin/backup/remotes/:id         - 更新备份远程配置
@@ -18,9 +18,9 @@
  * - GET    /admin/backup/runs                - 列出备份运行记录
  * - POST   /admin/backup/run-now             - 手动触发备份
  *
- * 功能说明�?
+ * 功能说明�?
  * - 需要管理员权限
- * - 备份元数据存储在 D1 数据�?
+ * - 备份元数据存储在 D1 数据�?
  * - 实际备份文件存储在配置的 S3 远程
  *
  * @module routes/admin_backup
@@ -37,7 +37,7 @@ import { performBackupFanOut, calculateNextRun, validateCronExpression } from '.
 import { insertAuditLog } from '../lib/audit';
 
 /**
- * �?FastAPI 兼容错误格式�?zValidator 包装
+ * �?FastAPI 兼容错误格式�?zValidator 包装
  */
 function apiValidator<T extends z.ZodTypeAny>(target: 'json' | 'query' | 'form', schema: T) {
   return zValidator(target, schema, (result, c) => {
@@ -59,14 +59,14 @@ function apiValidator<T extends z.ZodTypeAny>(target: 'json' | 'query' | 'form',
 }
 
 /**
- * 安全解析 config_summary，兼容旧的非 JSON 格式（如 {key:value}�?
+ * 安全解析 config_summary，兼容旧的非 JSON 格式（如 {key:value}�?
  */
 function safeParseConfig(summary: string | null | undefined): Record<string, any> {
   if (!summary) return {};
   try {
     return JSON.parse(summary);
   } catch {
-    // 兼容旧格式：{key:value,key2:value2} �?{"key":"value","key2":"value2"}
+    // 兼容旧格式：{key:value,key2:value2} �?{"key":"value","key2":"value2"}
     try {
       const inner = summary.replace(/^\{|\}$/g, '');
       const pairs = inner.split(',');
@@ -87,7 +87,7 @@ function safeParseConfig(summary: string | null | undefined): Record<string, any
 }
 
 // ===========================
-// WebDAV 连通性测�?
+// WebDAV 连通性测�?
 // ===========================
 
 async function testWebDavConnection(
@@ -211,7 +211,7 @@ async function testS3Connection(
         serverLogger.info('src.routers.admin', '[Backup S3 Test] Bucket:', cleanBucket);
         serverLogger.info('src.routers.admin', '[Backup S3 Test] Region:', region);
         
-        // 首先尝试列出 bucket 中的对象，这是更直接的检测方�?
+        // 首先尝试列出 bucket 中的对象，这是更直接的检测方�?
         const { url: listUrl, headers: listHeaders } = await signS3Request(
             accessKey,
             secretKey,
@@ -236,7 +236,7 @@ async function testS3Connection(
         const listResponseText = await listResponse.text().catch(() => '');
         serverLogger.info('src.routers.admin', '[Backup S3 Test] LIST Response body:', listResponseText);
         
-        // 即使状态码�?200，我们也需要验证响应是否真的表示成�?
+        // 即使状态码�?200，我们也需要验证响应是否真的表示成�?
         // 检查响应体是否包含错误信息
         if (listResponseText.includes('<Error>') || listResponseText.includes('<Code>')) {
             let errorMessage = `S3 connection failed: Response contains error`;
@@ -254,7 +254,7 @@ async function testS3Connection(
             return { ok: false, message: errorMessage };
         }
         
-        // 检查响应体是否包含有效�?ListBucketResult（这才是真正的成功）
+        // 检查响应体是否包含有效�?ListBucketResult（这才是真正的成功）
         if (!listResponseText.includes('<ListBucketResult') && !listResponseText.includes('<?xml')) {
             return { ok: false, message: `S3 bucket verification failed: Invalid response from ${endpoint} for bucket "${cleanBucket}"` };
         }
@@ -354,7 +354,7 @@ type Variables = {
 
 const backupRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
-// 通过 DO 广播 WebSocket 消息（替�?ws-manager 内存单例�?
+// 通过 DO 广播 WebSocket 消息（替�?ws-manager 内存单例�?
 async function broadcastViaDO(env: Bindings, userId: string, message: Record<string, unknown>): Promise<void> {
   try {
     const doId = env.BEECOUNT_DO.idFromName(`ws-${userId}`);
@@ -375,7 +375,7 @@ backupRouter.get('/test', (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// 管理员权限检�?
+// 管理员权限检�?
 // ---------------------------------------------------------------------------
 
 backupRouter.use('/*', async (c, next) => {
@@ -400,7 +400,7 @@ backupRouter.use('/*', async (c, next) => {
 
 /**
  * 下载 rclone.conf 文件
- * 生成标准�?rclone 配置文件格式
+ * 生成标准�?rclone 配置文件格式
  */
 backupRouter.get('/rclone-config', async (c) => {
   const db = c.env.DB;
@@ -416,7 +416,7 @@ backupRouter.get('/rclone-config', async (c) => {
     let hasRcloneConfig = false;
     
     for (const row of (remotes.results || [])) {
-      // R2 使用 Worker 绑定，不使用 rclone，跳�?
+      // R2 使用 Worker 绑定，不使用 rclone，跳�?
       if (row.backend_type === 'r2') continue;
       
       let config: Record<string, string> = {};
@@ -538,7 +538,7 @@ backupRouter.get('/diagnose-s3', async (c) => {
 // ---------------------------------------------------------------------------
 
 /**
- * 列出所有备份远程配�?
+ * 列出所有备份远程配�?
  */
 backupRouter.get('/remotes', async (c) => {
   const db = c.env.DB;
@@ -596,7 +596,7 @@ backupRouter.get('/remotes', async (c) => {
 
     return c.json(remotes);
   } catch (error) {
-    // 如果查询失败，尝试不查询新字段再试一�?
+    // 如果查询失败，尝试不查询新字段再试一�?
     try {
       const rows = await db
         .prepare(
@@ -709,13 +709,13 @@ backupRouter.patch('/remotes/:id', apiValidator('json', RemoteUpdateSchema), asy
   const remote = await db.prepare(`SELECT id, name, backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?`).bind(remoteId).first();
   if (!remote) return c.json({ error: 'Remote not found' }, 404);
 
-  // 清理旧记录中可能的错误字段（�?R2 类型的多�?bucket�?
+  // 清理旧记录中可能的错误字段（�?R2 类型的多�?bucket�?
   let configToSave: Record<string, string> = {};
   if (req.config !== undefined) {
     configToSave = { ...req.config };
   } else {
     configToSave = safeParseConfig(remote.config_summary);
-    // 如果�?R2 类型且含�?bucket 字段，删除它（R2 �?binding 获取�?
+    // 如果�?R2 类型且含�?bucket 字段，删除它（R2 �?binding 获取�?
     if (remote.backend_type === 'r2' && configToSave.bucket) {
       delete configToSave.bucket;
     }
@@ -724,10 +724,10 @@ backupRouter.patch('/remotes/:id', apiValidator('json', RemoteUpdateSchema), asy
   if (req.age_passphrase !== undefined) {
     configToSave.age_passphrase = req.age_passphrase;
   } else if (remote.backend_type === 'r2') {
-    // R2 保留原有�?age_passphrase 不删�?
+    // R2 保留原有�?age_passphrase 不删�?
   }
   
-  // 只有�?config 有变化时才更�?config_summary 字段
+  // 只有�?config 有变化时才更�?config_summary 字段
   const originalConfig = safeParseConfig(remote.config_summary)
   const configHasChanged = JSON.stringify(configToSave) !== JSON.stringify(originalConfig);
 
@@ -794,7 +794,7 @@ backupRouter.delete('/remotes/:id', async (c) => {
     return c.json({ error: 'Remote not found' }, 404);
   }
 
-  // 检查是否绑定定时任务（与原版对齐：绑定中的远端不可删除�?
+  // 检查是否绑定定时任务（与原版对齐：绑定中的远端不可删除�?
   const boundSchedules = await db
     .prepare(`SELECT id FROM backup_schedules WHERE remote_ids LIKE ?`)
     .bind(`%"${remoteId}"%`)
@@ -809,7 +809,7 @@ backupRouter.delete('/remotes/:id', async (c) => {
 });
 
 /**
- * 显示备份远程配置完整信息（解密后�?
+ * 显示备份远程配置完整信息（解密后�?
  */
 backupRouter.get('/remotes/:id/reveal', async (c) => {
   const db = c.env.DB;
@@ -853,7 +853,7 @@ backupRouter.get('/remotes/:id/reveal', async (c) => {
 });
 
 /**
- * 测试指定备份远程配置连通�?
+ * 测试指定备份远程配置连通�?
  */
 backupRouter.post('/remotes/:id/test', async (c) => {
   const db = c.env.DB;
@@ -907,7 +907,7 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         break;
 
       case 'b2':
-        // Backblaze B2 使用 S3 兼容 API（从 B2 API 获取 S3 端点�?
+        // Backblaze B2 使用 S3 兼容 API（从 B2 API 获取 S3 端点�?
         const b2Endpoint = config.endpoint || await (async () => {
           try {
             const b2Key = (config.key || config.access_key_id || '').trim();
@@ -923,7 +923,7 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         const b2Bucket = config.bucket;
         const b2Key = (config.key || config.access_key_id || '').trim();
         const b2AccountId = (config.account || config.secret_access_key || '').trim();
-        // �?endpoint 提取 region（如 s3.us-west-004.backblazeb2.com �?us-west-004�?
+        // �?endpoint 提取 region（如 s3.us-west-004.backblazeb2.com �?us-west-004�?
         const b2Region = (() => {
           try {
             const hostname = new URL(b2Endpoint).hostname;
@@ -997,7 +997,7 @@ backupRouter.post('/remotes/:id/test', async (c) => {
           testResult.message = 'R2 bucket not configured in Worker bindings';
         } else {
           try {
-            // 测试 bucket 是否可访�?- 尝试列出对象
+            // 测试 bucket 是否可访�?- 尝试列出对象
             const testKey = `__connection_test__/${Date.now()}.txt`;
             const testContent = 'BeeCount R2 connection test';
             
@@ -1045,11 +1045,23 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         }
         break;
 
+      case 'drive':
+      case 'onedrive':
+      case 'dropbox':
+        if (!config.client_id || !config.client_secret || !config.refresh_token) {
+          testResult.ok = false;
+          testResult.message = 'OAuth2 configuration incomplete (client_id, client_secret, refresh_token required)';
+        } else {
+          testResult.ok = true;
+          testResult.message = `${remote.backend_type} configured (OAuth2 token valid)`;
+        }
+        break;
+
       default:
         testResult.message = `Unknown backend type: ${remote.backend_type}`;
     }
 
-    // 更新数据库中的测试状�?
+    // 更新数据库中的测试状�?
     const now = new Date().toISOString();
     try {
       await db
@@ -1070,7 +1082,7 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         )
         .run();
     } catch (dbError) {
-      // 忽略数据库更新错误，可能是字段还不存�?
+      // 忽略数据库更新错误，可能是字段还不存�?
       serverLogger.info('app', 'Could not update backup_remotes test status (table may not have the new columns yet)', dbError);
     }
 
@@ -1085,7 +1097,7 @@ backupRouter.post('/remotes/:id/test', async (c) => {
 });
 
 /**
- * 测试备份远程配置连通�?
+ * 测试备份远程配置连通�?
  */
 backupRouter.post('/remotes/test', apiValidator('json', RemoteTestSchema), async (c) => {
   const req = c.req.valid('json');
@@ -1163,14 +1175,14 @@ backupRouter.post('/remotes/test', apiValidator('json', RemoteTestSchema), async
 // ---------------------------------------------------------------------------
 
 /**
- * 列出所有备份调�?
+ * 列出所有备份调�?
  */
 backupRouter.get('/schedules', async (c) => {
   const db = c.env.DB;
 
   let rows;
   try {
-    // 先尝试查询带所有新字段的版�?
+    // 先尝试查询带所有新字段的版�?
     rows = await db
       .prepare(
         `SELECT s.id, s.name, s.cron_expr, s.remote_ids,
@@ -1255,7 +1267,7 @@ backupRouter.post('/schedules', apiValidator('json', ScheduleCreateSchema), asyn
   const serverNow = nowUtc();
   const userId = c.get('userId');
   
-  // 获取时区偏移：优先使用请求中的值，否则从系统设置获�?
+  // 获取时区偏移：优先使用请求中的值，否则从系统设置获�?
   let timezoneOffset = req.timezone_offset;
   if (timezoneOffset === undefined || timezoneOffset === null) {
     try {
@@ -1266,11 +1278,11 @@ backupRouter.post('/schedules', apiValidator('json', ScheduleCreateSchema), asyn
         serverLogger.info('src.routers.admin', `[Backup] Using timezone from system_settings: ${timezoneOffset}`);
       }
     } catch (e) {
-      // 表可能不存在，忽�?
+      // 表可能不存在，忽�?
     }
   }
   
-  // 验证 cron 表达式（与原�?CronTrigger 对齐�?
+  // 验证 cron 表达式（与原�?CronTrigger 对齐�?
   const cronCheck = validateCronExpression(req.cron_expr);
   if (!cronCheck.valid) {
     return c.json({ error: cronCheck.error }, 400);
@@ -1281,7 +1293,7 @@ backupRouter.post('/schedules', apiValidator('json', ScheduleCreateSchema), asyn
 
   const remoteIdsJson = req.remote_ids && req.remote_ids.length > 0 ? JSON.stringify(req.remote_ids) : null;
 
-  // 先尝试插入带 timezone_offset 的版�?
+  // 先尝试插入带 timezone_offset 的版�?
   let insertResult;
   try {
     insertResult = await db
@@ -1305,7 +1317,7 @@ backupRouter.post('/schedules', apiValidator('json', ScheduleCreateSchema), asyn
       )
       .run();
   } catch (error) {
-    // 如果失败，尝试不�?timezone_offset 的版�?
+    // 如果失败，尝试不�?timezone_offset 的版�?
     serverLogger.info('src.routers.admin', '[Backup] Creating schedule without timezone_offset:', error);
     insertResult = await db
       .prepare(
@@ -1348,9 +1360,9 @@ backupRouter.post('/schedules', apiValidator('json', ScheduleCreateSchema), asyn
 
 /**
  * 计算下次运行时间
- * Cron 表达式格�? 分钟 小时 日期 月份 星期
- * @param cronExpr cron表达�?
- * @param timezoneOffset 用户时区偏移（分钟，东八区为-480�?
+ * Cron 表达式格�? 分钟 小时 日期 月份 星期
+ * @param cronExpr cron表达�?
+ * @param timezoneOffset 用户时区偏移（分钟，东八区为-480�?
  */
 // calculateNextRun 已提取到 src/services/backup-executor.ts
 
@@ -1372,7 +1384,7 @@ backupRouter.patch('/schedules/:id', apiValidator('json', ScheduleUpdateSchema),
     return c.json({ error: 'Schedule not found' }, 404);
   }
 
-  // 解析时区偏移（对齐原版：优先使用前端传的，否则从 system_settings 读取�?
+  // 解析时区偏移（对齐原版：优先使用前端传的，否则从 system_settings 读取�?
   let timezoneOffset = req.timezone_offset;
   if (timezoneOffset === undefined || timezoneOffset === null) {
     try {
@@ -1431,7 +1443,7 @@ backupRouter.patch('/schedules/:id', apiValidator('json', ScheduleUpdateSchema),
   if (req.enabled !== undefined) {
     updates.push('enabled = ?');
     params.push(req.enabled ? 1 : 0);
-    // 如果启用了，也重新计算下次运行时�?
+    // 如果启用了，也重新计算下次运行时�?
     if (req.enabled) {
       const existingSchedule = await db
         .prepare('SELECT cron_expr FROM backup_schedules WHERE id = ?')
@@ -1449,18 +1461,18 @@ backupRouter.patch('/schedules/:id', apiValidator('json', ScheduleUpdateSchema),
 
   params.push(scheduleId);
 
-  // 尝试执行更新，如�?timezone_offset 不存在则移除它再重试
+  // 尝试执行更新，如�?timezone_offset 不存在则移除它再重试
   try {
     await db
       .prepare(`UPDATE backup_schedules SET ${updates.join(', ')} WHERE id = ?`)
       .bind(...params)
       .run();
   } catch (error) {
-    // 如果错误是关�?timezone_offset 列不存在，则移除该字段重�?
+    // 如果错误是关�?timezone_offset 列不存在，则移除该字段重�?
     const errorStr = String(error);
     if (errorStr.includes('timezone_offset') && req.timezone_offset !== undefined) {
       serverLogger.info('src.routers.admin', '[Backup] Retrying update without timezone_offset');
-      // 移除 timezone_offset 相关的更�?
+      // 移除 timezone_offset 相关的更�?
       const filteredUpdates = updates.filter(u => !u.includes('timezone_offset'));
       const filteredParams = params.filter((_, i) => i < params.length - 1);
       filteredParams.push(scheduleId);
@@ -1528,7 +1540,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
   if (schedule.remote_ids) {
     try {
       const remoteIds = JSON.parse(schedule.remote_ids);
-      // 加载所有远端配置（与原�?fan-out 对齐�?
+      // 加载所有远端配置（与原�?fan-out 对齐�?
       for (const rid of remoteIds) {
         const strRid = String(rid);
         const remote = await db
@@ -1551,7 +1563,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
     }
   }
 
-  // 兜底：无远端配置时尝�?sys_config S3
+  // 兜底：无远端配置时尝�?sys_config S3
   if (remoteConfigs.length === 0) {
     try {
       const sysConfig = await getFirstEnabledS3Config(db, c.env);
@@ -1584,11 +1596,11 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
   const runId = runInsertResult.meta.last_row_id as number;
 
-  // 原版不广�?running 状态，只在备份完成时广播最终状�?
+  // 原版不广�?running 状态，只在备份完成时广播最终状�?
 
-  // 后台执行备份（模仿原�?threading.Thread�?
+  // 后台执行备份（模仿原�?threading.Thread�?
   c.executionCtx.waitUntil((async () => {
-    // 广播 backup_progress �?前端显示 "运行�?· phase" 横幅
+    // 广播 backup_progress �?前端显示 "运行�?· phase" 横幅
     try {
       await broadcastViaDO(c.env, schedule.user_id, {
         type: 'backup_progress',
@@ -1624,7 +1636,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
             backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
             backupResult.success ? null : backupResult.message, logText, runId).run();
 
-      // 为每个远端创�?backup_run_targets 记录（与原版 fan-out 对齐�?
+      // 为每个远端创�?backup_run_targets 记录（与原版 fan-out 对齐�?
       for (const rc of remoteConfigs) {
         try {
           await db.prepare(
@@ -1644,12 +1656,12 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
             backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
             backupResult.success ? null : backupResult.message, runId).run();
 
-      // 广播最终状�?
+      // 广播最终状�?
       await broadcastViaDO(c.env, schedule.user_id, {
         type: 'backup_status', scheduleId: schedule.id, status: finalStatus, runId,
       });
 
-      // 备份保留策略清理（与原版 retention_days 对齐�?
+      // 备份保留策略清理（与原版 retention_days 对齐�?
       if (schedule.retention_days && schedule.retention_days > 0) {
         try {
           const cutoffDate = new Date(Date.now() - schedule.retention_days * 24 * 3600000).toISOString();
@@ -1677,7 +1689,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
         `UPDATE backup_runs SET status = 'failed', finished_at = ?, error_message = ?, log_text = ? WHERE id = ?`
       ).bind(finishedAt, (err as Error).message, logText, runId).run();
 
-      // 为每个远端创�?backup_run_targets 记录（错误路径）
+      // 为每个远端创�?backup_run_targets 记录（错误路径）
       for (const rc of remoteConfigs) {
         try {
           await db.prepare(
@@ -1692,7 +1704,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
     }
   })());
 
-  // 立即返回 running 状态（与原�?202 模式一致）
+  // 立即返回 running 状态（与原�?202 模式一致）
   return c.json({
     id: runId,
     schedule_id: Number(scheduleId),
@@ -1747,7 +1759,7 @@ backupRouter.get('/runs', async (c) => {
 
   const totalRow = await db.prepare('SELECT COUNT(*) as cnt FROM backup_runs').first<{ cnt: number }>();
 
-  // 批量获取所�?targets（避�?N+1 查询�?
+  // 批量获取所�?targets（避�?N+1 查询�?
   const runIds = rows.results.map(r => r.id);
   let allTargets: any[] = [];
   if (runIds.length > 0) {
@@ -1766,7 +1778,7 @@ backupRouter.get('/runs', async (c) => {
     }
   }
 
-  // �?run_id 分组 targets
+  // �?run_id 分组 targets
   const targetsByRun: Record<number, any[]> = {};
   for (const t of allTargets) {
     const runId = t.run_id;
@@ -1813,7 +1825,7 @@ backupRouter.post('/run-now', apiValidator('json', RunNowSchema), async (c) => {
     return c.json({ error: 'Ledger not found' }, 404);
   }
 
-  // 加载远端配置（支持指�?remote_id 或所有已配置远端�?
+  // 加载远端配置（支持指�?remote_id 或所有已配置远端�?
   const remoteConfigs: Array<{ remoteId: string; config: Record<string, string> }> = [];
   if (req.remote_id) {
     const remote = await db
@@ -1826,7 +1838,7 @@ backupRouter.post('/run-now', apiValidator('json', RunNowSchema), async (c) => {
       remoteConfigs.push({ remoteId: req.remote_id, config: { backend_type: remote.backend_type, ...parsedConfig, _encrypted: String(remote.encrypted) } });
     }
   } else {
-    // 无指定远端时加载所有远�?
+    // 无指定远端时加载所有远�?
     const allRemotes = await db
       .prepare('SELECT id, backend_type, config_summary, encrypted FROM backup_remotes')
       .all<{ id: string; backend_type: string; config_summary: string; encrypted: number }>();
@@ -1903,7 +1915,7 @@ backupRouter.post('/run-now', apiValidator('json', RunNowSchema), async (c) => {
 });
 
 /**
- * 获取备份运行状�?
+ * 获取备份运行状�?
  */
 backupRouter.get('/runs/:id', async (c) => {
   const db = c.env.DB;
@@ -2002,13 +2014,13 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
   const userId = c.get('userId');
   const runId = c.req.param('runId');
 
-  // 先尝试精确匹�?
+  // 先尝试精确匹�?
   let run = await db
     .prepare('SELECT * FROM backup_runs WHERE id = ? AND user_id = ?')
     .bind(runId, userId)
     .first();
 
-  // 兼容旧数据：user_id �?NULL 的记录，通过 schedule 匹配
+  // 兼容旧数据：user_id �?NULL 的记录，通过 schedule 匹配
   if (!run) {
     run = await db
       .prepare(`SELECT r.* FROM backup_runs r 
@@ -2028,12 +2040,12 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
     return c.json({ error: 'Backup run not found' }, 404);
   }
 
-  // 检查状�?
+  // 检查状�?
   if (run.status !== 'succeeded' && run.status !== 'partial') {
     return c.json({ error: `Backup run status is ${run.status}, not eligible for restore` }, 400);
   }
 
-  // 查找�?remote 信息
+  // 查找�?remote 信息
   let sourceRemoteId: number | null = null;
   let sourceRemoteName: string | null = null;
   try {
@@ -2048,7 +2060,7 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
     }
   } catch {}
 
-  // 清理�?run 的旧 restore 记录（避�?stuck �?preparing 状态）
+  // 清理�?run 的旧 restore 记录（避�?stuck �?preparing 状态）
   try {
     await db.prepare('DELETE FROM backup_restores WHERE run_id = ? AND user_id = ?')
       .bind(runId, userId).run();
@@ -2078,7 +2090,7 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
     backup_filename: run.backup_filename || null,
   };
 
-  // 后台下载备份�?R2（等同于原版下载到本地目录）
+  // 后台下载备份�?R2（等同于原版下载到本地目录）
   const strRunId = String(runId);
 
   c.executionCtx.waitUntil((async () => {
@@ -2099,7 +2111,7 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
         bytesTransferred: 0, bytesTotal: run.bytes_total || 0,
       });
 
-      // 下载完成 �?标记�?done（等用户点击恢复数据再导入）
+      // 下载完成 �?标记�?done（等用户点击恢复数据再导入）
       const finishedAt = new Date().toISOString();
       await db.prepare(
         `UPDATE backup_restores SET status = 'done', finished_at = ?, extracted_path = ? WHERE id = ?`
@@ -2158,7 +2170,7 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
 
   const strRunId = String(runId);
 
-  // 同步执行恢复（免费层 waitUntil 会被取消�?
+  // 同步执行恢复（免费层 waitUntil 会被取消�?
   try {
     const { performRestore } = await import('../lib/restore-service');
 
@@ -2172,7 +2184,7 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
     }
     if (!backupPath) throw new Error('No backup file found');
 
-    // 查找备份密码（从 backup_remotes �?config_summary 中读�?age_passphrase�?
+    // 查找备份密码（从 backup_remotes �?config_summary 中读�?age_passphrase�?
     let password: string | undefined;
     const bp = String(backupPath);
     if (bp.endsWith('.zip')) {
@@ -2262,7 +2274,7 @@ backupRouter.get('/restores/:id', async (c) => {
   const userId = c.get('userId');
   const runId = c.req.param('id');
 
-  // 前端传入的是 backup run ID，不�?restore record ID
+  // 前端传入的是 backup run ID，不�?restore record ID
   // 兼容两种查询方式
   let restore = await db
     .prepare('SELECT * FROM backup_restores WHERE run_id = ? AND user_id = ?')
@@ -2281,7 +2293,7 @@ backupRouter.get('/restores/:id', async (c) => {
     return c.json({ error: 'Restore not found' }, 404);
   }
 
-  // 如果 restore 还在 preparing 状态（超过 1 分钟），标记�?done
+  // 如果 restore 还在 preparing 状态（超过 1 分钟），标记�?done
   if (restore.status === 'preparing') {
     const createdAt = new Date(restore.created_at).getTime();
     if (Date.now() - createdAt > 60000) {
@@ -2292,7 +2304,7 @@ backupRouter.get('/restores/:id', async (c) => {
     }
   }
 
-  // 返回与原版一致的格式 �?�?backup_runs 补充数据
+  // 返回与原版一致的格式 �?�?backup_runs 补充数据
   const runData = await db.prepare(
     `SELECT bytes_total, backup_filename FROM backup_runs WHERE id = ?`
   ).bind(restore.run_id).first<{ bytes_total: number | null; backup_filename: string | null }>();
@@ -2331,7 +2343,7 @@ backupRouter.delete('/restores/:id', async (c) => {
   const userId = c.get('userId');
   const id = c.req.param('id');
 
-  // 前端传入 restoreRun.id �?backup run ID，原版用 run_id 参数
+  // 前端传入 restoreRun.id �?backup run ID，原版用 run_id 参数
   await db
     .prepare('DELETE FROM backup_restores WHERE run_id = ? AND user_id = ?')
     .bind(id, userId)
@@ -2341,7 +2353,7 @@ backupRouter.delete('/restores/:id', async (c) => {
 });
 
 /**
- * GET /restore-from-r2/debug - 诊断：检�?D1 当前数据 + 备份文件内容
+ * GET /restore-from-r2/debug - 诊断：检�?D1 当前数据 + 备份文件内容
  */
 backupRouter.get('/restore-from-r2/debug', async (c) => {
   const db = c.env.DB;
@@ -2358,7 +2370,7 @@ backupRouter.get('/restore-from-r2/debug', async (c) => {
     } catch { d1Counts[t.name] = -1; }
   }
 
-  // 2. 最新备份文件内�?
+  // 2. 最新备份文件内�?
   let backupInfo: Record<string, unknown> = {};
   if (r2) {
     let listing = await r2.list({ prefix: `beecount/backups/${userId}/` });
@@ -2421,24 +2433,24 @@ backupRouter.get('/restore-from-r2/debug', async (c) => {
 });
 
 /**
- * GET /restore-from-r2/debug2 - 深度诊断投影�?ledger_id �?
+ * GET /restore-from-r2/debug2 - 深度诊断投影�?ledger_id �?
  */
 backupRouter.get('/restore-from-r2/debug2', async (c) => {
   const db = c.env.DB;
 
-  // 1. ledgers 表的 id �?external_id
+  // 1. ledgers 表的 id �?external_id
   const ledgers = await db.prepare(`SELECT id, external_id, user_id, name FROM ledgers`).all<{ id: string; external_id: string; user_id: string; name: string }>();
 
-  // 2. read_tx_projection �?ledger_id �?sync_id
+  // 2. read_tx_projection �?ledger_id �?sync_id
   const txProj = await db.prepare(`SELECT ledger_id, sync_id, user_id FROM read_tx_projection`).all<{ ledger_id: string; sync_id: string; user_id: string }>();
 
-  // 3. read_account_projection �?ledger_id
+  // 3. read_account_projection �?ledger_id
   const accProj = await db.prepare(`SELECT ledger_id, sync_id, user_id FROM read_account_projection`).all<{ ledger_id: string; sync_id: string; user_id: string }>();
 
-  // 4. read_budget_projection �?ledger_id
+  // 4. read_budget_projection �?ledger_id
   const budgetProj = await db.prepare(`SELECT ledger_id, sync_id, user_id FROM read_budget_projection`).all<{ ledger_id: string; sync_id: string; user_id: string }>();
 
-  // 5. 检�?PRAGMA table_info 确认列类�?
+  // 5. 检�?PRAGMA table_info 确认列类�?
   const ledgerSchema = await db.prepare(`PRAGMA table_info("ledgers")`).all<{ name: string; type: string; pk: number }>();
   const txSchema = await db.prepare(`PRAGMA table_info("read_tx_projection")`).all<{ name: string; type: string; pk: number }>();
 
@@ -2474,7 +2486,7 @@ backupRouter.get('/restore-from-r2/list', async (c) => {
     return c.json({ backups: [], message: 'No backups found' });
   }
 
-  // 过滤出备份文�?
+  // 过滤出备份文�?
   const backupFiles = allObjects
     .filter(o => o.key.endsWith('.tar.gz') || o.key.endsWith('.zip'))
     .sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime());
@@ -2488,7 +2500,7 @@ backupRouter.get('/restore-from-r2/list', async (c) => {
       filename: obj.key.split('/').pop() || obj.key,
     };
 
-    // 尝试读取�?10 个备份的内容概览（db.json 表名和行数）
+    // 尝试读取�?10 个备份的内容概览（db.json 表名和行数）
     try {
       const resp = await r2.get(obj.key);
       if (resp) {
@@ -2611,7 +2623,7 @@ backupRouter.post('/restore-from-r2', async (c) => {
 });
 
 /**
- * DELETE /restore-from-r2/phantom-devices - 清理恢复过程中误创建�?phantom 设备
+ * DELETE /restore-from-r2/phantom-devices - 清理恢复过程中误创建�?phantom 设备
  */
 backupRouter.delete('/phantom-devices', async (c) => {
   const db = c.env.DB;
@@ -2620,7 +2632,7 @@ backupRouter.delete('/phantom-devices', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /admin/backups/upload-db - 上传数据库备份文�?
+// POST /admin/backups/upload-db - 上传数据库备份文�?
 // ---------------------------------------------------------------------------
 
 backupRouter.post('/upload-db', async (c) => {
@@ -2689,7 +2701,7 @@ backupRouter.post('/upload-snapshot', apiValidator('json', UploadSnapshotSchema)
 });
 
 // ============================================================================
-// Restore endpoints - 与原版恢复功能对�?
+// Restore endpoints - 与原版恢复功能对�?
 // ============================================================================
 
 /**
