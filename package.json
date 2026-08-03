@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "vitest"
+    "test": "vitest",
+    "postinstall": "node scripts/patch-ssh2.js"
   },
   "keywords": [
     "beecount",
@@ -31,6 +32,7 @@
     "@cloudflare/workers-types": "^4.20250124.0",
     "@types/node": "^25.8.0",
     "@types/ssh2": "^1.15.5",
+    "patch-package": "^8.0.1",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5",
     "wrangler": "^4.24.0"
