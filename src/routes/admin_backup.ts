@@ -2771,31 +2771,48 @@ backupRouter.get('/restore/:runId/info', async (c) => {
 });
 
 /**
- * OAuth2 回调端点 — 处理授权码并返回 token JSON
+ * OAuth2 回调端点 — 接收授权码，返回 token JSON
+ * 访问: /admin/backup/remotes/oauth2/callback?code=xxx&provider=drive
+ * 然后 POST /admin/backup/remotes/oauth2/token 用 code 换取 token
  */
 backupRouter.get('/remotes/oauth2/callback', async (c) => {
   const code = c.req.query('code');
   const provider = c.req.query('provider') || 'drive';
-  const clientId = c.req.query('client_id');
-  const clientSecret = c.req.query('client_secret');
   if (!code) return c.text('Missing authorization code', 400);
-  if (!clientId || !clientSecret) return c.text('Missing client_id or client_secret', 400);
+  // 返回一个页面，提示用户复制 code 并用 POST 换取 token
+  return c.html(`<!DOCTYPE html><html><body>
+    <h2>授权成功</h2>
+    <p>授权码: <code>${code}</code></p>
+    <p>使用以下命令换取 token:</p>
+    <pre>curl -X POST https://beecount.qzz.io/api/v1/admin/backup/remotes/oauth2/token \\
+  -H "Content-Type: application/json" \\
+  -d '{"code":"${code}","provider":"${provider}","client_id":"你的client_id","client_secret":"你的client_secret"}'</pre>
+  </body></html>`);
+});
+
+/**
+ * OAuth2 令牌交换端点
+ */
+backupRouter.post('/remotes/oauth2/token', async (c) => {
+  const { code, provider, client_id, client_secret } = await c.req.json();
+  if (!code || !client_id || !client_secret) return c.json({ error: 'Missing required fields' }, 400);
   const tokenEndpoints: Record<string, string> = {
     drive: 'https://oauth2.googleapis.com/token',
     onedrive: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
     dropbox: 'https://api.dropbox.com/oauth2/token',
   };
-  const tokenUrl = tokenEndpoints[provider];
-  if (!tokenUrl) return c.text(`Unsupported provider: ${provider}`, 400);
-  const redirectUri = `${new URL(c.req.url).origin}/api/v1/admin/backup/remotes/oauth2/callback`;
+  const tokenUrl = tokenEndpoints[provider || 'drive'];
+  if (!tokenUrl) return c.json({ error: `Unsupported provider: ${provider}` }, 400);
+  const redirectUri = `https://beecount.qzz.io/api/v1/admin/backup/remotes/oauth2/callback`;
   try {
     const resp = await fetch(tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: 'authorization_code' }),
+      body: JSON.stringify({ code, client_id, client_secret, redirect_uri: redirectUri, grant_type: 'authorization_code' }),
     });
     const tokenData = await resp.json();
-    return c.json(tokenData, resp.ok ? 200 : 400);
+    if (!resp.ok) return c.json({ error: 'Token exchange failed', details: tokenData }, 400);
+    return c.json({ message: 'Token obtained successfully', token: tokenData });
   } catch (e) {
     return c.json({ error: (e as Error).message }, 500);
   }
