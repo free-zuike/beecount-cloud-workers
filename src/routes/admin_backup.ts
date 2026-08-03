@@ -1048,9 +1048,12 @@ backupRouter.post('/remotes/:id/test', async (c) => {
       case 'drive':
       case 'onedrive':
       case 'dropbox':
-        if (!config.client_id || !config.client_secret || !config.refresh_token) {
+        if (!config.client_id || !config.client_secret) {
           testResult.ok = false;
-          testResult.message = 'OAuth2 configuration incomplete (client_id, client_secret, refresh_token required)';
+          testResult.message = 'OAuth2 configuration incomplete (client_id, client_secret required)';
+        } else if (!config.refresh_token && !config.token) {
+          testResult.ok = false;
+          testResult.message = 'OAuth2 configuration incomplete (refresh_token required)';
         } else {
           testResult.ok = true;
           testResult.message = `${remote.backend_type} configured (OAuth2 token valid)`;
