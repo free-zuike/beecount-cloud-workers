@@ -1182,9 +1182,6 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
       - (txTotals?.expense_in ?? 0)
       + (txTotals?.income_transfer ?? 0)
       - (txTotals?.expense_transfer ?? 0);
-    // 负债账户（credit_card, loan）的余额应为负值
-    const displayBalance = (row.account_type as string) === 'credit_card' || (row.account_type as string) === 'loan'
-      ? -Math.abs(balance) : balance;
 
     result.push({
       id: accountSyncId,
@@ -1192,7 +1189,7 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
       account_type: row.account_type as string | null,
       currency: row.currency as string | null,
       initial_balance: initialBalance,
-      balance: displayBalance,
+      balance,
       last_change_id: latestChangeId?.max_id ?? 0,
       ledger_id: ledger.external_id,
       ledger_name: ledger.name,
