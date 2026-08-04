@@ -623,6 +623,9 @@ workspaceRouter.get('/accounts', async (c) => {
     const incomeTotal = (txStats?.income_in ?? 0) + (txStats?.income_transfer ?? 0);
     const expenseTotal = (txStats?.expense_in ?? 0) + (txStats?.expense_transfer ?? 0);
     const balance = initialBalance + incomeTotal - expenseTotal;
+    // 负债账户（credit_card, loan）的余额应为负值（前端 computeCurrencySummary 期望）
+    const displayBalance = (row.account_type as string) === 'credit_card' || (row.account_type as string) === 'loan'
+      ? -Math.abs(balance) : balance;
 
     items.push({
       id: accountSyncId,
@@ -645,7 +648,7 @@ workspaceRouter.get('/accounts', async (c) => {
       tx_count: txStats?.tx_count ?? 0,
       income_total: incomeTotal,
       expense_total: expenseTotal,
-      balance,
+      balance: displayBalance,
     });
   }
 
