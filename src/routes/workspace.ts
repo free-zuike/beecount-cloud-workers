@@ -2376,7 +2376,7 @@ workspaceRouter.get('/net-worth-history', async (c) => {
         const rate = ratesToBase[accountCurrency[tx.account_sync_id]] ?? 1;
         const convertedAmt = amt * rate;
         if (!monthlyChanges[month]) monthlyChanges[month] = { assets: 0, liabilities: 0 };
-        monthlyChanges[month].liabilities += convertedAmt;
+        monthlyChanges[month].assets -= convertedAmt;
         accountBalances[tx.account_sync_id] = (accountBalances[tx.account_sync_id] ?? 0) - convertedAmt;
       }
     } else if (tx.tx_type === 'transfer') {
