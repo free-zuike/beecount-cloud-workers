@@ -17,6 +17,18 @@ async function cleanupStalePendingBackups(db: D1Database): Promise<void> {
     if (result.meta.changes > 0) {
       console.log(`[CRON] Cleaned up ${result.meta.changes} stale pending backups`);
     }
+    // 也清理卡在 running 状态超过 10 分钟的备份
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const runningResult = await db
+      .prepare(
+        `UPDATE backup_runs SET status = 'failed', error_message = 'Backup timed out (stuck in running)'
+         WHERE status = 'running' AND started_at < ?`
+      )
+      .bind(tenMinutesAgo)
+      .run();
+    if (runningResult.meta.changes > 0) {
+      console.log(`[CRON] Cleaned up ${runningResult.meta.changes} stale running backups`);
+    }
   } catch (err) {
     console.error('[CRON] Failed to cleanup stale pending backups:', err);
   }
@@ -105,7 +117,7 @@ export async function processBackupSchedule(
     const timezoneOffset = await resolveTimezoneOffset(db, schedule.timezone_offset);
 
     if (!schedule['next_run_at']) {
-      const nextRun = calculateNextRun(schedule['cron_expr'], resolveTimezoneOffset(db, schedule['timezone_offset']));
+      const nextRun = calculateNextRun(schedule['cron_expr'], await resolveTimezoneOffset(db, schedule['timezone_offset']));
       await db.prepare('UPDATE backup_schedules SET next_run_at = ? WHERE id = ?')
         .bind(nextRun, schedule['id']).run();
       console.log(`[CRON] Set initial next_run_at for schedule ${schedule['id']}: ${nextRun}`);
