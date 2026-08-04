@@ -168,7 +168,7 @@ export function AccountsPage() {
         const cur = (a.currency || '').toUpperCase()
         if (cur) distinct.add(cur)
       }
-      if (base && (distinct.size >= 2 || (distinct.size === 1 && !distinct.has(base)))) {
+      if (base && distinct.size >= 2) {
         const [r, o] = await Promise.all([
           fetchExchangeRates(token, base).catch(() => null),
           fetchExchangeRateOverrides(token).catch(() => [] as ExchangeRateOverride[]),
