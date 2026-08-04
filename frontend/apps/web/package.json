@@ -1,6 +1,6 @@
 {
   "name": "@beecount/web",
-  "version": "1.0.0",
+  "version": "1.6.2",
   "private": true,
   "type": "module",
   "scripts": {
