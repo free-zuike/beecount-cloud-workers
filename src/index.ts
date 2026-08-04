@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
 import { initializeDatabase } from './db/schema';
+import { APP_VERSION } from './version';
 import { authMiddleware } from './middleware/auth';
 import { spaMiddleware } from './middleware/spa';
 import { processBackupSchedule } from './services/backup-scheduler';
@@ -78,7 +79,7 @@ app.get('/healthz', (c) => c.json({ status: 'ok' }));
 app.route('/api/v1/setup', setupRouter);
 app.route('/api/v1/auth', authRouter);
 app.get('/api/v1/version', (c) =>
-  c.json({ name: 'BeeCount Cloud', version: '1.6.2' })
+  c.json({ name: 'BeeCount Cloud', version: APP_VERSION })
 );
 
 // 头像下载公开访问（与原版一致）
