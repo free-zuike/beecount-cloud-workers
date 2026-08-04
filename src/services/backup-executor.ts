@@ -878,7 +878,7 @@ export function calculateNextRun(cronExpr: string, timezoneOffset: number | stri
     let targetUtcMs = targetDate.getTime() + offsetMs;
 
     // 如果目标时间已过，加一�?
-    if (targetUtcMs <= nowMs) {
+    while (targetUtcMs <= nowMs) {
       targetUtcMs += 24 * 60 * 60 * 1000;
     }
 
@@ -903,4 +903,6 @@ export function calculateNextRun(cronExpr: string, timezoneOffset: number | stri
     return nextDate.toISOString();
   }
 }
+
+
 
