@@ -1434,6 +1434,15 @@ async function applyUserChangeToProjection(
     const iconCloudFileId = (payload as any).iconCloudFileId ?? payload.icon_cloud_file_id ?? null;
     const iconCloudSha256 = (payload as any).iconCloudSha256 ?? payload.icon_cloud_sha256 ?? null;
 
+    // 检查 sync_id 是否已被其他用户使用（防止共享账本分类被复制到当前用户）
+    const existingAnyUser = await db.prepare(
+      'SELECT user_id FROM read_category_projection WHERE sync_id = ? AND user_id != ? LIMIT 1'
+    ).bind(entity_sync_id, userId).first<{ user_id: string }>();
+    if (existingAnyUser && !existingRow) {
+      serverLogger.info('src.routers.sync', '[SYNC] Skipping category creation for sync_id', entity_sync_id, '- already belongs to user', existingAnyUser.user_id);
+      return;
+    }
+
     // 合并 rename 检查和现有行查询为一次 SELECT
     const existingRow = await db.prepare(
       'SELECT name, kind, level, sort_order, icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256, parent_name, parent_sync_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
