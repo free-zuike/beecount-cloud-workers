@@ -33,8 +33,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { getFirstEnabledS3Config } from './sys_config';
 import { signS3Request } from '../lib/s3';
-import { performBackupFanOut, calculateNextRun, validateCronExpression, resolveAliasRemote } from '../services/backup-executor';
-import { downloadFromS3 } from '../lib/s3';
+import { performBackupFanOut, calculateNextRun, validateCronExpression, resolveAliasRemote, downloadBackupFile } from '../services/backup-executor';
 import { insertAuditLog } from '../lib/audit';
 
 /**
@@ -2740,54 +2739,36 @@ backupRouter.post('/restore/:runId', async (c) => {
   }
   
   // 下载备份文件
-  if (!r2) {
-    return c.json({ error: 'R2 not configured' }, 500);
-  }
-  
   try {
-    let backupFile = await r2.get(run.backup_path);
+    let backupFile: Uint8Array | null = null;
+    
+    // 先尝试 R2
+    if (r2) {
+      const r2Obj = await r2.get(run.backup_path);
+      if (r2Obj) {
+        const buffer = await r2Obj.arrayBuffer();
+        backupFile = new Uint8Array(buffer);
+      }
+    }
+    
     if (!backupFile) {
-      // 尝试从 S3 远程下载
+      // 尝试从远程存储下载
       const target = await db.prepare(
         `SELECT br.backend_type, br.config_summary FROM backup_run_targets brt
          JOIN backup_remotes br ON brt.remote_id = br.id
          WHERE brt.run_id = ? AND brt.status = 'succeeded' LIMIT 1`
       ).bind(runId).first<{ backend_type: string; config_summary: string }>();
-      if (target && (target.backend_type === 's3' || target.backend_type === 'b2')) {
+      
+      if (target) {
         const config = (() => { try { return JSON.parse(target.config_summary || '{}'); } catch { return {}; } })();
-        const isB2 = target.backend_type === 'b2';
-        const endpoint = config.endpoint || (isB2 ? 'https://s3.eu-central-003.backblazeb2.com' : 'https://s3.amazonaws.com');
-        const bucket = config.bucket;
-        const accessKey = isB2 ? (config.account || config.access_key_id)?.trim() : (config.access_key_id || config.key)?.trim();
-        const secretKey = isB2 ? (config.key || config.secret_access_key)?.trim() : (config.secret_access_key || config.account)?.trim();
-        const region = config.region || 'auto';
-        const data = await downloadFromS3(endpoint, bucket!, accessKey!, secretKey!, region, run.backup_path);
-        if (data) {
-          return c.json({
-            success: true,
-            filename: run.backup_filename,
-            size: data.length,
-            backup_path: run.backup_path,
-            message: 'Backup file downloaded successfully from S3.'
-          });
-        }
+        const remoteConfig: Record<string, string> = { backend_type: target.backend_type, ...config };
+        backupFile = await downloadBackupFile(remoteConfig, run.backup_path);
       }
-      return c.json({ error: 'Backup file not found in R2 or S3' }, 404);
     }
     
-    // 读取文件内容
-    const backupData = await backupFile.arrayBuffer();
-    
-    return c.json({
-      success: true,
-      filename: run.backup_filename,
-      size: backupData.byteLength,
-      backup_path: run.backup_path,
-      message: 'Backup file downloaded successfully. Use /restore/:runId/extract to extract.'
-    });
-  } catch (error) {
-    return c.json({ error: `Failed to download backup: ${(error as Error).message}` }, 500);
-  }
+    if (!backupFile) {
+      return c.json({ error: 'Backup file not found' }, 404);
+    }
 });
 
 /**
