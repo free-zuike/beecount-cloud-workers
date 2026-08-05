@@ -433,11 +433,8 @@ export async function deleteRemoteFile(
     const accessKey = isB2 ? (config.account || config.access_key_id)?.trim() : (config.access_key_id || config.key)?.trim();
     const secretKey = isB2 ? (config.key || config.secret_access_key)?.trim() : (config.secret_access_key || config.account)?.trim();
     const region = config.region || 'auto';
-    let prefix = '';
-    if (config.savePath && config.savePath !== 'custom') prefix = config.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
-    else if (config.root_path) prefix = config.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
-    else prefix = 'beecount/';
-    return await deleteS3Object(endpoint, bucket!, accessKey!, secretKey!, region, prefix + fileName);
+    // S3 list 返回完整 key（含前缀），直接使用 fileName 即可
+    return await deleteS3Object(endpoint, bucket!, accessKey!, secretKey!, region, fileName);
   }
 
   if (config.backend_type === 'r2' && config._r2Bucket) {
