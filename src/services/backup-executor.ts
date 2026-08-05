@@ -554,7 +554,9 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
     let prefix = '';
-    if (remoteConfig.savePath) prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else prefix = 'beecount/';
     const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
     const webdavUser = remoteConfig.username || remoteConfig.user;
     const webdavPass = remoteConfig.password || remoteConfig.pass;
@@ -578,7 +580,9 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
     let prefix = '';
-    if (remoteConfig.savePath) prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else prefix = 'beecount/';
     const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
     const result = await uploadToOAuth2Provider(remoteConfig, key, backupBytes);
     return result ? { ok: true, message: 'Upload successful', key } : { ok: false, message: 'Upload failed' };
@@ -597,7 +601,9 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
     let prefix = '';
-    if (remoteConfig.savePath) prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else prefix = 'beecount/';
     const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
 
     try {
@@ -624,7 +630,9 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const ts = localTime.toISOString().replace(/[:\-T]/g, '').slice(0, 14);
     let prefix = '';
-    if (remoteConfig.savePath) prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
+    else prefix = 'beecount/';
     const key = `${prefix}backups/${userId}/${ts}_backup${encrypted ? '.zip' : '.tar.gz'}`;
 
     try {
