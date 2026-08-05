@@ -367,7 +367,7 @@ export async function listRemoteFiles(
       const auth = 'Basic ' + Buffer.from(username + ':' + password).toString('base64');
       const response = await fetch(baseUrl, {
         method: 'PROPFIND',
-        headers: { 'Authorization': auth, 'Depth': '1' },
+        headers: { 'Authorization': auth, 'Depth': 'infinity' },
       });
       if (!response.ok) return [];
       const text = await response.text();
