@@ -154,9 +154,11 @@ export async function listOneDriveFiles(
   if (!token) return [];
 
   try {
-    const path = config.folder_path ? `:/${config.folder_path}:/` : ':/';
+    const searchUrl = config.folder_path
+      ? `https://graph.microsoft.com/v1.0/me/drive/root:/${config.folder_path}:/search(q='backup')`
+      : `https://graph.microsoft.com/v1.0/me/drive/root/search(q='backup')`;
     const res = await fetch(
-      `https://graph.microsoft.com/v1.0/me/drive/root${path}children`,
+      searchUrl,
       { headers: { 'Authorization': `Bearer ${token}` } },
     );
     if (!res.ok) return [];
