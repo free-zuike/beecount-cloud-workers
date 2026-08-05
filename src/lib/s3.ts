@@ -276,3 +276,26 @@ export async function deleteS3Object(
     return false;
   }
 }
+
+export async function downloadFromS3(
+  endpoint: string,
+  bucket: string,
+  accessKey: string,
+  secretKey: string,
+  region: string,
+  key: string,
+): Promise<Uint8Array | null> {
+  try {
+    const { url, headers } = await signS3Request(
+      accessKey, secretKey, region,
+      endpoint, bucket.replace(/^\/+/, ''),
+      key, 'GET'
+    );
+    const response = await fetch(url, { method: 'GET', headers });
+    if (!response.ok) return null;
+    const buffer = await response.arrayBuffer();
+    return new Uint8Array(buffer);
+  } catch {
+    return null;
+  }
+}

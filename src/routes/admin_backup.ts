@@ -33,7 +33,8 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { getFirstEnabledS3Config } from './sys_config';
 import { signS3Request } from '../lib/s3';
-import { performBackupFanOut, calculateNextRun, validateCronExpression } from '../services/backup-executor';
+import { performBackupFanOut, calculateNextRun, validateCronExpression, resolveAliasRemote } from '../services/backup-executor';
+import { downloadFromS3 } from '../lib/s3';
 import { insertAuditLog } from '../lib/audit';
 
 /**
@@ -2744,9 +2745,34 @@ backupRouter.post('/restore/:runId', async (c) => {
   }
   
   try {
-    const backupFile = await r2.get(run.backup_path);
+    let backupFile = await r2.get(run.backup_path);
     if (!backupFile) {
-      return c.json({ error: 'Backup file not found in R2' }, 404);
+      // 尝试从 S3 远程下载
+      const target = await db.prepare(
+        `SELECT br.backend_type, br.config_summary FROM backup_run_targets brt
+         JOIN backup_remotes br ON brt.remote_id = br.id
+         WHERE brt.run_id = ? AND brt.status = 'succeeded' LIMIT 1`
+      ).bind(runId).first<{ backend_type: string; config_summary: string }>();
+      if (target && (target.backend_type === 's3' || target.backend_type === 'b2')) {
+        const config = (() => { try { return JSON.parse(target.config_summary || '{}'); } catch { return {}; } })();
+        const isB2 = target.backend_type === 'b2';
+        const endpoint = config.endpoint || (isB2 ? 'https://s3.eu-central-003.backblazeb2.com' : 'https://s3.amazonaws.com');
+        const bucket = config.bucket;
+        const accessKey = isB2 ? (config.account || config.access_key_id)?.trim() : (config.access_key_id || config.key)?.trim();
+        const secretKey = isB2 ? (config.key || config.secret_access_key)?.trim() : (config.secret_access_key || config.account)?.trim();
+        const region = config.region || 'auto';
+        const data = await downloadFromS3(endpoint, bucket!, accessKey!, secretKey!, region, run.backup_path);
+        if (data) {
+          return c.json({
+            success: true,
+            filename: run.backup_filename,
+            size: data.length,
+            backup_path: run.backup_path,
+            message: 'Backup file downloaded successfully from S3.'
+          });
+        }
+      }
+      return c.json({ error: 'Backup file not found in R2 or S3' }, 404);
     }
     
     // 读取文件内容
