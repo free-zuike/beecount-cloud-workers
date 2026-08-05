@@ -226,7 +226,7 @@ export async function listDropboxFiles(
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ path, include_media_info: false }),
+      body: JSON.stringify({ path, recursive: true, include_media_info: false }),
     });
     if (!res.ok) return [];
     const data = await res.json() as { entries?: Array<{ name: string; path_display: string; '.tag': string }> };
