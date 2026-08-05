@@ -36,12 +36,17 @@ async function downloadAndExtractBackup(
   r2: R2Bucket,
   backupPath: string,
   password?: string,
+  preloadedData?: Uint8Array,
 ): Promise<{ meta: any; tables: Record<string, unknown[]>; attachments: Map<string, Uint8Array> }> {
   // 下载备份文件
-  const obj = await r2.get(backupPath);
-  if (!obj) throw new Error(`Backup not found: ${backupPath}`);
-  
-  let data = new Uint8Array(await obj.arrayBuffer());
+  let data: Uint8Array;
+  if (preloadedData) {
+    data = preloadedData;
+  } else {
+    const obj = await r2.get(backupPath);
+    if (!obj) throw new Error(`Backup not found: ${backupPath}`);
+    data = new Uint8Array(await obj.arrayBuffer());
+  }
   let entries: { name: string; size: number; data: Uint8Array }[];
 
   // 判断是否为 ZIP 格式（PK\x03\x04 开头）
@@ -290,6 +295,7 @@ export async function performRestore(
   backupPath: string,
   onProgress?: (progress: RestoreProgress) => void,
   password?: string,
+  preloadedData?: Uint8Array,
 ): Promise<RestoreResult> {
   try {
     // 禁用外键约束，防止 INSERT OR REPLACE 触发 ON DELETE CASCADE 删除关联数据
@@ -298,7 +304,7 @@ export async function performRestore(
     // Phase 1: 下载并解压（支持加密备份）
     onProgress?.({ phase: 'downloading', bytesTransferred: 0, bytesTotal: 0 });
     
-    const { meta, tables, attachments } = await downloadAndExtractBackup(r2, backupPath, password);
+    const { meta, tables, attachments } = await downloadAndExtractBackup(r2, backupPath, password, preloadedData);
     
     const totalBytes = Object.values(tables).reduce((sum, rows) => sum + rows.length, 0) * 500; // 估算
     onProgress?.({ phase: 'downloading', bytesTransferred: totalBytes, bytesTotal: totalBytes });

@@ -2209,6 +2209,23 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
       } catch {}
     }
 
+    // 尝试从远端存储预下载（支持 S3/B2/WebDAV/OAuth2 等）
+    let preloadedData: Uint8Array | undefined;
+    if (backupPath && !backupPath.startsWith('backups/')) {
+      // 路径不是 R2 格式，尝试从远端下载
+      const target = await db.prepare(
+        `SELECT br.backend_type, br.config_summary FROM backup_run_targets brt
+         JOIN backup_remotes br ON brt.remote_id = br.id
+         WHERE brt.run_id = ? AND brt.status = 'succeeded' LIMIT 1`
+      ).bind(runId).first<{ backend_type: string; config_summary: string }>();
+      if (target) {
+        const config = (() => { try { return JSON.parse(target.config_summary || '{}'); } catch { return {}; } })();
+        const remoteConfig: Record<string, string> = { backend_type: target.backend_type, ...config };
+        const { downloadBackupFile } = await import('../services/backup-executor');
+        preloadedData = await downloadBackupFile(remoteConfig, backupPath);
+      }
+    }
+
     await broadcastViaDO(c.env, userId, {
       type: 'restore_progress', runId: strRunId, phase: 'downloading',
       bytesTransferred: 0, bytesTotal: run.bytes_total || 0,
@@ -2219,7 +2236,7 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
         type: 'restore_progress', runId: strRunId, phase: progress.phase,
         bytesTransferred: progress.bytesTransferred, bytesTotal: progress.bytesTotal,
       }).catch(() => {});
-    }, password);
+    }, password, preloadedData);
 
     const finishedAt = new Date().toISOString();
     await db.prepare(
