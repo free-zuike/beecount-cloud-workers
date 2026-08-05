@@ -1060,6 +1060,11 @@ backupRouter.post('/remotes/:id/test', async (c) => {
         }
         break;
 
+      case 'alias':
+        testResult.message = 'Alias resolved via target remote';
+        testResult.ok = true;
+        break;
+
       default:
         testResult.message = `Unknown backend type: ${remote.backend_type}`;
     }

@@ -13,6 +13,7 @@ const TAR_NAME_RE = /^(\d{14})_backup(?:\.zip|\.tar\.gz(?:\.age)?)$/;
 
 export interface RemoteFile {
   name: string;
+  path?: string; // 远端文件 ID 或路径（用于删除）
   timestamp: Date; // UTC
 }
 
@@ -47,7 +48,7 @@ export function filterBackupFiles(items: Array<{ Name?: string; Path?: string; I
     const name = item.Name || item.Path || '';
     const ts = parseBackupFilename(name);
     if (!ts) continue;
-    out.push({ name, timestamp: ts });
+    out.push({ name, path: item.Path, timestamp: ts });
   }
   return out;
 }

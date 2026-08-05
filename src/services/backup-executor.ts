@@ -696,13 +696,28 @@ export async function performBackupFanOut(
     }
   }
 
-  // 3. 并行上传到所有远端（与原�?ThreadPoolExecutor fan-out 对齐�?
-  const remoteIds = remoteConfigs.map(r => r.remoteId);
-  logWrap(`[Backup] Fan-out to ${remoteConfigs.length} remotes: ${remoteIds.join(', ')}`);
+  // 3. 解析 alias 远端
+  let effectiveConfigs = remoteConfigs;
+  const hasAlias = remoteConfigs.some(rc => rc.config.backend_type === 'alias');
+  if (hasAlias) {
+    effectiveConfigs = await Promise.all(remoteConfigs.map(async (rc) => {
+      if (rc.config.backend_type !== 'alias') return rc;
+      const resolved = await resolveAliasRemote(db, rc.config);
+      if (resolved.error) {
+        logWrap(`[Backup] Alias resolution failed: ${resolved.error}`);
+        return { ...rc, config: { ...rc.config, backend_type: 'local' } };
+      }
+      return { ...rc, config: resolved };
+    }));
+  }
+
+  // 4. 并行上传到所有远端（与原�?ThreadPoolExecutor fan-out 对齐�?
+  const remoteIds = effectiveConfigs.map(r => r.remoteId);
+  logWrap(`[Backup] Fan-out to ${effectiveConfigs.length} remotes: ${remoteIds.join(', ')}`);
   progressFn?.('fan_out_start');
 
   const uploadResults = await Promise.allSettled(
-    remoteConfigs.map(async ({ remoteId, config }) => {
+    effectiveConfigs.map(async ({ remoteId, config }) => {
       progressFn?.('uploading', { remoteId });
       const result = await uploadBackupToRemote(backupBytes, encrypted, config, userId, logWrap);
       logWrap(`[Backup] Remote ${remoteId}: ${result.ok ? 'success' : 'failed'} ${result.message}`);
@@ -741,7 +756,7 @@ export async function performBackupFanOut(
     logWrap(`[Backup] Retention: running with retention_days=${retentionDays}`);
     for (const result of successful) {
       const r = (result as PromiseFulfilledResult<{ remoteId: string; ok: boolean; message: string; key?: string }>).value;
-      const remoteConfig = remoteConfigs.find(rc => rc.remoteId === r.remoteId);
+      const remoteConfig = effectiveConfigs.find(rc => rc.remoteId === r.remoteId);
       if (!remoteConfig) continue;
       try {
         const items = await listRemoteFiles(remoteConfig.config);
@@ -749,7 +764,7 @@ export async function performBackupFanOut(
         const toDelete = computeRetentionDeletes(backupFiles, retentionDays);
         for (const f of toDelete) {
           try {
-            await deleteRemoteFile(remoteConfig.config, f.Path || f.name);
+            await deleteRemoteFile(remoteConfig.config, f.path || f.name);
             logWrap(`[Backup] Retention deleted: ${f.name}`);
           } catch (exc) {
             logWrap(`[Backup] Retention delete failed: ${f.name}: ${exc}`);
@@ -907,6 +922,29 @@ export function calculateNextRun(cronExpr: string, timezoneOffset: number | stri
     nextDate.setMinutes(nextDate.getMinutes() + 5);
     return nextDate.toISOString();
   }
+}
+
+/**
+ * 解析 alias 远端配置：查找目标远端并合并路径前缀
+ */
+export async function resolveAliasRemote(
+  db: D1Database,
+  config: Record<string, string>,
+): Promise<Record<string, string>> {
+  const remoteSpec = config.remote || '';
+  const colonIdx = remoteSpec.indexOf(':');
+  if (colonIdx < 0) return { ...config, error: 'Invalid alias format' };
+  const targetName = remoteSpec.slice(0, colonIdx).trim();
+  const aliasPath = remoteSpec.slice(colonIdx + 1).trim();
+  const target = await db
+    .prepare('SELECT id, backend_type, config_summary FROM backup_remotes WHERE name = ?')
+    .bind(targetName)
+    .first<{ id: string; backend_type: string; config_summary: string }>();
+  if (!target) return { ...config, error: `Alias target "${targetName}" not found` };
+  const targetConfig = (() => { try { return JSON.parse(target.config_summary || '{}'); } catch { return {}; } })();
+  const resolved: Record<string, string> = { backend_type: target.backend_type, ...targetConfig };
+  if (aliasPath) resolved.savePath = aliasPath;
+  return resolved;
 }
 
 
