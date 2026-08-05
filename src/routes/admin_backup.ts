@@ -2752,17 +2752,18 @@ backupRouter.post('/restore/:runId', async (c) => {
     }
     
     if (!backupFile) {
-      // 尝试从远程存储下载
-      const target = await db.prepare(
+      // 尝试从所有成功上传的远端存储下载
+      const targets = await db.prepare(
         `SELECT br.backend_type, br.config_summary FROM backup_run_targets brt
          JOIN backup_remotes br ON brt.remote_id = br.id
-         WHERE brt.run_id = ? AND brt.status = 'succeeded' LIMIT 1`
-      ).bind(runId).first<{ backend_type: string; config_summary: string }>();
+         WHERE brt.run_id = ? AND brt.status = 'succeeded'`
+      ).bind(runId).all<{ backend_type: string; config_summary: string }>();
       
-      if (target) {
+      for (const target of targets.results) {
         const config = (() => { try { return JSON.parse(target.config_summary || '{}'); } catch { return {}; } })();
         const remoteConfig: Record<string, string> = { backend_type: target.backend_type, ...config };
         backupFile = await downloadBackupFile(remoteConfig, run.backup_path);
+        if (backupFile) break;
       }
     }
     
