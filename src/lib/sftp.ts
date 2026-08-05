@@ -141,6 +141,32 @@ class SftpClient {
     });
   }
 
+  async listRecursive(dirPath: string): Promise<Array<{ Name: string; Path: string; IsDir: boolean }>> {
+    const allItems: Array<{ Name: string; Path: string; IsDir: boolean }> = [];
+    const dirsToScan = [dirPath || ''];
+    const scanned = new Set<string>();
+
+    while (dirsToScan.length > 0) {
+      const currentDir = dirsToScan.shift()!;
+      if (scanned.has(currentDir)) continue;
+      scanned.add(currentDir);
+
+      try {
+        const items = await this.list(currentDir);
+        for (const item of items) {
+          allItems.push(item);
+          if (item.IsDir) {
+            dirsToScan.push(item.Path);
+          }
+        }
+      } catch {
+        // 跳过无法列出的目录
+      }
+    }
+
+    return allItems;
+  }
+
   async delete(remotePath: string): Promise<boolean> {
     return this.withSftp((sftp) => {
       return new Promise((resolve, reject) => {

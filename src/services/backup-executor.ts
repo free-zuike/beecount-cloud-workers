@@ -395,7 +395,7 @@ export async function listRemoteFiles(
     let prefix = '';
     if (config.savePath && config.savePath !== 'custom') prefix = config.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (config.root_path) prefix = config.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
-    return await ftpClient.list(prefix);
+    return await ftpClient.listRecursive(prefix);
   }
 
   if (config.backend_type === 'sftp') {
@@ -409,7 +409,7 @@ export async function listRemoteFiles(
     let prefix = '';
     if (config.savePath && config.savePath !== 'custom') prefix = config.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (config.root_path) prefix = config.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
-    return await sftpClient.list(prefix);
+    return await sftpClient.listRecursive(prefix);
   }
 
   if (config.backend_type === 'drive' || config.backend_type === 'onedrive' || config.backend_type === 'dropbox') {
