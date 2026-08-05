@@ -2770,6 +2770,17 @@ backupRouter.post('/restore/:runId', async (c) => {
     if (!backupFile) {
       return c.json({ error: 'Backup file not found' }, 404);
     }
+    
+    return c.json({
+      success: true,
+      filename: run.backup_filename,
+      size: backupFile.length,
+      backup_path: run.backup_path,
+      message: 'Backup file downloaded successfully.'
+    });
+  } catch (error) {
+    return c.json({ error: `Failed to download backup: ${(error as Error).message}` }, 500);
+  }
 });
 
 /**
