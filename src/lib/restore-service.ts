@@ -214,44 +214,48 @@ async function importToD1(
     const pkColumns = tableInfoRows.filter(c => c.pk > 0).map(c => c.name);
     const useReplace = pkColumns.length > 0;
 
-    // 逐行插入（避免批量中某行失败导致整批丢失）
+    // 批量插入（每批最多 100 条，避免超过 Workers 子请求限制）
     let importedCount = 0;
-    for (const row of rows) {
-      const record = row as Record<string, unknown>;
-      // 如果指定了 userIdMapping，替换 user_id 列（按邮箱匹配，恢复数据归属当前用户）
-      if (userIdMapping && matchedColumns.includes('user_id') && record['user_id'] && userIdMapping[String(record['user_id'])]) {
-        record['user_id'] = userIdMapping[String(record['user_id'])];
-      }
-      // users 表：跳过已存在邮箱的用户（不覆盖密码/2FA）
-      if (tableName === 'users' && userIdMapping && record['id'] && userIdMapping[String(record['id'])]) {
-        continue;
-      }
-      // users 表：保留现有用户的 password_hash（防止恢复时覆盖密码）
-      if (tableName === 'users' && record['id']) {
-        const existingUser = await db.prepare('SELECT id FROM users WHERE id = ?').bind(record['id']).first<{ id: string }>();
-        if (existingUser) {
-          // 跳过 password_hash 列，保留现有哈希
-          const skipPassword = matchedColumns.indexOf('password_hash');
-          if (skipPassword >= 0) {
-            matchedColumns.splice(skipPassword, 1);
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      const batch = rows.slice(i, i + BATCH_SIZE);
+      const stmts: D1PreparedStatement[] = [];
+      
+      for (const row of batch) {
+        const record = row as Record<string, unknown>;
+        // 如果指定了 userIdMapping，替换 user_id 列
+        if (userIdMapping && matchedColumns.includes('user_id') && record['user_id'] && userIdMapping[String(record['user_id'])]) {
+          record['user_id'] = userIdMapping[String(record['user_id'])];
+        }
+        // users 表：跳过已存在邮箱的用户
+        if (tableName === 'users' && userIdMapping && record['id'] && userIdMapping[String(record['id'])]) {
+          continue;
+        }
+        // users 表：保留现有用户的 password_hash
+        if (tableName === 'users' && record['id']) {
+          const existingUser = await db.prepare('SELECT id FROM users WHERE id = ?').bind(record['id']).first<{ id: string }>();
+          if (existingUser) {
+            const skipPassword = matchedColumns.indexOf('password_hash');
+            if (skipPassword >= 0) {
+              matchedColumns.splice(skipPassword, 1);
+            }
           }
         }
-      }
-      const values = matchedColumns.map(col => record[col] ?? null);
-
-      try {
+        const values = matchedColumns.map(col => record[col] ?? null);
         if (useReplace) {
-          await db.prepare(`INSERT OR REPLACE INTO "${tableName}" (${matchedColumns.map(c => `"${c}"`).join(',')}) VALUES (${matchedColumns.map(() => '?').join(',')})`)
-            .bind(...values).run();
+          stmts.push(db.prepare(`INSERT OR REPLACE INTO "${tableName}" (${matchedColumns.map(c => `"${c}"`).join(',')}) VALUES (${matchedColumns.map(() => '?').join(',')})`).bind(...values));
         } else {
-          await db.prepare(`INSERT INTO "${tableName}" (${matchedColumns.map(c => `"${c}"`).join(',')}) VALUES (${matchedColumns.map(() => '?').join(',')})`)
-            .bind(...values).run();
+          stmts.push(db.prepare(`INSERT INTO "${tableName}" (${matchedColumns.map(c => `"${c}"`).join(',')}) VALUES (${matchedColumns.map(() => '?').join(',')})`).bind(...values));
         }
-        importedCount++;
-      } catch (err) {
-        const msg = `[Restore] ${tableName}: ${(err as Error).message}`;
-        console.error(msg);
-        errors.push(msg);
+      }
+      
+      if (stmts.length > 0) {
+        try {
+          await db.batch(stmts);
+          importedCount += stmts.length;
+        } catch (e) {
+          errors.push(`${tableName} batch ${Math.floor(i / BATCH_SIZE) + 1}: ${(e as Error).message}`);
+        }
       }
     }
 
