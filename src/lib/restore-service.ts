@@ -181,6 +181,13 @@ async function importToD1(
     const rows = tables[tableName];
     if (!Array.isArray(rows) || rows.length === 0) continue;
 
+    // 跳过运维表，这些是运行时数据，不应被备份覆盖
+    const SKIP_TABLES = new Set(['backup_runs', 'backup_run_targets', 'backup_restores', 'backup_snapshots', 'sync_cursors', 'sync_push_idempotency', 'mcp_call_logs']);
+    if (SKIP_TABLES.has(tableName)) {
+      console.debug(`[Restore] Skipping ${tableName}: operational table`);
+      continue;
+    }
+
     // 跳过 D1 中不存在的表
     if (!existingTableNames.has(tableName)) {
       console.debug(`[Restore] Skipping table ${tableName}: not found in D1`);
