@@ -7,7 +7,7 @@
 
 // ==================== Token 刷新 ====================
 
-async function refreshAccessToken(
+export async function refreshAccessToken(
   provider: 'drive' | 'onedrive' | 'dropbox',
   clientId: string,
   clientSecret: string,
