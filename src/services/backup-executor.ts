@@ -744,7 +744,7 @@ export async function performBackupFanOut(
         const toDelete = computeRetentionDeletes(backupFiles, retentionDays);
         for (const f of toDelete) {
           try {
-            await deleteRemoteFile(remoteConfig.config, f.name);
+            await deleteRemoteFile(remoteConfig.config, f.Path || f.name);
             logWrap(`[Backup] Retention deleted: ${f.name}`);
           } catch (exc) {
             logWrap(`[Backup] Retention delete failed: ${f.name}: ${exc}`);
