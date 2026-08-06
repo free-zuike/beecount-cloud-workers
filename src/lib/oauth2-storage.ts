@@ -55,20 +55,54 @@ export async function uploadToDrive(
   if (!token) return false;
 
   try {
-    // 1. 创建文件元数据
+    // 解析路径，创建目录结构
+    const parts = fileName.split('/').filter(Boolean);
+    const basename = parts.pop() || fileName;
+    let parentId = config.folder_id || 'root';
+
+    // 逐层创建目录
+    for (const dirName of parts) {
+      // 检查目录是否已存在
+      const searchRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=name='${encodeURIComponent(dirName)}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false&fields=files(id)`,
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      );
+      const searchData = await searchRes.json() as { files?: Array<{ id: string }> };
+      if (searchData.files && searchData.files.length > 0) {
+        parentId = searchData.files[0].id;
+      } else {
+        // 创建目录
+        const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: dirName,
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: [parentId],
+          }),
+        });
+        if (!createRes.ok) return false;
+        const folder = await createRes.json() as { id: string };
+        parentId = folder.id;
+      }
+    }
+
+    // 上传文件到目标目录
     const metaRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ name: fileName.split('/').pop() || fileName, parents: config.folder_id ? [config.folder_id] : [] }),
+      body: JSON.stringify({ name: basename, parents: [parentId] }),
     });
     if (!metaRes.ok) return false;
     const uploadUrl = metaRes.headers.get('Location');
     if (!uploadUrl) return false;
 
-    // 2. 上传文件内容
     const uploadRes = await fetch(uploadUrl, {
       method: 'PUT',
       headers: { 'Content-Length': String(data.length) },
