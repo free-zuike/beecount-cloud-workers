@@ -7,7 +7,7 @@ import { useT } from '@beecount/ui'
 import { AppShell } from './app/AppShell'
 import { RequireAuth } from './app/router'
 import { LoginPage } from './pages/LoginPage'
-import { clearCursor } from './state/sync-client'
+import { SetupForm } from './app/SetupForm'
 
 // Section 页面全部懒加载 — 首屏只下载当前 route 需要的 chunk,显著降低
 // 首次进入 /app/overview 的 JS 体积。每个页面会是独立 chunk,后续切到
@@ -135,6 +135,23 @@ function AppRoutes() {
     }
   }, [token])
 
+  const [setupChecked, setSetupChecked] = useState(false)
+  const [setupCompleted, setSetupCompleted] = useState(true)
+
+  useEffect(() => {
+    const checkSetup = async () => {
+      try {
+        const res = await fetch('/api/v1/setup')
+        const data = await res.json()
+        setSetupCompleted(data.setup_completed === true)
+      } catch {
+        setSetupCompleted(false)
+      }
+      setSetupChecked(true)
+    }
+    checkSetup()
+  }, [])
+
   const handleLogout = useCallback(() => {
     const prev = getStoredUserId()
     if (prev) {
@@ -168,6 +185,22 @@ function AppRoutes() {
       <AppShell token={token} onLogout={handleLogout} />
     </RequireAuth>
   )
+
+  if (!setupChecked) {
+    return null
+  }
+
+  if (!setupCompleted) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-50">
+        <div className="w-full max-w-md p-8 bg-white rounded-lg shadow">
+          <h1 className="text-2xl font-bold mb-2 text-center">BeeCount Cloud</h1>
+          <p className="text-muted-foreground text-center mb-6">首次启动，请创建管理员账户</p>
+          <SetupForm onComplete={() => window.location.reload()} />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <Routes>
