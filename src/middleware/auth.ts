@@ -4,7 +4,7 @@ import { validateAccessToken } from '../auth';
 export const authMiddleware = async (c: any, next: Next) => {
   const path = c.req.path;
   // auth 路由和 MCP 路由自己处理认证，跳过中间件
-  if (path.startsWith('/api/v1/auth') || path.startsWith('/api/v1/mcp')) {
+  if (path.startsWith('/api/v1/auth') || path.startsWith('/api/v1/mcp') || path.startsWith('/api/v1/setup')) {
     return next();
   }
 
