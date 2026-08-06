@@ -35,6 +35,19 @@ export const spaMiddleware = async (c: any, next: Next) => {
     return await next();
   }
 
+  // 如果 pathname 是 /app 或 / 且不是 /app/setup，检查 setup 是否完成
+  if (pathname === '/' || pathname === '/app' || pathname === '/app/') {
+    try {
+      const settings = await c.env.DB.prepare('SELECT setup_completed FROM system_settings WHERE id = ?').bind('default').first<{ setup_completed: number }>();
+      if (!settings || settings.setup_completed !== 1) {
+        return c.redirect('/app/setup', 302);
+      }
+    } catch {
+      // 数据库还没初始化，也重定向到 setup
+      return c.redirect('/app/setup', 302);
+    }
+  }
+
   const isStaticAsset = STATIC_PREFIXES.some(p => pathname.startsWith(p)) ||
                         pathname === '/manifest.webmanifest' ||
                         pathname === '/sw.js';
