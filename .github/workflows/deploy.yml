@@ -27,7 +27,7 @@ jobs:
           version: 9
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
       - name: Setup D1 database
         id: d1
@@ -64,9 +64,6 @@ jobs:
 
       - name: Build frontend
         run: cd frontend && pnpm install --no-frozen-lockfile && pnpm build
-
-      - name: Rename index.html to prevent direct asset serving
-        run: mv frontend/apps/web/dist/index.html frontend/apps/web/dist/app.html
 
       - name: Deploy
         run: npx wrangler deploy
