@@ -357,7 +357,7 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
   serverLogger.info('src.routers.read', '[READ] read_tx_projection is empty, syncing from sync_changes...');
   
   const ledgers = await db
-    .prepare('SELECT id FROM ledgers WHERE user_id = ?')
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
     .bind(userId)
     .all<{ id: string }>();
   
@@ -1606,7 +1606,7 @@ readRouter.get('/debug/transactions', async (c) => {
   const db = c.env.DB;
 
   const ledgers = await db
-    .prepare('SELECT id FROM ledgers WHERE user_id = ?')
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
     .bind(userId)
     .all();
 
