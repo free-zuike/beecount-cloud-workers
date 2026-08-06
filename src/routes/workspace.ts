@@ -346,6 +346,7 @@ workspaceRouter.get('/transactions.csv', async (c) => {
 
 workspaceRouter.get('/transactions', async (c) => {
   const userId = c.get('userId');
+  if (!userId) return c.json({ error: 'Unauthorized' }, 401);
   const db = c.env.DB;
 
   const ledgerId = c.req.query('ledger_id') ?? null;
