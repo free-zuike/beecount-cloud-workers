@@ -41,7 +41,7 @@ export const authMiddleware = async (c: any, next: Next) => {
     console.log(`[AUTH-MW] Token expired for ${path}`);
     return c.json({ error: 'Token expired' }, 401);
   }
-  if (!('userId' in validationResult)) {
+  if (!('userId' in validationResult) || !validationResult.userId) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
 
