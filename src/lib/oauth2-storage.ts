@@ -62,7 +62,7 @@ export async function uploadToDrive(
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ name: fileName, parents: config.folder_id ? [config.folder_id] : [] }),
+      body: JSON.stringify({ name: fileName.split('/').pop() || fileName, parents: config.folder_id ? [config.folder_id] : [] }),
     });
     if (!metaRes.ok) return false;
     const uploadUrl = metaRes.headers.get('Location');
