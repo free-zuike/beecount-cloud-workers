@@ -195,7 +195,10 @@ export async function uploadToDropbox(
   data: Uint8Array,
 ): Promise<boolean> {
   const token = await refreshAccessToken('dropbox', config.client_id!, config.client_secret!, config.token!);
-  if (!token) return false;
+  if (!token) {
+    console.error('[Dropbox] Token refresh failed');
+    return false;
+  }
 
   try {
     const path = config.folder_path ? `/${config.folder_path}/${fileName}` : `/${fileName}`;
@@ -208,8 +211,13 @@ export async function uploadToDropbox(
       },
       body: data,
     });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => 'unknown');
+      console.error(`[Dropbox] Upload failed: ${res.status} ${errText}`);
+    }
     return res.ok;
-  } catch {
+  } catch (e) {
+    console.error('[Dropbox] Upload error:', e);
     return false;
   }
 }
