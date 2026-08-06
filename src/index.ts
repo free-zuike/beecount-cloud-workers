@@ -247,10 +247,8 @@ app.get('/', async (c) => {
     if (!settings || settings.setup_completed !== 1) {
       return c.redirect('/app/setup', 302);
     }
-    return c.redirect('/app', 302);
-  } catch {
-    return c.redirect('/app/setup', 302);
-  }
+  } catch {}
+  return c.redirect('/app', 302);
 });
 
 app.use('*', spaMiddleware);
