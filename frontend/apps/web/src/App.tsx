@@ -8,6 +8,7 @@ import { AppShell } from './app/AppShell'
 import { RequireAuth } from './app/router'
 import { LoginPage } from './pages/LoginPage'
 import { SetupForm } from './app/SetupForm'
+import { clearCursor } from './state/sync-client'
 
 // Section 页面全部懒加载 — 首屏只下载当前 route 需要的 chunk,显著降低
 // 首次进入 /app/overview 的 JS 体积。每个页面会是独立 chunk,后续切到
