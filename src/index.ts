@@ -70,15 +70,19 @@ app.use('*', async (c, next) => {
     initLogger(c.env.DB);
     initialized = true;
   }
-  // 根路径检查 setup 状态
   const path = c.req.path;
+  console.log(`[INIT] path=${path}`);
+  // 根路径检查 setup 状态
   if (path === '/' || path === '/app' || path === '/app/') {
     try {
       const settings = await c.env.DB.prepare("SELECT setup_completed FROM system_settings WHERE id = ?").bind('default').first<{ setup_completed: number }>();
+      console.log(`[INIT] settings=${JSON.stringify(settings)}`);
       if (!settings || settings.setup_completed !== 1) {
+        console.log('[INIT] Redirecting to /app/setup');
         return c.redirect('/app/setup', 302);
       }
-    } catch {
+    } catch (e) {
+      console.error('[INIT] Error:', (e as Error).message);
       return c.redirect('/app/setup', 302);
     }
   }
