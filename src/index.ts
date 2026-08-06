@@ -70,18 +70,6 @@ app.use('*', async (c, next) => {
     initLogger(c.env.DB);
     initialized = true;
   }
-  // 根路径检查 setup 状态
-  const path = c.req.path;
-  if (path === '/' || path === '/app' || path === '/app/') {
-    try {
-      const settings = await c.env.DB.prepare("SELECT setup_completed FROM system_settings WHERE id = ?").bind('default').first<{ setup_completed: number }>();
-      if (!settings || settings.setup_completed !== 1) {
-        return c.redirect('/app/setup', 302);
-      }
-    } catch {
-      return c.redirect('/app/setup', 302);
-    }
-  }
   await next();
 });
 
