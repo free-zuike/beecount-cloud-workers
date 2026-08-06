@@ -119,10 +119,10 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
       .prepare(
         `SELECT change_id, entity_type, entity_sync_id, action, payload_json, user_id, updated_at, updated_by_user_id
          FROM sync_changes 
-         WHERE ledger_id = ? AND entity_type = 'transaction' AND action != 'delete'
+         WHERE (ledger_id = ? OR ledger_id = ?) AND entity_type = 'transaction' AND action != 'delete'
          ORDER BY change_id ASC`
       )
-      .bind(ledger.id)
+      .bind(ledger.id, ledger.external_id)
       .all<{
         change_id: number;
         entity_type: string;
