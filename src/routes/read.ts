@@ -425,7 +425,8 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
           )
           .run();
       } catch (err) {
-        serverLogger.error('src.routers.read', '[READ] Error syncing transaction:', change.entity_sync_id, err);
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        serverLogger.error('src.routers.read', `[READ] Error syncing transaction ${change.entity_sync_id}: ${errorMsg}`);
       }
     }
   }
