@@ -240,7 +240,7 @@ app.get('/invite/:code', (c) => {
   return c.redirect(`/app/ledgers?invite=${code}`, 302);
 });
 
-app.get('*', spaMiddleware);
+app.use('*', spaMiddleware);
 
 export { BeeCountDO };
 
