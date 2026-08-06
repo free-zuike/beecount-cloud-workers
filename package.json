@@ -35,7 +35,7 @@
     "patch-package": "^8.0.1",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5",
-    "wrangler": "^4.119.0"
+    "wrangler": "^4.24.0"
   },
   "overrides": {
     "cpu-features": "file:./shims/cpu-features"
