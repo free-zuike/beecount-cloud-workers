@@ -240,6 +240,17 @@ app.get('/invite/:code', (c) => {
   return c.redirect(`/app/ledgers?invite=${code}`, 302);
 });
 
+// 根路径 / 和 /app 检查 setup 是否完成，未完成则重定向到 setup 页面
+app.get('/', async (c) => {
+  try {
+    const settings = await c.env.DB.prepare("SELECT setup_completed FROM system_settings WHERE id = ?").bind('default').first<{ setup_completed: number }>();
+    if (!settings || settings.setup_completed !== 1) {
+      return c.redirect('/app/setup', 302);
+    }
+  } catch {}
+  return c.redirect('/app', 302);
+});
+
 app.use('*', spaMiddleware);
 
 export { BeeCountDO };
