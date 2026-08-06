@@ -454,7 +454,7 @@ readRouter.get('/workspace/transactions', async (c) => {
 
   serverLogger.info('src.routers.read', '[READ] /workspace/transactions called, ledgerId:', ledgerId, 'dateFrom:', dateFrom, 'dateTo:', dateTo, 'limit:', limit, 'offset:', offset);
 
-  await ensureTxProjectionSynced(db, userId);
+  // await ensureTxProjectionSynced(db, userId);
 
   let query = 'SELECT * FROM read_tx_projection';
   const bindings: (string | number)[] = [];
