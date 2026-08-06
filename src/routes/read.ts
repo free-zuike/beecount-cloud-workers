@@ -402,7 +402,7 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
             change.entity_sync_id,
             change.user_id,
             payload.tx_type || 'expense',
-            Math.round((payload.amount || 0) * 100),
+            payload.amount || 0,
             payload.happened_at || payload.happenedAt || change.updated_at,
             payload.note || null,
             payload.category_sync_id || null,
