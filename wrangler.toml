@@ -62,3 +62,4 @@ fallthrough = true
 [assets]
 directory = "./frontend/apps/web/dist"
 binding = "ASSETS"
+serve_assets_behavior = "none"
