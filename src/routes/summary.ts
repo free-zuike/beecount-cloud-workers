@@ -147,8 +147,8 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
               from_account_sync_id, from_account_name,
               to_account_sync_id, to_account_name,
               tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id,
-              created_at, created_by, created_by_user_id, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              created_by_user_id, last_edited_by_user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .bind(
             ledger.id,
@@ -172,10 +172,8 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
             payload.attachments ? JSON.stringify(payload.attachments) : null,
             payload.tx_index ?? 0,
             change.change_id,
-            change.updated_at,
-            null,
-            change.updated_by_user_id,
-            change.updated_at,
+            change.updated_by_user_id ?? null,
+            change.updated_by_user_id ?? null,
           )
           .run();
       } catch (err) {
