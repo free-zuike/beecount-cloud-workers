@@ -65,5 +65,8 @@ jobs:
       - name: Build frontend
         run: cd frontend && pnpm install --no-frozen-lockfile && pnpm build
 
+      - name: Rename index.html to app.html
+        run: mv frontend/apps/web/dist/index.html frontend/apps/web/dist/app.html
+
       - name: Deploy
         run: npx wrangler deploy

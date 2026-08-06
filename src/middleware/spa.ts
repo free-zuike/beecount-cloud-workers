@@ -59,7 +59,7 @@ export const spaMiddleware = async (c: any, next: Next) => {
   }
 
   if (res.status === 404) {
-    const indexRes = await c.env.ASSETS.fetch(new Request(`${url.origin}/index.html`, { method: 'GET' }));
+    const indexRes = await c.env.ASSETS.fetch(new Request(`${url.origin}/app.html`, { method: 'GET' }));
     return indexRes;
   }
 
