@@ -110,9 +110,9 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
   serverLogger.info('app', '[SUMMARY] read_tx_projection is empty, syncing from sync_changes...');
   
   const ledgers = await db
-    .prepare('SELECT id FROM ledgers WHERE user_id = ?')
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
     .bind(userId)
-    .all<{ id: string }>();
+    .all<{ id: string; external_id: string }>();
   
   for (const ledger of ledgers.results) {
     const changes = await db
