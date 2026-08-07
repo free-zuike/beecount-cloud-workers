@@ -170,7 +170,7 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
             payload.to_account_sync_id ?? payload.toAccountId ?? null,
             payload.to_account_name ?? payload.toAccountName ?? null,
             payload.tags ? (Array.isArray(payload.tags) ? payload.tags.join(',') : String(payload.tags)) : null,
-            payload.tag_sync_ids ? JSON.stringify(payload.tag_sync_ids) : null,
+            payload.tag_sync_ids ?? payload.tagIds ? JSON.stringify(payload.tag_sync_ids ?? payload.tagIds) : null,
             payload.attachments ? JSON.stringify(payload.attachments) : null,
             payload.tx_index ?? 0,
             change.change_id,
