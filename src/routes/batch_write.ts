@@ -167,10 +167,29 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
     try {
       await db
         .prepare(`INSERT OR REPLACE INTO read_tx_projection
-          (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, account_sync_id, from_account_sync_id, to_account_sync_id, source_change_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
+           category_sync_id, category_name, category_kind,
+           account_sync_id, account_name,
+           from_account_sync_id, from_account_name,
+           to_account_sync_id, to_account_name,
+           tags_csv, tag_sync_ids_json, tx_index, source_change_id,
+           exclude_from_stats, exclude_from_budget,
+           created_by_user_id, last_edited_by_user_id,
+           currency_code, native_amount)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null,
-          categorySyncId, accountSyncId, tx.from_account_id || null, tx.to_account_id || null, changeId)
+          categorySyncId, tx.category_name || null, tx.category_kind || null,
+          accountSyncId, tx.account_name || null,
+          tx.from_account_id || null, tx.from_account_name || null,
+          tx.to_account_id || null, tx.to_account_name || null,
+          tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null,
+          tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null,
+          0, changeId,
+          tx.exclude_from_stats != null ? (tx.exclude_from_stats ? 1 : 0) : null,
+          tx.exclude_from_budget != null ? (tx.exclude_from_budget ? 1 : 0) : null,
+          userId, userId,
+          tx.currency_code ?? tx.currencyCode ?? null,
+          tx.native_amount ?? tx.nativeAmount ?? null,)
         .run();
     } catch (projErr) {
       await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(changeId).run();
@@ -320,7 +339,7 @@ batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch', zValidator('json'
     const changeId = (insertResult as any).lastRowId;
     maxChangeId = Math.max(maxChangeId, changeId);
 
-    await db.prepare(`INSERT OR REPLACE INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, account_sync_id, from_account_sync_id, to_account_sync_id, source_change_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null, categorySyncId, accountSyncId, tx.from_account_id || null, tx.to_account_id || null, changeId).run();
+    await db.prepare(`INSERT OR REPLACE INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, category_name, category_kind, account_sync_id, account_name, from_account_sync_id, from_account_name, to_account_sync_id, to_account_name, tags_csv, tag_sync_ids_json, tx_index, source_change_id, exclude_from_stats, exclude_from_budget, created_by_user_id, last_edited_by_user_id, currency_code, native_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null, categorySyncId, tx.category_name || null, tx.category_kind || null, accountSyncId, tx.account_name || null, tx.from_account_id || null, tx.from_account_name || null, tx.to_account_id || null, tx.to_account_name || null, tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null, tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null, 0, changeId, tx.exclude_from_stats != null ? (tx.exclude_from_stats ? 1 : 0) : null, tx.exclude_from_budget != null ? (tx.exclude_from_budget ? 1 : 0) : null, userId, userId, tx.currency_code ?? tx.currencyCode ?? null, tx.native_amount ?? tx.nativeAmount ?? null).run();
     createdSyncIds.push(txSyncId);
   }
 

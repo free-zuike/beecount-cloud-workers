@@ -1021,8 +1021,11 @@ adminRouter.post('/backups/restore', zValidator('json', BackupRestoreSchema), as
             account_sync_id, account_name,
             from_account_sync_id, from_account_name,
             to_account_sync_id, to_account_name,
-            tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id,
+            exclude_from_stats, exclude_from_budget,
+            created_by_user_id, last_edited_by_user_id,
+            currency_code, native_amount)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(
           targetLedger.id, syncId, userId,
@@ -1033,6 +1036,10 @@ adminRouter.post('/backups/restore', zValidator('json', BackupRestoreSchema), as
           txRecord.to_account_sync_id ?? null, txRecord.to_account_name ?? null,
           txRecord.tags_csv ?? null, txRecord.tag_sync_ids_json ?? null, txRecord.attachments_json ?? null,
           txRecord.tx_index ?? 0, txRecord.source_change_id ?? 0,
+          txRecord.exclude_from_stats != null ? (txRecord.exclude_from_stats ? 1 : 0) : null,
+          txRecord.exclude_from_budget != null ? (txRecord.exclude_from_budget ? 1 : 0) : null,
+          txRecord.created_by_user_id ?? null, txRecord.last_edited_by_user_id ?? null,
+          txRecord.currency_code ?? null, txRecord.native_amount ?? null,
         )
         .run();
 

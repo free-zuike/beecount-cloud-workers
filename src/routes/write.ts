@@ -816,8 +816,10 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
           from_account_sync_id, from_account_name,
           to_account_sync_id, to_account_name,
           tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id,
-          exclude_from_stats, exclude_from_budget)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          exclude_from_stats, exclude_from_budget,
+          created_by_user_id, last_edited_by_user_id,
+          currency_code, native_amount)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         ledger.id, syncId, userId, req.tx_type, req.amount, happenedAt,
@@ -829,6 +831,9 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
         req.attachments ? safeJsonStringify(req.attachments) : null, 0, newChangeId,
         req.exclude_from_stats != null ? (req.exclude_from_stats ? 1 : 0) : null,
         req.exclude_from_budget != null ? (req.exclude_from_budget ? 1 : 0) : null,
+        userId, userId,
+        req.currency_code ?? req.currencyCode ?? null,
+        req.native_amount ?? req.nativeAmount ?? null,
       )
       .run();
   } catch (projErr) {
@@ -929,7 +934,11 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
       if (req.name !== undefined) { sets.push('name = ?'); vals.push(req.name); }
       if (req.account_type !== undefined) { sets.push('account_type = ?'); vals.push(req.account_type); }
       if (req.currency !== undefined) { sets.push('currency = ?'); vals.push(req.currency); }
-      if (req.initial_balance !== undefined) { sets.push('initial_balance = ?'); vals.push(req.initial_balance); }
+      if (req.initial_balance !== undefined) {
+        const isLiability = (row.account_type as string || '') === 'credit_card' || (row.account_type as string || '') === 'loan';
+        sets.push('initial_balance = ?');
+        vals.push(isLiability ? -Math.abs(req.initial_balance) : req.initial_balance);
+      }
       if (req.note !== undefined) { sets.push('note = ?'); vals.push(req.note); }
       if (req.credit_limit !== undefined) { sets.push('credit_limit = ?'); vals.push(req.credit_limit); }
       if (req.billing_day !== undefined) { sets.push('billing_day = ?'); vals.push(req.billing_day); }

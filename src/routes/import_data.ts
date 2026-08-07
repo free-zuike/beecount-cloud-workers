@@ -582,20 +582,29 @@ importRouter.post('/:token/execute', async (c) => {
             await db.prepare(
               `INSERT OR REPLACE INTO read_tx_projection
                (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
-                category_name, account_name, from_account_name, to_account_name,
-                tags_csv, tx_index, created_by_user_id, last_edited_by_user_id, source_change_id,
-                currency_code, native_amount, exclude_from_stats, exclude_from_budget)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
+                category_sync_id, category_name, category_kind,
+                account_sync_id, account_name,
+                from_account_sync_id, from_account_name,
+                to_account_sync_id, to_account_name,
+                tags_csv, tag_sync_ids_json, tx_index, source_change_id,
+                exclude_from_stats, exclude_from_budget,
+                created_by_user_id, last_edited_by_user_id,
+                currency_code, native_amount)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             ).bind(
               ledger.id, syncId, userId,
               tx.txType, tx.amount, happenedAt,
               tx.note ?? null,
-              tx.categoryName ?? null,
-              tx.accountName ?? null,
-              tx.fromAccountName ?? null,
-              tx.toAccountName ?? null,
-              tagsCsv, 0, userId, userId, result.meta.last_row_id ?? 0,
-              tx.currencyCode ?? null, tx.amount,
+              tx.categoryId ?? null, tx.categoryName ?? null, tx.categoryKind ?? null,
+              tx.accountId ?? null, tx.accountName ?? null,
+              tx.fromAccountId ?? null, tx.fromAccountName ?? null,
+              tx.toAccountId ?? null, tx.toAccountName ?? null,
+              tagsCsv, tx.tagIds ? JSON.stringify(tx.tagIds) : null,
+              0, result.meta.last_row_id ?? 0,
+              tx.excludeFromStats != null ? (tx.excludeFromStats ? 1 : 0) : null,
+              tx.excludeFromBudget != null ? (tx.excludeFromBudget ? 1 : 0) : null,
+              userId, userId,
+              tx.currencyCode ?? null, tx.nativeAmount ?? tx.amount,
             ).run();
 
             imported++;
