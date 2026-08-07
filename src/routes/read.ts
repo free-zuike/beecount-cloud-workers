@@ -394,8 +394,10 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
               from_account_sync_id, from_account_name,
               to_account_sync_id, to_account_name,
               tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id,
-              created_by_user_id, last_edited_by_user_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              created_by_user_id, last_edited_by_user_id,
+              exclude_from_stats, exclude_from_budget,
+              currency_code, native_amount)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .bind(
             ledger.id,
@@ -421,6 +423,10 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
             change.change_id,
             change.updated_by_user_id ?? null,
             change.updated_by_user_id ?? null,
+            payload.excludeFromStats != null ? (payload.excludeFromStats ? 1 : 0) : null,
+            payload.excludeFromBudget != null ? (payload.excludeFromBudget ? 1 : 0) : null,
+            payload.currency_code ?? payload.currencyCode ?? null,
+            payload.native_amount ?? payload.nativeAmount ?? null,
           )
           .run();
       } catch (err) {
