@@ -1870,20 +1870,6 @@ async function applyChangeToProjection(
             txMerged.native_amount,
             txMerged.exclude_from_stats ? 1 : 0,
             txMerged.exclude_from_budget ? 1 : 0,
-            payload.fromAccountName ?? null,
-            payload.toAccountId ?? null,
-            payload.toAccountName ?? null,
-            resolvedTagsCsv,
-            payload.tagIds ? safeJsonStringify(payload.tagIds) : null,
-            payload.attachments ? safeJsonStringify(payload.attachments) : null,
-            payload.tx_index ?? 0,
-            payload.createdByUserId ?? userId,
-            payload.updatedByUserId ?? userId,
-            change.change_id,
-            payload.currency_code ?? payload.currencyCode ?? null,
-            payload.native_amount ?? payload.nativeAmount ?? null,
-            payload.excludeFromStats != null ? (payload.excludeFromStats ? 1 : 0) : null,
-            payload.excludeFromBudget != null ? (payload.excludeFromBudget ? 1 : 0) : null,
           )
           .run();
       }
