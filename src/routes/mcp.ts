@@ -76,28 +76,24 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         let q = 'SELECT * FROM read_tx_projection WHERE ledger_id = ?';
         const p: unknown[] = [led.id];
         if (args.date_from) { q += ' AND happened_at >= ?'; p.push(args.date_from); }
-        if (args.date_to) { q += ' AND happened_at <= ?'; p.push(args.date_to); }
+        if (args.date_to) { q += ' AND happened_at <= ?'; p.push(args.date_to + 'T23:59:59'); }
         if (args.category) { q += ' AND category_name = ?'; p.push(args.category); }
         if (args.account) { q += ' AND (account_name = ? OR from_account_name = ? OR to_account_name = ?)'; p.push(args.account, args.account, args.account); }
         if (args.min_amount !== undefined && args.min_amount !== null) { q += ' AND ABS(amount) >= ?'; p.push(args.min_amount); }
         if (args.max_amount !== undefined && args.max_amount !== null) { q += ' AND ABS(amount) <= ?'; p.push(args.max_amount); }
-        if (args.q) { q += ' AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ?)'; const l = `%${args.q}%`; p.push(l, l, l); }
+        if (args.q) { q += ' AND note LIKE ?'; const l = `%${args.q}%`; p.push(l); }
         const total = (await db.prepare(q.replace('SELECT *', 'SELECT COUNT(*) as cnt')).bind(...p).first<{ cnt: number }>())?.cnt || 0;
         q += ' ORDER BY happened_at DESC LIMIT ?'; p.push(limit);
         const rows = await db.prepare(q).bind(...p).all();
-        r = { ledger: led.name, total, items: rows.results.map((x: any) => ({ sync_id: x.sync_id, tx_type: x.tx_type, amount: x.amount, happened_at: x.happened_at, note: x.note, category_name: x.category_name, account_name: x.account_name, from_account_name: x.from_account_name, to_account_name: x.to_account_name, tags: x.tags_csv || '' })) };
+        r = { ledger: led.name, total, items: rows.results.map((x: any) => ({ sync_id: x.sync_id, tx_type: x.tx_type, amount: Number(x.amount || 0), happened_at: x.happened_at, note: x.note, category_name: x.category_name, account_name: x.account_name, from_account_name: x.from_account_name, to_account_name: x.to_account_name, tags: x.tags_csv || '' })) };
         break;
       }
       case 'get_transaction': {
         if (!args.sync_id) throw new Error('sync_id required');
-        // 查询用户可访问账本中的交易（支持共享账本）
-        const access = await db.prepare(`SELECT l.id FROM ledgers l WHERE l.user_id = ? UNION SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?`).bind(userId, userId).all<{ id: string }>();
-        const ids = access.results.map(r => r.id);
-        if (ids.length === 0) { r = null; break; }
-        const tx = await db.prepare(`SELECT * FROM read_tx_projection WHERE ledger_id IN (${ids.map(() => '?').join(',')}) AND sync_id = ?`).bind(...ids, args.sync_id).first<any>();
+        const tx = await db.prepare(`SELECT * FROM read_tx_projection WHERE user_id = ? AND sync_id = ?`).bind(userId, args.sync_id).first<any>();
         if (!tx) { r = null; break; }
         const l = await db.prepare('SELECT name FROM ledgers WHERE id = ?').bind(tx.ledger_id).first<{ name: string }>();
-        r = { sync_id: tx.sync_id, tx_type: tx.tx_type, amount: tx.amount, happened_at: tx.happened_at, note: tx.note, category_name: tx.category_name, account_name: tx.account_name, from_account_name: tx.from_account_name, to_account_name: tx.to_account_name, tags: tx.tags_csv || '', ledger: l?.name || null, attachments: tx.attachments_json ? JSON.parse(tx.attachments_json) : [] };
+        r = { sync_id: tx.sync_id, tx_type: tx.tx_type, amount: Number(tx.amount || 0), happened_at: tx.happened_at, note: tx.note, category_name: tx.category_name, account_name: tx.account_name, from_account_name: tx.from_account_name, to_account_name: tx.to_account_name, tags: tx.tags_csv || '', ledger: l?.name || null, attachments: tx.attachments_json ? JSON.parse(tx.attachments_json) : [] };
         break;
       }
       case 'create_transaction': {
@@ -177,33 +173,40 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         const income = items.filter(x => x.tx_type === 'income').reduce((s, x) => s + (x.native_amount ?? x.amount || 0), 0);
         const expense = items.filter(x => x.tx_type === 'expense').reduce((s, x) => s + (x.native_amount ?? x.amount || 0), 0);
         const catMap = new Map<string, number>();
-        items.filter(x => x.tx_type === 'expense').forEach(x => { const amt = x.native_amount ?? x.amount || 0; catMap.set(x.category_name, (catMap.get(x.category_name) || 0) + amt); });
-        const topCats = [...catMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, total]) => ({ name, total }));
-        r = { ledger: led.name, scope, period, income: Math.round(income * 100) / 100, expense: Math.round(expense * 100) / 100, balance: Math.round((income - expense) * 100) / 100, transaction_count: items.length, top_categories: topCats };
+        items.filter(x => x.tx_type === 'expense').forEach(x => { const amt = x.native_amount ?? x.amount || 0; const nm = x.category_name || '(未分类)'; catMap.set(nm, (catMap.get(nm) || 0) + amt); });
+        const topCats = [...catMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, total]) => ({ name, total: Math.round(total * 100) / 100 }));
+        r = { ledger: led.name, scope, period, income: Math.round(income * 100) / 100, expense: Math.round(expense * 100) / 100, balance: Math.round((income - expense) * 100) / 100, transaction_count: items.length, top_categories: topCats.map(t => ({ name: t.name, total: Math.round((t.total as number) * 100) / 100 })) };
         break;
       }
       case 'list_categories': {
-        let q = 'SELECT sync_id, name, kind, level, icon, parent_name FROM read_category_projection WHERE user_id = ?'; const p: unknown[] = [userId];
+        let q = 'SELECT sync_id, name, kind, level, icon, parent_name, sort_order FROM read_category_projection WHERE user_id = ?'; const p: unknown[] = [userId];
         if (args.kind) { q += ' AND kind = ?'; p.push(args.kind); }
-        q += ' ORDER BY kind, sort_order, name';
         const rows = await db.prepare(q).bind(...p).all();
-        const seen = new Set<string>();
-        r = rows.results.filter((x: any) => { if (seen.has(x.sync_id)) return false; seen.add(x.sync_id); return true; }).map((x: any) => ({ name: x.name, kind: x.kind, level: x.level || 1, parent_name: x.parent_name || null, icon: x.icon || null }));
+        const seen = new Map<string, any>();
+        for (const r of (rows.results as any[])) { if (!seen.has(r.sync_id)) seen.set(r.sync_id, r); }
+        r = [...seen.values()].sort((a, b) => {
+          const ka = (a.kind || '').toLowerCase(), kb = (b.kind || '').toLowerCase();
+          if (ka !== kb) return ka < kb ? -1 : 1;
+          const sa = a.sort_order || 0, sb = b.sort_order || 0;
+          if (sa !== sb) return sa - sb;
+          return (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase());
+        }).map((x: any) => ({ name: x.name, kind: x.kind, level: x.level, parent_name: x.parent_name, icon: x.icon }));
         break;
       }
       case 'list_accounts': {
         let q = 'SELECT sync_id, name, account_type, currency, initial_balance, bank_name, card_last_four, credit_limit, billing_day, payment_due_day FROM read_account_projection WHERE user_id = ?'; const p: unknown[] = [userId];
         if (args.account_type) { q += ' AND account_type = ?'; p.push(args.account_type); }
-        q += ' ORDER BY name';
         const rows = await db.prepare(q).bind(...p).all();
-        const seen = new Set<string>();
-        r = rows.results.filter((x: any) => { if (seen.has(x.sync_id)) return false; seen.add(x.sync_id); return true; }).map((x: any) => ({ name: x.name, account_type: x.account_type, currency: x.currency, initial_balance: x.initial_balance || 0, bank_name: x.bank_name || null, card_last_four: x.card_last_four || null, credit_limit: x.credit_limit || null, billing_day: x.billing_day || null, payment_due_day: x.payment_due_day || null }));
+        const seen = new Map<string, any>();
+        for (const r of (rows.results as any[])) { if (!seen.has(r.sync_id)) seen.set(r.sync_id, r); }
+        r = [...seen.values()].sort((a, b) => (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase())).map((x: any) => ({ name: x.name, account_type: x.account_type, currency: x.currency, initial_balance: Number(x.initial_balance || 0), bank_name: x.bank_name, card_last_four: x.card_last_four, credit_limit: x.credit_limit != null ? Number(x.credit_limit) : null, billing_day: x.billing_day, payment_due_day: x.payment_due_day }));
         break;
       }
       case 'list_tags': {
-        const rows = await db.prepare('SELECT sync_id, name, color FROM read_tag_projection WHERE user_id = ? ORDER BY name').bind(userId).all();
-        const seen = new Set<string>();
-        r = rows.results.filter((x: any) => { if (seen.has(x.sync_id)) return false; seen.add(x.sync_id); return true; }).map((x: any) => ({ name: x.name, color: x.color || null }));
+        const rows = await db.prepare('SELECT sync_id, name, color FROM read_tag_projection WHERE user_id = ?').bind(userId).all();
+        const seen = new Map<string, any>();
+        for (const r of (rows.results as any[])) { if (!seen.has(r.sync_id)) seen.set(r.sync_id, r); }
+        r = [...seen.values()].sort((a, b) => (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase())).map((x: any) => ({ name: x.name, color: x.color }));
         break;
       }
       case 'list_budgets': {
@@ -226,11 +229,8 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         const q = args.q as string; if (!q?.trim()) { r = []; break; }
         const limit = Math.max(1, Math.min((args.limit as number) || 20, 100));
         const like = `%${q}%`;
-        const access = await db.prepare(`SELECT l.id FROM ledgers l WHERE l.user_id = ? UNION SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?`).bind(userId, userId).all<{ id: string }>();
-        const ids = access.results.map(r => r.id);
-        if (ids.length === 0) { r = []; break; }
-        const rows = await db.prepare(`SELECT * FROM read_tx_projection WHERE ledger_id IN (${ids.map(() => '?').join(',')}) AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ?) ORDER BY happened_at DESC LIMIT ?`).bind(...ids, like, like, like, limit).all();
-        r = (rows.results as any[]).map(x => ({ sync_id: x.sync_id, tx_type: x.tx_type, amount: x.amount, happened_at: x.happened_at, note: x.note, category_name: x.category_name, account_name: x.account_name, from_account_name: x.from_account_name, to_account_name: x.to_account_name, tags: x.tags_csv || '' }));
+        const rows = await db.prepare('SELECT * FROM read_tx_projection WHERE user_id = ? AND note LIKE ? ORDER BY happened_at DESC LIMIT ?').bind(userId, like, limit).all();
+        r = (rows.results as any[]).map(x => ({ sync_id: x.sync_id, tx_type: x.tx_type, amount: Number(x.amount || 0), happened_at: x.happened_at, note: x.note, category_name: x.category_name, account_name: x.account_name, from_account_name: x.from_account_name, to_account_name: x.to_account_name, tags: x.tags_csv || '' }));
         break;
       }
       case 'create_category': {
