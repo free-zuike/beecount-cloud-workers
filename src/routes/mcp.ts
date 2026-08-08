@@ -18,7 +18,7 @@ async function hashToken(t: string): Promise<string> {
 
 interface ToolDef { name: string; description: string; inputSchema: Record<string, unknown>; }
 
-const TOOL_DEFS: ToolDef[] = [
+export const TOOL_DEFS: ToolDef[] = [
   { name: 'list_ledgers', description: 'List all ledgers for the authenticated BeeCount user. Returns each ledger\'s id (external_id), name, currency, and created_at. Use the returned id when calling other tools that take ledger_id.', inputSchema: { type: 'object', properties: {} } },
   { name: 'get_active_ledger', description: 'Get the user\'s primary/default ledger. Use this when the user doesn\'t specify which ledger they\'re talking about. Returns null if the user has no ledgers.', inputSchema: { type: 'object', properties: {} } },
   { name: 'list_transactions', description: 'Query transactions with rich filters. ledger_id: Optional, uses active ledger if omitted. date_from/date_to: ISO dates (YYYY-MM-DD) or full ISO datetimes. category: Exact category name match. account: Exact account name match (matches account/from_account/to_account). min_amount/max_amount: Filter by absolute amount. q: Substring match against note. limit: Max items returned (1..200, default 50).', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' }, date_from: { type: 'string' }, date_to: { type: 'string' }, category: { type: 'string' }, account: { type: 'string' }, min_amount: { type: 'number' }, max_amount: { type: 'number' }, q: { type: 'string' }, limit: { type: 'number', default: 50 } } } },
