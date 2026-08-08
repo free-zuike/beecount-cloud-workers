@@ -151,7 +151,11 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
     switch (name) {
       case 'list_ledgers': {
         const rows = await db.prepare(`SELECT l.id, l.external_id, l.name, l.currency, l.created_at FROM ledgers l LEFT JOIN ledger_members lm ON l.id = lm.ledger_id WHERE (l.user_id = ? OR lm.user_id = ?) ORDER BY l.created_at ASC`).bind(userId, userId).all();
-        r = rows.results.map((l: any) => ({ id: l.external_id, name: l.name || l.external_id, currency: l.currency, created_at: l.created_at ? new Date(l.created_at).toISOString() : null }));
+        const live: any[] = [];
+        for (const l of rows.results) {
+          if (!(await isLedgerDeleted(db, l.id))) live.push(l);
+        }
+        r = live.map((l: any) => ({ id: l.external_id, name: l.name || l.external_id, currency: l.currency, created_at: l.created_at ? new Date(l.created_at).toISOString() : null }));
         break;
       }
       case 'get_active_ledger': {
