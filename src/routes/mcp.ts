@@ -433,7 +433,7 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         const aiRes = await fetch(aiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}` },
-          body: JSON.stringify({ model: provider.textModel, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: args.text as string }], temperature: 0.2, response_format: { type: 'json_object' } }),
+          body: JSON.stringify({ model: provider.textModel, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: (args.text as string) + '\n\nlocale: zh' }], temperature: 0.2, response_format: { type: 'json_object' } }),
           signal: AbortSignal.timeout(30000),
         });
         if (!aiRes.ok) throw new Error(`AI API error: ${aiRes.status}`);
