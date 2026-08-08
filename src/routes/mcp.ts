@@ -100,26 +100,54 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         const led = await resolveLedger(db, userId, args.ledger_id as string);
         if (!led) throw new Error('No ledger found');
         if (!args.amount || (args.amount as number) <= 0) throw new Error('amount must be positive');
+        const txType = (args.tx_type as string) || 'expense';
+        if (!['expense', 'income', 'transfer'].includes(txType)) throw new Error(`Invalid tx_type: ${txType}`);
+        // 验证分类/账户存在（原版行为）
+        if (args.category) {
+          const cat = await db.prepare('SELECT sync_id FROM read_category_projection WHERE user_id = ? AND name = ? AND kind = ?').bind(userId, args.category, txType).first<any>();
+          if (!cat) throw new Error(`Category "${args.category}" not found for type "${txType}"`);
+        }
+        if (args.account) {
+          const acc = await db.prepare('SELECT sync_id FROM read_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<any>();
+          if (!acc) throw new Error(`Account "${args.account}" not found`);
+        }
         const sid = randomUUID();
-        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify({ syncId: sid, type: args.tx_type || 'expense', amount: args.amount, happenedAt: args.happened_at || nowUtc(), note: args.note || null, categoryName: args.category || null, accountName: args.account || null, tags: args.tags || null }), nowUtc(), userId).run();
-        r = { sync_id: sid, ledger: led.name, tx_type: args.tx_type || 'expense', amount: args.amount, happened_at: args.happened_at || nowUtc(), category: args.category || null, account: args.account || null };
+        const payload: any = { syncId: sid, type: txType, amount: args.amount, happenedAt: args.happened_at || nowUtc(), note: args.note || null, tags: args.tags || null };
+        if (args.category) { payload.categoryName = args.category; payload.categoryKind = txType; }
+        if (args.account) {
+          if (txType === 'transfer') payload.fromAccountName = args.account;
+          else payload.accountName = args.account;
+        }
+        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify(payload), nowUtc(), userId).run();
+        r = { sync_id: sid, ledger: led.name, tx_type: txType, amount: args.amount, happened_at: args.happened_at || nowUtc(), category: args.category || null, account: args.account || null };
         break;
       }
       case 'update_transaction': {
         if (!args.sync_id) throw new Error('sync_id required');
-        const access = await db.prepare(`SELECT l.id FROM ledgers l WHERE l.user_id = ? UNION SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?`).bind(userId, userId).all<{ id: string }>();
-        const ids = access.results.map(r => r.id);
-        if (ids.length === 0) throw new Error('Transaction not found');
-        const tx = await db.prepare(`SELECT * FROM read_tx_projection WHERE ledger_id IN (${ids.map(() => '?').join(',')}) AND sync_id = ?`).bind(...ids, args.sync_id).first<any>();
+        if (args.amount !== undefined && (args.amount as number) <= 0) throw new Error('amount must be positive');
+        if (args.tx_type && !['expense', 'income', 'transfer'].includes(args.tx_type as string)) throw new Error(`Invalid tx_type: ${args.tx_type}`);
+        const tx = await db.prepare(`SELECT * FROM read_tx_projection WHERE user_id = ? AND sync_id = ?`).bind(userId, args.sync_id).first<any>();
         if (!tx) throw new Error('Transaction not found');
+        const effectiveTxType = (args.tx_type as string) || tx.tx_type;
+        if (args.category) {
+          const cat = await db.prepare('SELECT sync_id FROM read_category_projection WHERE user_id = ? AND name = ? AND kind = ?').bind(userId, args.category, effectiveTxType).first<any>();
+          if (!cat) throw new Error(`Category "${args.category}" not found for type "${effectiveTxType}"`);
+        }
+        if (args.account) {
+          const acc = await db.prepare('SELECT sync_id FROM read_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<any>();
+          if (!acc) throw new Error(`Account "${args.account}" not found`);
+        }
         const payload: any = { syncId: args.sync_id };
         if (args.amount !== undefined) payload.amount = args.amount;
         if (args.tx_type) payload.tx_type = args.tx_type;
-        if (args.category) payload.categoryName = args.category;
-        if (args.account) payload.accountName = args.account;
         if (args.happened_at) payload.happened_at = args.happened_at;
         if (args.note !== undefined) payload.note = args.note;
-        if (args.tags) payload.tags = args.tags;
+        if (args.tags !== undefined) payload.tags = args.tags;
+        if (args.category !== undefined) { payload.categoryName = args.category; payload.categoryKind = effectiveTxType; }
+        if (args.account !== undefined) {
+          if (effectiveTxType === 'transfer') payload.fromAccountName = args.account;
+          else payload.accountName = args.account;
+        }
         const updated = Object.keys(payload).filter(k => k !== 'syncId');
         const sid = randomUUID();
         await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, tx.ledger_id, 'transaction', sid, 'upsert', JSON.stringify(payload), nowUtc(), userId).run();
@@ -129,10 +157,7 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
       case 'delete_transaction': {
         if (!args.sync_id) throw new Error('sync_id required');
         if (!args.confirm) { r = { status: 'confirmation_required', message: 'Delete transaction requires explicit confirmation. Please confirm with the user, then call again with confirm=true.', sync_id: args.sync_id }; break; }
-        const access = await db.prepare('SELECT l.id FROM ledgers l WHERE l.user_id = ? UNION SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?').bind(userId, userId).all<{ id: string }>();
-        const ids = access.results.map(r => r.id);
-        if (ids.length === 0) throw new Error('Transaction not found');
-        const tx = await db.prepare(`SELECT ledger_id FROM read_tx_projection WHERE ledger_id IN (${ids.map(() => '?').join(',')}) AND sync_id = ?`).bind(...ids, args.sync_id).first<any>();
+        const tx = await db.prepare('SELECT ledger_id FROM read_tx_projection WHERE user_id = ? AND sync_id = ?').bind(userId, args.sync_id).first<any>();
         if (!tx) throw new Error('Transaction not found');
         const sid = randomUUID();
         await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, tx.ledger_id, 'transaction', sid, 'delete', JSON.stringify({ syncId: args.sync_id }), nowUtc(), userId).run();
@@ -235,12 +260,14 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
       }
       case 'create_category': {
         if (!args.name) throw new Error('name required');
+        const kind = (args.kind as string) || 'expense';
+        if (!['expense', 'income', 'transfer'].includes(kind)) throw new Error(`Invalid kind: ${kind}`);
         const led = await resolveLedger(db, userId, args.ledger_id as string);
         if (!led) throw new Error('No ledger found');
         const sid = randomUUID();
         const level = args.parent_name ? 2 : 1;
-        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'category', sid, 'upsert', JSON.stringify({ syncId: sid, name: args.name, kind: args.kind || 'expense', level, sortOrder: 0, icon: args.icon || null, iconType: null, parentName: args.parent_name || null }), nowUtc(), userId).run();
-        r = { sync_id: sid, name: args.name, kind: args.kind || 'expense' };
+        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'category', sid, 'upsert', JSON.stringify({ syncId: sid, name: args.name, kind, level, sortOrder: 0, icon: args.icon || null, iconType: null, parentName: args.parent_name || null }), nowUtc(), userId).run();
+        r = { sync_id: sid, name: args.name, kind };
         break;
       }
       case 'update_budget': {
@@ -256,13 +283,22 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
       case 'create_transactions': {
         const txs = args.transactions as any[];
         if (!txs?.length) throw new Error('transactions array required');
+        if (txs.length > 200) throw new Error('Max 200 transactions per call');
         const led = await resolveLedger(db, userId, args.ledger_id as string);
         if (!led) throw new Error('No ledger found');
         const sids: string[] = [];
-        for (const tx of txs.slice(0, 200)) {
-          if (!tx.amount || tx.amount <= 0) continue;
+        for (const tx of txs) {
+          if (tx.amount === undefined || (tx.amount as number) <= 0) throw new Error('amount must be positive');
+          const txType = tx.tx_type || 'expense';
+          if (!['expense', 'income', 'transfer'].includes(txType)) throw new Error(`Invalid tx_type: ${txType}`);
           const sid = randomUUID();
-          await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify({ syncId: sid, type: tx.tx_type || 'expense', amount: tx.amount, happenedAt: tx.happened_at || nowUtc(), note: tx.note || null, categoryName: tx.category || null, accountName: tx.account || null, tags: tx.tags || null }), nowUtc(), userId).run();
+          const payload: any = { syncId: sid, type: txType, amount: tx.amount, happenedAt: tx.happened_at || nowUtc(), note: tx.note || null, tags: tx.tags || null };
+          if (tx.category) { payload.categoryName = tx.category; payload.categoryKind = txType; }
+          if (tx.account) {
+            if (txType === 'transfer') payload.fromAccountName = tx.account;
+            else payload.accountName = tx.account;
+          }
+          await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify(payload), nowUtc(), userId).run();
           sids.push(sid);
         }
         r = { status: 'created', ledger: led.name, created_count: sids.length, sync_ids: sids };
