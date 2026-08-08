@@ -50,6 +50,51 @@ async function resolveLedger(db: D1Database, userId: string, ledgerId?: string |
   return db.prepare(`SELECT l.id, l.external_id, l.name, l.currency FROM ledgers l LEFT JOIN ledger_members lm ON l.id = lm.ledger_id WHERE (l.user_id = ? OR lm.user_id = ?) ORDER BY l.created_at ASC LIMIT 1`).bind(userId, userId).first<{ id: string; external_id: string; name: string; currency: string | null }>();
 }
 
+// B5: 多账本写操作歧义拒绝 — 不指定 ledger_id 且有多个账本时返回候选列表（原版行为）
+async function resolveWriteLedger(db: D1Database, userId: string, ledgerId?: string | null): Promise<{ ledger: { id: string; external_id: string; name: string; currency: string | null } | null; status: any }> {
+  if (ledgerId) {
+    const led = await resolveLedger(db, userId, ledgerId);
+    if (!led) return { ledger: null, status: { status: 'ledger_not_found', message: `Ledger not found or has been deleted: ${ledgerId}`, ledger_id: ledgerId } };
+    return { ledger: led, status: null };
+  }
+  const ledgers = await db.prepare(`SELECT l.id, l.external_id, l.name, l.currency FROM ledgers l LEFT JOIN ledger_members lm ON l.id = lm.ledger_id WHERE (l.user_id = ? OR lm.user_id = ?) ORDER BY l.created_at ASC`).bind(userId, userId).all<{ id: string; external_id: string; name: string; currency: string | null }>();
+  if (ledgers.results.length === 0) return { ledger: null, status: { status: 'no_ledger', message: 'You have no ledger yet. Create one in BeeCount first.' } };
+  if (ledgers.results.length === 1) return { ledger: ledgers.results[0], status: null };
+  return { ledger: null, status: { status: 'ledger_required', message: 'You have multiple ledgers — refusing to guess which one to write to. Re-call this tool with an explicit `ledger_id` (the `id` field of one of the candidates below).', candidates: ledgers.results.map(l => ({ id: l.external_id, name: l.name })) } };
+}
+
+// MCP 默认标签工具
+const MCP_DEFAULT_TAG = 'MCP';
+const MCP_DEFAULT_TAG_COLOR = '#00BCD4';
+
+function mergeDefaultTag(tags: string[] | null | undefined): string[] {
+  const seen: string[] = [];
+  if (tags) { for (const t of tags) { const v = (t || '').trim(); if (v) seen.push(v); } }
+  if (!seen.includes(MCP_DEFAULT_TAG)) seen.push(MCP_DEFAULT_TAG);
+  return seen;
+}
+
+async function ensureMcpTag(db: D1Database, userId: string, ledgerExternalId: string): Promise<void> {
+  const existing = await db.prepare('SELECT sync_id FROM read_tag_projection WHERE user_id = ? AND name = ?').bind(userId, MCP_DEFAULT_TAG).first<any>();
+  if (existing) return;
+  const sid = randomUUID();
+  await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, '', 'tag', sid, 'upsert', JSON.stringify({ syncId: sid, name: MCP_DEFAULT_TAG, color: MCP_DEFAULT_TAG_COLOR, sortOrder: 0 }), nowUtc(), userId).run();
+}
+
+// AI 解析文本（对齐原版 _parse_dt）
+function parseDt(dateStr: string | null | undefined): string {
+  if (!dateStr) return nowUtc();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr + 'T00:00:00';
+  return dateStr;
+}
+
+function extractJson(text: string): any {
+  try {
+    const m = text.match(/\{[\s\S]*\}/);
+    return m ? JSON.parse(m[0]) : null;
+  } catch { return null; }
+}
+
 async function execTool(db: D1Database, userId: string, scopes: string[], name: string, args: Record<string, unknown>, patId: string, patPrefix: string, patName: string): Promise<{ content: { type: string; text: string }[] }> {
   const t = Date.now();
   const isWrite = ['create_transaction', 'update_transaction', 'delete_transaction', 'create_category', 'update_budget', 'create_transactions', 'parse_and_create_from_text'].includes(name);
@@ -97,12 +142,12 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         break;
       }
       case 'create_transaction': {
-        const led = await resolveLedger(db, userId, args.ledger_id as string);
+        const { ledger: led, status: ledgerStatus } = await resolveWriteLedger(db, userId, args.ledger_id as string);
+        if (ledgerStatus) { r = ledgerStatus; break; }
         if (!led) throw new Error('No ledger found');
         if (!args.amount || (args.amount as number) <= 0) throw new Error('amount must be positive');
         const txType = (args.tx_type as string) || 'expense';
         if (!['expense', 'income', 'transfer'].includes(txType)) throw new Error(`Invalid tx_type: ${txType}`);
-        // 验证分类/账户存在（原版行为）
         if (args.category) {
           const cat = await db.prepare('SELECT sync_id FROM read_category_projection WHERE user_id = ? AND name = ? AND kind = ?').bind(userId, args.category, txType).first<any>();
           if (!cat) throw new Error(`Category "${args.category}" not found for type "${txType}"`);
@@ -111,15 +156,18 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
           const acc = await db.prepare('SELECT sync_id FROM read_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<any>();
           if (!acc) throw new Error(`Account "${args.account}" not found`);
         }
+        // MCP 默认标签
+        await ensureMcpTag(db, userId, led.external_id);
+        const finalTags = mergeDefaultTag(args.tags as string[] | null | undefined);
         const sid = randomUUID();
-        const payload: any = { syncId: sid, type: txType, amount: args.amount, happenedAt: args.happened_at || nowUtc(), note: args.note || null, tags: args.tags || null };
+        const payload: any = { syncId: sid, type: txType, amount: args.amount, happenedAt: parseDt(args.happened_at as string), note: args.note || null, tags: finalTags };
         if (args.category) { payload.categoryName = args.category; payload.categoryKind = txType; }
         if (args.account) {
           if (txType === 'transfer') payload.fromAccountName = args.account;
           else payload.accountName = args.account;
         }
         await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify(payload), nowUtc(), userId).run();
-        r = { sync_id: sid, ledger: led.name, tx_type: txType, amount: args.amount, happened_at: args.happened_at || nowUtc(), category: args.category || null, account: args.account || null };
+        r = { sync_id: sid, ledger: led.name, tx_type: txType, amount: args.amount, happened_at: parseDt(args.happened_at as string), category: args.category || null, account: args.account || null, _meta: { sync_id: sid } };
         break;
       }
       case 'update_transaction': {
@@ -137,12 +185,13 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
           const acc = await db.prepare('SELECT sync_id FROM read_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<any>();
           if (!acc) throw new Error(`Account "${args.account}" not found`);
         }
+        const finalTags = args.tags !== undefined ? mergeDefaultTag(args.tags as string[] | null) : undefined;
         const payload: any = { syncId: args.sync_id };
         if (args.amount !== undefined) payload.amount = args.amount;
         if (args.tx_type) payload.tx_type = args.tx_type;
-        if (args.happened_at) payload.happened_at = args.happened_at;
+        if (args.happened_at) payload.happened_at = parseDt(args.happened_at as string);
         if (args.note !== undefined) payload.note = args.note;
-        if (args.tags !== undefined) payload.tags = args.tags;
+        if (finalTags !== undefined) payload.tags = finalTags;
         if (args.category !== undefined) { payload.categoryName = args.category; payload.categoryKind = effectiveTxType; }
         if (args.account !== undefined) {
           if (effectiveTxType === 'transfer') payload.fromAccountName = args.account;
@@ -151,7 +200,7 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         const updated = Object.keys(payload).filter(k => k !== 'syncId');
         const sid = randomUUID();
         await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, tx.ledger_id, 'transaction', sid, 'upsert', JSON.stringify(payload), nowUtc(), userId).run();
-        r = { sync_id: args.sync_id, updated };
+        r = { sync_id: args.sync_id, updated, _meta: { sync_id: args.sync_id } };
         break;
       }
       case 'delete_transaction': {
@@ -262,12 +311,13 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         if (!args.name) throw new Error('name required');
         const kind = (args.kind as string) || 'expense';
         if (!['expense', 'income', 'transfer'].includes(kind)) throw new Error(`Invalid kind: ${kind}`);
-        const led = await resolveLedger(db, userId, args.ledger_id as string);
+        const { ledger: led, status: ledgerStatus } = await resolveWriteLedger(db, userId, args.ledger_id as string);
+        if (ledgerStatus) { r = ledgerStatus; break; }
         if (!led) throw new Error('No ledger found');
         const sid = randomUUID();
         const level = args.parent_name ? 2 : 1;
         await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'category', sid, 'upsert', JSON.stringify({ syncId: sid, name: args.name, kind, level, sortOrder: 0, icon: args.icon || null, iconType: null, parentName: args.parent_name || null }), nowUtc(), userId).run();
-        r = { sync_id: sid, name: args.name, kind };
+        r = { sync_id: sid, name: args.name, kind, _meta: { sync_id: sid } };
         break;
       }
       case 'update_budget': {
@@ -277,22 +327,25 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         if (!budget) throw new Error('Budget not found');
         const sid = randomUUID();
         await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, budget.ledger_id, 'budget', sid, 'upsert', JSON.stringify({ syncId: sid, type: budget.budget_type, categoryId: budget.category_sync_id, amount: args.amount, period: budget.period, startDay: budget.start_day, enabled: !!budget.enabled }), nowUtc(), userId).run();
-        r = { sync_id: args.budget_id, amount: args.amount };
+        r = { sync_id: args.budget_id, amount: args.amount, _meta: { sync_id: args.budget_id } };
         break;
       }
       case 'create_transactions': {
         const txs = args.transactions as any[];
         if (!txs?.length) throw new Error('transactions array required');
         if (txs.length > 200) throw new Error('Max 200 transactions per call');
-        const led = await resolveLedger(db, userId, args.ledger_id as string);
+        const { ledger: led, status: ledgerStatus } = await resolveWriteLedger(db, userId, args.ledger_id as string);
+        if (ledgerStatus) { r = ledgerStatus; break; }
         if (!led) throw new Error('No ledger found');
+        await ensureMcpTag(db, userId, led.external_id);
         const sids: string[] = [];
         for (const tx of txs) {
           if (tx.amount === undefined || (tx.amount as number) <= 0) throw new Error('amount must be positive');
           const txType = tx.tx_type || 'expense';
           if (!['expense', 'income', 'transfer'].includes(txType)) throw new Error(`Invalid tx_type: ${txType}`);
           const sid = randomUUID();
-          const payload: any = { syncId: sid, type: txType, amount: tx.amount, happenedAt: tx.happened_at || nowUtc(), note: tx.note || null, tags: tx.tags || null };
+          const finalTags = mergeDefaultTag(tx.tags as string[] | null | undefined);
+          const payload: any = { syncId: sid, type: txType, amount: tx.amount, happenedAt: parseDt(tx.happened_at as string), note: tx.note || null, tags: finalTags };
           if (tx.category) { payload.categoryName = tx.category; payload.categoryKind = txType; }
           if (tx.account) {
             if (txType === 'transfer') payload.fromAccountName = tx.account;
@@ -306,16 +359,59 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
       }
       case 'parse_and_create_from_text': {
         if (!args.text) throw new Error('text required');
-        const led = await resolveLedger(db, userId, args.ledger_id as string);
+        const ledResult = await resolveWriteLedger(db, userId, args.ledger_id as string);
+        if (ledResult.status) { r = ledResult.status; break; }
+        const led = ledResult.ledger;
         if (!led) throw new Error('No ledger found');
-        // 简单解析：提取金额和备注
-        const text = args.text as string;
-        const amountMatch = text.match(/(\d+(?:\.\d+)?)/);
-        if (!amountMatch) throw new Error('Could not parse amount from text');
-        const amount = parseFloat(amountMatch[1]);
+        // 读取 AI 配置
+        const profile = await db.prepare('SELECT ai_config_json FROM user_profiles WHERE user_id = ?').bind(userId).first<{ ai_config_json: string | null }>();
+        const aiConfig = profile?.ai_config_json ? (() => { try { return JSON.parse(profile.ai_config_json); } catch { return {}; } })() : {};
+        const providerId = aiConfig?.binding?.textProviderId;
+        const provider = aiConfig?.providers?.find((p: any) => p.id === providerId);
+        if (!provider?.apiKey || !provider?.baseUrl || !provider?.textModel) {
+          throw new Error('AI provider not configured. Please configure AI provider in settings.');
+        }
+        // 调用 AI API
+        const systemPrompt = `你是一个专业的记账助手。请分析用户的文字描述，提取交易信息。
+请返回 JSON 格式：
+{"tx_drafts": [{"tx_type": "expense|income|transfer", "amount": 金额数字, "category_name": "分类名", "account_name": "账户名", "happened_at": "YYYY-MM-DD", "note": "备注"}]}
+规则：
+- 金额必须是数字，不是字符串
+- 尝试识别支出/收入/转账
+- 如果金额不明确，根据语境推断`;
+        const aiUrl = `${provider.baseUrl.replace(/\/$/, '')}/chat/completions`;
+        const aiRes = await fetch(aiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}` },
+          body: JSON.stringify({ model: provider.textModel, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: args.text as string }], temperature: 0.2, response_format: { type: 'json_object' } }),
+          signal: AbortSignal.timeout(30000),
+        });
+        if (!aiRes.ok) throw new Error(`AI API error: ${aiRes.status}`);
+        const aiData = await aiRes.json() as any;
+        const aiContent = aiData?.choices?.[0]?.message?.content || '';
+        const parsed = extractJson(aiContent);
+        const drafts = parsed?.tx_drafts;
+        if (!drafts?.length) { r = { status: 'parse_failed', message: 'AI did not extract any draft', parsed: aiContent }; break; }
+        const draft = drafts[0];
+        const amount = draft.amount;
+        if (typeof amount !== 'number' || amount === 0) { r = { status: 'parse_failed', message: 'No valid amount in draft', parsed: draft }; break; }
+        const txType = draft.tx_type || 'expense';
+        const category = draft.category_name;
+        const account = draft.account_name;
+        const happenedAt = draft.happened_at;
+        const note = draft.note || (args.text as string);
+        // 创建交易
         const sid = randomUUID();
-        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify({ syncId: sid, type: 'expense', amount, happenedAt: nowUtc(), note: text, categoryName: null, accountName: null }), nowUtc(), userId).run();
-        r = { status: 'created', parsed: { amount, note: text, tx_type: 'expense' }, transaction: { sync_id: sid, ledger: led.name, amount, tx_type: 'expense' } };
+        await ensureMcpTag(db, userId, led.external_id);
+        const finalTags = mergeDefaultTag(null);
+        const payload: any = { syncId: sid, type: txType, amount: Math.abs(amount), happenedAt: parseDt(happenedAt), note: note || null, tags: finalTags };
+        if (category) { payload.categoryName = category; payload.categoryKind = txType; }
+        if (account) {
+          if (txType === 'transfer') payload.fromAccountName = account;
+          else payload.accountName = account;
+        }
+        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify(payload), nowUtc(), userId).run();
+        r = { status: 'created', parsed: draft, transaction: { sync_id: sid, ledger: led.name, amount: Math.abs(amount), tx_type: txType, _meta: { sync_id: sid } } };
         break;
       }
       default: throw new Error(`Unknown tool: ${name}`);
