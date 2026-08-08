@@ -61,7 +61,7 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
     switch (name) {
       case 'list_ledgers': {
         const rows = await db.prepare(`SELECT l.id, l.external_id, l.name, l.currency, l.created_at FROM ledgers l LEFT JOIN ledger_members lm ON l.id = lm.ledger_id WHERE (l.user_id = ? OR lm.user_id = ?) ORDER BY l.created_at ASC`).bind(userId, userId).all();
-        r = rows.results.map((l: any) => ({ id: l.external_id, name: l.name || l.external_id, currency: l.currency, created_at: l.created_at }));
+        r = rows.results.map((l: any) => ({ id: l.external_id, name: l.name || l.external_id, currency: l.currency, created_at: l.created_at ? new Date(l.created_at).toISOString() : null }));
         break;
       }
       case 'get_active_ledger': {
@@ -70,17 +70,17 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         break;
       }
       case 'list_transactions': {
-        const limit = Math.min((args.limit as number) || 50, 200);
+        const limit = Math.max(1, Math.min((args.limit as number) || 50, 200));
         const led = await resolveLedger(db, userId, args.ledger_id as string);
-        if (!led) throw new Error('Ledger not found');
+        if (!led) { r = { ledger: null, total: 0, items: [] }; break; }
         let q = 'SELECT * FROM read_tx_projection WHERE ledger_id = ?';
         const p: unknown[] = [led.id];
         if (args.date_from) { q += ' AND happened_at >= ?'; p.push(args.date_from); }
         if (args.date_to) { q += ' AND happened_at <= ?'; p.push(args.date_to); }
         if (args.category) { q += ' AND category_name = ?'; p.push(args.category); }
         if (args.account) { q += ' AND (account_name = ? OR from_account_name = ? OR to_account_name = ?)'; p.push(args.account, args.account, args.account); }
-        if (args.min_amount) { q += ' AND ABS(amount) >= ?'; p.push(args.min_amount); }
-        if (args.max_amount) { q += ' AND ABS(amount) <= ?'; p.push(args.max_amount); }
+        if (args.min_amount !== undefined && args.min_amount !== null) { q += ' AND ABS(amount) >= ?'; p.push(args.min_amount); }
+        if (args.max_amount !== undefined && args.max_amount !== null) { q += ' AND ABS(amount) <= ?'; p.push(args.max_amount); }
         if (args.q) { q += ' AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ?)'; const l = `%${args.q}%`; p.push(l, l, l); }
         const total = (await db.prepare(q.replace('SELECT *', 'SELECT COUNT(*) as cnt')).bind(...p).first<{ cnt: number }>())?.cnt || 0;
         q += ' ORDER BY happened_at DESC LIMIT ?'; p.push(limit);
@@ -160,7 +160,12 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         const led = await resolveLedger(db, userId, args.ledger_id as string);
         if (!led) { r = {}; break; }
         const scope = (args.scope as string) || 'month';
-        const period = args.period as string;
+        let period = args.period as string;
+        const now = new Date();
+        if (!period) {
+          if (scope === 'month') period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+          else if (scope === 'year') period = `${now.getFullYear()}`;
+        }
         let dateFrom = '', dateTo = '';
         if (scope === 'month' && period) { dateFrom = period + '-01'; const y = parseInt(period.split('-')[0]), m = parseInt(period.split('-')[1]); dateTo = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`; }
         if (scope === 'year' && period) { dateFrom = period + '-01-01'; dateTo = `${parseInt(period) + 1}-01-01`; }
@@ -169,10 +174,10 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         if (dateTo) { q += ' AND happened_at < ?'; p.push(dateTo); }
         const rows = await db.prepare(q).bind(...p).all();
         const items = rows.results as any[];
-        const income = items.filter(x => x.tx_type === 'income').reduce((s, x) => s + (x.amount || 0), 0);
-        const expense = items.filter(x => x.tx_type === 'expense').reduce((s, x) => s + (x.amount || 0), 0);
+        const income = items.filter(x => x.tx_type === 'income').reduce((s, x) => s + (x.native_amount ?? x.amount || 0), 0);
+        const expense = items.filter(x => x.tx_type === 'expense').reduce((s, x) => s + (x.native_amount ?? x.amount || 0), 0);
         const catMap = new Map<string, number>();
-        items.filter(x => x.tx_type === 'expense').forEach(x => { catMap.set(x.category_name, (catMap.get(x.category_name) || 0) + (x.amount || 0)); });
+        items.filter(x => x.tx_type === 'expense').forEach(x => { const amt = x.native_amount ?? x.amount || 0; catMap.set(x.category_name, (catMap.get(x.category_name) || 0) + amt); });
         const topCats = [...catMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, total]) => ({ name, total }));
         r = { ledger: led.name, scope, period, income: Math.round(income * 100) / 100, expense: Math.round(expense * 100) / 100, balance: Math.round((income - expense) * 100) / 100, transaction_count: items.length, top_categories: topCats };
         break;
@@ -202,15 +207,16 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         break;
       }
       case 'list_budgets': {
-        const led = args.ledger_id ? await resolveLedger(db, userId, args.ledger_id as string) : null;
-        const lid = led?.id || null;
-        if (!lid) { r = []; break; }
+        const led = await resolveLedger(db, userId, args.ledger_id as string);
+        if (!led) { r = []; break; }
+        const lid = led.id;
         const budgets = await db.prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?').bind(lid).all();
         const now = new Date(); const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
         const spending = await db.prepare('SELECT category_sync_id, SUM(COALESCE(native_amount, amount)) as spent FROM read_tx_projection WHERE ledger_id = ? AND tx_type = \'expense\' AND happened_at >= ? GROUP BY category_sync_id').bind(lid, monthStart).all();
         const spentMap = new Map((spending.results as any[]).map(x => [x.category_sync_id, x.spent]));
+        const totalExpense = (spending.results as any[]).reduce((s, x) => s + (x.spent || 0), 0);
         r = (budgets.results as any[]).map(b => {
-          const spent = spentMap.get(b.category_sync_id) || 0;
+          const spent = (b.budget_type === 'total' || !b.category_sync_id) ? totalExpense : (spentMap.get(b.category_sync_id) || 0);
           const pct = b.amount > 0 ? Math.round((spent / b.amount) * 1000) / 10 : 0;
           return { id: b.sync_id, type: b.budget_type || 'total', amount: b.amount, spent, remaining: Math.max(0, b.amount - spent), percent_used: pct, exceeded: pct > 100 };
         });
@@ -218,7 +224,7 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
       }
       case 'search': {
         const q = args.q as string; if (!q?.trim()) { r = []; break; }
-        const limit = Math.min((args.limit as number) || 20, 100);
+        const limit = Math.max(1, Math.min((args.limit as number) || 20, 100));
         const like = `%${q}%`;
         const access = await db.prepare(`SELECT l.id FROM ledgers l WHERE l.user_id = ? UNION SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?`).bind(userId, userId).all<{ id: string }>();
         const ids = access.results.map(r => r.id);
