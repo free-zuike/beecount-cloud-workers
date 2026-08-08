@@ -19,25 +19,24 @@ async function hashToken(t: string): Promise<string> {
 interface ToolDef { name: string; description: string; inputSchema: Record<string, unknown>; }
 
 const TOOL_DEFS: ToolDef[] = [
-  { name: 'list_ledgers', description: '列出用户的所有账本', inputSchema: { type: 'object', properties: {} } },
-  { name: 'get_active_ledger', description: '获取用户的默认账本', inputSchema: { type: 'object', properties: {} } },
-  { name: 'list_transactions', description: '查询交易记录，支持多维筛选', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' }, date_from: { type: 'string' }, date_to: { type: 'string' }, category: { type: 'string' }, account: { type: 'string' }, min_amount: { type: 'number' }, max_amount: { type: 'number' }, q: { type: 'string' }, limit: { type: 'number' } } } },
-  { name: 'get_transaction', description: '获取单笔交易详情', inputSchema: { type: 'object', properties: { sync_id: { type: 'string' } }, required: ['sync_id'] } },
-  { name: 'create_transaction', description: '创建一笔新交易', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' }, tx_type: { type: 'string', enum: ['expense', 'income', 'transfer'] }, amount: { type: 'number' }, happened_at: { type: 'string' }, note: { type: 'string' }, category: { type: 'string' }, account: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, currency: { type: 'string' } }, required: ['amount'] } },
-  { name: 'update_transaction', description: '更新交易', inputSchema: { type: 'object', properties: { sync_id: { type: 'string' }, amount: { type: 'number' }, tx_type: { type: 'string', enum: ['expense', 'income', 'transfer'] }, category: { type: 'string' }, account: { type: 'string' }, happened_at: { type: 'string' }, note: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } } }, required: ['sync_id'] } },
-  { name: 'delete_transaction', description: '删除交易（需确认）', inputSchema: { type: 'object', properties: { sync_id: { type: 'string' }, confirm: { type: 'boolean' } }, required: ['sync_id'] } },
-  { name: 'get_summary', description: '获取账本汇总统计', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' } }, required: ['ledger_id'] } },
-  { name: 'get_ledger_stats', description: '获取账本统计（交易数/分类数/账户数/标签数/预算数）', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' } } } },
-  { name: 'get_analytics_summary', description: '获取收支分析（收入/支出/结余/TOP分类）', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' }, scope: { type: 'string', enum: ['month', 'year', 'all'] }, period: { type: 'string' } } } },
-  { name: 'list_categories', description: '列出所有分类', inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['expense', 'income', 'transfer'] } } } },
-  { name: 'list_accounts', description: '列出所有账户', inputSchema: { type: 'object', properties: { account_type: { type: 'string' } } } },
-  { name: 'list_tags', description: '列出所有标签', inputSchema: { type: 'object', properties: {} } },
-  { name: 'list_budgets', description: '列出预算及当前进度', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' } } } },
-  { name: 'search', description: '全文搜索交易', inputSchema: { type: 'object', properties: { q: { type: 'string' }, limit: { type: 'number' } }, required: ['q'] } },
-  { name: 'create_category', description: '创建分类', inputSchema: { type: 'object', properties: { name: { type: 'string' }, kind: { type: 'string', enum: ['expense', 'income', 'transfer'] }, parent_name: { type: 'string' }, icon: { type: 'string' }, ledger_id: { type: 'string' } }, required: ['name'] } },
-  { name: 'update_budget', description: '更新预算金额', inputSchema: { type: 'object', properties: { budget_id: { type: 'string' }, amount: { type: 'number' } }, required: ['budget_id', 'amount'] } },
-  { name: 'create_transactions', description: '批量创建交易', inputSchema: { type: 'object', properties: { transactions: { type: 'array', items: { type: 'object' } }, ledger_id: { type: 'string' } }, required: ['transactions'] } },
-  { name: 'parse_and_create_from_text', description: '用 AI 解析文本创建交易', inputSchema: { type: 'object', properties: { text: { type: 'string' }, ledger_id: { type: 'string' } }, required: ['text'] } },
+  { name: 'list_ledgers', description: 'List all ledgers for the authenticated BeeCount user. Returns each ledger\'s id (external_id), name, currency, and created_at. Use the returned id when calling other tools that take ledger_id.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'get_active_ledger', description: 'Get the user\'s primary/default ledger. Use this when the user doesn\'t specify which ledger they\'re talking about. Returns null if the user has no ledgers.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'list_transactions', description: 'Query transactions with rich filters. ledger_id: Optional, uses active ledger if omitted. date_from/date_to: ISO dates (YYYY-MM-DD) or full ISO datetimes. category: Exact category name match. account: Exact account name match (matches account/from_account/to_account). min_amount/max_amount: Filter by absolute amount. q: Substring match against note. limit: Max items returned (1..200, default 50).', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' }, date_from: { type: 'string' }, date_to: { type: 'string' }, category: { type: 'string' }, account: { type: 'string' }, min_amount: { type: 'number' }, max_amount: { type: 'number' }, q: { type: 'string' }, limit: { type: 'number', default: 50 } } } },
+  { name: 'get_transaction', description: 'Get a single transaction by its sync_id (cross-ledger lookup).', inputSchema: { type: 'object', properties: { sync_id: { type: 'string' } }, required: ['sync_id'] } },
+  { name: 'create_transaction', description: 'Create a new transaction. amount: Positive number; type captured separately via tx_type. tx_type: \'expense\' (default), \'income\', or \'transfer\'. category: Existing category name (server rejects unknown names). account: Existing account name. For transfers this is the from-account. happened_at: ISO date or datetime. Defaults to now. note: Optional memo. tags: Optional list of tag names. ledger_id: Optional; uses active ledger if omitted.', inputSchema: { type: 'object', properties: { amount: { type: 'number' }, tx_type: { type: 'string', enum: ['expense', 'income', 'transfer'] }, category: { type: 'string' }, account: { type: 'string' }, happened_at: { type: 'string' }, note: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, ledger_id: { type: 'string' } }, required: ['amount'] } },
+  { name: 'update_transaction', description: 'Patch an existing transaction. Only the fields you pass are changed.', inputSchema: { type: 'object', properties: { sync_id: { type: 'string' }, amount: { type: 'number' }, tx_type: { type: 'string', enum: ['expense', 'income', 'transfer'] }, category: { type: 'string' }, account: { type: 'string' }, happened_at: { type: 'string' }, note: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } } }, required: ['sync_id'] } },
+  { name: 'delete_transaction', description: 'Delete a transaction. Destructive - two-step confirmation required. Calling with confirm=False returns a confirmation_required placeholder; you must then prompt the user, and only call again with confirm=true after they explicitly agree.', inputSchema: { type: 'object', properties: { sync_id: { type: 'string' }, confirm: { type: 'boolean' } }, required: ['sync_id'] } },
+  { name: 'get_ledger_stats', description: 'Get summary stats for a ledger (transaction/category/account/tag/budget counts).', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' } } } },
+  { name: 'get_analytics_summary', description: 'Income/expense/balance plus top-10 spending categories. scope: \'month\' | \'year\' | \'all\'. period: For month: \'YYYY-MM\'. For year: \'YYYY\'. Defaults to current. ledger_id: Optional, uses active ledger if omitted.', inputSchema: { type: 'object', properties: { scope: { type: 'string', enum: ['month', 'year', 'all'] }, period: { type: 'string' }, ledger_id: { type: 'string' } } } },
+  { name: 'list_categories', description: 'List user\'s categories. kind is one of: expense, income, transfer.', inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['expense', 'income', 'transfer'] } } } },
+  { name: 'list_accounts', description: 'List user\'s accounts. account_type filters by type (bank_card, credit_card, cash, ...).', inputSchema: { type: 'object', properties: { account_type: { type: 'string' } } } },
+  { name: 'list_tags', description: 'List all of the user\'s tags.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'list_budgets', description: 'List budgets for a ledger with current-month spent/remaining/percent_used.', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' } } } },
+  { name: 'search', description: 'Full-text fuzzy search across transaction notes, category names, account names.', inputSchema: { type: 'object', properties: { q: { type: 'string' }, limit: { type: 'number', default: 20 } }, required: ['q'] } },
+  { name: 'create_category', description: 'Create a new category. Usually unnecessary - prefer existing categories. name: required. kind: expense/income/transfer, default expense. parent_name: optional, for level-2 categories.', inputSchema: { type: 'object', properties: { name: { type: 'string' }, kind: { type: 'string', enum: ['expense', 'income', 'transfer'] }, parent_name: { type: 'string' }, icon: { type: 'string' }, ledger_id: { type: 'string' } }, required: ['name'] } },
+  { name: 'update_budget', description: 'Update a budget\'s amount.', inputSchema: { type: 'object', properties: { budget_id: { type: 'string' }, amount: { type: 'number' } }, required: ['budget_id', 'amount'] } },
+  { name: 'create_transactions', description: 'Create many transactions at once - use this for bulk imports. Far more efficient than calling create_transaction in a loop. transactions: list of objects, each like create_transaction\'s args - {amount (>0), tx_type (expense|income|transfer, default expense), category, account, happened_at (ISO, default now), note, tags}. category/account must be existing names. ledger_id: Optional. Max 200 transactions per call.', inputSchema: { type: 'object', properties: { transactions: { type: 'array', items: { type: 'object' } }, ledger_id: { type: 'string' } }, required: ['transactions'] } },
+  { name: 'parse_and_create_from_text', description: 'Have BeeCount AI parse free-form natural-language text into a transaction. Useful when the user gives a sentence like "上午星巴克花了 38" and you want BeeCount\'s own AI prompt + ledger context to do the heavy lifting. Requires the user to have configured an AI chat provider in their profile.', inputSchema: { type: 'object', properties: { text: { type: 'string' }, ledger_id: { type: 'string' } }, required: ['text'] } },
 ];
 
 // ===========================
@@ -106,7 +105,7 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         if (!led) throw new Error('No ledger found');
         if (!args.amount || (args.amount as number) <= 0) throw new Error('amount must be positive');
         const sid = randomUUID();
-        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify({ syncId: sid, type: args.tx_type || 'expense', amount: args.amount, happenedAt: args.happened_at || nowUtc(), note: args.note || null, categoryName: args.category || null, accountName: args.account || null, tags: args.tags || null, currencyCode: args.currency || null }), nowUtc(), userId).run();
+        await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify({ syncId: sid, type: args.tx_type || 'expense', amount: args.amount, happenedAt: args.happened_at || nowUtc(), note: args.note || null, categoryName: args.category || null, accountName: args.account || null, tags: args.tags || null }), nowUtc(), userId).run();
         r = { sync_id: sid, ledger: led.name, tx_type: args.tx_type || 'expense', amount: args.amount, happened_at: args.happened_at || nowUtc(), category: args.category || null, account: args.account || null };
         break;
       }
@@ -142,14 +141,6 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         const sid = randomUUID();
         await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, tx.ledger_id, 'transaction', sid, 'delete', JSON.stringify({ syncId: args.sync_id }), nowUtc(), userId).run();
         r = { status: 'deleted', sync_id: args.sync_id };
-        break;
-      }
-      case 'get_summary': {
-        if (!args.ledger_id) throw new Error('ledger_id required');
-        const led = await resolveLedger(db, userId, args.ledger_id as string);
-        if (!led) throw new Error('Ledger not found');
-        const s = await db.prepare(`SELECT COUNT(*) as c, SUM(CASE WHEN tx_type='income' THEN amount ELSE 0 END) as inc, SUM(CASE WHEN tx_type='expense' THEN amount ELSE 0 END) as exp FROM read_tx_projection WHERE ledger_id = ?`).bind(led.id).first<{ c: number; inc: number; exp: number }>();
-        r = { ledger: led.name, transactions: s?.c || 0, income: s?.inc || 0, expense: s?.exp || 0 };
         break;
       }
       case 'get_ledger_stats': {
@@ -229,7 +220,10 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         const q = args.q as string; if (!q?.trim()) { r = []; break; }
         const limit = Math.min((args.limit as number) || 20, 100);
         const like = `%${q}%`;
-        const rows = await db.prepare('SELECT * FROM read_tx_projection WHERE user_id = ? AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ?) ORDER BY happened_at DESC LIMIT ?').bind(userId, like, like, like, limit).all();
+        const access = await db.prepare(`SELECT l.id FROM ledgers l WHERE l.user_id = ? UNION SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?`).bind(userId, userId).all<{ id: string }>();
+        const ids = access.results.map(r => r.id);
+        if (ids.length === 0) { r = []; break; }
+        const rows = await db.prepare(`SELECT * FROM read_tx_projection WHERE ledger_id IN (${ids.map(() => '?').join(',')}) AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ?) ORDER BY happened_at DESC LIMIT ?`).bind(...ids, like, like, like, limit).all();
         r = (rows.results as any[]).map(x => ({ sync_id: x.sync_id, tx_type: x.tx_type, amount: x.amount, happened_at: x.happened_at, note: x.note, category_name: x.category_name, account_name: x.account_name, from_account_name: x.from_account_name, to_account_name: x.to_account_name, tags: x.tags_csv || '' }));
         break;
       }
@@ -262,7 +256,7 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         for (const tx of txs.slice(0, 200)) {
           if (!tx.amount || tx.amount <= 0) continue;
           const sid = randomUUID();
-          await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify({ syncId: sid, type: tx.tx_type || 'expense', amount: tx.amount, happenedAt: tx.happened_at || nowUtc(), note: tx.note || null, categoryName: tx.category || null, accountName: tx.account || null, tags: tx.tags || null, currencyCode: tx.currency || null }), nowUtc(), userId).run();
+          await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, led.id, 'transaction', sid, 'upsert', JSON.stringify({ syncId: sid, type: tx.tx_type || 'expense', amount: tx.amount, happenedAt: tx.happened_at || nowUtc(), note: tx.note || null, categoryName: tx.category || null, accountName: tx.account || null, tags: tx.tags || null }), nowUtc(), userId).run();
           sids.push(sid);
         }
         r = { status: 'created', ledger: led.name, created_count: sids.length, sync_ids: sids };
