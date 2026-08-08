@@ -43,11 +43,52 @@ const TOOL_DEFS: ToolDef[] = [
 // 工具执行
 // ===========================
 
+// 软删除检查：最新 ledger_snapshot 为 delete 则视为已软删（原版 _is_ledger_deleted）
+async function isLedgerDeleted(db: D1Database, ledgerId: string): Promise<boolean> {
+  const row = await db.prepare(`SELECT action FROM sync_changes WHERE ledger_id = ? AND entity_type = 'ledger_snapshot' AND action = 'delete' ORDER BY change_id DESC LIMIT 1`).bind(ledgerId).first<{ action: string }>();
+  return row?.action === 'delete';
+}
+
+// 多币种折算（原版 _build_currency_fields）：currency 参数 > 账户币种 > 账本本位币
+async function buildCurrencyFields(db: D1Database, userId: string, ledgerBase: string, accountCurrency: string | null | undefined, currencyArg: string | null | undefined, amount: number): Promise<{ currency_code?: string; native_amount?: number; }> {
+  const base = (ledgerBase || 'CNY').trim().toUpperCase();
+  const cc = ((currencyArg || accountCurrency || base) || 'CNY').trim().toUpperCase();
+  if (cc === base) return {};
+  // override 优先
+  const ov = await db.prepare('SELECT rate FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?').bind(userId, base, cc).first<{ rate: string }>();
+  let native: number | null = null;
+  if (ov) {
+    const r = parseFloat(ov.rate);
+    if (r > 0) native = amount * r;
+  }
+  if (native === null) {
+    const cache = await db.prepare('SELECT payload_json FROM exchange_rate_cache WHERE base_currency = ?').bind(base).first<{ payload_json: string }>();
+    if (cache) {
+      try {
+        const payload = JSON.parse(cache.payload_json) as Record<string, string>;
+        const raw = payload[cc] ?? payload[cc.toLowerCase()];
+        const x = parseFloat(raw ?? '');
+        native = x > 0 ? amount / x : amount;
+      } catch { native = amount; }
+    } else {
+      native = amount;
+    }
+  }
+  return { currency_code: cc, native_amount: native };
+}
+
 async function resolveLedger(db: D1Database, userId: string, ledgerId?: string | null): Promise<{ id: string; external_id: string; name: string; currency: string | null } | null> {
   if (ledgerId) {
-    return db.prepare(`SELECT l.id, l.external_id, l.name, l.currency FROM ledgers l LEFT JOIN ledger_members lm ON l.id = lm.ledger_id WHERE (l.user_id = ? OR lm.user_id = ?) AND l.external_id = ?`).bind(userId, userId, ledgerId).first<{ id: string; external_id: string; name: string; currency: string | null }>();
+    const led = await db.prepare(`SELECT l.id, l.external_id, l.name, l.currency FROM ledgers l LEFT JOIN ledger_members lm ON l.id = lm.ledger_id WHERE (l.user_id = ? OR lm.user_id = ?) AND l.external_id = ?`).bind(userId, userId, ledgerId).first<{ id: string; external_id: string; name: string; currency: string | null }>();
+    if (!led) return null;
+    if (await isLedgerDeleted(db, led.id)) return null;
+    return led;
   }
-  return db.prepare(`SELECT l.id, l.external_id, l.name, l.currency FROM ledgers l LEFT JOIN ledger_members lm ON l.id = lm.ledger_id WHERE (l.user_id = ? OR lm.user_id = ?) ORDER BY l.created_at ASC LIMIT 1`).bind(userId, userId).first<{ id: string; external_id: string; name: string; currency: string | null }>();
+  const ledgers = await db.prepare(`SELECT l.id, l.external_id, l.name, l.currency FROM ledgers l LEFT JOIN ledger_members lm ON l.id = lm.ledger_id WHERE (l.user_id = ? OR lm.user_id = ?) ORDER BY l.created_at ASC`).bind(userId, userId).all<{ id: string; external_id: string; name: string; currency: string | null }>();
+  for (const l of ledgers.results) {
+    if (!(await isLedgerDeleted(db, l.id))) return l;
+  }
+  return null;
 }
 
 // B5: 多账本写操作歧义拒绝 — 不指定 ledger_id 且有多个账本时返回候选列表（原版行为）
@@ -58,9 +99,13 @@ async function resolveWriteLedger(db: D1Database, userId: string, ledgerId?: str
     return { ledger: led, status: null };
   }
   const ledgers = await db.prepare(`SELECT l.id, l.external_id, l.name, l.currency FROM ledgers l LEFT JOIN ledger_members lm ON l.id = lm.ledger_id WHERE (l.user_id = ? OR lm.user_id = ?) ORDER BY l.created_at ASC`).bind(userId, userId).all<{ id: string; external_id: string; name: string; currency: string | null }>();
-  if (ledgers.results.length === 0) return { ledger: null, status: { status: 'no_ledger', message: 'You have no ledger yet. Create one in BeeCount first.' } };
-  if (ledgers.results.length === 1) return { ledger: ledgers.results[0], status: null };
-  return { ledger: null, status: { status: 'ledger_required', message: 'You have multiple ledgers — refusing to guess which one to write to. Re-call this tool with an explicit `ledger_id` (the `id` field of one of the candidates below).', candidates: ledgers.results.map(l => ({ id: l.external_id, name: l.name })) } };
+  const live: typeof ledgers.results = [];
+  for (const l of ledgers.results) {
+    if (!(await isLedgerDeleted(db, l.id))) live.push(l);
+  }
+  if (live.length === 0) return { ledger: null, status: { status: 'no_ledger', message: 'You have no ledger yet. Create one in BeeCount first.' } };
+  if (live.length === 1) return { ledger: live[0], status: null };
+  return { ledger: null, status: { status: 'ledger_required', message: 'You have multiple ledgers — refusing to guess which one to write to. Re-call this tool with an explicit `ledger_id` (the `id` field of one of the candidates below).', candidates: live.map(l => ({ id: l.external_id, name: l.name })) } };
 }
 
 // MCP 默认标签工具
@@ -160,7 +205,10 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         await ensureMcpTag(db, userId, led.external_id);
         const finalTags = mergeDefaultTag(args.tags as string[] | null | undefined);
         const sid = randomUUID();
-        const payload: any = { syncId: sid, type: txType, amount: args.amount, happenedAt: parseDt(args.happened_at as string), note: args.note || null, tags: finalTags };
+        // 多币种折算
+        const accCurrency = args.account ? (await db.prepare('SELECT currency FROM read_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<{ currency: string }>())?.currency : null;
+        const ccyFields = await buildCurrencyFields(db, userId, led.currency || 'CNY', accCurrency, null, args.amount as number);
+        const payload: any = { syncId: sid, type: txType, amount: args.amount, happenedAt: parseDt(args.happened_at as string), note: args.note || null, tags: finalTags, ...ccyFields };
         if (args.category) { payload.categoryName = args.category; payload.categoryKind = txType; }
         if (args.account) {
           if (txType === 'transfer') payload.fromAccountName = args.account;
@@ -345,7 +393,9 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
           if (!['expense', 'income', 'transfer'].includes(txType)) throw new Error(`Invalid tx_type: ${txType}`);
           const sid = randomUUID();
           const finalTags = mergeDefaultTag(tx.tags as string[] | null | undefined);
-          const payload: any = { syncId: sid, type: txType, amount: tx.amount, happenedAt: parseDt(tx.happened_at as string), note: tx.note || null, tags: finalTags };
+          const accCurrency = tx.account ? (await db.prepare('SELECT currency FROM read_account_projection WHERE user_id = ? AND name = ?').bind(userId, tx.account).first<{ currency: string }>())?.currency : null;
+          const ccyFields = await buildCurrencyFields(db, userId, led.currency || 'CNY', accCurrency, null, tx.amount as number);
+          const payload: any = { syncId: sid, type: txType, amount: tx.amount, happenedAt: parseDt(tx.happened_at as string), note: tx.note || null, tags: finalTags, ...ccyFields };
           if (tx.category) { payload.categoryName = tx.category; payload.categoryKind = txType; }
           if (tx.account) {
             if (txType === 'transfer') payload.fromAccountName = tx.account;
