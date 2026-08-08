@@ -170,10 +170,10 @@ async function execTool(db: D1Database, userId: string, scopes: string[], name: 
         if (dateTo) { q += ' AND happened_at < ?'; p.push(dateTo); }
         const rows = await db.prepare(q).bind(...p).all();
         const items = rows.results as any[];
-        const income = items.filter(x => x.tx_type === 'income').reduce((s, x) => s + (x.native_amount ?? x.amount || 0), 0);
-        const expense = items.filter(x => x.tx_type === 'expense').reduce((s, x) => s + (x.native_amount ?? x.amount || 0), 0);
+        const income = items.filter(x => x.tx_type === 'income').reduce((s, x) => s + (x.native_amount ?? x.amount ?? 0), 0);
+        const expense = items.filter(x => x.tx_type === 'expense').reduce((s, x) => s + (x.native_amount ?? x.amount ?? 0), 0);
         const catMap = new Map<string, number>();
-        items.filter(x => x.tx_type === 'expense').forEach(x => { const amt = x.native_amount ?? x.amount || 0; const nm = x.category_name || '(未分类)'; catMap.set(nm, (catMap.get(nm) || 0) + amt); });
+        items.filter(x => x.tx_type === 'expense').forEach(x => { const amt = x.native_amount ?? x.amount ?? 0; const nm = x.category_name || '(未分类)'; catMap.set(nm, (catMap.get(nm) || 0) + amt); });
         const topCats = [...catMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, total]) => ({ name, total: Math.round(total * 100) / 100 }));
         r = { ledger: led.name, scope, period, income: Math.round(income * 100) / 100, expense: Math.round(expense * 100) / 100, balance: Math.round((income - expense) * 100) / 100, transaction_count: items.length, top_categories: topCats.map(t => ({ name: t.name, total: Math.round((t.total as number) * 100) / 100 })) };
         break;
