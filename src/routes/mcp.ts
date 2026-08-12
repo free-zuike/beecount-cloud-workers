@@ -13,6 +13,11 @@ async function hashToken(t: string): Promise<string> {
   return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// MCP 2026-07-28: 无握手，每个请求在 _meta 里带协议版本和 capabilities
+export const PROTOCOL_VERSION = '2026-07-28';
+export const SUPPORTED_VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
+export const SERVER_INFO = { name: 'beecount-mcp', version: '1.0.0' };
+
 // ===========================
 // 工具定义
 // ===========================
@@ -142,7 +147,7 @@ function extractJson(text: string): any {
 }
 
 // 原版 _self_call：用 JWT 调用 write router 端点，确保走完整写路径（验证 + 审计 + WS 广播）
-async function selfCall(method: string, path: string, env: { JWT_SECRET: string }, baseUrl: string, userId: string, body: any): Promise<any> {
+export async function selfCall(method: string, path: string, env: { JWT_SECRET: string }, baseUrl: string, userId: string, body: any): Promise<any> {
   const token = await createAccessToken(userId, env.JWT_SECRET, 'app', ['app_write'], 60);
   const url = `${baseUrl}${path}`;
   const res = await fetch(url, {
@@ -524,16 +529,45 @@ async function jsonRpcHandler(c: any) {
   try { body = await c.req.json(); } catch { return new Response(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }), { status: 400, headers: { 'Content-Type': 'application/json' } }); }
   if (!body || body.jsonrpc !== '2.0' || !body.method) return new Response(JSON.stringify({ jsonrpc: '2.0', id: body?.id ?? null, error: { code: -32600, message: 'Invalid Request' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   const { method, id, params } = body;
+
+  // MCP 2026-07-28: 无握手，每个请求在 params._meta 里带协议版本。校验
+  // MCP-Protocol-Version / Mcp-Method / Mcp-Name 头与 body 一致，不一致回
+  // -32020；版本不支持则回 -32022。头缺失时宽松放行（兼容旧版客户端）。
+  const meta = params?._meta ?? {};
+  const reqVersion: string | undefined = meta['io.modelcontextprotocol/protocolVersion'];
+  const headerVersion = c.req.header('MCP-Protocol-Version');
+  if (reqVersion && headerVersion && headerVersion !== reqVersion) {
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32020, message: `Header mismatch: MCP-Protocol-Version header '${headerVersion}' does not match body _meta value '${reqVersion}'` } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
+  if (reqVersion && !SUPPORTED_VERSIONS.includes(reqVersion)) {
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32022, message: 'Unsupported protocol version', data: { supported: SUPPORTED_VERSIONS, requested: reqVersion } } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
+  const headerMethod = c.req.header('Mcp-Method');
+  if (headerMethod && headerMethod !== method) {
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32020, message: `Header mismatch: Mcp-Method header '${headerMethod}' does not match body method '${method}'` } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
+  const headerName = c.req.header('Mcp-Name');
+  if (headerName && (params?.name ?? params?.uri) && headerName !== (params?.name ?? params?.uri)) {
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32020, message: `Header mismatch: Mcp-Name header '${headerName}' does not match body value '${params?.name ?? params?.uri}'` } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
+
+  // 通知（无 id）按传输规范回 202 无 body
+  if (id === undefined || id === null) return new Response(null, { status: 202 });
+
   try {
-    if (method === 'initialize') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'beecount-mcp', version: '1.0.0' } } }), { headers: { 'Content-Type': 'application/json' } });
-    if (method === 'tools/list') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { tools: TOOL_DEFS } }), { headers: { 'Content-Type': 'application/json' } });
+    // 旧版客户端仍可能发 initialize 握手，兼容响应
+    if (method === 'initialize') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { protocolVersion: PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: SERVER_INFO } }), { headers: { 'Content-Type': 'application/json' } });
+    if (method === 'server/discover') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', ttlMs: 0, cacheScope: 'private', supportedVersions: SUPPORTED_VERSIONS, capabilities: { tools: {} }, instructions: 'BeeCount Cloud MCP server - manage your personal finance ledgers via 18 tools.' } }), { headers: { 'Content-Type': 'application/json' } });
+    if (method === 'tools/list') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', tools: TOOL_DEFS, _meta: { 'io.modelcontextprotocol/serverInfo': SERVER_INFO } } }), { headers: { 'Content-Type': 'application/json' } });
     if (method === 'tools/call') {
       const p = (params || {}) as { name?: string; arguments?: Record<string, unknown> };
       if (!p.name) return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32602, message: 'Tool name required' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
       const result = await execTool(db, c.env, baseUrl, userId, patScopes, p.name, p.arguments || {}, patId, patPrefix, patName);
-      return new Response(JSON.stringify({ jsonrpc: '2.0', id, result }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', ...result, _meta: { 'io.modelcontextprotocol/serverInfo': SERVER_INFO } } }), { headers: { 'Content-Type': 'application/json' } });
     }
-    return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: {} }), { headers: { 'Content-Type': 'application/json' } });
+    if (method === 'ping') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete' } }), { headers: { 'Content-Type': 'application/json' } });
+    // 未知方法按规范回 404 + -32601
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32601, message: `Method not found: ${method}` } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
   } catch (e) {
     // 对齐原版 Python：异常转为 JSON-RPC error（不是 isError）
     return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32603, message: (e as Error).message } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
@@ -545,7 +579,7 @@ async function sseHandler(c: any) {
   const ae = await checkAuth(c); if (ae) return ae;
   const { readable, writable } = new TransformStream();
   const w = writable.getWriter(); const enc = new TextEncoder();
-  w.write(enc.encode(`data: ${JSON.stringify({ jsonrpc: '2.0', method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'beecount-mcp', version: '1.0.0' } } })}\n\n`));
+  w.write(enc.encode(`data: ${JSON.stringify({ jsonrpc: '2.0', method: 'initialize', params: { protocolVersion: PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: SERVER_INFO } })}\n\n`));
   const ka = setInterval(() => w.write(enc.encode(': keepalive\n\n')).catch(() => clearInterval(ka)), 15000);
   c.req.raw.signal.addEventListener('abort', () => { clearInterval(ka); w.close().catch(() => {}); });
   return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
@@ -555,7 +589,7 @@ async function sseHandler(c: any) {
 router.get('/sse', sseHandler);
 router.post('/messages/', jsonRpcHandler);
 router.post('/', jsonRpcHandler);
-router.get('/', async (c) => { const ae = await checkAuth(c); return ae || new Response(JSON.stringify({ jsonrpc: '2.0', result: { serverInfo: { name: 'beecount-mcp', version: '1.0.0' } } }), { headers: { 'Content-Type': 'application/json' } }); });
+router.get('/', async (c) => { const ae = await checkAuth(c); return ae || new Response(JSON.stringify({ jsonrpc: '2.0', result: { serverInfo: SERVER_INFO } }), { headers: { 'Content-Type': 'application/json' } }); });
 router.get('/tools', async (c) => { const ae = await checkAuth(c); return ae || new Response(JSON.stringify({ tools: TOOL_DEFS }), { headers: { 'Content-Type': 'application/json' } }); });
 router.post('/tools/call', async (c) => {
   const ae = await checkAuth(c); if (ae) return ae;
