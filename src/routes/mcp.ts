@@ -18,6 +18,20 @@ export const PROTOCOL_VERSION = '2026-07-28';
 export const SUPPORTED_VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 export const SERVER_INFO = { name: 'beecount-mcp', version: '1.0.0' };
 
+// 协商协议版本：取客户端请求版本与服务器支持版本的 LCA（最高公共版本）。
+// 返回语义上不超过客户端版本的最高支持版本；客户端未指定版本时返回服务器最高版本。
+export function negotiateVersion(clientVersion: string | undefined): string {
+  if (!clientVersion) return PROTOCOL_VERSION;
+  if (SUPPORTED_VERSIONS.includes(clientVersion)) return clientVersion;
+  // 客户端版本不在支持列表中时，按纯数字降级匹配
+  const clientNorm = parseInt(clientVersion.replace(/[^0-9]/g, ''), 10);
+  for (const sv of SUPPORTED_VERSIONS) {
+    if (parseInt(sv.replace(/[^0-9]/g, ''), 10) <= clientNorm) return sv;
+  }
+  // 客户端版本比所有支持版本都旧，返回最低支持版本
+  return SUPPORTED_VERSIONS[SUPPORTED_VERSIONS.length - 1];
+}
+
 // ===========================
 // 工具定义
 // ===========================
@@ -530,11 +544,10 @@ async function jsonRpcHandler(c: any) {
   if (!body || body.jsonrpc !== '2.0' || !body.method) return new Response(JSON.stringify({ jsonrpc: '2.0', id: body?.id ?? null, error: { code: -32600, message: 'Invalid Request' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   const { method, id, params } = body;
 
-  // MCP 2026-07-28: 无握手，每个请求在 params._meta 里带协议版本。校验
-  // MCP-Protocol-Version / Mcp-Method / Mcp-Name 头与 body 一致，不一致回
-  // -32020；版本不支持则回 -32022。头缺失时宽松放行（兼容旧版客户端）。
+  // 从 params.protocolVersion（旧版 initialize 握手）或
+  // params._meta（新版 2026-07-28 无握手协议）中提取客户端请求的协议版本。
   const meta = params?._meta ?? {};
-  const reqVersion: string | undefined = meta['io.modelcontextprotocol/protocolVersion'];
+  const reqVersion: string | undefined = params?.protocolVersion || meta['io.modelcontextprotocol/protocolVersion'];
   const headerVersion = c.req.header('MCP-Protocol-Version');
   if (reqVersion && headerVersion && headerVersion !== reqVersion) {
     return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32020, message: `Header mismatch: MCP-Protocol-Version header '${headerVersion}' does not match body _meta value '${reqVersion}'` } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
@@ -556,7 +569,11 @@ async function jsonRpcHandler(c: any) {
 
   try {
     // 旧版客户端仍可能发 initialize 握手，兼容响应
-    if (method === 'initialize') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { protocolVersion: PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: SERVER_INFO } }), { headers: { 'Content-Type': 'application/json' } });
+    if (method === 'initialize') {
+      // 协商协议版本：取客户端请求版本与服务器支持版本的 LCA（最高公共版本）
+      const negotiated = negotiateVersion(reqVersion);
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { protocolVersion: negotiated, capabilities: { tools: {} }, serverInfo: SERVER_INFO } }), { headers: { 'Content-Type': 'application/json' } });
+    }
     if (method === 'server/discover') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', ttlMs: 0, cacheScope: 'private', supportedVersions: SUPPORTED_VERSIONS, capabilities: { tools: {} }, instructions: 'BeeCount Cloud MCP server - manage your personal finance ledgers via 18 tools.' } }), { headers: { 'Content-Type': 'application/json' } });
     if (method === 'tools/list') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', tools: TOOL_DEFS, _meta: { 'io.modelcontextprotocol/serverInfo': SERVER_INFO } } }), { headers: { 'Content-Type': 'application/json' } });
     if (method === 'tools/call') {
