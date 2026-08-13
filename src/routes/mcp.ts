@@ -555,11 +555,20 @@ async function jsonRpcHandler(c: any) {
   if (reqVersion && !SUPPORTED_VERSIONS.includes(reqVersion)) {
     return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32022, message: 'Unsupported protocol version', data: { supported: SUPPORTED_VERSIONS, requested: reqVersion } } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   }
+  // 2026-07-28 协议：Mcp-Method、Mcp-Name 为 REQUIRED 头
+  // 旧版协议（2025-11-25 及更早）：缺失时放行，存在时校验一致性
+  const isModern = reqVersion === '2026-07-28';
   const headerMethod = c.req.header('Mcp-Method');
+  const headerName = c.req.header('Mcp-Name');
+  if (isModern && !headerMethod) {
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32020, message: '缺少 Mcp-Method 请求头（2026-07-28 协议必需）' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
   if (headerMethod && headerMethod !== method) {
     return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32020, message: `Header mismatch: Mcp-Method header '${headerMethod}' does not match body method '${method}'` } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   }
-  const headerName = c.req.header('Mcp-Name');
+  if (isModern && method === 'tools/call' && !headerName) {
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32020, message: '缺少 Mcp-Name 请求头（tools/call 必需）' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
   if (headerName && (params?.name ?? params?.uri) && headerName !== (params?.name ?? params?.uri)) {
     return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32020, message: `Header mismatch: Mcp-Name header '${headerName}' does not match body value '${params?.name ?? params?.uri}'` } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   }
