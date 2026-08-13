@@ -574,12 +574,15 @@ async function jsonRpcHandler(c: any) {
   }
 }
 
-// SSE 处理
+// SSE 处理（旧版 SSE 传输握手，官方 SDK 的 SSEClientTransport 依赖 endpoint 事件）
 async function sseHandler(c: any) {
   const ae = await checkAuth(c); if (ae) return ae;
+  const base = new URL(c.req.url);
+  // 将 SSE 端点对应的 POST 目标指向同前缀的 /messages/（如 /mcp → /mcp/messages/）
+  const endpoint = new URL(`${base.pathname.replace(/\/sse$/, '')}/messages/`, base.origin);
   const { readable, writable } = new TransformStream();
   const w = writable.getWriter(); const enc = new TextEncoder();
-  w.write(enc.encode(`data: ${JSON.stringify({ jsonrpc: '2.0', method: 'initialize', params: { protocolVersion: PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: SERVER_INFO } })}\n\n`));
+  w.write(enc.encode(`event: endpoint\ndata: ${endpoint.toString()}\n\n`));
   const ka = setInterval(() => w.write(enc.encode(': keepalive\n\n')).catch(() => clearInterval(ka)), 15000);
   c.req.raw.signal.addEventListener('abort', () => { clearInterval(ka); w.close().catch(() => {}); });
   return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
@@ -589,7 +592,12 @@ async function sseHandler(c: any) {
 router.get('/sse', sseHandler);
 router.post('/messages/', jsonRpcHandler);
 router.post('/', jsonRpcHandler);
-router.get('/', async (c) => { const ae = await checkAuth(c); return ae || new Response(JSON.stringify({ jsonrpc: '2.0', result: { serverInfo: SERVER_INFO } }), { headers: { 'Content-Type': 'application/json' } }); });
+// 旧版 SSE 客户端直接 GET 根路径（Accept: text/event-stream）→ SSE 握手；否则返回服务器信息
+router.get('/', async (c) => {
+  const ae = await checkAuth(c); if (ae) return ae;
+  if (c.req.header('Accept')?.includes('text/event-stream')) return sseHandler(c);
+  return new Response(JSON.stringify({ jsonrpc: '2.0', result: { serverInfo: SERVER_INFO } }), { headers: { 'Content-Type': 'application/json' } });
+});
 router.get('/tools', async (c) => { const ae = await checkAuth(c); return ae || new Response(JSON.stringify({ tools: TOOL_DEFS }), { headers: { 'Content-Type': 'application/json' } }); });
 router.post('/tools/call', async (c) => {
   const ae = await checkAuth(c); if (ae) return ae;
