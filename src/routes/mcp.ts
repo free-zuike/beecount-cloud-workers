@@ -592,10 +592,13 @@ async function sseHandler(c: any) {
 router.get('/sse', sseHandler);
 router.post('/messages/', jsonRpcHandler);
 router.post('/', jsonRpcHandler);
-// 旧版 SSE 客户端直接 GET 根路径（Accept: text/event-stream）→ SSE 握手；否则返回服务器信息
+// 旧版 SSE 客户端 GET 根路径（Accept: text/event-stream）→ SSE 握手。
+// 注意：现代 SDK 客户端 Accept 是 "application/json, text/event-stream"，
+// 必须区分——否则客户端 GET 探测会拿到永不结束的 SSE 流而挂起 30s。
 router.get('/', async (c) => {
   const ae = await checkAuth(c); if (ae) return ae;
-  if (c.req.header('Accept')?.includes('text/event-stream')) return sseHandler(c);
+  const accept = c.req.header('Accept') || '';
+  if (accept === 'text/event-stream' || (accept.startsWith('text/event-stream') && !accept.includes('application/json'))) return sseHandler(c);
   return new Response(JSON.stringify({ jsonrpc: '2.0', result: { serverInfo: SERVER_INFO } }), { headers: { 'Content-Type': 'application/json' } });
 });
 router.get('/tools', async (c) => { const ae = await checkAuth(c); return ae || new Response(JSON.stringify({ tools: TOOL_DEFS }), { headers: { 'Content-Type': 'application/json' } }); });

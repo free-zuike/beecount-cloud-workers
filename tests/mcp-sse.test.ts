@@ -145,3 +145,92 @@ describe('MCP SSE 兼容端点', () => {
     expect(body.result?.tools?.length).toBe(18);
   });
 });
+
+// 回归测试：标准 SDK 客户端常配置带尾斜杠的 URL，Hono 挂载必须同时匹配
+// /mcp 与 /mcp/（同 index.ts 的双挂载方式），否则客户端收到 404 连不上。
+describe('MCP trailing-slash mount (index.ts dual-mount)', () => {
+  const buildApp = () => {
+    const app = new Hono();
+    app.route('/mcp', mcpRouter);
+    app.route('/mcp/', mcpRouter);
+    return app;
+  };
+
+  const INIT_BODY = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+  const post = (app: Hono, path: string) =>
+    app.request(
+      path,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer bcmcp_abcdefghijklmnopqrstuvwxyz123456' },
+        body: INIT_BODY,
+      },
+      createEnv()
+    );
+
+  it('POST /mcp (no slash) returns 200', async () => {
+    const app = buildApp();
+    const res = await post(app, '/mcp');
+    expect(res.status).toBe(200);
+  });
+
+  it('POST /mcp/ (trailing slash) returns 200', async () => {
+    const app = buildApp();
+    const res = await post(app, '/mcp/');
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as { result: { serverInfo: { name: string } } };
+    expect(j.result.serverInfo.name).toBe('beecount-mcp');
+  });
+
+  it('POST /mcp// double-slash does NOT match (no silent fallthrough)', async () => {
+    const app = buildApp();
+    const res = await post(app, '/mcp//');
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /mcp (no slash) with event-stream returns SSE handshake', async () => {
+    const app = buildApp();
+    const controller = new AbortController();
+    const res = await app.request(
+      '/mcp',
+      {
+        method: 'GET',
+        headers: { Accept: 'text/event-stream', Authorization: 'Bearer bcmcp_abcdefghijklmnopqrstuvwxyz123456' },
+        signal: controller.signal,
+      },
+      createEnv()
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toContain('text/event-stream');
+    controller.abort();
+  });
+
+  // 关键回归：现代 SDK 客户端 Accept 是 "application/json, text/event-stream"，
+  // GET 探测必须返回 JSON（而非永不结束的 SSE 流），否则客户端挂起 30s。
+  it('GET /mcp with modern Accept (application/json, text/event-stream) returns JSON, not SSE', async () => {
+    const app = buildApp();
+    const res = await app.request(
+      '/mcp',
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json, text/event-stream', Authorization: 'Bearer bcmcp_abcdefghijklmnopqrstuvwxyz123456' },
+      },
+      createEnv()
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toContain('application/json');
+    const j = (await res.json()) as { result: { serverInfo: { name: string } } };
+    expect(j.result.serverInfo.name).toBe('beecount-mcp');
+  });
+
+  it('GET /mcp with default Accept also returns JSON', async () => {
+    const app = buildApp();
+    const res = await app.request(
+      '/mcp',
+      { method: 'GET', headers: { Authorization: 'Bearer bcmcp_abcdefghijklmnopqrstuvwxyz123456' } },
+      createEnv()
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toContain('application/json');
+  });
+});

@@ -205,7 +205,9 @@ app.route('/api/v1/sys-config', sysConfigRouter);
 app.route('/api/v1/profile/mcp-calls', mcpCallsRouter);
 app.route('/api/v1/export', csvRouter);
 app.route('/api/v1/mcp', mcpRouter);
+app.route('/api/v1/mcp/', mcpRouter); // 尾斜杠变体：标准 SDK 客户端常带尾斜杠
 app.route('/mcp', mcpRouter);
+app.route('/mcp/', mcpRouter);
 app.route('/sync', syncRouter);
 app.route('/read', readRouter);
 app.route('/read/summary', summaryRouter);
