@@ -39,7 +39,8 @@ const SOURCE_OPTIONS: Array<{ key: string; value: string }> = [
   { key: 'auth', value: 'src.routers.auth' },
   { key: 'admin', value: 'src.routers.admin' },
   { key: 'ws', value: 'src.routers.ws,src.websocket_manager' },
-  { key: 'uvicorn', value: 'uvicorn' }
+  // 原版是 uvicorn 服务器的 access log；Workers 无 uvicorn，请求日志用 beecount.access
+  { key: 'uvicorn', value: 'beecount.access,uvicorn' }
 ]
 
 // 自动刷新可选间隔(秒)。0 = 关闭。
