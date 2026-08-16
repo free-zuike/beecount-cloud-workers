@@ -310,6 +310,27 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_snapshots_user_id ON backup_snapshots(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_snapshots_ledger_id ON backup_snapshots(ledger_id)').run();
 
+    // 备份产物（对齐原版 BackupArtifact）：upload-db / upload-snapshot 各写一条，
+    // 列表 /admin/backups/artifacts 读这张表（kind=db|snapshot、checksum、文件名等）。
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS backup_artifacts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ledger_id TEXT REFERENCES ledgers(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        storage_path TEXT NOT NULL,
+        content_type TEXT,
+        checksum_sha256 TEXT NOT NULL,
+        size_bytes INTEGER DEFAULT 0,
+        metadata_json TEXT,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_artifacts_user_id ON backup_artifacts(user_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_artifacts_ledger_created ON backup_artifacts(ledger_id, created_at)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_artifacts_kind ON backup_artifacts(kind)').run();
+
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_remotes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -2687,6 +2687,14 @@ backupRouter.post('/upload-db', async (c) => {
     VALUES (?, ?, 'db', ?, ?, ?, ?, ?, ?)`)
     .bind(userId, ledgerId || null, fileName, file.type || null, checksum, buffer.byteLength, serverNow, note).run();
 
+  // 备份产物记录（对齐原版 kind=db + checksum + storage_path）
+  const artifactId = crypto.randomUUID();
+  await db.prepare(`INSERT INTO backup_artifacts
+    (id, user_id, ledger_id, kind, file_name, storage_path, content_type, checksum_sha256, size_bytes, metadata_json, created_at)
+    VALUES (?, ?, ?, 'db', ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(artifactId, userId, ledgerId || null, fileName, r2Key, file.type || null, checksum, buffer.byteLength,
+      note ? JSON.stringify({ note }) : null, serverNow).run();
+
   return c.json({ success: true, file_name: fileName, size: buffer.byteLength, checksum });
 });
 
@@ -2721,6 +2729,15 @@ backupRouter.post('/upload-snapshot', apiValidator('json', UploadSnapshotSchema)
   await db.prepare(`INSERT INTO backup_snapshots (user_id, ledger_id, kind, file_name, content_type, checksum, size, created_at, note)
     VALUES (?, ?, 'snapshot', ?, 'application/json', ?, ?, ?, ?)`)
     .bind(userId, req.ledger_id, fileName, checksum, jsonStr.length, serverNow, req.note || null).run();
+
+  // 备份产物记录（对齐原版 kind=snapshot + checksum + storage_path）
+  const artifactId = crypto.randomUUID();
+  const metadata = { ...(req.metadata || {}), ...(req.note ? { note: req.note } : {}) };
+  await db.prepare(`INSERT INTO backup_artifacts
+    (id, user_id, ledger_id, kind, file_name, storage_path, content_type, checksum_sha256, size_bytes, metadata_json, created_at)
+    VALUES (?, ?, ?, 'snapshot', ?, ?, 'application/json', ?, ?, ?, ?)`)
+    .bind(artifactId, userId, req.ledger_id, fileName, r2Key, checksum, jsonStr.length,
+      JSON.stringify(metadata), serverNow).run();
 
   return c.json({ success: true, file_name: fileName, size: jsonStr.length, checksum });
 });

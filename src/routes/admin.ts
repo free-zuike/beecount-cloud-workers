@@ -917,33 +917,65 @@ adminRouter.post('/backups/create', zValidator('json', BackupCreateSchema), asyn
 });
 
 // ---------------------------------------------------------------------------
-// GET /admin/backups/artifacts - 列出备份文件
+// GET /admin/backups/artifacts - 列出备份产物（对齐原版，读 backup_artifacts 表）
 // ---------------------------------------------------------------------------
 
 adminRouter.get('/backups/artifacts', async (c) => {
   const db = c.env.DB;
+  const userId = c.get('userId');
+  const ledgerId = c.req.query('ledger_id') || undefined;
+  const kind = c.req.query('kind') || undefined;
+  const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') || '100', 10) || 100, 500));
 
-  const rows = await db
-    .prepare(
-      `SELECT bs.id, bs.ledger_id, bs.created_at, bs.user_id, LENGTH(bs.snapshot_json) as size, bs.note
-       FROM backup_snapshots bs
-       ORDER BY bs.created_at DESC`
-    )
-    .all<{ id: string; ledger_id: string; created_at: string; user_id: string; size: number; note: string | null }>();
+  let q = `SELECT a.id, a.user_id, a.ledger_id, a.kind, a.file_name, a.content_type,
+                  a.checksum_sha256, a.size_bytes, a.metadata_json, a.created_at,
+                  l.external_id
+           FROM backup_artifacts a
+           LEFT JOIN ledgers l ON l.id = a.ledger_id`;
+  const conds = ['a.user_id = ?'];
+  const p: unknown[] = [userId];
 
-  const items = rows.results.map((row) => ({
-    id: row.id,
-    ledger_id: row.ledger_id,
-    kind: 'snapshot',
-    file_name: `${row.id}.json`,
-    content_type: 'application/json',
-    checksum: '',
-    size: row.size,
-    created_at: row.created_at,
-    created_by: row.user_id,
-    note: row.note,
-    metadata: {},
-  }));
+  if (ledgerId) {
+    // ledger_id 是 external_id（前端传的），先查内部 id
+    const led = await db.prepare('SELECT id FROM ledgers WHERE user_id = ? AND external_id = ?').bind(userId, ledgerId).first<{ id: string }>();
+    if (!led) return c.json([]);
+    conds.push('a.ledger_id = ?');
+    p.push(led.id);
+  }
+  if (kind) {
+    conds.push('a.kind = ?');
+    p.push(kind);
+  }
+  q += ' WHERE ' + conds.join(' AND ');
+  q += ' ORDER BY a.created_at DESC LIMIT ?';
+  p.push(limit);
+
+  const rows = await db.prepare(q).bind(...p).all<{
+    id: string; ledger_id: string | null; kind: string; file_name: string; content_type: string | null;
+    checksum_sha256: string; size_bytes: number; metadata_json: string | null;
+    created_at: string; external_id: string | null; user_id: string;
+  }>();
+
+  const items = rows.results.map((row) => {
+    let metadata: Record<string, unknown> = {};
+    try { metadata = row.metadata_json ? JSON.parse(row.metadata_json) : {}; } catch { /* ignore */ }
+    const meta = { ...metadata };
+    const note = typeof meta.note === 'string' ? meta.note : null;
+    delete meta.note;
+    return {
+      id: row.id,
+      ledger_id: row.external_id || row.ledger_id || '',
+      kind: row.kind,
+      file_name: row.file_name,
+      content_type: row.content_type,
+      checksum: row.checksum_sha256,
+      size: row.size_bytes,
+      created_at: row.created_at,
+      created_by: row.user_id,
+      note,
+      metadata: meta,
+    };
+  });
 
   return c.json(items);
 });
