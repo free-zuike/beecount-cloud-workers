@@ -101,7 +101,7 @@ const DEFAULT_CATEGORIES: DefaultCategory[] = [
     { name: '其他', icon: '❓' },
   ]},
 ];
-import { hashPassword, verifyPassword, createAccessToken, createRefreshToken, validateAccessToken, decodeRefreshToken, revokeRefreshToken, sha256, isLegacyPasswordHash } from '../auth';
+import { hashPassword, verifyPassword, createAccessToken, createRefreshToken, validateAccessToken, decodeRefreshToken, revokeRefreshToken, sha256 } from '../auth';
 import { isRateLimited } from '../lib/rate-limit';
 import twoFactorRouter from './two_factor';
 
@@ -254,12 +254,6 @@ authRouter.post('/login', zValidator('json', z.object({
   const passwordValid = await verifyPassword(user.password_hash, password);
   if (!passwordValid) {
     return c.json({ error: 'Invalid credentials' }, 401);
-  }
-
-  // 自动迁移旧密码哈希（bcrypt / 旧 hex pbkdf2-26000）到 passlib 兼容格式
-  if (isLegacyPasswordHash(user.password_hash)) {
-    const newHash = await hashPassword(password);
-    await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(newHash, user.id).run();
   }
 
   if (!user.is_enabled) {

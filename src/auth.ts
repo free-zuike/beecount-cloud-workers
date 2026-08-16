@@ -1,4 +1,3 @@
-import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 
 const JWT_ALG = 'HS256';
@@ -31,14 +30,6 @@ function ab64Decode(str: string): Uint8Array | null {
   }
 }
 
-// 兼容旧格式检测：我们此前的实现是 `$pbkdf2-sha256$<rounds>$<16位hex盐>$<64位hex哈希>`。
-// passlib 原生格式：`$pbkdf2-sha256$<rounds>$<22位ab64盐>$<43位ab64哈希>`。
-function isLegacyHexPbkdf2(hash: string): boolean {
-  const parts = hash.split('$');
-  if (parts.length !== 5 || parts[1] !== 'pbkdf2-sha256') return false;
-  return /^[0-9a-f]{16}$/i.test(parts[3]) && /^[0-9a-f]{64}$/i.test(parts[4]);
-}
-
 async function pbkdf2Sha256(password: string, salt: Uint8Array, iterations: number): Promise<Uint8Array> {
   const encoder = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
@@ -69,17 +60,6 @@ async function verifyPbkdf2Sha256(hash: string, password: string): Promise<boole
   const iterations = parseInt(parts[2], 10);
   if (!Number.isFinite(iterations) || iterations <= 0) return false;
 
-  if (isLegacyHexPbkdf2(hash)) {
-    // 旧格式（26000 rounds 时代）：salt 是 **16 hex 字符的文本**，直接按 UTF-8
-    // 编码当 PBKDF2 salt 字节；校验和是 hex 字符串。必须按当时的逻辑算，
-    // 否则（把 hex 文本解码成二进制）算出的摘要不匹配 → 老用户永远登录失败。
-    const saltText = new TextEncoder().encode(parts[3]);
-    const storedHex = parts[4];
-    const computed = await pbkdf2Sha256(password, saltText, iterations);
-    const computedHex = Array.from(computed).map(b => b.toString(16).padStart(2, '0')).join('');
-    return timingSafeEqualBytes(new TextEncoder().encode(computedHex), new TextEncoder().encode(storedHex));
-  }
-
   const salt = ab64Decode(parts[3]);
   const storedHash = ab64Decode(parts[4]);
   if (!salt || !storedHash) return false;
@@ -100,18 +80,10 @@ export async function verifyPassword(
   password: string
 ): Promise<boolean> {
   try {
-    if (hash.startsWith('$pbkdf2-sha256$')) {
-      return await verifyPbkdf2Sha256(hash, password);
-    }
-    return await bcrypt.compare(password, hash);
+    return await verifyPbkdf2Sha256(hash, password);
   } catch {
     return false;
   }
-}
-
-/** 检查密码哈希是否需要迁移到 passlib pbkdf2 格式（bcrypt 旧格式 或 我们此前的 hex pbkdf2）。 */
-export function isLegacyPasswordHash(hash: string): boolean {
-  return hash.startsWith('$2b$') || hash.startsWith('$2a$') || isLegacyHexPbkdf2(hash);
 }
 
 function base64urlEncode(str: string): string {
