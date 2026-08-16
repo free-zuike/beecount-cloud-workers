@@ -393,9 +393,16 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
       .all<{ id: number; code_hash: string }>();
 
     for (const rc of recoveryCodes.results) {
-      const rcBuf = new TextEncoder().encode(rc.code_hash);
-      const chBuf = new TextEncoder().encode(codeHash);
-      if (rcBuf.length === chBuf.length && await crypto.subtle.timingSafeEqual(rcBuf, chBuf)) {
+      // 恒定时比较：两个 hex 字符串，逐字符 XOR 累积防时序攻击
+      const a = rc.code_hash;
+      const b = codeHash;
+      let same = a.length === b.length;
+      if (same) {
+        for (let i = 0; i < a.length; i++) {
+          if (a.charCodeAt(i) !== b.charCodeAt(i)) same = false;
+        }
+      }
+      if (same) {
         isValid = true;
         await db.prepare('UPDATE recovery_codes SET used_at = ? WHERE id = ?').bind(serverNow, rc.id).run();
         break;

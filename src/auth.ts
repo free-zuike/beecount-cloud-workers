@@ -60,6 +60,18 @@ async function pbkdf2Sha256(password: string, salt: Uint8Array, iterations: numb
   return new Uint8Array(derivedBits);
 }
 
+/** 恒定时比较，防时序攻击。Web Crypto 的 SubtleCrypto 没有 timingSafeEqual
+ * （那是 Node crypto 模块专属），Workers 运行时调用会抛错，这里手动实现：
+ * 先比长度，再做逐字节 XOR 累积，耗时与内容无关。 */
+function timingSafeEqualBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a[i] ^ b[i];
+  }
+  return diff === 0;
+}
+
 async function verifyPbkdf2Sha256(hash: string, password: string): Promise<boolean> {
   const parts = hash.split('$');
   if (parts.length !== 5 || parts[1] !== 'pbkdf2-sha256') return false;
@@ -78,9 +90,7 @@ async function verifyPbkdf2Sha256(hash: string, password: string): Promise<boole
   if (!salt || !storedHash) return false;
 
   const computed = await pbkdf2Sha256(password, salt, iterations);
-  const a = computed;
-  const b = storedHash;
-  return a.length === b.length && await crypto.subtle.timingSafeEqual(a, b);
+  return timingSafeEqualBytes(computed, storedHash);
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -179,8 +189,7 @@ async function decodeJwtPayload(token: string, secret: string): Promise<Record<s
     const [headerB64, payloadB64, signature] = parts;
     const expectedSig = await hmacSHA256(secret, `${headerB64}.${payloadB64}`);
     const encoder = new TextEncoder();
-    if (encoder.encode(signature).length !== encoder.encode(expectedSig).length ||
-        !(await crypto.subtle.timingSafeEqual(encoder.encode(signature), encoder.encode(expectedSig)))) {
+    if (!timingSafeEqualBytes(encoder.encode(signature), encoder.encode(expectedSig))) {
       return null;
     }
     const payloadStr = base64urlDecode(payloadB64);
@@ -360,7 +369,7 @@ export async function validateAccessToken(
     const encoder = new TextEncoder();
     const sig1 = encoder.encode(signature);
     const sig2 = encoder.encode(expectedSignature);
-    if (sig1.length !== sig2.length || !(await crypto.subtle.timingSafeEqual(sig1, sig2))) return null;
+    if (!timingSafeEqualBytes(sig1, sig2)) return null;
     
     const payloadStr = base64urlDecode(payloadB64);
     if (!payloadStr) return null;
