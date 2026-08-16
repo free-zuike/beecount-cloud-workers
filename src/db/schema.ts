@@ -604,6 +604,16 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       )
     `).run();
 
+    // 通用 key-value 配置表（S3 上传配置等，sys_config.ts 读取；对齐迁移 0003_add_settings_table.sql）
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_settings_key ON settings(key)').run();
+
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS exchange_rate_overrides (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
