@@ -613,12 +613,12 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
       const att = attRows.results.find(r => r.id === fid);
       if (!att) continue;
 
-      // 检查是否仍被其他 tx 的 attachments_json 引用
-      const patNoSpace = `%"cloudFileId":"${fid}"%`;
-      const patWithSpace = `%"cloudFileId": "${fid}"%`;
+      // 检查是否仍被其他 tx 的 attachments_json 引用（用 INSTR 替代 LIKE 避免 SQLite 模式复杂度限制）
+      const patNoSpace = `"cloudFileId":"${fid}"`;
+      const patWithSpace = `"cloudFileId": "${fid}"`;
       const stillReferenced = await db.prepare(
         `SELECT COUNT(*) as cnt FROM read_tx_projection
-         WHERE user_id = ? AND (attachments_json LIKE ? OR attachments_json LIKE ?)`
+         WHERE user_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0)`
       ).bind(userId, patNoSpace, patWithSpace).first<{ cnt: number }>();
 
       if (stillReferenced && stillReferenced.cnt > 0) continue;
