@@ -176,18 +176,21 @@ export async function createAccessToken(
   tokenType: string = 'access'
 ): Promise<string> {
   const header = JSON.stringify({ alg: JWT_ALG, typ: 'JWT' });
-  const payload = JSON.stringify({
+  const payload: Record<string, unknown> = {
     sub: userId,
     type: tokenType,
     client_type: clientType,
-    scopes: scopes,
     jti: randomUUID().replace(/-/g, ''),
     iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + expiresIn
-  });
-  
+    exp: Math.floor(Date.now() / 1000) + expiresIn,
+  };
+  // 对齐原版：只有 scopes 非空时才写入 payload（2FA challenge token 不含 scopes）
+  if (scopes.length > 0) {
+    payload.scopes = scopes;
+  }
+  const payloadStr = JSON.stringify(payload);
   const headerB64 = base64urlEncode(header);
-  const payloadB64 = base64urlEncode(payload);
+  const payloadB64 = base64urlEncode(payloadStr);
   const signature = await hmacSHA256(secret, `${headerB64}.${payloadB64}`);
   
   return `${headerB64}.${payloadB64}.${signature}`;

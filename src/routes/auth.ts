@@ -262,7 +262,7 @@ authRouter.post('/login', zValidator('json', z.object({
 
   if (user.totp_enabled) {
     // 与原版对齐：2FA challenge 时不创建设备，仅在 /2fa/verify 时创建
-    const challengeToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', ['challenge:2fa'], 300, 'totp_challenge');
+    const challengeToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', [], 300, 'totp_challenge');
     return c.json({
       requires_2fa: true,
       challenge_token: challengeToken,
@@ -417,15 +417,28 @@ authRouter.get('/me', async (c) => {
   });
 });
 
-// POST /auth/logout — 吊销 refresh token（与原版 AuthLogoutRequest 对齐）
+// POST /auth/logout — 吊销 refresh token（与原版对齐：需有效 token 鉴权）
 authRouter.post('/logout', zValidator('json', z.object({ refresh_token: z.string().optional() })), async (c) => {
-  const userId = c.get('userId');
   const db = c.env.DB;
+  const jwtSecret = c.env.JWT_SECRET;
   const body = c.req.valid('json');
   const refreshToken = body.refresh_token;
-  let revoked = false;
 
-  if (refreshToken && userId) {
+  // 手动验证 token（authMiddleware 跳过 /api/v1/auth 路由）
+  const authHeader = c.req.header('Authorization');
+  let userId: string | undefined;
+  if (authHeader?.startsWith('Bearer ')) {
+    const result = await validateAccessToken(authHeader.slice(7), jwtSecret);
+    if (result && 'userId' in result) {
+      userId = result.userId;
+    }
+  }
+  if (!userId) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  let revoked = false;
+  if (refreshToken) {
     const tokenHash = Buffer.from(await sha256(new TextEncoder().encode(refreshToken))).toString('hex');
     const tokenRecord = await db
       .prepare('SELECT id FROM refresh_tokens WHERE user_id = ? AND token_hash = ? AND revoked_at IS NULL')
