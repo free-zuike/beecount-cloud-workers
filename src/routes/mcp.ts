@@ -50,8 +50,8 @@ export const TOOL_DEFS: ToolDef[] = [
   { name: 'get_ledger_stats', description: 'Get summary stats for a ledger (transaction/category/account/tag/budget counts).', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' } } } },
   { name: 'get_analytics_summary', description: 'Income/expense/balance plus top-10 spending categories. scope: \'month\' | \'year\' | \'all\'. period: For month: \'YYYY-MM\'. For year: \'YYYY\'. Defaults to current. ledger_id: Optional, uses active ledger if omitted.', inputSchema: { type: 'object', properties: { scope: { type: 'string', enum: ['month', 'year', 'all'] }, period: { type: 'string' }, ledger_id: { type: 'string' } } } },
   { name: 'search', description: 'Full-text fuzzy search across transaction notes, category names, account names.', inputSchema: { type: 'object', properties: { q: { type: 'string' }, limit: { type: 'number', default: 20 } }, required: ['q'] } },
-  { name: 'create_transaction', description: 'Create a new transaction. amount: Positive number; type captured separately via tx_type. tx_type: \'expense\' (default), \'income\', or \'transfer\'. category: Existing category name (server rejects unknown names). account: Existing account name. For transfers this is the from-account. happened_at: ISO date or datetime. Defaults to now. note: Optional memo. tags: Optional list of tag names. ledger_id: Optional; uses active ledger if omitted.', inputSchema: { type: 'object', properties: { amount: { type: 'number' }, tx_type: { type: 'string', enum: ['expense', 'income', 'transfer'] }, category: { type: 'string' }, account: { type: 'string' }, happened_at: { type: 'string' }, note: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, ledger_id: { type: 'string' } }, required: ['amount'] } },
-  { name: 'create_transactions', description: 'Create many transactions at once - use this for bulk imports. Far more efficient than calling create_transaction in a loop. transactions: list of objects, each like create_transaction\'s args - {amount (>0), tx_type (expense|income|transfer, default expense), category, account, happened_at (ISO, default now), note, tags}. category/account must be existing names. ledger_id: Optional. Max 200 transactions per call.', inputSchema: { type: 'object', properties: { transactions: { type: 'array', items: { type: 'object' } }, ledger_id: { type: 'string' } }, required: ['transactions'] } },
+  { name: 'create_transaction', description: 'Create a new transaction. amount: Positive number; type captured separately via tx_type. tx_type: \'expense\' (default), \'income\', or \'transfer\'. category: Existing category name (server rejects unknown names). account: Existing account name. For transfers this is the from-account. happened_at: ISO date or datetime. Defaults to now. note: Optional memo. tags: Optional list of tag names. ledger_id: Optional; uses active ledger if omitted. currency: ISO 4217 code (e.g. \'USD\', \'JPY\') when the amount is in a foreign currency. Omit to follow the account\'s currency, or the ledger\'s base currency when no account is given. The server converts to the ledger base at current rates and stores both amounts.', inputSchema: { type: 'object', properties: { amount: { type: 'number' }, tx_type: { type: 'string', enum: ['expense', 'income', 'transfer'] }, category: { type: 'string' }, account: { type: 'string' }, happened_at: { type: 'string' }, note: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, ledger_id: { type: 'string' }, currency: { type: 'string' } }, required: ['amount'] } },
+  { name: 'create_transactions', description: 'Create many transactions at once - use this for bulk imports. Far more efficient than calling create_transaction in a loop. transactions: list of objects, each like create_transaction\'s args - {amount (>0), tx_type (expense|income|transfer, default expense), category, account, happened_at (ISO, default now), note, tags, currency (ISO 4217, only for foreign-currency amounts)}. category/account must be existing names. ledger_id: Optional. Max 200 transactions per call.', inputSchema: { type: 'object', properties: { transactions: { type: 'array', items: { type: 'object' } }, ledger_id: { type: 'string' } }, required: ['transactions'] } },
   { name: 'update_transaction', description: 'Patch an existing transaction. Only the fields you pass are changed.', inputSchema: { type: 'object', properties: { sync_id: { type: 'string' }, amount: { type: 'number' }, tx_type: { type: 'string', enum: ['expense', 'income', 'transfer'] }, category: { type: 'string' }, account: { type: 'string' }, happened_at: { type: 'string' }, note: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } } }, required: ['sync_id'] } },
   { name: 'delete_transaction', description: 'Delete a transaction. Destructive - two-step confirmation required. Calling with confirm=False returns a confirmation_required placeholder; you must then prompt the user, and only call again with confirm=true after they explicitly agree.', inputSchema: { type: 'object', properties: { sync_id: { type: 'string' }, confirm: { type: 'boolean' } }, required: ['sync_id'] } },
   { name: 'create_category', description: 'Create a new category. Usually unnecessary - prefer existing categories. name: required. kind: expense/income/transfer, default expense. parent_name: optional, for level-2 categories.', inputSchema: { type: 'object', properties: { name: { type: 'string' }, kind: { type: 'string', enum: ['expense', 'income', 'transfer'] }, parent_name: { type: 'string' }, icon: { type: 'string' }, ledger_id: { type: 'string' } }, required: ['name'] } },
@@ -176,6 +176,53 @@ export async function selfCall(method: string, path: string, env: { JWT_SECRET: 
   return res.json();
 }
 
+// 单笔创建的公共逻辑（对齐原版 write_tools.create_transaction）:
+// 校验 + MCP 默认标签 + 多币种折算 + self-call write router。
+// 返回 ({ok:true, tx}) 或 ({ok:false, status}) —— status 是给 LLM 看的结构化信号。
+async function createTxViaWriteRouter(
+  db: D1Database,
+  env: { JWT_SECRET: string },
+  baseUrl: string,
+  userId: string,
+  args: { amount: number; tx_type?: string; category?: string; account?: string; happened_at?: string; note?: string | null; tags?: string[] | null; currency?: string | null; ledger_id?: string | null },
+): Promise<{ ok: true; tx: any } | { ok: false; status: any }> {
+  const { ledger: led, status: ledgerStatus } = await resolveWriteLedger(db, userId, args.ledger_id);
+  if (ledgerStatus) return { ok: false, status: ledgerStatus };
+  if (!led) throw new Error('No ledger found');
+  const txAmount = args.amount;
+  if (!txAmount || txAmount <= 0) throw new Error('amount must be positive');
+  const txType = args.tx_type || 'expense';
+  if (!['expense', 'income', 'transfer'].includes(txType)) throw new Error(`Invalid tx_type: ${txType}`);
+  if (args.category) {
+    const cat = await db.prepare('SELECT sync_id FROM read_category_projection WHERE user_id = ? AND name = ? AND kind = ?').bind(userId, args.category, txType).first<any>();
+    if (!cat) throw new Error(`Category "${args.category}" not found for type "${txType}"`);
+  }
+  if (args.account) {
+    const acc = await db.prepare('SELECT sync_id FROM read_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<any>();
+    if (!acc) throw new Error(`Account "${args.account}" not found`);
+  }
+  await ensureMcpTag(db, userId, led.external_id);
+  const finalTags = mergeDefaultTag(args.tags);
+  const body: any = { base_change_id: 0, tx_type: txType, amount: txAmount, happened_at: parseDt(args.happened_at), note: args.note || null, tags: finalTags };
+  if (args.category) { body.category_name = args.category; body.category_kind = txType; }
+  if (args.account) {
+    if (txType === 'transfer') body.from_account_name = args.account;
+    else body.account_name = args.account;
+  }
+  // v30 多币种:非转账才折算(转账币种恒=账户币种,本阶段不支持跨币种转账)。
+  // 币种优先级:currency 参数 > 账户币种 > 账本本位币。
+  if (txType !== 'transfer') {
+    const accCurrency = args.account ? (await db.prepare('SELECT currency FROM read_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<{ currency: string }>())?.currency : null;
+    const ccyFields = await buildCurrencyFields(db, userId, led.currency || 'CNY', accCurrency, args.currency || null, txAmount);
+    Object.assign(body, ccyFields);
+  }
+  const result = await selfCall('POST', `/api/v1/write/ledgers/${led.external_id}/transactions`, env, baseUrl, userId, body);
+  return {
+    ok: true,
+    tx: { sync_id: result.entity_id, ledger: led.name, tx_type: txType, amount: txAmount, happened_at: parseDt(args.happened_at), category: args.category || null, account: args.account || null, _meta: result },
+  };
+}
+
 async function execTool(db: D1Database, env: { JWT_SECRET: string }, baseUrl: string, userId: string, scopes: string[], name: string, args: Record<string, unknown>, patId: string, patPrefix: string, patName: string): Promise<{ content: { type: string; text: string }[] }> {
   const t = Date.now();
   const isWrite = ['create_transaction', 'update_transaction', 'delete_transaction', 'create_category', 'update_budget', 'create_transactions', 'parse_and_create_from_text'].includes(name);
@@ -228,33 +275,19 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string }, baseUrl: st
         break;
       }
       case 'create_transaction': {
-        const { ledger: led, status: ledgerStatus } = await resolveWriteLedger(db, userId, args.ledger_id as string);
-        if (ledgerStatus) { r = ledgerStatus; break; }
-        if (!led) throw new Error('No ledger found');
-        const txAmount = args.amount as number;
-        if (!txAmount || txAmount <= 0) throw new Error('amount must be positive');
-        const txType = (args.tx_type as string) || 'expense';
-        if (!['expense', 'income', 'transfer'].includes(txType)) throw new Error(`Invalid tx_type: ${txType}`);
-        if (args.category) {
-          const cat = await db.prepare('SELECT sync_id FROM read_category_projection WHERE user_id = ? AND name = ? AND kind = ?').bind(userId, args.category, txType).first<any>();
-          if (!cat) throw new Error(`Category "${args.category}" not found for type "${txType}"`);
-        }
-        if (args.account) {
-          const acc = await db.prepare('SELECT sync_id FROM read_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<any>();
-          if (!acc) throw new Error(`Account "${args.account}" not found`);
-        }
-        await ensureMcpTag(db, userId, led.external_id);
-        const finalTags = mergeDefaultTag(args.tags as string[] | null | undefined);
-        const accCurrency = args.account ? (await db.prepare('SELECT currency FROM read_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<{ currency: string }>())?.currency : null;
-        const ccyFields = await buildCurrencyFields(db, userId, led.currency || 'CNY', accCurrency, null, txAmount);
-        const body: any = { base_change_id: 0, tx_type: txType, amount: txAmount, happened_at: parseDt(args.happened_at as string), note: args.note || null, tags: finalTags, ...ccyFields };
-        if (args.category) { body.category_name = args.category; body.category_kind = txType; }
-        if (args.account) {
-          if (txType === 'transfer') body.from_account_name = args.account;
-          else body.account_name = args.account;
-        }
-        const result = await selfCall('POST', `/api/v1/write/ledgers/${led.external_id}/transactions`, env, baseUrl, userId, body);
-        r = { sync_id: result.entity_id, ledger: led.name, tx_type: txType, amount: txAmount, happened_at: parseDt(args.happened_at as string), category: args.category || null, account: args.account || null, _meta: result };
+        const created = await createTxViaWriteRouter(db, env, baseUrl, userId, {
+          amount: args.amount as number,
+          tx_type: args.tx_type as string | undefined,
+          category: args.category as string | undefined,
+          account: args.account as string | undefined,
+          happened_at: args.happened_at as string | undefined,
+          note: (args.note as string) ?? null,
+          tags: args.tags as string[] | null | undefined,
+          currency: (args.currency as string) || null,
+          ledger_id: args.ledger_id as string | null | undefined,
+        });
+        if (!created.ok) { r = created.status; break; }
+        r = created.tx;
         break;
       }
       case 'update_transaction': {
@@ -429,6 +462,14 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string }, baseUrl: st
         if (ledgerStatus) { r = ledgerStatus; break; }
         if (!led) throw new Error('No ledger found');
         await ensureMcpTag(db, userId, led.external_id);
+        // v30 多币种:预取涉及账户的币种 map(一次性查询,避免逐笔查库)
+        const accNames = [...new Set(txs.filter((t: any) => t.account).map((t: any) => t.account as string))];
+        const accCcyMap: Record<string, string | null> = {};
+        if (accNames.length) {
+          const placeholders = accNames.map(() => '?').join(',');
+          const accRows = await db.prepare(`SELECT name, currency FROM read_account_projection WHERE user_id = ? AND name IN (${placeholders})`).bind(userId, ...accNames).all();
+          for (const a of (accRows.results as any[])) accCcyMap[a.name] = (a.currency || '');
+        }
         const batchTxs: any[] = [];
         for (const tx of txs) {
           if (tx.amount === undefined || (tx.amount as number) <= 0) throw new Error('amount must be positive');
@@ -439,6 +480,11 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string }, baseUrl: st
           if (tx.account) {
             if (txType === 'transfer') item.from_account_name = tx.account;
             else item.account_name = tx.account;
+          }
+          // v30 多币种:非转账才折算(转账币种恒=账户币种)。币种优先级:currency > 账户币种 > 账本本位币。
+          if (txType !== 'transfer') {
+            const ccyFields = await buildCurrencyFields(db, userId, led.currency || 'CNY', accCcyMap[tx.account as string] || null, (tx.currency as string) || null, tx.amount);
+            Object.assign(item, ccyFields);
           }
           batchTxs.push(item);
         }
@@ -461,11 +507,14 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string }, baseUrl: st
         }
         const systemPrompt = `你是一个专业的记账助手。请分析用户的文字描述，提取交易信息。
 请返回 JSON 格式：
-{"tx_drafts": [{"tx_type": "expense|income|transfer", "amount": 金额数字, "category_name": "分类名", "account_name": "账户名", "happened_at": "YYYY-MM-DD", "note": "备注"}]}
+{"tx_drafts": [{"tx_type": "expense|income|transfer", "amount": 金额数字, "category_name": "分类名", "account_name": "账户名", "happened_at": "YYYY-MM-DD", "note": "备注", "currency": "币种"}]}
 规则：
 - 金额必须是数字，不是字符串
 - 尝试识别支出/收入/转账
-- 如果金额不明确，根据语境推断`;
+- 如果金额不明确，根据语境推断
+- currency 必须是 3 位大写 ISO 4217 代码(不要填货币符号或中文名)：美元/$ → USD,日元/円 → JPY,欧元/€ → EUR,英镑/£ → GBP,港币 → HKD,新台币 → TWD,韩元 → KRW,泰铢 → THB
+- 与账本主币种(${(led.currency || 'CNY').toUpperCase()})相同时留 ""；原文出现任何外币说法(中文名/符号/代码都算)就必须填，别漏
+- 例:「花了 45 美元」→ "USD"；「1200 日元」→ "JPY"；「星巴克 $6.5」→ "USD"`;
         const aiUrl = `${provider.baseUrl.replace(/\/$/, '')}/chat/completions`;
         const aiRes = await fetch(aiUrl, {
           method: 'POST',
@@ -487,16 +536,22 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string }, baseUrl: st
         const account = draft.account_name;
         const happenedAt = draft.happened_at;
         const note = draft.note || (args.text as string);
-        // 通过 write router 创建
-        await ensureMcpTag(db, userId, led.external_id);
-        const body: any = { base_change_id: 0, tx_type: txType, amount: Math.abs(amount), happened_at: parseDt(happenedAt), note: note || null, tags: mergeDefaultTag(null) };
-        if (category) { body.category_name = category; body.category_kind = txType; }
-        if (account) {
-          if (txType === 'transfer') body.from_account_name = account;
-          else body.account_name = account;
-        }
-        const result = await selfCall('POST', `/api/v1/write/ledgers/${led.external_id}/transactions`, env, baseUrl, userId, body);
-        r = { status: 'created', parsed: draft, transaction: { sync_id: result.entity_id, ledger: led.name, amount: Math.abs(amount), tx_type: txType, _meta: result } };
+        // v30 多币种:AI 可能返回 currency(已被 prompt 约束为 ISO 4217 或 "")。
+        // 空串/缺省传 null → 创建时走「随账户币种 / 账本主币种」。
+        const currency = ((draft.currency || '') as string).trim().toUpperCase() || null;
+        const created = await createTxViaWriteRouter(db, env, baseUrl, userId, {
+          amount: Math.abs(amount),
+          tx_type: txType,
+          category,
+          account,
+          happened_at: happenedAt,
+          note,
+          tags: null,
+          currency,
+          ledger_id: args.ledger_id as string | null | undefined,
+        });
+        if (!created.ok) { r = created.status; break; }
+        r = { status: 'created', parsed: draft, transaction: created.tx };
         break;
       }
       default: throw new Error(`Unknown tool: ${name}`);

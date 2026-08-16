@@ -14,7 +14,7 @@ const EXPECTED_TOOLS: { name: string; params: string[]; required: string[] }[] =
   { name: 'get_ledger_stats', params: ['ledger_id'], required: [] },
   { name: 'get_analytics_summary', params: ['scope', 'period', 'ledger_id'], required: [] },
   { name: 'search', params: ['q', 'limit'], required: ['q'] },
-  { name: 'create_transaction', params: ['amount', 'tx_type', 'category', 'account', 'happened_at', 'note', 'tags', 'ledger_id'], required: ['amount'] },
+  { name: 'create_transaction', params: ['amount', 'tx_type', 'category', 'account', 'happened_at', 'note', 'tags', 'ledger_id', 'currency'], required: ['amount'] },
   { name: 'create_transactions', params: ['transactions', 'ledger_id'], required: ['transactions'] },
   { name: 'update_transaction', params: ['sync_id', 'amount', 'tx_type', 'category', 'account', 'happened_at', 'note', 'tags'], required: ['sync_id'] },
   { name: 'delete_transaction', params: ['sync_id', 'confirm'], required: ['sync_id'] },
@@ -91,10 +91,10 @@ describe('MCP Tool Definitions', () => {
     expect(schema.properties.limit.default).toBe(20);
   });
 
-  it('create_transaction should not have currency param', () => {
+  it('create_transaction should have currency param for foreign currency amounts', () => {
     const tool = TOOL_DEFS.find(t => t.name === 'create_transaction')!;
     const schema = tool.inputSchema as any;
-    expect(schema.properties.currency).toBeUndefined();
+    expect(schema.properties.currency).toEqual({ type: 'string' });
   });
 
   it('create_transaction should not have ledger_id in required', () => {
