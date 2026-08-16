@@ -73,15 +73,6 @@ app.use('*', async (c, next) => {
   await next();
 });
 
-// 请求日志中间件（对齐原版 install_request_middleware）：记录每个 HTTP 请求的方法、
-// 路径、状态码、耗时。写入 audit_logs 表，供 /admin/logs 端点和前端日志弹窗查看。
-app.use('*', async (c, next) => {
-  const start = Date.now();
-  await next();
-  const elapsed = Date.now() - start;
-  serverLogger.info('beecount.access', `${c.req.method} ${c.req.path} → ${c.res.status} ${elapsed}ms`);
-});
-
 app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
 // 就绪探针（对齐原版）：查 DB 确认可用
@@ -322,6 +313,7 @@ export { BeeCountDO };
 export default {
   async fetch(request: Request, env: Bindings, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    const start = Date.now();
 
     // WebSocket 升级必须在 Worker 层处理（Hono 中间件会丢失 Upgrade 头）
     if (url.pathname === '/ws' && request.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
@@ -349,7 +341,15 @@ export default {
       }
     }
 
-    return app.fetch(request, env, ctx);
+    // 兜底日志：记录所有经过 Hono 的 HTTP 请求（中间件也可能记录，但这里确保不遗漏）
+    const response = await app.fetch(request, env, ctx);
+    const elapsed = Date.now() - start;
+    ctx.waitUntil((async () => {
+      try {
+        serverLogger.info('beecount.access', `${request.method} ${url.pathname} → ${response.status} ${elapsed}ms`);
+      } catch { /* 日志失败不阻塞 */ }
+    })());
+    return response;
   },
   
   async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
