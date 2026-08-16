@@ -6,7 +6,7 @@ import { APP_VERSION, APP_NAME } from './version';
 import { authMiddleware } from './middleware/auth';
 import { spaMiddleware } from './middleware/spa';
 import { processBackupSchedule } from './services/backup-scheduler';
-import { initLogger } from './lib/logger';
+import { initLogger, serverLogger } from './lib/logger';
 
 import setupRouter from './routes/setup';
 import authRouter from './routes/auth';
@@ -71,6 +71,15 @@ app.use('*', async (c, next) => {
     initialized = true;
   }
   await next();
+});
+
+// 请求日志中间件（对齐原版 install_request_middleware）：记录每个 HTTP 请求的方法、
+// 路径、状态码、耗时。写入 audit_logs 表，供 /admin/logs 端点和前端日志弹窗查看。
+app.use('*', async (c, next) => {
+  const start = Date.now();
+  await next();
+  const elapsed = Date.now() - start;
+  serverLogger.info('beecount.access', `${c.req.method} ${c.req.path} → ${c.res.status} ${elapsed}ms`);
 });
 
 app.get('/healthz', (c) => c.json({ status: 'ok' }));
