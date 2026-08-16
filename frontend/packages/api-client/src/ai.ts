@@ -108,6 +108,8 @@ export type TxDraft = {
   from_account_name: string | null
   to_account_name: string | null
   note: string
+  /** 原币种 ISO 4217(server 已校验);'' = 跟账本主币种。老 server 不返此字段。 */
+  currency?: string
   tags: string[]
   confidence: 'high' | 'medium' | 'low'
 }
@@ -173,6 +175,10 @@ export type BatchTxItem = {
   amount: number
   happened_at: string
   note?: string | null
+  /** 交易级多币种:原币种 ISO 4217。不传 = 账本本位币。 */
+  currency_code?: string
+  /** 折账本本位币的金额快照(前端按汇率算好传入)。 */
+  native_amount?: number
   category_name?: string | null
   category_kind?: 'expense' | 'income' | 'transfer' | null
   account_name?: string | null
