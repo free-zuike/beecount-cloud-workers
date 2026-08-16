@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 
-import { API_BASE, clearStoredSession, configureHttp, getStoredUserId, refreshAuth } from '@beecount/api-client'
+import { API_BASE, clearStoredSession, configureHttp, getStoredRefreshToken, getStoredUserId, refreshAuth } from '@beecount/api-client'
 import { useT } from '@beecount/ui'
 
 import { AppShell } from './app/AppShell'
@@ -135,6 +135,20 @@ function AppRoutes() {
       localStorage.removeItem(LEGACY_TOKEN_KEY)
     }
   }, [token])
+
+  // 页面加载时主动刷新 token（解决首次渲染时旧 token 过期导致请求失败的问题）
+  const [refreshAttempted, setRefreshAttempted] = useState(false)
+  useEffect(() => {
+    if (refreshAttempted) return
+    setRefreshAttempted(true)
+    const stored = getStoredRefreshToken()
+    if (!stored) return
+    refreshAuth()
+      .then((fresh) => setToken(fresh))
+      .catch(() => {
+        // refresh 失败（如 refresh_token 过期），不清 token，等 401 后重试
+      })
+  }, [refreshAttempted])
 
   const [setupChecked, setSetupChecked] = useState(false)
   const [setupCompleted, setSetupCompleted] = useState(true)
