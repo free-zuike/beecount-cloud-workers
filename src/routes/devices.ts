@@ -175,7 +175,7 @@ devicesRouter.get('/', async (c) => {
   return c.json(result);
 });
 
-// POST /devices/:id/revoke - 撤销设备（与原版 POST /{device_id}/revoke 对齐）
+// POST /devices/:id/revoke - 撤销设备（与原版对齐）
 devicesRouter.post('/:id/revoke', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
@@ -193,38 +193,6 @@ devicesRouter.post('/:id/revoke', async (c) => {
 
   await db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ?').bind(serverNow, deviceId).run();
   await db.prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL').bind(serverNow, deviceId).run();
-
-  return c.json({ ok: true, device_id: deviceId });
-});
-
-// DELETE /devices/:id - 撤销设备
-devicesRouter.delete('/:id', async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-  const deviceId = c.req.param('id');
-  const serverNow = nowUtc();
-
-  // 验证设备归属（必须属于当前用户）
-  const device = await db
-    .prepare('SELECT id FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL')
-    .bind(deviceId, userId)
-    .first<{ id: string }>();
-
-  if (!device) {
-    return c.json({ error: 'Device not found' }, 404);
-  }
-
-  // 撤销设备
-  await db
-    .prepare('UPDATE devices SET revoked_at = ? WHERE id = ?')
-    .bind(serverNow, deviceId)
-    .run();
-
-  // 使该设备的所有 refresh_token 失效
-  await db
-    .prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL')
-    .bind(serverNow, deviceId)
-    .run();
 
   return c.json({ ok: true, device_id: deviceId });
 });
