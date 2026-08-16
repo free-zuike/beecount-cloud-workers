@@ -35,7 +35,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { createHmac } from 'crypto';
+import { createHmac, randomUUID } from 'crypto';
 
 function nowUtc(): string {
   return new Date().toISOString();
@@ -303,21 +303,142 @@ function extractJson(text: string): unknown {
   }
 }
 
-/**
- * 下载图片并转为 base64
- */
-async function downloadImageAsBase64(imageId: string, db: D1Database): Promise<string | null> {
-  // 从 attachments 表获取存储路径
-  const attachment = await db
-    .prepare('SELECT storage_path, mime_type FROM attachment_files WHERE id = ?')
-    .bind(imageId)
-    .first<{ storage_path: string; mime_type: string | null }>();
-  
-  if (!attachment) return null;
-  
-  // 如果配置了 S3，从 S3 下载
-  // 这里简化处理，返回 URL 让客户端使用
-  return `data:${attachment.mime_type || 'image/png'};base64,<image_data>`;
+// ===========================
+// B2/B3 共享工具（对齐原版 parse_tx_image.py / parse_tx_text.py）
+// ===========================
+
+const _ISO_CURRENCY_RE = /^[A-Z]{3}$/;
+
+/** LLM 给的币种 → ISO 4217 大写码；不合法返 ""（= 跟账本主币种）。
+ * 唯一例外是裸 `$` → USD（实测 LLM 常把「45 美元」识别成 "$"；A$/C$/S$/HK$
+ * 这些歧义写法提示本身就会带前缀）。`¥` 不映射 —— CNY 与 JPY 都写裸 ¥，
+ * 猜错是 ~20 倍金额差，宁可退回账本主币种。 */
+function normalizeCurrency(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  const code = raw.trim().toUpperCase();
+  if (code === '$') return 'USD';
+  return _ISO_CURRENCY_RE.test(code) ? code : '';
+}
+
+class SchemaInvalidError extends Error {}
+
+/** 严格校验 LLM 输出：必须是 `{"tx_drafts": [...]}`。对齐原版 —— 不静默
+ * 兼容其它结构（顶层 array / items key 等），兼容会让 prompt 漂移。 */
+function normalizeDrafts(result: unknown): Array<Record<string, unknown>> {
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+    throw new SchemaInvalidError(
+      `expected JSON object with \`tx_drafts\` key, got ${result === null ? 'null' : Array.isArray(result) ? 'array' : typeof result}`
+    );
+  }
+  const drafts = (result as Record<string, unknown>).tx_drafts;
+  if (!Array.isArray(drafts)) {
+    const keys = Object.keys(result as Record<string, unknown>).slice(0, 5);
+    throw new SchemaInvalidError(
+      `\`tx_drafts\` missing or not array; top-level keys present: ${JSON.stringify(keys)}`
+    );
+  }
+  const out: Array<Record<string, unknown>> = [];
+  for (const d of drafts) {
+    if (typeof d !== 'object' || d === null) continue;
+    const rec = d as Record<string, unknown>;
+    const amt = rec.amount;
+    if (typeof amt !== 'number' || !Number.isFinite(amt)) continue;
+    const txType = (rec.type as string) || 'expense';
+    out.push({
+      type: ['expense', 'income', 'transfer'].includes(txType) ? txType : 'expense',
+      amount: Math.abs(amt), // 强制正数
+      // 多币种："" = 跟账本主币种。非法值降级成 "" 而不是丢弃整笔。
+      currency: normalizeCurrency(rec.currency),
+      happened_at: (rec.happened_at as string) || '',
+      category_name: ((rec.category_name as string) || '').trim(),
+      account_name: ((rec.account_name as string) || '').trim(),
+      from_account_name: ((rec.from_account_name as string) || '').trim() || null,
+      to_account_name: ((rec.to_account_name as string) || '').trim() || null,
+      note: ((rec.note as string) || '').trim(),
+      tags: Array.isArray(rec.tags)
+        ? rec.tags.filter((t) => typeof t === 'string' && t.trim())
+        : [],
+      confidence: ['high', 'medium', 'low'].includes(rec.confidence as string)
+        ? rec.confidence
+        : 'medium',
+    });
+  }
+  return out;
+}
+
+/** 取当前账本的 category / account / 本位币（给 LLM hint）。对齐原版：
+ * - category 排除「有子分类的父类」（父类是 grouping，不能作为交易分类）
+ * - account 返回 (名称, 币种)，排除隐藏账户（#240）
+ * - 没传 ledger_id → 跨账本聚合；本位币取「唯一账本的币种，否则 CNY」 */
+async function loadLedgerContext(
+  db: D1Database,
+  userId: string,
+  ledgerId?: string | null,
+): Promise<{ categories: string[]; accounts: Array<[string, string | null]>; ledgerCurrency: string }> {
+  const fallback = 'CNY';
+  let ledgerIntIds: string[] = [];
+  let ledgerCurrency = fallback;
+
+  if (ledgerId) {
+    const ledger = await db
+      .prepare('SELECT id, currency FROM ledgers WHERE user_id = ? AND external_id = ?')
+      .bind(userId, ledgerId)
+      .first<{ id: string; currency: string | null }>();
+    if (!ledger) return { categories: [], accounts: [], ledgerCurrency: fallback };
+    ledgerIntIds = [ledger.id];
+    ledgerCurrency = (ledger.currency || fallback).trim().toUpperCase();
+  } else {
+    const all = await db
+      .prepare('SELECT id, currency FROM ledgers WHERE user_id = ?')
+      .bind(userId)
+      .all<{ id: string; currency: string | null }>();
+    ledgerIntIds = all.results.map((l) => l.id);
+    ledgerCurrency = all.results.length === 1
+      ? (all.results[0].currency || fallback).trim().toUpperCase()
+      : fallback;
+  }
+
+  if (ledgerIntIds.length === 0) return { categories: [], accounts: [], ledgerCurrency };
+
+  // category 是 user-global，按 user_id 拉（跨 ledger 统一）
+  const catRows = await db
+    .prepare('SELECT name, parent_name FROM read_category_projection WHERE user_id = ?')
+    .bind(userId)
+    .all<{ name: string | null; parent_name: string | null }>();
+  const parentNamesWithChildren = new Set(
+    catRows.results.filter((c) => c.parent_name).map((c) => c.parent_name as string)
+  );
+  const selectableCats = new Set<string>();
+  for (const c of catRows.results) {
+    if (!c.name) continue;
+    if (c.parent_name) selectableCats.add(c.name);
+    else if (!parentNamesWithChildren.has(c.name)) selectableCats.add(c.name);
+  }
+
+  // account 排除隐藏（#240）：隐藏账户不作为新交易记账目标
+  const acctRows = await db
+    .prepare('SELECT name, currency, hidden FROM read_account_projection WHERE user_id = ?')
+    .bind(userId)
+    .all<{ name: string | null; currency: string | null; hidden: number | null }>();
+  const acctSet = new Map<string, string | null>();
+  for (const a of acctRows.results) {
+    if (a.name && !a.hidden) {
+      acctSet.set(a.name, (a.currency || '').trim().toUpperCase() || null);
+    }
+  }
+  const accounts = [...acctSet.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+  return { categories: [...selectableCats].sort(), accounts, ledgerCurrency };
+}
+
+/** CURRENCY_HINT 提示行（对齐原版 _format_currency_hint）：报主币种；
+ * 有外币账户时额外列出。 */
+function formatCurrencyHint(accounts: Array<[string, string | null]>, ledgerCurrency: string): string {
+  const base = (ledgerCurrency || 'CNY').trim().toUpperCase();
+  const others = [...new Set(accounts.map(([, c]) => c).filter((c): c is string => !!c && c !== base))].sort();
+  let line = `账本主币种:${base}`;
+  if (others.length) line += `;账本内已有外币账户:${others.join('、')}`;
+  return line;
 }
 
 // ===========================
@@ -333,15 +454,11 @@ const AiAskSchema = z.object({
   })).optional(),
 });
 
-const AiParseTxImageSchema = z.object({
-  image_id: z.string().optional(),
-  image_url: z.string().optional(),
-  hint: z.string().optional(),
-});
-
+// 对齐原版：parse-tx-image 收 multipart FormData，parse-tx-text 收 JSON
 const AiParseTxTextSchema = z.object({
-  text: z.string().min(1).max(2000),
-  hint: z.string().optional(),
+  text: z.string().min(1).max(5000),
+  ledger_id: z.string().optional(),
+  locale: z.string().optional(),
 });
 
 const AiTestProviderSchema = z.object({
@@ -378,6 +495,7 @@ type Bindings = {
   S3_ACCESS_KEY_ID?: string;
   S3_SECRET_ACCESS_KEY?: string;
   S3_BUCKET_NAME?: string;
+  R2?: R2Bucket;
 };
 
 type Variables = {
@@ -517,88 +635,81 @@ ${context}
 });
 
 // ---------------------------------------------------------------------------
-// POST /ai/parse-tx-image - 上传截图 → AI 解析交易
+// POST /ai/parse-tx-image - 上传截图 → AI 解析交易（multipart FormData）
 // ---------------------------------------------------------------------------
 
 /**
- * 上传截图，AI 解析出交易信息
+ * 上传截图，AI 解析出交易信息。对齐原版 FastAPI 协议：
+ * - 请求：multipart FormData（image 文件 + ledger_id + locale）
+ * - 返回：{ tx_drafts: [...], image_id }，image_id 用于 batch 保存时转附件
+ * 错误码（前端按 error_code 显示对应 fallback）：
+ * - AI_NO_VISION_PROVIDER (400) / AI_IMAGE_TOO_LARGE (413) /
+ *   AI_IMAGE_TYPE_INVALID (400) / AI_PROVIDER_ERROR (502) /
+ *   AI_PARSE_FAILED (422) / AI_SCHEMA_INVALID (422)
  */
-aiRouter.post('/parse-tx-image', zValidator('json', AiParseTxImageSchema), async (c) => {
+aiRouter.post('/parse-tx-image', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
-  const req = c.req.valid('json');
 
+  // 1. multipart FormData 解析
+  const formData = await c.req.formData();
+  const imageFile = formData.get('image') as File | null;
+  const ledgerId = (formData.get('ledger_id') as string | null) || undefined;
+  const locale = (formData.get('locale') as string | null) || 'zh';
+
+  if (!imageFile) {
+    return c.json({ error: { code: 'AI_IMAGE_TYPE_INVALID', message: 'image file is required' } }, 400);
+  }
+
+  // 2. 校验 mime + size（对齐原版 5MB / jpg-png-webp-gif）
+  const mime = (imageFile.type || '').toLowerCase();
+  const _ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+  if (!_ALLOWED_MIMES.has(mime)) {
+    return c.json({
+      error: { code: 'AI_IMAGE_TYPE_INVALID', message: `unsupported image type: ${mime!}; allowed: jpeg/png/webp/gif` },
+    }, 400);
+  }
+  const imageBytes = new Uint8Array(await imageFile.arrayBuffer());
+  const _MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+  if (imageBytes.length > _MAX_IMAGE_BYTES) {
+    return c.json({
+      error: { code: 'AI_IMAGE_TOO_LARGE', message: `image size ${imageBytes.length} exceeds 5MB` },
+    }, 413);
+  }
+
+  // 3. 解析 vision provider
   const profile = await db
     .prepare('SELECT ai_config_json FROM user_profiles WHERE user_id = ?')
     .bind(userId)
     .first<{ ai_config_json: string | null }>();
-
   const aiConfig = parseAiConfig(profile?.ai_config_json ?? null);
   const provider = findProvider(aiConfig, 'vision');
-
   if (!provider || !provider.visionModel) {
     return c.json({
-      error: 'Vision AI provider not configured. Please configure AI provider with vision model.',
+      error: { code: 'AI_NO_VISION_PROVIDER', message: 'Vision AI provider not configured. Please configure AI provider with vision model.' },
     }, 400);
   }
 
-  if (!req.image_id && !req.image_url) {
-    return c.json({ error: 'image_id or image_url is required' }, 400);
-  }
+  // 4. 取 ledger 上下文（categories + accounts 带币种 + 本位币）
+  const { categories, accounts, ledgerCurrency } = await loadLedgerContext(db, userId, ledgerId);
 
-  let imageContent: string | null = null;
-  
-  if (req.image_id) {
-    imageContent = await downloadImageAsBase64(req.image_id, db);
-  } else if (req.image_url) {
-    // SSRF 防护：仅允许 https URL，拒绝私有 IP
-    try {
-      const parsedUrl = new URL(req.image_url);
-      if (parsedUrl.protocol !== 'https:') {
-        return c.json({ error: 'Only HTTPS URLs are allowed for image_url' }, 400);
-      }
-      const hostname = parsedUrl.hostname;
-      if (
-        hostname === '127.0.0.1' || hostname === 'localhost' ||
-        hostname.startsWith('10.') || hostname.startsWith('192.168.') ||
-        /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
-        /^0\./.test(hostname) || hostname === '::1' || hostname === '0.0.0.0'
-      ) {
-        return c.json({ error: 'Private/internal URLs are not allowed' }, 400);
-      }
-      const imgResponse = await fetch(req.image_url);
-      if (imgResponse.ok) {
-        const imgBuffer = await imgResponse.arrayBuffer();
-        const base64 = btoa(String.fromCharCode(...new Uint8Array(imgBuffer)));
-        const contentType = imgResponse.headers.get('content-type') || 'image/png';
-        imageContent = `data:${contentType};base64,${base64}`;
-      }
-    } catch {
-      // 忽略图片下载错误
-    }
-  }
-
-  const hint = req.hint ? `\n用户提示：${req.hint}` : '';
+  // 5. 拼 prompt（多币种：schema 含 currency + CURRENCY_HINT 上下文）
+  const imageDataUrl = `data:${mime};base64,${btoa(String.fromCharCode(...imageBytes))}`;
   const systemPrompt = `你是一个专业的记账助手。请分析图片中的内容，提取交易信息。
 
 请返回 JSON 格式：
-{
-  "tx_drafts": [
-    {
-      "tx_type": "expense|income|transfer",
-      "amount": 金额数字,
-      "category_name": "分类名",
-      "happened_at": "YYYY-MM-DD",
-      "note": "备注"
-    }
-  ]
-}
+{"tx_drafts": [{"type": "expense|income|transfer", "amount": 金额数字, "category_name": "分类名", "account_name": "账户名", "from_account_name": "转账转出账户", "to_account_name": "转账转入账户", "happened_at": "YYYY-MM-DD", "note": "备注", "currency": "币种", "tags": ["标签"], "confidence": "high|medium|low"}]}
+
+${formatCurrencyHint(accounts, ledgerCurrency)}
+账本可用类目:${categories.length ? categories.join(', ') : '(无 — category_name 留空)'}
+账本可用账户:${accounts.length ? accounts.map(([name, ccy]) => ccy ? `${name}(${ccy})` : name).join(', ') : '(无 — account_name 留空)'}
 
 规则：
 - 金额必须是数字，不是字符串
-- 如果是支出，返回 tx_type: "expense"
-- 如果是收入，返回 tx_type: "income"
-- 如果是转账，返回 tx_type: "transfer"
+- 如果是支出，返回 type: "expense"；收入 "income"；转账 "transfer"
+- currency 必须是 3 位大写 ISO 4217 代码(不要填货币符号或中文名)：美元/$ → USD,日元/円 → JPY,欧元/€ → EUR,英镑/£ → GBP,港币 → HKD,新台币 → TWD,韩元 → KRW,泰铢 → THB
+- 与账本主币种(${ledgerCurrency})相同时 currency 留 ""；图片里出现任何外币说法(中文名/符号/代码都算)就必须填，别漏
+- 例:「花了 45 美元」→ "USD"；「1200 日元」→ "JPY"；「星巴克 $6.5」→ "USD"
 - 如果无法识别，返回空的 tx_drafts 数组`;
 
   const messages: Array<{ role: string; content: string | Array<unknown> }> = [
@@ -606,15 +717,14 @@ aiRouter.post('/parse-tx-image', zValidator('json', AiParseTxImageSchema), async
     {
       role: 'user',
       content: [
-        {
-          type: 'text',
-          text: `请分析这张图片提取交易信息。${hint}`,
-        },
-        ...(imageContent ? [{ type: 'image_url', image_url: { url: imageContent } }] : []),
+        { type: 'text', text: '请分析这张图片提取交易信息。' },
+        { type: 'image_url', image_url: { url: imageDataUrl } },
       ],
     },
   ];
 
+  // 6. 调 vision LLM
+  let drafts: Array<Record<string, unknown>>;
   try {
     const content = await callAiChatJson(
       provider.baseUrl,
@@ -622,37 +732,32 @@ aiRouter.post('/parse-tx-image', zValidator('json', AiParseTxImageSchema), async
       provider.visionModel,
       messages
     );
-
-    const parsed = extractJson(content) as {
-      tx_drafts?: Array<{
-        tx_type?: string;
-        amount?: number;
-        category_name?: string;
-        happened_at?: string;
-        note?: string;
-      }>;
-    } | null;
-
-    const suggestions = (parsed?.tx_drafts ?? []).map((draft) => ({
-      tx_type: (draft.tx_type as 'expense' | 'income' | 'transfer') || 'expense',
-      amount: draft.amount ?? 0,
-      category_name: draft.category_name ?? '其他',
-      happened_at: draft.happened_at ?? new Date().toISOString().slice(0, 10),
-      note: draft.note ?? '',
-      confidence: 0.8,
-    }));
-
-    return c.json({
-      suggestions,
-      provider: provider.id,
-      model: provider.visionModel,
-      image_id: req.image_id,
-      hint: req.hint,
-    });
+    const parsed = extractJson(content);
+    drafts = normalizeDrafts(parsed);
   } catch (err) {
+    if (err instanceof SchemaInvalidError) {
+      return c.json({
+        error: { code: 'AI_SCHEMA_INVALID', message: (err as Error).message, raw: String((err as Error).message).slice(0, 1000) },
+      }, 422);
+    }
     const errorMsg = err instanceof Error ? err.message : 'AI parsing failed';
-    return c.json({ error: errorMsg }, 500);
+    return c.json({ error: { code: 'AI_PROVIDER_ERROR', message: errorMsg.slice(0, 200) } }, 502);
   }
+
+  // 7. 缓存 image bytes（R2 + D1 元数据），返回 image_id 供 batch 保存时转附件
+  const imageId = randomUUID();
+  const r2Key = `ai-tmp/${userId}/${imageId}`;
+  if (c.env.R2) {
+    try {
+      await c.env.R2.put(r2Key, imageBytes, { httpMetadata: { contentType: mime } });
+    } catch { /* 缓存失败不阻断解析 */ }
+  }
+  await db.prepare(
+    `INSERT INTO ai_image_cache (image_id, user_id, mime_type, size_bytes, r2_key, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(imageId, userId, mime, imageBytes.length, r2Key, nowUtc()).run().catch(() => {});
+
+  return c.json({ tx_drafts: drafts, image_id: imageId });
 });
 
 // ---------------------------------------------------------------------------
@@ -660,51 +765,53 @@ aiRouter.post('/parse-tx-image', zValidator('json', AiParseTxImageSchema), async
 // ---------------------------------------------------------------------------
 
 /**
- * 文字描述记账，AI 解析出交易信息
+ * 文字描述记账，AI 解析出交易信息。对齐原版：
+ * - 请求：JSON { text, ledger_id?, locale? }
+ * - 返回：{ tx_drafts: [...] }
+ * 错误码：AI_NO_CHAT_PROVIDER (400) / AI_PROVIDER_ERROR (502) /
+ * AI_PARSE_FAILED (422) / AI_SCHEMA_INVALID (422)
  */
 aiRouter.post('/parse-tx-text', zValidator('json', AiParseTxTextSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
+  const locale = req.locale || 'zh';
 
   const profile = await db
     .prepare('SELECT ai_config_json FROM user_profiles WHERE user_id = ?')
     .bind(userId)
     .first<{ ai_config_json: string | null }>();
-
   const aiConfig = parseAiConfig(profile?.ai_config_json ?? null);
   const provider = findProvider(aiConfig, 'text');
-
   if (!provider || !provider.textModel) {
     return c.json({
-      error: 'AI provider not configured. Please configure AI provider in settings.',
+      error: { code: 'AI_NO_CHAT_PROVIDER', message: 'AI provider not configured. Please configure AI provider in settings.' },
     }, 400);
   }
 
-  const hint = req.hint ? `\n用户提示：${req.hint}` : '';
+  // 取 ledger 上下文（categories + accounts 带币种 + 本位币）
+  const { categories, accounts, ledgerCurrency } = await loadLedgerContext(db, userId, req.ledger_id);
+
   const systemPrompt = `你是一个专业的记账助手。请分析用户的文字描述，提取交易信息。
 
 请返回 JSON 格式：
-{
-  "tx_drafts": [
-    {
-      "tx_type": "expense|income|transfer",
-      "amount": 金额数字,
-      "category_name": "分类名",
-      "happened_at": "YYYY-MM-DD",
-      "note": "备注"
-    }
-  ]
-}
+{"tx_drafts": [{"type": "expense|income|transfer", "amount": 金额数字, "category_name": "分类名", "account_name": "账户名", "from_account_name": "转账转出账户", "to_account_name": "转账转入账户", "happened_at": "YYYY-MM-DD", "note": "备注", "currency": "币种", "tags": ["标签"], "confidence": "high|medium|low"}]}
+
+${formatCurrencyHint(accounts, ledgerCurrency)}
+账本可用类目:${categories.length ? categories.join(', ') : '(无 — category_name 留空)'}
+账本可用账户:${accounts.length ? accounts.map(([name, ccy]) => ccy ? `${name}(${ccy})` : name).join(', ') : '(无 — account_name 留空)'}
 
 规则：
 - 金额必须是数字，不是字符串
 - 尝试识别支出/收入/转账
-- 如果金额不明确，根据语境推断`;
+- 如果金额不明确，根据语境推断
+- currency 必须是 3 位大写 ISO 4217 代码(不要填货币符号或中文名)：美元/$ → USD,日元/円 → JPY,欧元/€ → EUR,英镑/£ → GBP,港币 → HKD,新台币 → TWD,韩元 → KRW,泰铢 → THB
+- 与账本主币种(${ledgerCurrency})相同时 currency 留 ""；原文出现任何外币说法(中文名/符号/代码都算)就必须填，别漏
+- 例:「花了 45 美元」→ "USD"；「1200 日元」→ "JPY"；「星巴克 $6.5」→ "USD"`;
 
   const messages: Array<{ role: string; content: string }> = [
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: `${req.text}${hint}` },
+    { role: 'user', content: `${req.text}\n\nlocale: ${locale}` },
   ];
 
   try {
@@ -714,35 +821,17 @@ aiRouter.post('/parse-tx-text', zValidator('json', AiParseTxTextSchema), async (
       provider.textModel,
       messages
     );
-
-    const parsed = extractJson(content) as {
-      tx_drafts?: Array<{
-        tx_type?: string;
-        amount?: number;
-        category_name?: string;
-        happened_at?: string;
-        note?: string;
-      }>;
-    } | null;
-
-    const suggestions = (parsed?.tx_drafts ?? []).map((draft) => ({
-      tx_type: (draft.tx_type as 'expense' | 'income' | 'transfer') || 'expense',
-      amount: draft.amount ?? 0,
-      category_name: draft.category_name ?? '其他',
-      happened_at: draft.happened_at ?? new Date().toISOString().slice(0, 10),
-      note: draft.note ?? req.text,
-      confidence: 0.8,
-    }));
-
-    return c.json({
-      suggestions,
-      provider: provider.id,
-      model: provider.textModel,
-      original_text: req.text,
-    });
+    const parsed = extractJson(content);
+    const drafts = normalizeDrafts(parsed);
+    return c.json({ tx_drafts: drafts });
   } catch (err) {
+    if (err instanceof SchemaInvalidError) {
+      return c.json({
+        error: { code: 'AI_SCHEMA_INVALID', message: (err as Error).message, raw: String((err as Error).message).slice(0, 1000) },
+      }, 422);
+    }
     const errorMsg = err instanceof Error ? err.message : 'AI parsing failed';
-    return c.json({ error: errorMsg }, 500);
+    return c.json({ error: { code: 'AI_PROVIDER_ERROR', message: errorMsg.slice(0, 200) } }, 502);
   }
 });
 

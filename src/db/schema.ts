@@ -595,6 +595,21 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       )
     `).run();
 
+    // B2 截图记账临时图片缓存（对齐原版 image_cache.py，30 分钟 TTL）
+    // Workers 无跨请求内存，用 D1 + R2 持久化；consume 时一次性删除。
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS ai_image_cache (
+        image_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL DEFAULT 0,
+        r2_key TEXT NOT NULL,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ai_image_cache_user ON ai_image_cache(user_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ai_image_cache_created ON ai_image_cache(created_at)').run();
+
     // 迁移：read_account_projection 添加 hidden 列（用于隐藏/归档账户）
     try {
       await db.prepare("ALTER TABLE read_account_projection ADD COLUMN hidden INTEGER DEFAULT 0").run();

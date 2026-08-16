@@ -57,6 +57,12 @@ const BatchTransactionCreateSchema = z.object({
     tags: z.union([z.string(), z.array(z.string())]).nullable().optional(),
     tag_ids: z.array(z.string()).nullable().optional(),
     attachments: z.array(z.record(z.any())).nullable().optional(),
+    exclude_from_stats: z.boolean().nullable().optional(),
+    exclude_from_budget: z.boolean().nullable().optional(),
+    currency_code: z.string().nullable().optional(),
+    currencyCode: z.string().nullable().optional(),
+    native_amount: z.number().nullable().optional(),
+    nativeAmount: z.number().nullable().optional(),
   })),
   auto_ai_tag: z.boolean().default(true),
   extra_tag_name: z.string().nullable().optional(),
@@ -78,11 +84,84 @@ const BatchTransactionDeleteSchema = z.object({
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
+  R2?: R2Bucket;
 };
 
 type Variables = {
   userId: string;
 };
+
+/**
+ * B2 共享附件：consume ai_image_cache（一次性，user_id 校验防越权），转正式
+ * attachment 一份。对齐原版 consume_image → _create_attachment_from_bytes：
+ * sha256 dedup — 同 ledger 已有相同 sha 就复用；找不到/过期/异用户 → null。
+ */
+async function consumeAiImageAsAttachment(
+  db: D1Database,
+  env: { R2?: R2Bucket },
+  userId: string,
+  ledger: { id: string; external_id: string },
+  attachImageId: string,
+): Promise<Record<string, unknown> | null> {
+  const cacheRow = await db
+    .prepare('SELECT user_id, mime_type, size_bytes, r2_key FROM ai_image_cache WHERE image_id = ?')
+    .bind(attachImageId)
+    .first<{ user_id: string; mime_type: string; size_bytes: number; r2_key: string }>();
+  let imageBytes: Uint8Array | null = null;
+  if (cacheRow && cacheRow.user_id === userId && env.R2) {
+    const obj = await env.R2.get(cacheRow.r2_key);
+    if (obj) imageBytes = new Uint8Array(await obj.arrayBuffer());
+  }
+  // 无论成功与否都删除缓存（一次性消费；找不到 = 已过期/异用户/无 R2，静默跳过）
+  await db.prepare('DELETE FROM ai_image_cache WHERE image_id = ?').bind(attachImageId).run().catch(() => {});
+  if (cacheRow?.r2_key && env.R2) await env.R2.delete(cacheRow.r2_key).catch(() => {});
+  if (!imageBytes) return null;
+
+  const hashBuf = await crypto.subtle.digest('SHA-256', imageBytes.slice().buffer);
+  const sha256 = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  const existing = await db
+    .prepare("SELECT id FROM attachment_files WHERE sha256 = ? AND ledger_id = ? AND attachment_kind = 'transaction'")
+    .bind(sha256, ledger.id)
+    .first<{ id: string }>();
+  if (existing) {
+    return {
+      cloudFileId: existing.id,
+      fileName: 'screenshot.jpg',
+      mimeType: cacheRow!.mime_type || 'image/jpeg',
+      sha256,
+      sizeBytes: cacheRow!.size_bytes,
+    };
+  }
+  const fileId = randomUUID();
+  const mime = cacheRow!.mime_type || 'image/jpeg';
+  const fileExt = mime.includes('png') ? '.png' : mime.includes('webp') ? '.webp' : mime.includes('gif') ? '.gif' : '.jpg';
+  const r2Key = `attachments/${ledger.external_id}/${fileId}_screenshot${fileExt}`;
+  if (env.R2) {
+    await env.R2.put(r2Key, imageBytes, { httpMetadata: { contentType: mime } });
+  }
+  await db.prepare(
+    `INSERT INTO attachment_files
+     (id, ledger_id, user_id, sha256, size_bytes, mime_type, file_name, storage_path, attachment_kind, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'transaction', ?)`
+  ).bind(fileId, ledger.id, userId, sha256, cacheRow!.size_bytes, mime, `screenshot${fileExt}`, r2Key, nowUtc()).run();
+  return {
+    cloudFileId: fileId,
+    fileName: `screenshot${fileExt}`,
+    mimeType: mime,
+    sha256,
+    sizeBytes: cacheRow!.size_bytes,
+  };
+}
+
+/** 把共享 attachment 合并进单笔 tx 的 attachments（若该笔自带附件则排在后面相安无事）。 */
+function mergeSharedAttachment(
+  txAttachments: unknown,
+  shared: Record<string, unknown> | null,
+): unknown {
+  if (!shared) return txAttachments ?? null;
+  if (Array.isArray(txAttachments) && txAttachments.length) return txAttachments;
+  return [shared];
+}
 
 const batchWriteRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
@@ -112,6 +191,10 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
   const deviceId = req.device_id || c.req.header('X-Device-ID') || 'unknown';
   const createdSyncIds: string[] = [];
   let maxChangeId = 0;
+  // B2 共享附件：consume ai_image_cache 转正式 attachment（一次性）→ 每笔 tx 挂同一份
+  const sharedAttachment = req.attach_image_id
+    ? await consumeAiImageAsAttachment(db, c.env, userId, ledger, req.attach_image_id)
+    : null;
 
   for (const tx of req.transactions) {
     const txSyncId = randomUUID();
@@ -149,7 +232,7 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
       toAccountId: tx.to_account_id || null,
       tags: tx.tags || null,
       tagIds: tx.tag_ids || null,
-      attachments: tx.attachments || null,
+      attachments: mergeSharedAttachment(tx.attachments, sharedAttachment),
       updatedByUserId: userId,
       createdByUserId: userId,
     };
@@ -172,11 +255,11 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
            account_sync_id, account_name,
            from_account_sync_id, from_account_name,
            to_account_sync_id, to_account_name,
-           tags_csv, tag_sync_ids_json, tx_index, source_change_id,
+           tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id,
            exclude_from_stats, exclude_from_budget,
            created_by_user_id, last_edited_by_user_id,
            currency_code, native_amount)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null,
           categorySyncId, tx.category_name || null, tx.category_kind || null,
           accountSyncId, tx.account_name || null,
@@ -184,6 +267,7 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
           tx.to_account_id || null, tx.to_account_name || null,
           tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null,
           tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null,
+          mergeSharedAttachment(tx.attachments, sharedAttachment) ? safeJsonStringify(mergeSharedAttachment(tx.attachments, sharedAttachment)) : null,
           0, changeId,
           tx.exclude_from_stats != null ? (tx.exclude_from_stats ? 1 : 0) : null,
           tx.exclude_from_budget != null ? (tx.exclude_from_budget ? 1 : 0) : null,
@@ -319,6 +403,10 @@ batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch', zValidator('json'
   const deviceId = req.device_id || c.req.header('X-Device-ID') || 'unknown';
   const createdSyncIds: string[] = [];
   let maxChangeId = 0;
+  // B2 共享附件：consume ai_image_cache 转正式 attachment（一次性）→ 每笔 tx 挂同一份
+  const sharedAttachment = req.attach_image_id
+    ? await consumeAiImageAsAttachment(db, c.env, userId, ledger, req.attach_image_id)
+    : null;
 
   for (const tx of req.transactions) {
     const txSyncId = randomUUID();
@@ -334,12 +422,12 @@ batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch', zValidator('json'
       if (acc) accountSyncId = acc.sync_id;
     }
 
-    const payload: Record<string, unknown> = { syncId: txSyncId, type: txType, amount: tx.amount, happenedAt: tx.happened_at, note: tx.note || null, categoryId: categorySyncId, accountId: accountSyncId, fromAccountId: tx.from_account_id || null, toAccountId: tx.to_account_id || null, tags: tx.tags || null, updatedByUserId: userId, createdByUserId: userId };
+    const payload: Record<string, unknown> = { syncId: txSyncId, type: txType, amount: tx.amount, happenedAt: tx.happened_at, note: tx.note || null, categoryId: categorySyncId, accountId: accountSyncId, fromAccountId: tx.from_account_id || null, toAccountId: tx.to_account_id || null, tags: tx.tags || null, attachments: mergeSharedAttachment(tx.attachments, sharedAttachment), updatedByUserId: userId, createdByUserId: userId };
     const insertResult = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope) VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, ?, ?, 'ledger')`).bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, deviceId).run();
     const changeId = (insertResult as any).lastRowId;
     maxChangeId = Math.max(maxChangeId, changeId);
 
-    await db.prepare(`INSERT OR REPLACE INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, category_name, category_kind, account_sync_id, account_name, from_account_sync_id, from_account_name, to_account_sync_id, to_account_name, tags_csv, tag_sync_ids_json, tx_index, source_change_id, exclude_from_stats, exclude_from_budget, created_by_user_id, last_edited_by_user_id, currency_code, native_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null, categorySyncId, tx.category_name || null, tx.category_kind || null, accountSyncId, tx.account_name || null, tx.from_account_id || null, tx.from_account_name || null, tx.to_account_id || null, tx.to_account_name || null, tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null, tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null, 0, changeId, tx.exclude_from_stats != null ? (tx.exclude_from_stats ? 1 : 0) : null, tx.exclude_from_budget != null ? (tx.exclude_from_budget ? 1 : 0) : null, userId, userId, tx.currency_code ?? tx.currencyCode ?? null, tx.native_amount ?? tx.nativeAmount ?? null).run();
+    await db.prepare(`INSERT OR REPLACE INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, category_name, category_kind, account_sync_id, account_name, from_account_sync_id, from_account_name, to_account_sync_id, to_account_name, tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id, exclude_from_stats, exclude_from_budget, created_by_user_id, last_edited_by_user_id, currency_code, native_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null, categorySyncId, tx.category_name || null, tx.category_kind || null, accountSyncId, tx.account_name || null, tx.from_account_id || null, tx.from_account_name || null, tx.to_account_id || null, tx.to_account_name || null, tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null, tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null, mergeSharedAttachment(tx.attachments, sharedAttachment) ? safeJsonStringify(mergeSharedAttachment(tx.attachments, sharedAttachment)) : null, 0, changeId, tx.exclude_from_stats != null ? (tx.exclude_from_stats ? 1 : 0) : null, tx.exclude_from_budget != null ? (tx.exclude_from_budget ? 1 : 0) : null, userId, userId, tx.currency_code ?? tx.currencyCode ?? null, tx.native_amount ?? tx.nativeAmount ?? null).run();
     createdSyncIds.push(txSyncId);
   }
 
