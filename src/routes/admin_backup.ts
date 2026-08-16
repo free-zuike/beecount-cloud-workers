@@ -182,6 +182,49 @@ function nowUtc(): string {
   return new Date().toISOString();
 }
 
+/**
+ * 解析 schedule 的 remote_ids：优先读 backup_schedule_remotes M2M（对齐原版），
+ * 无 M2M 记录时回退解析 remote_ids JSON 列（旧数据兼容）。
+ */
+async function resolveScheduleRemoteIds(db: D1Database, scheduleId: number | string): Promise<Array<string | number>> {
+  const schedIdStr = String(scheduleId);
+  const m2m = await db
+    .prepare('SELECT remote_id FROM backup_schedule_remotes WHERE schedule_id = ? ORDER BY sort_order ASC')
+    .bind(schedIdStr)
+    .all<{ remote_id: number }>();
+  if (m2m.results.length > 0) {
+    return m2m.results.map(r => r.remote_id);
+  }
+  const sched = await db
+    .prepare('SELECT remote_ids FROM backup_schedules WHERE id = ?')
+    .bind(schedIdStr)
+    .first<{ remote_ids: string }>();
+  if (!sched?.remote_ids) return [];
+  try {
+    const parsed = JSON.parse(sched.remote_ids);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 全量覆盖 schedule 的 remote 关联（对齐原版：先删旧映射再加新）。
+ * 兼容旧实现：同步写回 remote_ids JSON 列（存放整型 id 列表）。 */
+async function replaceScheduleRemotes(
+  db: D1Database,
+  scheduleId: number | string,
+  remoteIds: Array<string | number>,
+) {
+  return db.batch([
+    db.prepare('DELETE FROM backup_schedule_remotes WHERE schedule_id = ?').bind(String(scheduleId)),
+    ...remoteIds.map((rid, idx) =>
+      db.prepare('INSERT INTO backup_schedule_remotes (schedule_id, remote_id, sort_order) VALUES (?, ?, ?)')
+        .bind(String(scheduleId), String(rid), idx)),
+    db.prepare('UPDATE backup_schedules SET remote_ids = ? WHERE id = ?')
+      .bind(remoteIds.length ? JSON.stringify(remoteIds) : null, String(scheduleId)),
+  ]);
+}
+
 async function testS3Connection(
     endpoint: string,
     bucket: string,
@@ -1241,9 +1284,29 @@ backupRouter.get('/schedules', async (c) => {
       }>();
   }
 
+  // 批量预取所有 schedule 的 M2M remote 映射（对齐原版 _build_schedule_out）
+  const scheduleIds = rows.results.map(r => String(r.id));
+  const m2mBySchedule = new Map<string, Array<string | number>>();
+  if (scheduleIds.length > 0) {
+    const placeholders = scheduleIds.map(() => '?').join(',');
+    const m2m = await db
+      .prepare(`SELECT schedule_id, remote_id FROM backup_schedule_remotes WHERE schedule_id IN (${placeholders}) ORDER BY sort_order ASC`)
+      .bind(...scheduleIds)
+      .all<{ schedule_id: number; remote_id: number }>();
+    for (const row of m2m.results) {
+      const sid = String(row.schedule_id);
+      if (!m2mBySchedule.has(sid)) m2mBySchedule.set(sid, []);
+      m2mBySchedule.get(sid)!.push(row.remote_id);
+    }
+  }
+
   const schedules = rows.results.map((row) => {
+    // M2M 优先，回退 remote_ids JSON 列（旧数据兼容）
+    const m2mIds = m2mBySchedule.get(String(row.id));
     let parsedRemoteIds: (string | number)[] = [];
-    if (row.remote_ids) {
+    if (m2mIds) {
+      parsedRemoteIds = m2mIds;
+    } else if (row.remote_ids) {
       try {
         parsedRemoteIds = JSON.parse(row.remote_ids);
       } catch {}
@@ -1352,6 +1415,11 @@ backupRouter.post('/schedules', apiValidator('json', ScheduleCreateSchema), asyn
 
   const scheduleId = (insertResult as any).lastRowId;
 
+  // schedule ↔ remote 多对多（对齐原版 BackupScheduleRemote）
+  if (req.remote_ids && req.remote_ids.length > 0) {
+    await replaceScheduleRemotes(db, scheduleId, req.remote_ids);
+  }
+
   return c.json({
     id: scheduleId,
     name: req.name,
@@ -1417,9 +1485,8 @@ backupRouter.patch('/schedules/:id', apiValidator('json', ScheduleUpdateSchema),
   }
 
   if (req.remote_ids !== undefined) {
-    const remoteIdsJson = req.remote_ids.length > 0 ? JSON.stringify(req.remote_ids) : null;
-    updates.push('remote_ids = ?');
-    params.push(remoteIdsJson);
+    // M2M 全量覆盖（对齐原版）；helper 内部会同步写 remote_ids JSON 列兼容旧数据
+    await replaceScheduleRemotes(db, scheduleId, req.remote_ids);
   }
 
   if (req.cron_expr !== undefined) {
@@ -1515,6 +1582,8 @@ backupRouter.delete('/schedules/:id', async (c) => {
     return c.json({ error: 'Schedule not found' }, 404);
   }
 
+  // 清理 M2M 关联（对齐原版：显式删除 schedule_remotes 行）
+  await db.prepare('DELETE FROM backup_schedule_remotes WHERE schedule_id = ?').bind(scheduleId).run();
   await db.prepare('DELETE FROM backup_schedules WHERE id = ?').bind(scheduleId).run();
 
   return c.json({ success: true });
@@ -1529,9 +1598,9 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
   const serverNow = nowUtc();
 
   const schedule = await db
-    .prepare('SELECT id, name, user_id, remote_ids, retention_days FROM backup_schedules WHERE id = ?')
+    .prepare('SELECT id, name, user_id, retention_days FROM backup_schedules WHERE id = ?')
     .bind(scheduleId)
-    .first<{ id: number; name: string; user_id: string; remote_ids: string; retention_days: number | null }>();
+    .first<{ id: number; name: string; user_id: string; retention_days: number | null }>();
 
   if (!schedule) {
     return c.json({ error: 'Schedule not found' }, 404);
@@ -1547,29 +1616,23 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
   let remoteConfigs: Array<{ remoteId: string; config: Record<string, string> }> = [];
   let shouldEncrypt = false;
 
-  if (schedule.remote_ids) {
-    try {
-      const remoteIds = JSON.parse(schedule.remote_ids);
-      // 加载所有远端配置（与原�?fan-out 对齐�?
-      for (const rid of remoteIds) {
-        const strRid = String(rid);
-        const remote = await db
-          .prepare('SELECT backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?')
-          .bind(strRid)
-          .first<{ backend_type: string; config_summary: string; encrypted: number }>();
+  // remote_ids 优先从 M2M 表读（对齐原版），回退 remote_ids JSON 列
+  const remoteIds = await resolveScheduleRemoteIds(db, schedule.id);
+  for (const rid of remoteIds) {
+    const strRid = String(rid);
+    const remote = await db
+      .prepare('SELECT backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?')
+      .bind(strRid)
+      .first<{ backend_type: string; config_summary: string; encrypted: number }>();
 
-        if (remote) {
-          const parsedConfig = safeParseConfig(remote.config_summary);
-          // 补充 R2 Bucket 绑定
-          if (remote.backend_type === 'r2' && c.env.R2) {
-            parsedConfig._r2Bucket = c.env.R2;
-          }
-          remoteConfigs.push({ remoteId: strRid, config: { backend_type: remote.backend_type, ...parsedConfig } });
-          if (remote.encrypted === 1) shouldEncrypt = true;
-        }
+    if (remote) {
+      const parsedConfig = safeParseConfig(remote.config_summary);
+      // 补充 R2 Bucket 绑定
+      if (remote.backend_type === 'r2' && c.env.R2) {
+        parsedConfig._r2Bucket = c.env.R2;
       }
-    } catch (err) {
-      serverLogger.info('src.routers.admin', '[Backup] Failed to parse remote_ids:', err);
+      remoteConfigs.push({ remoteId: strRid, config: { backend_type: remote.backend_type, ...parsedConfig } });
+      if (remote.encrypted === 1) shouldEncrypt = true;
     }
   }
 

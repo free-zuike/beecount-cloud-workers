@@ -153,22 +153,29 @@ export async function processBackupSchedule(
     let remoteConfigs: Array<{ remoteId: string; config: Record<string, string> }> = [];
     let shouldEncrypt = false;
 
-    if (schedule.remote_ids) {
-      try {
-        const remoteIds = JSON.parse(schedule.remote_ids);
-        for (const rid of remoteIds) {
-          const remote = await db.prepare('SELECT id, backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?')
-            .bind(String(rid)).first<{ id: string; backend_type: string; config_summary: string; encrypted: number }>();
-          if (remote) {
-            const parsedConfig = (() => { try { return JSON.parse(remote.config_summary || '{}'); } catch { return {}; } })();
-            if (remote.backend_type === 'r2' && r2) parsedConfig._r2Bucket = r2;
-            remoteConfigs.push({ remoteId: remote.id, config: { backend_type: remote.backend_type, ...parsedConfig } });
-            if (remote.encrypted === 1) shouldEncrypt = true;
-            if (!remoteId) remoteId = remote.id;
-          }
-        }
-      } catch (e) {
-        console.log(`[CRON] Failed to parse remote config for schedule ${schedule.id}:`, e);
+    // remote_ids 优先从 M2M 表读（对齐原版），回退 remote_ids JSON 列
+    let remoteIds: Array<string | number> = [];
+    try {
+      const m2m = await db.prepare('SELECT remote_id FROM backup_schedule_remotes WHERE schedule_id = ? ORDER BY sort_order ASC')
+        .bind(schedule.id).all<{ remote_id: number }>();
+      if (m2m.results.length > 0) {
+        remoteIds = m2m.results.map(r => r.remote_id);
+      } else if (schedule.remote_ids) {
+        const parsed = JSON.parse(schedule.remote_ids);
+        remoteIds = Array.isArray(parsed) ? parsed : [];
+      }
+    } catch (e) {
+      console.log(`[CRON] Failed to resolve remote ids for schedule ${schedule.id}:`, e);
+    }
+    for (const rid of remoteIds) {
+      const remote = await db.prepare('SELECT id, backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?')
+        .bind(String(rid)).first<{ id: string; backend_type: string; config_summary: string; encrypted: number }>();
+      if (remote) {
+        const parsedConfig = (() => { try { return JSON.parse(remote.config_summary || '{}'); } catch { return {}; } })();
+        if (remote.backend_type === 'r2' && r2) parsedConfig._r2Bucket = r2;
+        remoteConfigs.push({ remoteId: remote.id, config: { backend_type: remote.backend_type, ...parsedConfig } });
+        if (remote.encrypted === 1) shouldEncrypt = true;
+        if (!remoteId) remoteId = remote.id;
       }
     }
 

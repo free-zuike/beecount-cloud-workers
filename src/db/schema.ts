@@ -406,6 +406,18 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       )
     `).run();
 
+    // schedule ↔ remote 多对多（对齐原版 BackupScheduleRemote）：一个 schedule
+    // 可 fan-out 推到多个 remote，按 sort_order 排序。
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS backup_schedule_remotes (
+        schedule_id INTEGER NOT NULL REFERENCES backup_schedules(id) ON DELETE CASCADE,
+        remote_id INTEGER NOT NULL REFERENCES backup_remotes(id) ON DELETE RESTRICT,
+        sort_order INTEGER DEFAULT 0,
+        PRIMARY KEY (schedule_id, remote_id)
+      )
+    `).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_schedule_remotes_remote ON backup_schedule_remotes(remote_id)').run();
+
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_restores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

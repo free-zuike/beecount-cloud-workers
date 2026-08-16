@@ -75,6 +75,33 @@ app.use('*', async (c, next) => {
 
 app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
+// 就绪探针（对齐原版）：查 DB 确认可用
+app.get('/ready', async (c) => {
+  await c.env.DB.prepare('SELECT 1').run();
+  return c.json({ status: 'ready' });
+});
+
+// Prometheus 指标（对齐原版）：轻量内存计数器 + 文本格式
+const _startTs = Date.now();
+let _requestTotal = 0;
+let _requestBytes = 0;
+app.use('*', async (c, next) => {
+  _requestTotal++;
+  const len = Number(c.req.header('content-length') || 0);
+  _requestBytes += len;
+  return next();
+});
+app.get('/metrics', (c) => {
+  const lines: string[] = [];
+  lines.push('# TYPE beecount_http_requests_total counter');
+  lines.push(`beecount_http_requests_total ${_requestTotal}`);
+  lines.push('# TYPE beecount_http_request_bytes_total counter');
+  lines.push(`beecount_http_request_bytes_total ${_requestBytes}`);
+  lines.push('# TYPE beecount_workers_uptime_seconds gauge');
+  lines.push(`beecount_workers_uptime_seconds ${Math.floor((Date.now() - _startTs) / 1000)}`);
+  return c.text(lines.join('\n') + '\n');
+});
+
 // OAuth 2.0 Protected Resource Metadata (RFC 9728) — MCP 客户端（Claude /
 // Cursor / Cline）连接前会探测此端点。我们只有静态 PAT、无 OAuth server，
 // 所以声明 authorization_servers=[] + bearer header，让客户端走 Bearer 鉴权。

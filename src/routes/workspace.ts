@@ -1804,6 +1804,81 @@ workspaceRouter.get('/ledgers/:id/members', async (c) => {
 });
 
 // ===========================================================================
+// PATCH /workspace/ledgers/:id/members/:memberUserId - 修改成员角色（仅 Owner）
+// 对齐原版 Phase 1：只允许 editor → editor（no-op 写回），owner 切换走 transfer，
+// 不允许把成员改成 owner。变更后 WS 广播 member_change。
+// ===========================================================================
+
+const MemberRoleUpdateSchema = z.object({
+  role: z.literal('editor'),
+});
+
+workspaceRouter.patch('/ledgers/:id/members/:memberUserId', zValidator('json', MemberRoleUpdateSchema), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const ledgerExternalId = c.req.param('id');
+  const memberUserId = c.req.param('memberUserId');
+  const req = c.req.valid('json');
+
+  const ledger = await db
+    .prepare('SELECT id, user_id FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerExternalId)
+    .first<{ id: string; user_id: string }>();
+
+  if (!ledger || ledger.user_id !== userId) {
+    return c.json({ error: 'Ledger not found or not owned by you' }, 404);
+  }
+
+  if (memberUserId === userId) {
+    return c.json({ error: 'Owner cannot change own role; use transfer endpoint' }, 409);
+  }
+
+  const target = await db
+    .prepare('SELECT user_id, role FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .bind(ledger.id, memberUserId)
+    .first<{ user_id: string; role: string }>();
+  if (!target) {
+    return c.json({ error: 'Member not found' }, 404);
+  }
+
+  // Phase 1 仅允许 editor → editor（no-op 写回），未来扩展角色体系
+  if (req.role !== 'editor') {
+    return c.json({ error: `Unsupported role: ${req.role}` }, 400);
+  }
+  await db.prepare('UPDATE ledger_members SET role = ? WHERE ledger_id = ? AND user_id = ?')
+    .bind('editor', ledger.id, memberUserId).run();
+
+  await insertAuditLog({
+    db, userId, ledgerId: ledger.id, action: 'update_meta', entityType: 'ledger', entityId: ledgerExternalId,
+    details: { member_role_update: memberUserId, role: req.role },
+  });
+
+  // WS 广播 member_change（角色变更）给账本所有成员
+  try {
+    const members = await db.prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ?').bind(ledger.id).all<{ user_id: string }>();
+    const allUserIds = new Set([userId, ...members.results.map(m => m.user_id)]);
+    const payload = { type: 'member_change', ledgerId: ledgerExternalId, changeType: 'role_changed', userId: memberUserId, newRole: req.role };
+    for (const uid of allUserIds) {
+      try {
+        const doId = c.env.BEECOUNT_DO.idFromName(`ws-${uid}`);
+        const doStub = c.env.BEECOUNT_DO.get(doId);
+        await doStub.fetch(new Request('https://dummy/broadcast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: JSON.stringify(payload) }) }));
+      } catch {}
+      try {
+        const { getWsManager } = await import('../lib/ws-manager');
+        await getWsManager().broadcastToUser(uid, payload);
+      } catch {}
+    }
+  } catch {}
+
+  return c.json({
+    user_id: memberUserId,
+    ledger_id: ledgerExternalId,
+    role: req.role,
+  });
+});
+
+// ===========================================================================
 // DELETE /workspace/ledgers/:id/members/:memberUserId - 移除成员（仅 Owner）
 // ===========================================================================
 
