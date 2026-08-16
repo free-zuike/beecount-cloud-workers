@@ -64,12 +64,15 @@ app.use('*', async (c, next) => {
 });
 
 let initialized = false;
-app.use('*', async (c, next) => {
+async function ensureInitialized(db: D1Database): Promise<void> {
   if (!initialized) {
-    await initializeDatabase(c.env.DB);
-    initLogger(c.env.DB);
+    await initializeDatabase(db);
+    initLogger(db);
     initialized = true;
   }
+}
+app.use('*', async (c, next) => {
+  await ensureInitialized(c.env.DB);
   await next();
 });
 
@@ -323,6 +326,8 @@ export default {
       }
 
       try {
+        // WebSocket 请求绕过 Hono 中间件，这里手动初始化 DB 和 logger
+        await ensureInitialized(env.DB);
         const { validateAccessToken } = await import('./auth');
         const result = await validateAccessToken(token, env.JWT_SECRET);
         if (!result || !('userId' in result)) {
