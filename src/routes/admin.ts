@@ -88,6 +88,7 @@ type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
   R2?: R2Bucket;
+  BEECOUNT_DO: DurableObjectNamespace;
 };
 
 type Variables = {
@@ -770,72 +771,44 @@ adminRouter.post('/users/:id/password', zValidator('json', z.object({
 });
 
 adminRouter.get('/logs', async (c) => {
-  const db = c.env.DB;
-  const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '500', 10), 1000);
   const level = c.req.query('level');
   const q = c.req.query('q');
   const source = c.req.query('source');
+  const sinceSeq = parseInt(c.req.query('since_seq') ?? '0', 10);
 
-  let query = `SELECT id, user_id, ledger_id, action, level, logger, metadata_json, created_at FROM audit_logs`;
-  const conditions: string[] = [];
-  const params: unknown[] = [];
+  // 从 LogBuffer DO（内存 ring buffer）读日志 —— 对齐原版「内存，重启清零」。
+  // 审计事件（insertAuditLog）仍在 D1 持久化，但普通日志/请求日志只进内存。
+  const doId = c.env.BEECOUNT_DO.idFromName('log-global');
+  const stub = c.env.BEECOUNT_DO.get(doId);
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (level && level !== 'ALL') params.set('level', level);
+  if (source) params.set('source', source);
+  if (sinceSeq > 0) params.set('since_seq', String(sinceSeq));
+  const resp = await stub.fetch(`https://do/log/get?${params.toString()}`);
+  const data = await resp.json() as {
+    logs: Array<{ id: number; level: string; source: string; message: string; timestamp: string }>;
+    total: number;
+  };
 
-  // 级别过滤：只显示 >= 所选级别的日志
-  if (level && level !== 'ALL') {
-    const LEVEL_RANK: Record<string, number> = { DEBUG: 0, INFO: 1, WARNING: 2, ERROR: 3, CRITICAL: 4 };
-    const minRank = LEVEL_RANK[level.toUpperCase()] ?? 0;
-    // level 列是 TEXT，按 CASE 表达式比较级别
-    conditions.push(`CASE level WHEN 'DEBUG' THEN 0 WHEN 'INFO' THEN 1 WHEN 'WARNING' THEN 2 WHEN 'ERROR' THEN 3 WHEN 'CRITICAL' THEN 4 ELSE 1 END >= ?`);
-    params.push(minRank);
-  }
-
-  // 来源过滤：logger 名称前缀匹配
-  if (source) {
-    // 前端 SOURCE_OPTIONS 的 value 是逗号分隔的 logger 名称前缀
-    const sourceList = source.split(',').map(s => s.trim()).filter(Boolean);
-    if (sourceList.length > 0) {
-      const likeClauses = sourceList.map(() => `logger LIKE ?`);
-      conditions.push(`(${likeClauses.join(' OR ')})`);
-      for (const s of sourceList) {
-        params.push(`%${s}%`);
-      }
-    }
-  }
-
-  // 关键词搜索
-  if (q) {
-    conditions.push(`(action LIKE ? OR logger LIKE ? OR metadata_json LIKE ?)`);
-    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
-  }
-
-  if (conditions.length > 0) {
-    query += ` WHERE ${conditions.join(' AND ')}`;
-  }
-  query += ` ORDER BY id DESC LIMIT ?`;
-  params.push(limit);
-
-  const rows = await db.prepare(query).bind(...params).all<{
-    id: number; user_id: string | null; ledger_id: string | null;
-    action: string; level: string; logger: string | null;
-    metadata_json: string; created_at: string;
-  }>();
-
-  const items = rows.results.map((row) => ({
-    seq: row.id,
-    ts: row.created_at,
-    level: row.level || 'INFO',
-    logger: row.logger || 'audit',
-    message: row.action,
-    ledger_id: row.ledger_id,
-    user_id: row.user_id,
-    device_id: null,
-    metadata: JSON.parse(row.metadata_json || '{}'),
-  }));
+  const items = data.logs
+    .filter((l) => !q || l.message.includes(q) || l.source.includes(q))
+    .map((l) => ({
+      seq: l.id,
+      ts: l.timestamp,
+      level: l.level || 'INFO',
+      logger: l.source || 'audit',
+      message: l.message,
+      ledger_id: null,
+      user_id: null,
+      device_id: null,
+      metadata: {} as Record<string, unknown>,
+    }));
 
   return c.json({
     items,
     capacity: 1000,
-    latest_seq: rows.results[0]?.id ?? 0,
+    latest_seq: items.length > 0 ? items[items.length - 1].seq : 0,
   });
 });
 

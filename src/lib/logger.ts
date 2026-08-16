@@ -4,9 +4,11 @@
  */
 
 let _db: D1Database | null = null;
+let _logBuffer: DurableObjectNamespace | null = null;
 
-export function initLogger(db: D1Database) {
+export function initLogger(db: D1Database, logBuffer?: DurableObjectNamespace) {
   _db = db;
+  _logBuffer = logBuffer ?? null;
 }
 
 interface LogEntry {
@@ -25,19 +27,20 @@ function writeLog(entry: LogEntry): Promise<void> {
     case 'WARNING': console.warn(prefix, entry.message); break;
     default: console.log(prefix, entry.message);
   }
-  if (_db) {
-    return _db.prepare(
-      `INSERT INTO audit_logs (user_id, ledger_id, action, level, logger, metadata_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      entry.user_id ?? null,
-      entry.ledger_id ?? null,
-      entry.message.substring(0, 500),
-      entry.level,
-      entry.logger,
-      null,
-      new Date().toISOString(),
-    ).run().then(() => {}).catch(() => {});
+  // 普通日志进内存 ring buffer（LogBuffer DO），不落 D1 —— 对齐原版
+  // "内存 ring buffer,服务重启后清零"。D1 只存审计事件（insertAuditLog）。
+  if (_logBuffer) {
+    try {
+      const doId = _logBuffer.idFromName('log-global');
+      const stub = _logBuffer.get(doId);
+      return stub.fetch(new URL('/log/add', 'http://do'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ level: entry.level, source: entry.logger, message: entry.message }),
+      }).then(() => {}).catch(() => {});
+    } catch {
+      return Promise.resolve();
+    }
   }
   return Promise.resolve();
 }

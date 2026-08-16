@@ -9,9 +9,9 @@ import { DurableObject } from 'cloudflare:workers';
  * - lock-{taskId} → 分布式任务锁
  */
 export class BeeCountDO extends DurableObject {
-  private buffer: Array<{ level: string; source: string; message: string; timestamp: string }> = [];
+  private buffer: Array<{ id: number; level: string; source: string; message: string; timestamp: string }> = [];
   private maxLogSize = 1000;
-  private alarmInterval = 5 * 60 * 1000;
+  private nextSeq = 0;
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -36,26 +36,36 @@ export class BeeCountDO extends DurableObject {
     // ===== 日志缓冲模式 =====
     if (path.endsWith('/log/add')) {
       const { level, source, message } = await request.json<{ level: string; source: string; message: string }>();
-      this.buffer.push({ level, source, message, timestamp: new Date().toISOString() });
+      this.buffer.push({ id: ++this.nextSeq, level, source, message, timestamp: new Date().toISOString() });
       if (this.buffer.length > this.maxLogSize) this.buffer = this.buffer.slice(-this.maxLogSize);
-      if (!(await this.ctx.storage.getAlarm())) {
-        await this.ctx.storage.setAlarm(Date.now() + this.alarmInterval);
-      }
       return new Response('ok');
     }
 
     if (path.endsWith('/log/get')) {
-      const limit = parseInt(url.searchParams.get('limit') ?? '100');
+      const limit = parseInt(url.searchParams.get('limit') ?? '500');
       const level = url.searchParams.get('level') ?? undefined;
       const source = url.searchParams.get('source') ?? undefined;
+      const sinceSeq = parseInt(url.searchParams.get('since_seq') ?? '0', 10);
       let logs = this.buffer;
-      if (level) logs = logs.filter((l) => l.level === level);
-      if (source) logs = logs.filter((l) => l.source === source);
+      if (level && level !== 'ALL') {
+        const LEVEL_RANK: Record<string, number> = { DEBUG: 0, INFO: 1, WARNING: 2, ERROR: 3, CRITICAL: 4 };
+        const minRank = LEVEL_RANK[level.toUpperCase()] ?? 0;
+        logs = logs.filter((l) => (LEVEL_RANK[l.level.toUpperCase()] ?? 1) >= minRank);
+      }
+      if (source) {
+        // 逗号分隔多个 logger 前缀，前缀匹配（对齐原版 /admin/logs 来源过滤）
+        const prefixes = source.split(',').map(s => s.trim()).filter(Boolean);
+        if (prefixes.length > 0) {
+          logs = logs.filter((l) => prefixes.some((p) => l.source.includes(p)));
+        }
+      }
+      if (sinceSeq > 0) logs = logs.filter((l) => l.id > sinceSeq);
       return Response.json({ logs: logs.slice(-limit), total: this.buffer.length });
     }
 
     if (path.endsWith('/log/clear')) {
       this.buffer = [];
+      this.nextSeq = 0;
       return new Response('ok');
     }
 
@@ -119,27 +129,4 @@ export class BeeCountDO extends DurableObject {
   }
 
   async webSocketClose(ws: WebSocket): Promise<void> {}
-
-  // Alarm 回调：刷盘到 D1
-  async alarm(): Promise<void> {
-    try {
-      if (this.buffer.length > 0) {
-        const db = (this.env as any).DB as D1Database;
-        if (db) {
-          for (const log of this.buffer.slice(-50)) {
-            try {
-              await db.prepare(
-                'INSERT INTO audit_logs (user_id, action, details_json, created_at) VALUES (?, ?, ?, ?)'
-              ).bind(this.ctx.id.toString(), 'system_log',
-                JSON.stringify({ level: log.level, source: log.source, message: log.message }),
-                log.timestamp).run();
-            } catch { /* skip */ }
-          }
-        }
-      }
-      await this.ctx.storage.setAlarm(Date.now() + this.alarmInterval);
-    } catch {
-      await this.ctx.storage.setAlarm(Date.now() + this.alarmInterval);
-    }
-  }
 }
