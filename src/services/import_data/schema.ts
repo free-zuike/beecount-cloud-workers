@@ -94,6 +94,16 @@ export interface ImportTransaction {
   tagNames: string[];
   sourceRowNumber: number;
   sourceRawLine: string;
+  // 下方字段由导入流程后阶段填充，类型定义为可选避免早期步骤报错
+  categoryId?: string | null;
+  categoryKind?: string | null;
+  accountId?: string | null;
+  fromAccountId?: string | null;
+  toAccountId?: string | null;
+  tagIds?: string[];
+  excludeFromStats?: boolean | null;
+  excludeFromBudget?: boolean | null;
+  nativeAmount?: number | null;
 }
 
 export interface ImportData {

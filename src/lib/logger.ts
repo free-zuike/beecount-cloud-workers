@@ -42,15 +42,26 @@ function writeLog(entry: LogEntry) {
 }
 
 export const serverLogger = {
-  debug: (logger: string, message: string, meta?: { user_id?: string; ledger_id?: string }) =>
-    writeLog({ level: 'DEBUG', logger, message, ...meta }),
-  info: (logger: string, message: string, meta?: { user_id?: string; ledger_id?: string }) =>
-    writeLog({ level: 'INFO', logger, message, ...meta }),
-  warn: (logger: string, message: string, meta?: { user_id?: string; ledger_id?: string }) =>
-    writeLog({ level: 'WARNING', logger, message, ...meta }),
-  error: (logger: string, message: string, meta?: any) => {
-    const msg = typeof meta === 'object' && meta?.message ? `${message} ${meta.message}` : message;
-    const logMeta = meta && typeof meta === 'object' && !meta?.message ? meta as any : undefined;
-    writeLog({ level: 'ERROR', logger, message: msg, ...logMeta });
+  debug: (...args: unknown[]) => writeLog({ level: 'DEBUG', logger: String(args[0] ?? ''), message: restToMessage(args) }),
+  info: (...args: unknown[]) => writeLog({ level: 'INFO', logger: String(args[0] ?? ''), message: restToMessage(args) }),
+  warn: (...args: unknown[]) => writeLog({ level: 'WARNING', logger: String(args[0] ?? ''), message: restToMessage(args) }),
+  error: (...args: unknown[]) => {
+    const logger = String(args[0] ?? '');
+    const body = args.slice(1);
+    const last = body[body.length - 1];
+    const meta = last && typeof last === 'object' && !(last instanceof Error) ? last as { user_id?: string; ledger_id?: string } : undefined;
+    const message = last && (last instanceof Error || typeof last === 'object') && meta === undefined ? body.map(stringifyArg).join(' ') : args.slice(1, meta ? -1 : undefined).map(stringifyArg).join(' ');
+    writeLog({ level: 'ERROR', logger, message, ...(meta ?? {}) });
   },
 };
+
+function stringifyArg(arg: unknown): string {
+  if (typeof arg === 'string') return arg;
+  if (arg instanceof Error) return arg.message;
+  try { return JSON.stringify(arg); } catch { return String(arg); }
+}
+
+/** console.log 风格变参 → 拼接字符串（保持与调用处行为一致）。 */
+function restToMessage(args: unknown[], startIdx = 1): string {
+  return args.slice(startIdx).map(stringifyArg).join(' ');
+}

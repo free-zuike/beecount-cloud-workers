@@ -202,7 +202,9 @@ const WriteTransactionCreateSchema = WriteBaseSchema.extend({
   exclude_from_stats: z.boolean().optional(),
   exclude_from_budget: z.boolean().optional(),
   currency_code: z.string().nullable().optional(),
+  currencyCode: z.string().nullable().optional(),
   native_amount: z.number().nullable().optional(),
+  nativeAmount: z.number().nullable().optional(),
 });
 
 /** 更新交易请求 */
@@ -226,7 +228,9 @@ const WriteTransactionUpdateSchema = WriteBaseSchema.extend({
   exclude_from_stats: z.boolean().optional(),
   exclude_from_budget: z.boolean().optional(),
   currency_code: z.string().nullable().optional(),
+  currencyCode: z.string().nullable().optional(),
   native_amount: z.number().nullable().optional(),
+  nativeAmount: z.number().nullable().optional(),
 });
 
 /** 创建账户请求 */
@@ -934,8 +938,8 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
       if (req.name !== undefined) { sets.push('name = ?'); vals.push(req.name); }
       if (req.account_type !== undefined) { sets.push('account_type = ?'); vals.push(req.account_type); }
       if (req.currency !== undefined) { sets.push('currency = ?'); vals.push(req.currency); }
-      if (req.initial_balance !== undefined) {
-        const isLiability = (row.account_type as string || '') === 'credit_card' || (row.account_type as string || '') === 'loan';
+      if (req.initial_balance != null && full) {
+        const isLiability = (full.account_type as string || '') === 'credit_card' || (full.account_type as string || '') === 'loan';
         sets.push('initial_balance = ?');
         vals.push(isLiability ? -Math.abs(req.initial_balance) : req.initial_balance);
       }

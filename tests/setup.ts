@@ -1,8 +1,10 @@
 import nodeCrypto from 'crypto';
 
-if (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.subtle) {
-  if (!(globalThis.crypto.subtle as any).timingSafeEqual) {
-    (globalThis.crypto.subtle as any).timingSafeEqual = async function timingSafeEqual(
+const g = globalThis as any;
+
+if (typeof g.crypto !== 'undefined' && g.crypto.subtle) {
+  if (!(g.crypto.subtle as any).timingSafeEqual) {
+    (g.crypto.subtle as any).timingSafeEqual = async function timingSafeEqual(
       a: ArrayBuffer,
       b: ArrayBuffer
     ): Promise<boolean> {

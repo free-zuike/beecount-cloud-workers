@@ -4,7 +4,8 @@ export type AuditAction =
   | 'batch_create' | 'batch_delete'
   | 'init_defaults' | 'invite' | 'join' | 'remove_member' | 'update_meta'
   | 'revoke_invite' | 'preview_invite' | 'transfer_owner'
-  | 'backup_remote_reveal';
+  | 'backup_remote_reveal'
+  | 'admin_user_create' | 'admin_user_patch' | 'admin_user_delete';
 
 interface AuditLogParams {
   db: D1Database;

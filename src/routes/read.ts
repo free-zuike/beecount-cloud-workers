@@ -142,7 +142,7 @@ interface ReadAccountOut {
   payment_due_day: number | null;
   bank_name: string | null;
   card_last_four: string | null;
-  hidden: number | null;
+  hidden: boolean;
 }
 
 /** 分类输出 */
@@ -631,7 +631,7 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
   // 查询账本（先 external_id，再内部 id，再共享账本）
   let ledger = await db
     .prepare(
-      `SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
+      `SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day, l.user_id
        FROM ledgers l
        WHERE l.user_id = ? AND l.external_id = ?`
     )
@@ -642,6 +642,7 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
       name: string | null;
       currency: string;
       month_start_day: number;
+      user_id: string;
     }>();
 
   if (!ledger) {
@@ -1207,7 +1208,7 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
       payment_due_day: row.payment_due_day as number | null,
       bank_name: row.bank_name as string | null,
       card_last_four: row.card_last_four as string | null,
-      hidden: Boolean(row.hidden),
+      hidden: !!row.hidden,
     });
   }
 

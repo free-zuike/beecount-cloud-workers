@@ -49,7 +49,7 @@ export const authMiddleware = async (c: any, next: Next) => {
 
   // 检查用户是否存在于数据库中（数据库被删后旧 token 不能继续使用）
   try {
-    const user = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first<{ id: string }>();
+    const user = await (c.env.DB as D1Database).prepare('SELECT id FROM users WHERE id = ?').bind(userId).first<{ id: string }>();
     if (!user) {
       console.log(`[AUTH-MW] User ${userId} not found in database, rejecting token`);
       return c.json({ error: 'Unauthorized' }, 401);

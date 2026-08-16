@@ -296,6 +296,7 @@ const RemoteCreateSchema = z.object({
   config: z.record(z.any()),
   encrypted: z.boolean().optional(),
   age_passphrase: z.string().optional().nullable(),
+  encryption_password: z.string().optional().nullable(),
 });
 
 const RemoteUpdateSchema = z.object({
@@ -303,6 +304,7 @@ const RemoteUpdateSchema = z.object({
   config: z.record(z.string()).optional(),
   encrypted: z.boolean().optional(),
   age_passphrase: z.string().optional().nullable(),
+  encryption_password: z.string().optional().nullable(),
 });
 
 const RemoteTestSchema = z.object({
@@ -408,7 +410,7 @@ backupRouter.get('/rclone-config', async (c) => {
   try {
     const remotes = await db
       .prepare('SELECT id, name, backend_type, config_summary FROM backup_remotes')
-      .all();
+      .all<{ id: number; name: string; backend_type: string; config_summary: string }>();
     
     let configContent = '# BeeCount Cloud rclone configuration\n';
     configContent += '# Auto-generated - do not edit manually\n\n';
@@ -706,7 +708,7 @@ backupRouter.patch('/remotes/:id', apiValidator('json', RemoteUpdateSchema), asy
     .bind(remoteId)
     .first();
 
-  const remote = await db.prepare(`SELECT id, name, backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?`).bind(remoteId).first();
+  const remote = await db.prepare(`SELECT id, name, backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?`).bind(remoteId).first<{ id: number; name: string; backend_type: string; config_summary: string; encrypted: number }>();
   if (!remote) return c.json({ error: 'Remote not found' }, 404);
 
   // 清理旧记录中可能的错误字段（�?R2 类型的多�?bucket�?
@@ -721,7 +723,7 @@ backupRouter.patch('/remotes/:id', apiValidator('json', RemoteUpdateSchema), asy
     }
   }
   
-  if (req.age_passphrase !== undefined) {
+  if (req.age_passphrase != null) {
     configToSave.age_passphrase = req.age_passphrase;
   } else if (remote.backend_type === 'r2') {
     // R2 保留原有�?age_passphrase 不删�?
@@ -732,7 +734,7 @@ backupRouter.patch('/remotes/:id', apiValidator('json', RemoteUpdateSchema), asy
   const configHasChanged = JSON.stringify(configToSave) !== JSON.stringify(originalConfig);
 
   const updates: string[] = ['name = ?', 'updated_at = ?'];
-  const params: (string | number)[] = [req.name || remote.name, serverNow];
+  const params: unknown[] = [req.name || remote.name, serverNow];
 
   if (configHasChanged) {
     updates.push('config_summary = ?');
@@ -1527,9 +1529,9 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
   const serverNow = nowUtc();
 
   const schedule = await db
-    .prepare('SELECT id, name, user_id, remote_ids FROM backup_schedules WHERE id = ?')
+    .prepare('SELECT id, name, user_id, remote_ids, retention_days FROM backup_schedules WHERE id = ?')
     .bind(scheduleId)
-    .first<{ id: number; name: string; user_id: string; remote_ids: string }>();
+    .first<{ id: number; name: string; user_id: string; remote_ids: string; retention_days: number | null }>();
 
   if (!schedule) {
     return c.json({ error: 'Schedule not found' }, 404);
@@ -2156,7 +2158,7 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
   const restore = await db
     .prepare('SELECT * FROM backup_restores WHERE run_id = ? AND user_id = ?')
     .bind(runId, userId)
-    .first();
+    .first<{ id: number }>();
 
   if (!restore) {
     return c.json({ error: 'Restore not found' }, 404);
@@ -2165,7 +2167,7 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
   const run = await db
     .prepare('SELECT * FROM backup_runs WHERE id = ?')
     .bind(runId)
-    .first();
+    .first<{ id: number; schedule_id: number | null; backup_path: string | null; bytes_total: number | null }>();
 
   if (!run) {
     return c.json({ error: 'Backup run not found' }, 404);
@@ -2210,7 +2212,7 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
     }
 
     // 尝试从远端存储预下载（支持 S3/B2/WebDAV/OAuth2 等）
-    let preloadedData: Uint8Array | undefined;
+    let preloadedData: Uint8Array | null | undefined;
     if (backupPath && !backupPath.startsWith('backups/')) {
       // 路径不是 R2 格式，尝试从远端下载
       const target = await db.prepare(
@@ -2219,7 +2221,7 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
          WHERE brt.run_id = ? AND brt.status = 'succeeded' LIMIT 1`
       ).bind(runId).first<{ backend_type: string; config_summary: string }>();
       if (target) {
-        const config = (() => { try { return JSON.parse(target.config_summary || '{}'); } catch { return {}; } })();
+        const config = (() => { try { return JSON.parse(target.config_summary || '{}') as Record<string, string>; } catch { return {} as Record<string, string>; } })();
         const remoteConfig: Record<string, string> = { backend_type: target.backend_type, ...config };
         const { downloadBackupFile } = await import('../services/backup-executor');
         preloadedData = await downloadBackupFile(remoteConfig, backupPath);
@@ -2236,7 +2238,7 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
         type: 'restore_progress', runId: strRunId, phase: progress.phase,
         bytesTransferred: progress.bytesTransferred, bytesTotal: progress.bytesTotal,
       }).catch(() => {});
-    }, password, preloadedData);
+    }, password, preloadedData ?? undefined);
 
     const finishedAt = new Date().toISOString();
     await db.prepare(
@@ -2304,14 +2306,14 @@ backupRouter.get('/restores/:id', async (c) => {
   let restore = await db
     .prepare('SELECT * FROM backup_restores WHERE run_id = ? AND user_id = ?')
     .bind(runId, userId)
-    .first();
+    .first<{ id: number; run_id: number; status: string; created_at: string; finished_at: string | null; error_message: string | null; extracted_path: string | null }>();
 
   // 回退：按 restore record ID 查询
   if (!restore) {
     restore = await db
       .prepare('SELECT * FROM backup_restores WHERE id = ? AND user_id = ?')
       .bind(runId, userId)
-      .first();
+      .first<{ id: number; run_id: number; status: string; created_at: string; finished_at: string | null; error_message: string | null; extracted_path: string | null }>();
   }
 
   if (!restore) {
@@ -2758,7 +2760,7 @@ backupRouter.post('/restore/:runId', async (c) => {
   // 验证备份记录
   const run = await db.prepare(
     'SELECT * FROM backup_runs WHERE id = ? AND user_id = ?'
-  ).bind(runId, userId).first();
+  ).bind(runId, userId).first<{ id: number; status: string; backup_path: string; backup_filename: string | null; bytes_total: number | null; started_at: string }>();
   
   if (!run) {
     return c.json({ error: 'Backup run not found' }, 404);
@@ -2794,7 +2796,7 @@ backupRouter.post('/restore/:runId', async (c) => {
       ).bind(runId).all<{ backend_type: string; config_summary: string }>();
       
       for (const target of targets.results) {
-        const config = (() => { try { return JSON.parse(target.config_summary || '{}'); } catch { return {}; } })();
+        const config = (() => { try { return JSON.parse(target.config_summary || '{}') as Record<string, string>; } catch { return {} as Record<string, string>; } })();
         const remoteConfig: Record<string, string> = { backend_type: target.backend_type, ...config };
         backupFile = await downloadBackupFile(remoteConfig, run.backup_path);
         if (backupFile) break;
@@ -2827,7 +2829,7 @@ backupRouter.get('/restore/:runId/info', async (c) => {
   
   const run = await db.prepare(
     'SELECT * FROM backup_runs WHERE id = ? AND user_id = ?'
-  ).bind(runId, userId).first();
+  ).bind(runId, userId).first<{ id: number; status: string; backup_path: string; backup_filename: string | null; bytes_total: number | null; started_at: string }>();
   
   if (!run) {
     return c.json({ error: 'Backup run not found' }, 404);

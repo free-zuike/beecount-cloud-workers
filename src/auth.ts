@@ -204,7 +204,7 @@ export async function decodeRefreshToken(
     let scopesFromJwt: string[] | null = null;
 
     try {
-      const decoded = decodeJwtPayload(token, secret);
+      const decoded = await decodeJwtPayload(token, secret);
       if (decoded) {
         payload = decoded;
         // 只取标准 JWT 的 sub 字段

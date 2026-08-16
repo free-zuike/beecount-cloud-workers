@@ -2,8 +2,8 @@
  * Backup & Data Management Routes
  * 
  * Implements data export/import and data cleanup endpoints
-import { serverLogger } from '../lib/logger';
  */
+import { serverLogger } from '../lib/logger';
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
@@ -11,6 +11,7 @@ import { z } from 'zod';
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
+  R2?: R2Bucket;
 };
 
 type Variables = {

@@ -1438,10 +1438,6 @@ async function applyUserChangeToProjection(
     const existingAnyUser = await db.prepare(
       'SELECT user_id FROM read_category_projection WHERE sync_id = ? AND user_id != ? LIMIT 1'
     ).bind(entity_sync_id, userId).first<{ user_id: string }>();
-    if (existingAnyUser && !existingRow) {
-      serverLogger.info('src.routers.sync', '[SYNC] Skipping category creation for sync_id', entity_sync_id, '- already belongs to user', existingAnyUser.user_id);
-      return;
-    }
 
     // 合并 rename 检查和现有行查询为一次 SELECT
     const existingRow = await db.prepare(
@@ -1452,6 +1448,12 @@ async function applyUserChangeToProjection(
       custom_icon_path: string | null; icon_cloud_file_id: string | null;
       icon_cloud_sha256: string | null; parent_name: string | null; parent_sync_id: string | null;
     }>();
+
+    // 如果其他用户已有此 sync_id 且当前用户没有 → 跳过
+    if (existingAnyUser && !existingRow) {
+      serverLogger.info('src.routers.sync', '[SYNC] Skipping category creation for sync_id', entity_sync_id, '- already belongs to user', existingAnyUser.user_id);
+      return;
+    }
 
     // Rename cascade
     const newName = (payload.name as string) ?? null;

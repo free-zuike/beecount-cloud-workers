@@ -37,7 +37,7 @@ export const spaMiddleware = async (c: any, next: Next) => {
 
   if (pathname === '/' || pathname === '/app' || pathname === '/app/') {
     try {
-      const settings = await c.env.DB.prepare("SELECT setup_completed FROM system_settings WHERE id = ?").bind('default').first<{ setup_completed: number }>();
+      const settings = await (c.env.DB as D1Database).prepare("SELECT setup_completed FROM system_settings WHERE id = ?").bind('default').first<{ setup_completed: number }>();
       if (!settings || settings.setup_completed !== 1) {
         console.log('[SPA] Setup not completed, redirecting to /app/setup');
         return c.redirect('/app/setup', 302);

@@ -5,7 +5,6 @@
  * 扫描数据库中的孤立数据（没有对应 sync_changes 的 projection 记录等）。
  */
 
-import type { D1Database } from '@cloudflare/workers-types';
 import type { OrphanRecord, ScanReport } from './types';
 
 const MAX_ORPHANS = 100;

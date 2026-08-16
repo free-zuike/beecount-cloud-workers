@@ -108,7 +108,7 @@ csvRouter.get('/workspace/transactions.csv', zValidator('query', ExportQuerySche
   const db = c.env.DB;
   const q = c.req.valid('query');
 
-  const langKey = normalizeLang(q.lang);
+  const langKey = normalizeLang(q.lang ?? null);
   const headers = CSV_HEADERS[langKey];
   const typeLabels = TX_TYPE_LABELS[langKey];
 

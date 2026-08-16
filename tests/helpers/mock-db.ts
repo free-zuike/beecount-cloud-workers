@@ -20,7 +20,7 @@ function resetAutoIncrement() {
 }
 
 class InMemoryDB {
-  private tables: Map<string, Row[]> = new Map();
+  public tables: Map<string, Row[]> = new Map();
 
   getTable(name: string): Row[] {
     if (!this.tables.has(name)) {

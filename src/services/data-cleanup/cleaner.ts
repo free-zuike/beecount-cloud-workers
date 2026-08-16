@@ -5,7 +5,6 @@
  * 逐条清理孤立数据，避免长事务持锁。
  */
 
-import type { D1Database } from '@cloudflare/workers-types';
 import type { CleanupRecord, CleanupResult } from './types';
 
 /**

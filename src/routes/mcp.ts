@@ -579,7 +579,7 @@ async function checkAuth(c: any): Promise<Response | null> {
   if (h.startsWith('Bearer ')) t = h.slice(7); else return new Response('Invalid authorization format', { status: 401, headers: { 'Content-Type': 'text/plain' } });
   if (!t.startsWith('bcmcp_')) return new Response('Invalid PAT token format', { status: 401, headers: { 'Content-Type': 'text/plain' } });
   const hh = await hashToken(t);
-  const p = await c.env.DB.prepare(`SELECT id, user_id, name, scopes_json, expires_at FROM personal_access_tokens WHERE token_hash = ? AND revoked_at IS NULL`).bind(hh).first<{ id: string; user_id: string; name: string; scopes_json: string; expires_at: string | null }>();
+  const p = await (c.env.DB as D1Database).prepare(`SELECT id, user_id, name, scopes_json, expires_at FROM personal_access_tokens WHERE token_hash = ? AND revoked_at IS NULL`).bind(hh).first<{ id: string; user_id: string; name: string; scopes_json: string; expires_at: string | null }>();
   if (!p) return new Response('Invalid PAT token', { status: 401, headers: { 'Content-Type': 'text/plain' } });
   if (p.expires_at && p.expires_at < nowUtc()) return new Response('PAT token expired', { status: 401, headers: { 'Content-Type': 'text/plain' } });
   c.set('userId', p.user_id); c.set('patId', p.id); c.set('patPrefix', t.substring(0, 14)); c.set('patName', p.name);

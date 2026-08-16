@@ -3,11 +3,14 @@ import { Hono } from 'hono';
 import { createMockDB } from '../helpers/mock-db';
 import { createAccessToken, validateAccessToken } from '../../src/auth';
 
+type TestEnv = { DB: D1Database; JWT_SECRET: string };
+type AppT = { Bindings: TestEnv; Variables: { userId: string } };
+
 describe('Debug env', () => {
   it('c.env from middleware works', async () => {
     const JWT_SECRET = 'test-secret';
     const db = createMockDB();
-    const app = new Hono();
+    const app = new Hono<AppT>();
 
     app.use('*', async (c, next) => {
       c.env = { DB: db, JWT_SECRET } as any;
@@ -19,8 +22,8 @@ describe('Debug env', () => {
       return c.json({ secret });
     });
 
-    const res = await app.request('/test');
-    const body = await res.json();
+    const res: Response = await app.request('/test');
+    const body: Record<string, unknown> = await res.json();
     console.log('env from middleware:', JSON.stringify(body));
     expect(body.secret).toBe(JWT_SECRET);
   });
@@ -37,15 +40,15 @@ describe('Debug env', () => {
   it('env via app.request third arg', async () => {
     const JWT_SECRET = 'test-secret';
     const db = createMockDB();
-    const app = new Hono();
+    const app = new Hono<AppT>();
 
     app.get('/test', async (c) => {
       const secret = c.env?.JWT_SECRET;
       return c.json({ secret });
     });
 
-    const res = await app.request('/test', undefined, { DB: db, JWT_SECRET } as any);
-    const body = await res.json();
+    const res: Response = await app.request('/test', undefined, { DB: db, JWT_SECRET } as any);
+    const body: Record<string, unknown> = await res.json();
     console.log('env from 3rd arg:', JSON.stringify(body));
     expect(body.secret).toBe(JWT_SECRET);
   });
@@ -53,7 +56,7 @@ describe('Debug env', () => {
   it('full auth middleware chain', async () => {
     const JWT_SECRET = 'test-secret';
     const db = createMockDB();
-    const app = new Hono();
+    const app = new Hono<AppT>();
 
     app.use('*', async (c, next) => {
       c.env = { DB: db, JWT_SECRET } as any;
@@ -79,10 +82,10 @@ describe('Debug env', () => {
     });
 
     const token = await createAccessToken('test-user', JWT_SECRET);
-    const res = await app.request('/protected', {
+    const res: Response = await app.request('/protected', {
       headers: { Authorization: `Bearer ${token}` },
     });
-    const body = await res.json();
+    const body: Record<string, unknown> = await res.json();
     console.log('auth chain result:', JSON.stringify(body));
     expect(res.status).toBe(200);
     expect(body.userId).toBe('test-user');
