@@ -276,7 +276,9 @@ app.route('/backup', backupRouter);
 app.route('/export', csvRouter);
 
 app.onError((err, c) => {
-  console.error('[ERROR]', err.message);
+  try {
+    serverLogger.error('app', `[ERROR] ${c.req.method} ${c.req.path} → ${err.message}\n${err.stack ?? ''}`);
+  } catch { console.error('[ERROR]', err.message); }
   const requestId = c.req.header('cf-ray') || '';
   return c.json({
     error: {
