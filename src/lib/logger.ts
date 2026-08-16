@@ -18,7 +18,7 @@ interface LogEntry {
   device_id?: string;
 }
 
-function writeLog(entry: LogEntry) {
+function writeLog(entry: LogEntry): Promise<void> {
   const prefix = `[${entry.level}] [${entry.logger}]`;
   switch (entry.level) {
     case 'ERROR': case 'CRITICAL': console.error(prefix, entry.message); break;
@@ -26,7 +26,7 @@ function writeLog(entry: LogEntry) {
     default: console.log(prefix, entry.message);
   }
   if (_db) {
-    _db.prepare(
+    return _db.prepare(
       `INSERT INTO audit_logs (user_id, ledger_id, action, level, logger, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).bind(
@@ -37,8 +37,9 @@ function writeLog(entry: LogEntry) {
       entry.logger,
       null,
       new Date().toISOString(),
-    ).run().catch(() => {});
+    ).run().then(() => {}).catch(() => {});
   }
+  return Promise.resolve();
 }
 
 export const serverLogger = {
@@ -51,7 +52,7 @@ export const serverLogger = {
     const last = body[body.length - 1];
     const meta = last && typeof last === 'object' && !(last instanceof Error) ? last as { user_id?: string; ledger_id?: string } : undefined;
     const message = last && (last instanceof Error || typeof last === 'object') && meta === undefined ? body.map(stringifyArg).join(' ') : args.slice(1, meta ? -1 : undefined).map(stringifyArg).join(' ');
-    writeLog({ level: 'ERROR', logger, message, ...(meta ?? {}) });
+    return writeLog({ level: 'ERROR', logger, message, ...(meta ?? {}) });
   },
 };
 

@@ -346,7 +346,7 @@ export default {
     const elapsed = Date.now() - start;
     ctx.waitUntil((async () => {
       try {
-        serverLogger.info('beecount.access', `${request.method} ${url.pathname} → ${response.status} ${elapsed}ms`);
+        await serverLogger.info('beecount.access', `${request.method} ${url.pathname} → ${response.status} ${elapsed}ms`);
       } catch { /* 日志失败不阻塞 */ }
     })());
     return response;
