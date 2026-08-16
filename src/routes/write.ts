@@ -143,9 +143,8 @@ function safeJsonStringify(obj: unknown): string {
   return JSON.stringify(obj);
 }
 
-/** 查找账本：先试 external_id，再试内部 id，支持共享账本（通过 ledger_members） */
+/** 查找账本：JOIN ledger_members 支持共享账本，只查 external_id（对齐原版 get_accessible_ledger_by_external_id） */
 async function findLedger(db: D1Database, userId: string, ledgerId: string): Promise<{ id: string; external_id: string } | null> {
-  // 与原版 get_accessible_ledger_by_external_id 一致：JOIN ledger_members，只查 external_id
   const row = await db.prepare(
     `SELECT l.id, l.external_id FROM ledgers l
      JOIN ledger_members lm ON l.id = lm.ledger_id
@@ -550,7 +549,6 @@ writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaU
  * 删除交易
  */
 writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', WriteBaseSchema), async (c) => {
-  serverLogger.info('src.routers.write', '[WRITE] DELETE /ledgers/:ledgerId/transactions/:id matched, url:', c.req.url);
   const userId = c.get('userId');
   const db = c.env.DB;
   const txSyncId = c.req.param('id');

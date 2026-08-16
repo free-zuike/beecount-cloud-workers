@@ -463,7 +463,7 @@ readRouter.get('/workspace/transactions', async (c) => {
 
   await ensureTxProjectionSynced(db, userId);
 
-  let query = 'SELECT * FROM read_tx_projection';
+  let query = 'SELECT rt.*, l.external_id AS ledger_external_id FROM read_tx_projection rt LEFT JOIN ledgers l ON rt.ledger_id = l.id';
   const bindings: (string | number)[] = [];
 
   if (ledgerId) {
@@ -479,13 +479,13 @@ readRouter.get('/workspace/transactions', async (c) => {
         .first<{ id: string }>();
     }
     if (ledger) {
-      query += ' WHERE ledger_id = ?';
+      query += ' WHERE rt.ledger_id = ?';
       bindings.push(ledger.id);
     } else {
       return c.json({ items: [], total: 0, limit, offset });
     }
   } else {
-    query += ' WHERE user_id = ?';
+    query += ' WHERE rt.user_id = ?';
     bindings.push(userId);
 
     // 无 ledgerId 过滤时，查询用户可访问的所有账本
@@ -498,65 +498,65 @@ readRouter.get('/workspace/transactions', async (c) => {
       return c.json({ rows: [], total: 0 });
     }
     const ids = accessibleIds.results.map(r => r.id);
-    query += ` AND ledger_id IN (${ids.map(() => '?').join(',')})`;
+    query += ` AND rt.ledger_id IN (${ids.map(() => '?').join(',')})`;
     bindings.push(...ids);
   }
 
   if (dateFrom) {
-    query += ' AND happened_at >= ?';
+    query += ' AND rt.happened_at >= ?';
     bindings.push(dateFrom);
   }
 
   if (dateTo) {
-    query += ' AND happened_at < ?';
+    query += ' AND rt.happened_at < ?';
     bindings.push(dateTo);
   }
 
   if (filterUserId) {
-    query += ' AND user_id = ?';
+    query += ' AND rt.user_id = ?';
     bindings.push(filterUserId);
   }
   if (txType) {
-    query += ' AND tx_type = ?';
+    query += ' AND rt.tx_type = ?';
     bindings.push(txType);
   }
   if (categorySyncId) {
-    query += ' AND category_sync_id = ?';
+    query += ' AND rt.category_sync_id = ?';
     bindings.push(categorySyncId);
   }
   if (accountSyncId) {
-    query += ' AND account_sync_id = ?';
+    query += ' AND rt.account_sync_id = ?';
     bindings.push(accountSyncId);
   }
   if (amountMin !== null) {
-    query += ' AND amount >= ?';
+    query += ' AND rt.amount >= ?';
     bindings.push(amountMin);
   }
   if (amountMax !== null) {
-    query += ' AND amount <= ?';
+    query += ' AND rt.amount <= ?';
     bindings.push(amountMax);
   }
   if (q) {
-    query += ' AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ? OR from_account_name LIKE ? OR to_account_name LIKE ? OR tags_csv LIKE ?)';
+    query += ' AND (rt.note LIKE ? OR rt.category_name LIKE ? OR rt.account_name LIKE ? OR rt.from_account_name LIKE ? OR rt.to_account_name LIKE ? OR rt.tags_csv LIKE ?)';
     const like = `%${q}%`;
     bindings.push(like, like, like, like, like, like);
   }
   if (txSyncId) {
-    query += ' AND sync_id = ?';
+    query += ' AND rt.sync_id = ?';
     bindings.push(txSyncId);
   }
   if (tagSyncId) {
-    query += ' AND tag_sync_ids_json LIKE ? ESCAPE ?';
+    query += ' AND rt.tag_sync_ids_json LIKE ? ESCAPE ?';
     const escapedTag = tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_');
     bindings.push(`%"${escapedTag}"%`, '\\');
   }
   if (accountName) {
-    query += ` AND (account_name LIKE ? OR from_account_name LIKE ? OR to_account_name LIKE ?)`;
+    query += ` AND (rt.account_name LIKE ? OR rt.from_account_name LIKE ? OR rt.to_account_name LIKE ?)`;
     const pattern = `%${accountName}%`;
     bindings.push(pattern, pattern, pattern);
   }
 
-  query += ' ORDER BY happened_at DESC LIMIT ? OFFSET ?';
+  query += ' ORDER BY rt.happened_at DESC LIMIT ? OFFSET ?';
   bindings.push(limit, offset);
 
   const rows = await db.prepare(query).bind(...bindings).all<Record<string, unknown>>();
@@ -575,7 +575,7 @@ readRouter.get('/workspace/transactions', async (c) => {
     return {
       id: (row.id as string) || (row.sync_id as string),
       sync_id: row.sync_id as string,
-      ledger_id: row.ledger_id as string,
+      ledger_id: (row.ledger_external_id as string) || (row.ledger_id as string),
       tx_type: row.tx_type as string,
       amount: row.amount as number,
       currency_code: (row.currency_code as string) ?? null,
