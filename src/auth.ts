@@ -2,37 +2,92 @@ import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 
 const JWT_ALG = 'HS256';
-const PBKDF2_ITERATIONS = 26000;
+// 对齐原版 passlib pbkdf2_sha256 默认 rounds（passlib 1.7: 29000）
+const PBKDF2_ITERATIONS = 29000;
+// 对齐原版 passlib 默认 salt 长度（16 字节）
+const SALT_BYTES = 16;
 
-async function pbkdf2Sha256(password: string, salt: string): Promise<string> {
+/** passlib ab64 编码：标准 base64 `+` → `.`，无 padding。 */
+function ab64Encode(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary)
+    .replace(/\+/g, '.')
+    .replace(/=+$/, '');
+}
+
+/** passlib ab64 解码：`.` → `+`，补 padding 后标准 base64 解码。 */
+function ab64Decode(str: string): Uint8Array | null {
+  try {
+    const base64 = str.replace(/\./g, '+');
+    let padded = base64;
+    while (padded.length % 4) padded += '=';
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+function hexToBytes(hex: string): Uint8Array | null {
+  if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2 !== 0) return null;
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+// 兼容旧格式检测：我们此前的实现是 `$pbkdf2-sha256$<rounds>$<16位hex盐>$<64位hex哈希>`。
+// passlib 原生格式：`$pbkdf2-sha256$<rounds>$<22位ab64盐>$<43位ab64哈希>`。
+function isLegacyHexPbkdf2(hash: string): boolean {
+  const parts = hash.split('$');
+  if (parts.length !== 5 || parts[1] !== 'pbkdf2-sha256') return false;
+  return /^[0-9a-f]{16}$/i.test(parts[3]) && /^[0-9a-f]{64}$/i.test(parts[4]);
+}
+
+async function pbkdf2Sha256(password: string, salt: Uint8Array, iterations: number): Promise<Uint8Array> {
   const encoder = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
     'raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']
   );
   const derivedBits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(salt), iterations: PBKDF2_ITERATIONS },
+    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations },
     keyMaterial, 256
   );
-  const hash = Array.from(new Uint8Array(derivedBits)).map(b => b.toString(16).padStart(2, '0')).join('');
-  return `$pbkdf2-sha256$${PBKDF2_ITERATIONS}$${salt}$${hash}`;
+  return new Uint8Array(derivedBits);
 }
 
 async function verifyPbkdf2Sha256(hash: string, password: string): Promise<boolean> {
   const parts = hash.split('$');
-  if (parts.length < 5) return false;
-  const iterations = parseInt(parts[2]);
-  const salt = parts[3];
-  const storedHash = parts[4];
-  if (!storedHash) return false;
-  const computed = await pbkdf2Sha256(password, salt);
-  const a = new TextEncoder().encode(storedHash);
-  const b = new TextEncoder().encode(computed.split('$')[4]);
+  if (parts.length !== 5 || parts[1] !== 'pbkdf2-sha256') return false;
+  const iterations = parseInt(parts[2], 10);
+  if (!Number.isFinite(iterations) || iterations <= 0) return false;
+
+  let salt: Uint8Array | null;
+  let storedHash: Uint8Array | null;
+  if (isLegacyHexPbkdf2(hash)) {
+    salt = hexToBytes(parts[3]);
+    storedHash = hexToBytes(parts[4]);
+  } else {
+    salt = ab64Decode(parts[3]);
+    storedHash = ab64Decode(parts[4]);
+  }
+  if (!salt || !storedHash) return false;
+
+  const computed = await pbkdf2Sha256(password, salt, iterations);
+  const a = computed;
+  const b = storedHash;
   return a.length === b.length && await crypto.subtle.timingSafeEqual(a, b);
 }
 
 export async function hashPassword(password: string): Promise<string> {
-  const salt = randomUUID().replace(/-/g, '').substring(0, 16);
-  return await pbkdf2Sha256(password, salt);
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
+  const digest = await pbkdf2Sha256(password, salt, PBKDF2_ITERATIONS);
+  // passlib pbkdf2_sha256 格式：$pbkdf2-sha256$rounds$ab64_salt$ab64_checksum
+  return `$pbkdf2-sha256$${PBKDF2_ITERATIONS}$${ab64Encode(salt)}$${ab64Encode(digest)}`;
 }
 
 export async function verifyPassword(
@@ -49,9 +104,9 @@ export async function verifyPassword(
   }
 }
 
-/** 检查密码哈希是否是旧格式（bcrypt），需要迁移 */
+/** 检查密码哈希是否需要迁移到 passlib pbkdf2 格式（bcrypt 旧格式 或 我们此前的 hex pbkdf2）。 */
 export function isLegacyPasswordHash(hash: string): boolean {
-  return hash.startsWith('$2b$') || hash.startsWith('$2a$');
+  return hash.startsWith('$2b$') || hash.startsWith('$2a$') || isLegacyHexPbkdf2(hash);
 }
 
 function base64urlEncode(str: string): string {

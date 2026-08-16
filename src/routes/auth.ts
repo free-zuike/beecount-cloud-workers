@@ -256,7 +256,7 @@ authRouter.post('/login', zValidator('json', z.object({
     return c.json({ error: 'Invalid credentials' }, 401);
   }
 
-  // 自动迁移旧 bcrypt 哈希到 pbkdf2_sha256
+  // 自动迁移旧密码哈希（bcrypt / 旧 hex pbkdf2-26000）到 passlib 兼容格式
   if (isLegacyPasswordHash(user.password_hash)) {
     const newHash = await hashPassword(password);
     await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(newHash, user.id).run();
