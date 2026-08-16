@@ -75,6 +75,30 @@ app.use('*', async (c, next) => {
 
 app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
+// OAuth 2.0 Protected Resource Metadata (RFC 9728) — MCP 客户端（Claude /
+// Cursor / Cline）连接前会探测此端点。我们只有静态 PAT、无 OAuth server，
+// 所以声明 authorization_servers=[] + bearer header，让客户端走 Bearer 鉴权。
+// 该端点必须存在且是可解析 JSON，否则 SDK 握手会因 schema 不匹配报错。
+app.get('/.well-known/oauth-protected-resource', (c) => {
+  const base = new URL(c.req.url).origin;
+  return c.json({
+    resource: `${base}/api/v1/mcp`,
+    authorization_servers: [],
+    bearer_methods_supported: ['header'],
+    resource_documentation: 'https://github.com/free-zuike/beecount-cloud-workers',
+  });
+});
+// 部分 SDK 会按 oauth-protected-resource/<resource_path> 形式探测，同样返回
+app.get('/.well-known/oauth-protected-resource/{path:path}', (c) => {
+  const base = new URL(c.req.url).origin;
+  return c.json({
+    resource: `${base}/api/v1/mcp`,
+    authorization_servers: [],
+    bearer_methods_supported: ['header'],
+    resource_documentation: 'https://github.com/free-zuike/beecount-cloud-workers',
+  });
+});
+
 // ---- 公共路由（无需鉴权）----
 app.route('/api/v1/setup', setupRouter);
 app.route('/api/v1/auth', authRouter);
