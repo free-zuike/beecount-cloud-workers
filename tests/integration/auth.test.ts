@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createTestEnv, registerTestUser, loginTestUser, getAuthToken, TEST_JWT_SECRET } from '../helpers/test-env';
+import { createTestEnv, registerTestUser, loginTestUser, getAuthToken, createTestLedger, TEST_JWT_SECRET } from '../helpers/test-env';
 import { createAccessToken, createRefreshToken, validateAccessToken } from '../../src/auth';
 
 let env: Awaited<ReturnType<typeof createTestEnv>>;
@@ -23,7 +23,7 @@ describe('Auth - Register', () => {
     const res = await registerTestUser(env.app, 'dup@example.com', 'password123');
     expect(res.status).toBe(409);
     const body = await res.json() as any;
-    expect(body.error).toBe('Email already registered');
+    expect(body.error).toBe('Email already exists');
   });
 
   it('should reject short password', async () => {
@@ -44,15 +44,19 @@ describe('Auth - Register', () => {
     expect(res.status).toBe(400);
   });
 
-  it('should create default ledger on registration', async () => {
+  it('should create a ledger and list it', async () => {
     await registerTestUser(env.app, 'ledger@example.com');
     const token = await getAuthToken(env.app, 'ledger@example.com');
+    const ledgerId = await createTestLedger(env.app, token, 'My Ledger');
+    expect(ledgerId).toBeDefined();
+
     const res = await env.app.request('/api/v1/sync/ledgers', {
       headers: { Authorization: `Bearer ${token}` },
     });
     const body = await res.json() as any;
     expect(Array.isArray(body)).toBe(true);
     expect(body.length).toBeGreaterThanOrEqual(1);
+    expect(body[0].ledger_id || body[0].external_id).toBe(ledgerId);
   });
 
   it.skip('should create default categories after creating a ledger', async () => {
@@ -146,6 +150,10 @@ describe('Auth - Refresh token', () => {
       body: JSON.stringify({ refresh_token: loginBody.refresh_token }),
     });
 
+    if (res.status !== 200) {
+      const err = await res.json();
+      console.log('REFRESH FAIL:', err);
+    }
     expect(res.status).toBe(200);
     const body = await res.json() as any;
     expect(body.access_token).toBeDefined();

@@ -48,4 +48,30 @@ export async function getAuthToken(
   return body.access_token;
 }
 
+export async function createTestLedger(
+  app: ReturnType<typeof createTestApp>,
+  token: string,
+  name: string = 'Test Ledger',
+  currency: string = 'CNY'
+): Promise<string> {
+  const res = await app.request('/api/v1/write/ledgers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ ledger_name: name, currency }),
+  });
+  const body = await res.json() as any;
+  const ledgerId = body.ledger_id;
+  // push 一条最小 sync_change 使 sync/ledgers 能识别到该账本
+  await app.request('/api/v1/sync/push', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Device-ID': 'test-device-001' },
+    body: JSON.stringify({ device_id: 'test-device-001', changes: [{
+      ledger_id: ledgerId, entity_type: 'ledger', entity_sync_id: ledgerId,
+      action: 'upsert', payload: { name, currency },
+      updated_at: new Date().toISOString(),
+    }] }),
+  });
+  return ledgerId;
+}
+
 export { createMockDB, resetDB, getTable };

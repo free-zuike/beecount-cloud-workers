@@ -1,17 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { createTestEnv, registerTestUser, getAuthToken } from '../helpers/test-env';
+import { createTestEnv, registerTestUser, getAuthToken, createTestLedger } from '../helpers/test-env';
 
 describe('SQL Debug', () => {
   it('pull query with JOIN', async () => {
     const env = await createTestEnv();
     await registerTestUser(env.app, 'sql@example.com');
     const token = await getAuthToken(env.app, 'sql@example.com');
-
-    const ledgerRes = await env.app.request('/api/v1/sync/ledgers', {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const ledgerBody = await ledgerRes.json() as any;
-    const ledgerId = ledgerBody[0].ledger_id;
+    const ledgerId = await createTestLedger(env.app, token, 'SQL Debug Ledger');
 
     // Push a change
     await env.app.request('/api/v1/sync/push', {
@@ -53,12 +48,7 @@ describe('SQL Debug', () => {
     const env = await createTestEnv();
     await registerTestUser(env.app, 'cat@example.com');
     const token = await getAuthToken(env.app, 'cat@example.com');
-
-    const ledgerRes = await env.app.request('/api/v1/sync/ledgers', {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const ledgerBody = await ledgerRes.json() as any;
-    const ledgerId = ledgerBody[0].ledger_id;
+    const ledgerId = await createTestLedger(env.app, token, 'Cat Debug Ledger');
 
     // Check projection table
     const { getTable } = await import('../helpers/mock-db');
@@ -79,15 +69,10 @@ describe('SQL Debug', () => {
     const env = await createTestEnv();
     await registerTestUser(env.app, 'acct@example.com');
     const token = await getAuthToken(env.app, 'acct@example.com');
-
-    const ledgerRes = await env.app.request('/api/v1/sync/ledgers', {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const ledgerBody = await ledgerRes.json() as any;
-    const ledgerId = ledgerBody[0].ledger_id;
+    const ledgerId = await createTestLedger(env.app, token, 'Acct Debug Ledger');
 
     // Create account via write endpoint
-    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/accounts', {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/accounts`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

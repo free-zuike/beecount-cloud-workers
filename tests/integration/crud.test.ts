@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createTestEnv, registerTestUser, getAuthToken } from '../helpers/test-env';
+import { createTestEnv, registerTestUser, getAuthToken, createTestLedger } from '../helpers/test-env';
 
 let env: Awaited<ReturnType<typeof createTestEnv>>;
 let token: string;
@@ -9,17 +9,12 @@ beforeEach(async () => {
   env = await createTestEnv();
   await registerTestUser(env.app, 'crud@example.com');
   token = await getAuthToken(env.app, 'crud@example.com');
-
-  const ledgerRes = await env.app.request('/api/v1/sync/ledgers', {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const ledgerBody = await ledgerRes.json() as any;
-  ledgerId = ledgerBody[0].ledger_id;
+  ledgerId = await createTestLedger(env.app, token, 'CRUD Test Ledger');
 });
 
 describe('CRUD - Transactions', () => {
   it('should create a transaction via write endpoint', async () => {
-    const res = await env.app.request('/api/v1/write/ledgers/${ledgerId}/transactions', {
+    const res = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/transactions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -44,7 +39,7 @@ describe('CRUD - Transactions', () => {
 
   it.skip('should update a transaction', async () => {
     // Skipped: mock DB UPDATE with complex WHERE clause needs improvement
-    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/transactions', {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/transactions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -77,7 +72,7 @@ describe('CRUD - Transactions', () => {
   });
 
   it('should delete a transaction', async () => {
-    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/transactions', {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/transactions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -109,7 +104,7 @@ describe('CRUD - Transactions', () => {
 
 describe('CRUD - Accounts', () => {
   it('should create an account', async () => {
-    const res = await env.app.request('/api/v1/write/ledgers/${ledgerId}/accounts', {
+    const res = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/accounts`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -129,7 +124,7 @@ describe('CRUD - Accounts', () => {
   });
 
   it('should update an account', async () => {
-    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/accounts', {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/accounts`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -159,7 +154,7 @@ describe('CRUD - Accounts', () => {
   });
 
   it('should delete an account', async () => {
-    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/accounts', {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/accounts`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -188,7 +183,7 @@ describe('CRUD - Accounts', () => {
 
 describe('CRUD - Categories', () => {
   it('should create a category', async () => {
-    const res = await env.app.request('/api/v1/write/ledgers/${ledgerId}/categories', {
+    const res = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/categories`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -209,7 +204,7 @@ describe('CRUD - Categories', () => {
   });
 
   it('should update a category', async () => {
-    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/categories', {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/categories`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -239,7 +234,7 @@ describe('CRUD - Categories', () => {
   });
 
   it('should delete a category', async () => {
-    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/categories', {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/categories`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -268,7 +263,7 @@ describe('CRUD - Categories', () => {
 
 describe('CRUD - Tags', () => {
   it('should create a tag', async () => {
-    const res = await env.app.request('/api/v1/write/ledgers/${ledgerId}/tags', {
+    const res = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/tags`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -286,7 +281,7 @@ describe('CRUD - Tags', () => {
   });
 
   it('should update a tag', async () => {
-    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/tags', {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/tags`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -315,7 +310,7 @@ describe('CRUD - Tags', () => {
   });
 
   it('should delete a tag', async () => {
-    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/tags', {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/tags`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -343,7 +338,7 @@ describe('CRUD - Tags', () => {
 
 describe('CRUD - Budgets', () => {
   it('should create a budget', async () => {
-    const res = await env.app.request('/api/v1/write/ledgers/${ledgerId}/budgets', {
+    const res = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/budgets`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -364,7 +359,7 @@ describe('CRUD - Budgets', () => {
   });
 
   it('should update a budget', async () => {
-    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/budgets', {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/budgets`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -397,7 +392,7 @@ describe('CRUD - Budgets', () => {
   });
 
   it('should delete a budget', async () => {
-    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/budgets', {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/budgets`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -466,7 +461,7 @@ describe('CRUD - Ledger', () => {
 
 describe('CRUD - Projection verification', () => {
   it('should have transaction in read projection after creation', async () => {
-    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/transactions', {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/transactions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -497,7 +492,7 @@ describe('CRUD - Projection verification', () => {
 
   it.skip('should have account in read projection after creation', async () => {
     // Skipped: mock DB projection refresh needs improvement
-    const createRes = await env.app.request('/api/v1/write/ledgers/${ledgerId}/accounts', {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/accounts`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

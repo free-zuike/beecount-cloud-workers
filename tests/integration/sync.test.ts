@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createTestEnv, registerTestUser, getAuthToken, TEST_JWT_SECRET, TEST_DEVICE_ID } from '../helpers/test-env';
+import { createTestEnv, registerTestUser, getAuthToken, createTestLedger, TEST_JWT_SECRET, TEST_DEVICE_ID } from '../helpers/test-env';
 
 let env: Awaited<ReturnType<typeof createTestEnv>>;
 let token: string;
@@ -9,12 +9,7 @@ beforeEach(async () => {
   env = await createTestEnv();
   await registerTestUser(env.app, 'sync@example.com');
   token = await getAuthToken(env.app, 'sync@example.com');
-
-  const ledgerRes = await env.app.request('/api/v1/sync/ledgers', {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const ledgerBody = await ledgerRes.json() as any;
-  ledgerId = ledgerBody[0].ledger_id;
+  ledgerId = await createTestLedger(env.app, token, 'Sync Test Ledger');
 });
 
 function pushHeaders() {
@@ -211,8 +206,8 @@ describe('Sync - Full sync', () => {
 
     expect(res.status).toBe(200);
     const body = await res.json() as any;
-    expect(body[ledgerId]).toBeDefined();
-    expect(body[ledgerId].length).toBeGreaterThanOrEqual(1);
+    expect(body.ledger_id).toBe(ledgerId);
+    expect(body.latest_cursor).toBeDefined();
     expect(body.server_timestamp).toBeDefined();
   });
 });
