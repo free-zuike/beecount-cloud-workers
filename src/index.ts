@@ -341,8 +341,10 @@ export default {
         const doId = env.BEECOUNT_DO.idFromName(`ws-${userId}`);
         const doStub = env.BEECOUNT_DO.get(doId);
 
+        serverLogger.info('beecount.access', `WS ${url.pathname} → upgrade 200`);
         return doStub.fetch(request);
       } catch (error) {
+        serverLogger.error('beecount.access', `WS ${url.pathname} → upgrade 500`);
         return new Response(JSON.stringify({ error: 'WebSocket failed' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
       }
     }
