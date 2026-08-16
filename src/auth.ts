@@ -31,15 +31,6 @@ function ab64Decode(str: string): Uint8Array | null {
   }
 }
 
-function hexToBytes(hex: string): Uint8Array | null {
-  if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2 !== 0) return null;
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
-}
-
 // 兼容旧格式检测：我们此前的实现是 `$pbkdf2-sha256$<rounds>$<16位hex盐>$<64位hex哈希>`。
 // passlib 原生格式：`$pbkdf2-sha256$<rounds>$<22位ab64盐>$<43位ab64哈希>`。
 function isLegacyHexPbkdf2(hash: string): boolean {
@@ -78,15 +69,19 @@ async function verifyPbkdf2Sha256(hash: string, password: string): Promise<boole
   const iterations = parseInt(parts[2], 10);
   if (!Number.isFinite(iterations) || iterations <= 0) return false;
 
-  let salt: Uint8Array | null;
-  let storedHash: Uint8Array | null;
   if (isLegacyHexPbkdf2(hash)) {
-    salt = hexToBytes(parts[3]);
-    storedHash = hexToBytes(parts[4]);
-  } else {
-    salt = ab64Decode(parts[3]);
-    storedHash = ab64Decode(parts[4]);
+    // 旧格式（26000 rounds 时代）：salt 是 **16 hex 字符的文本**，直接按 UTF-8
+    // 编码当 PBKDF2 salt 字节；校验和是 hex 字符串。必须按当时的逻辑算，
+    // 否则（把 hex 文本解码成二进制）算出的摘要不匹配 → 老用户永远登录失败。
+    const saltText = new TextEncoder().encode(parts[3]);
+    const storedHex = parts[4];
+    const computed = await pbkdf2Sha256(password, saltText, iterations);
+    const computedHex = Array.from(computed).map(b => b.toString(16).padStart(2, '0')).join('');
+    return timingSafeEqualBytes(new TextEncoder().encode(computedHex), new TextEncoder().encode(storedHex));
   }
+
+  const salt = ab64Decode(parts[3]);
+  const storedHash = ab64Decode(parts[4]);
   if (!salt || !storedHash) return false;
 
   const computed = await pbkdf2Sha256(password, salt, iterations);

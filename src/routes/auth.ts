@@ -253,10 +253,6 @@ authRouter.post('/login', zValidator('json', z.object({
 
   const passwordValid = await verifyPassword(user.password_hash, password);
   if (!passwordValid) {
-    // [TEMPORARY DIAGNOSTIC] 排查登录失败：打印哈希格式特征，定位后移除
-    const h = String(user.password_hash ?? '');
-    serverLogger.info('auth.login.diag',
-      `LOGIN_FAIL hash_prefix=${h.slice(0, 30)} hash_len=${h.length} starts_pbkdf2=${h.startsWith('$pbkdf2-sha256$')} starts_bcrypt=${h.startsWith('$2')} email_norm_ok=true`);
     return c.json({ error: 'Invalid credentials' }, 401);
   }
 
