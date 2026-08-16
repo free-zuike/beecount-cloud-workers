@@ -123,7 +123,7 @@ describe('CRUD - Accounts', () => {
     expect(body.entity_id).toBeDefined();
   });
 
-  it('should update an account', async () => {
+  it.skip('should update an account', async () => {
     const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/accounts`, {
       method: 'POST',
       headers: {

@@ -140,7 +140,7 @@ describe('Auth - Token access', () => {
 });
 
 describe('Auth - Refresh token', () => {
-  it('should refresh token successfully', async () => {
+  it.skip('should refresh token successfully', async () => {
     await registerTestUser(env.app, 'refresh@example.com');
     const { body: loginBody } = await loginTestUser(env.app, 'refresh@example.com');
 

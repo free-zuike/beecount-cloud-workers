@@ -114,6 +114,11 @@ class InMemoryDB {
     }
 
     table.push(row);
+    // sync_changes 的 change_id 是 auto-increment，INSERT 不显式传该列，
+    // 但后续 SELECT MAX(change_id) 需要行里有这个值。把 last_row_id 也写进去。
+    if (tableName === 'sync_changes') {
+      row['change_id'] = autoIncrementId;
+    }
     return { success: true, meta: { last_row_id: autoIncrementId++, changes: 1 }, results: [] };
   }
 
@@ -397,7 +402,13 @@ class InMemoryDB {
     const inMatch = condition.match(/(.+?)\s+IN\s*\((.+)\)/i);
     if (inMatch) {
       const leftVal = this.resolveColValue(row, inMatch[1]);
-      const valsStr = inMatch[2];
+      const valsStr = inMatch[2].trim();
+      // 支持 IN (SELECT ...) 子查询
+      if (valsStr.toUpperCase().startsWith('SELECT')) {
+        const subResult = this.handleSelect(valsStr, params);
+        const vals = subResult.results.map(r => Object.values(r)[0]);
+        return vals.includes(leftVal as string);
+      }
       const vals = valsStr.split(',').map(v => {
         const trimmed = v.trim();
         if (trimmed === '?') return params[paramIdx.current++];
