@@ -393,30 +393,8 @@ const handleUpload = async (c: any) => {
             .bind(fileId, ledger.id, userId, sha256Hash, size, mimeType, actualFileName, storageKey, now)
             .run();
 
-        // 写入 sync_changes 以便 APP 能同步附件信息
-        await db
-            .prepare(
-                `INSERT INTO sync_changes
-                 (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-            )
-            .bind(
-                userId,
-                ledger.id,
-                'attachment',
-                fileId,
-                'upsert',
-                JSON.stringify({
-                    file_id: fileId,
-                    sha256: sha256Hash,
-                    size: size,
-                    mime_type: mimeType,
-                    file_name: actualFileName,
-                }),
-                now,
-                userId
-            )
-            .run();
+        // 对齐原版：附件不写 sync_changes（App 不识别 attachment 实体类型，
+        // 附件信息通过交易 payload 的 attachments 字段同步）
 
         const response = {
             file_id: fileId,
@@ -623,25 +601,7 @@ attachmentsRouter.delete('/:id', async (c) => {
 
     await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
 
-    // 写入 sync_changes 以便 APP 能同步附件删除
-    const now = new Date().toISOString();
-    await db
-        .prepare(
-            `INSERT INTO sync_changes
-             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-            userId,
-            row.ledger_id,
-            'attachment',
-            fileId,
-            'delete',
-            JSON.stringify({ file_id: fileId }),
-            now,
-            userId
-        )
-        .run();
+    // 对齐原版：附件删除不写 sync_changes（App 不识别 attachment 实体类型）
 
     return c.json({ success: true });
 });
