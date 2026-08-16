@@ -1754,7 +1754,8 @@ async function applyChangeToProjection(
               const attachments = JSON.parse(txRow.attachments_json);
               if (Array.isArray(attachments)) {
                 for (const att of attachments) {
-                  const fileId = att.id || att.file_id;
+                  // attachments_json 里附件对象用 cloudFileId 字段（与 write.ts 删除逻辑一致）
+                  const fileId = att.cloudFileId || att.id || att.file_id;
                   if (fileId) {
                     // 从 attachment_files 获取 storage_path
                     const attFile = await db.prepare(
