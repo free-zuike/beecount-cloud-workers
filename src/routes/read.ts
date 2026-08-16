@@ -495,7 +495,7 @@ readRouter.get('/workspace/transactions', async (c) => {
        SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?`
     ).bind(userId, userId).all<{ id: string }>();
     if (accessibleIds.results.length === 0) {
-      return c.json({ rows: [], total: 0 });
+      return c.json({ items: [], total: 0, limit, offset });
     }
     const ids = accessibleIds.results.map(r => r.id);
     query += ` AND rt.ledger_id IN (${ids.map(() => '?').join(',')})`;
