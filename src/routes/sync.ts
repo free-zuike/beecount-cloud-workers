@@ -333,7 +333,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         ledgerMap[ledger.external_id] = ledger;
       }
       
-      // 创建不存在的账本（批量，同事务原子）
+      // 创建不存在的账本（批量）
       for (const externalId of ledgerExternalIds) {
         if (!ledgerMap[externalId]) {
           // 先检查是否已存在（避免 UNIQUE 约束错误）
@@ -344,19 +344,21 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           }
           serverLogger.info('src.routers.sync', '[SYNC] Creating new ledger:', externalId);
           const newLedgerId = randomUUID();
-          await db.batch([
-            db.prepare(
+          await db
+            .prepare(
               `INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
                VALUES (?, ?, ?, ?, 'CNY', ?)`
             )
-              .bind(newLedgerId, userId, externalId, externalId, serverNow),
-            // 与原版对齐：自动创建 owner 成员记录
-            db.prepare(
+            .bind(newLedgerId, userId, externalId, externalId, serverNow)
+            .run();
+          // 与原版对齐：自动创建 owner 成员记录
+          await db
+            .prepare(
               `INSERT INTO ledger_members (ledger_id, user_id, role, joined_at)
                VALUES (?, ?, 'owner', ?)`
             )
-              .bind(newLedgerId, userId, serverNow),
-          ]);
+            .bind(newLedgerId, userId, serverNow)
+            .run();
           ledgerMap[externalId] = { id: newLedgerId, user_id: userId, external_id: externalId };
         }
       }
@@ -1374,55 +1376,55 @@ async function applyUserChangeToProjection(
 
   if (action === 'delete') {
     if (entity_type === 'category') {
-      // 删除前收集图标信息（SELECT 在外，batch 内只做 DB 写）
-      const catIcon = r2 ? await db.prepare(
-        'SELECT icon_cloud_file_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
-      ).bind(entity_sync_id, userId).first<{ icon_cloud_file_id: string | null }>() : null;
-      const fileId = catIcon?.icon_cloud_file_id;
-
-      // 删投影 + 紧凑化历史（同事务原子）
-      await db.batch([
-        db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
-          .bind(entity_sync_id, userId),
-        db.prepare(
-          `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
-        ).bind(userId, entity_type, entity_sync_id),
-      ]);
-
-      // gc 孤立图标（best-effort，投影已删后才能检查引用）
-      if (fileId) {
+      // 删除前清理分类图标 R2 文件（与原版 gc_orphan_attachments 对齐）
+      if (r2) {
         try {
-          const stillUsed = await db.prepare(
-            'SELECT COUNT(*) as cnt FROM read_category_projection WHERE icon_cloud_file_id = ? AND user_id = ?'
-          ).bind(fileId, userId).first<{ cnt: number }>();
-          if (!stillUsed || stillUsed.cnt === 0) {
-            const iconRow = await db.prepare(
-              "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'category_icon'"
-            ).bind(fileId).first<{ storage_path: string }>();
-            if (iconRow?.storage_path && r2) {
-              try { await r2.delete(iconRow.storage_path); } catch {}
+          const catIcon = await db.prepare(
+            'SELECT icon_cloud_file_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
+          ).bind(entity_sync_id, userId).first<{ icon_cloud_file_id: string | null }>();
+          if (catIcon?.icon_cloud_file_id) {
+            const fileId = catIcon.icon_cloud_file_id;
+            // 先删 projection 行（gc_orphan 要求目标行已删后再调）
+            await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+              .bind(entity_sync_id, userId).run();
+            // 检查是否仍被其他 category 引用
+            const stillUsed = await db.prepare(
+              'SELECT COUNT(*) as cnt FROM read_category_projection WHERE icon_cloud_file_id = ? AND user_id = ?'
+            ).bind(fileId, userId).first<{ cnt: number }>();
+            if (!stillUsed || stillUsed.cnt === 0) {
+              // 无引用，安全删除 R2 + attachment_files
+              const iconRow = await db.prepare(
+                "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'category_icon'"
+              ).bind(fileId).first<{ storage_path: string }>();
+              if (iconRow?.storage_path && r2) {
+                try { await r2.delete(iconRow.storage_path); } catch {}
+              }
+              await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
             }
-            await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
+          } else {
+            // 无图标，只删 projection 行
+            await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+              .bind(entity_sync_id, userId).run();
           }
-        } catch {}
+        } catch {
+          await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+            .bind(entity_sync_id, userId).run();
+        }
+      } else {
+        await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+          .bind(entity_sync_id, userId).run();
       }
     } else if (entity_type === 'account') {
-      await db.batch([
-        db.prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
-          .bind(entity_sync_id, userId),
-        db.prepare(
-          `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
-        ).bind(userId, entity_type, entity_sync_id),
-      ]);
+      await db.prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
+        .bind(entity_sync_id, userId).run();
     } else if (entity_type === 'tag') {
-      await db.batch([
-        db.prepare('DELETE FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
-          .bind(entity_sync_id, userId),
-        db.prepare(
-          `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
-        ).bind(userId, entity_type, entity_sync_id),
-      ]);
+      await db.prepare('DELETE FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
+        .bind(entity_sync_id, userId).run();
     }
+    // 与原版 _compact_entity_upsert_events 对齐：实体删除后清掉 upsert 历史，只留 delete 事件
+    await db.prepare(
+      `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
+    ).bind(userId, entity_type, entity_sync_id).run();
     return;
   }
 
@@ -1457,14 +1459,11 @@ async function applyUserChangeToProjection(
     // 默认分类的 syncId 是确定性 uuid v5（所有用户相同），跨用户「已有就跳过」会把
     // 新用户的默认分类当别人的数据丢弃 —— 原版无此检查（projection.py _upsert）。
 
-    // Rename cascade + 投影 upsert 同事务原子写入
+    // Rename cascade
     const newName = (payload.name as string) ?? null;
-    const stmts: any[] = [];
     if (newName && existingRow?.name && existingRow.name !== newName) {
-      stmts.push(
-        db.prepare('UPDATE read_tx_projection SET category_name = ?, category_kind = ? WHERE user_id = ? AND category_sync_id = ?')
-          .bind(newName, payload.kind ?? existingRow.kind ?? null, userId, entity_sync_id),
-      );
+      await db.prepare('UPDATE read_tx_projection SET category_name = ?, category_kind = ? WHERE user_id = ? AND category_sync_id = ?')
+        .bind(newName, payload.kind ?? existingRow.kind ?? null, userId, entity_sync_id).run();
     }
 
     const merged = {
@@ -1499,29 +1498,23 @@ async function applyUserChangeToProjection(
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
-      stmts.push(
-        db.prepare(
-          `UPDATE read_category_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
-        ).bind(...vals),
-      );
+      await db.prepare(
+        `UPDATE read_category_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+      ).bind(...vals).run();
     } else {
-      stmts.push(
-        db.prepare(
-          `INSERT OR REPLACE INTO read_category_projection
-           (ledger_id, sync_id, user_id, name, kind, level, sort_order,
-            icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
-            parent_name, parent_sync_id, source_change_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(
-          null, entity_sync_id, userId, merged.name, merged.kind,
-          merged.level, merged.sort_order, merged.icon, merged.icon_type,
-          merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
-          merged.parent_name, merged.parent_sync_id, change.change_id ?? 0,
-        ),
-      );
+      await db.prepare(
+        `INSERT OR REPLACE INTO read_category_projection
+         (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+          icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+          parent_name, parent_sync_id, source_change_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        null, entity_sync_id, userId, merged.name, merged.kind,
+        merged.level, merged.sort_order, merged.icon, merged.icon_type,
+        merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
+        merged.parent_name, merged.parent_sync_id, change.change_id ?? 0
+      ).run();
     }
-
-    if (stmts.length > 0) await db.batch(stmts);
   } else if (entity_type === 'account') {
     // APP 用 camelCase，原版用 snake_case
     const accountType = (payload as any).accountType ?? payload.account_type ?? (payload as any).type ?? null;
@@ -1542,18 +1535,15 @@ async function applyUserChangeToProjection(
       bank_name: string | null; card_last_four: string | null; hidden: number | null;
     }>();
 
-    // Rename cascade + 投影 upsert 同事务原子写入
+    // Rename cascade
     const newName = (payload.name as string) ?? null;
-    const stmts2: any[] = [];
     if (newName && existingRow?.name && existingRow.name !== newName) {
-      stmts2.push(
-        db.prepare('UPDATE read_tx_projection SET account_name = ? WHERE user_id = ? AND account_sync_id = ?')
-          .bind(newName, userId, entity_sync_id),
-        db.prepare('UPDATE read_tx_projection SET from_account_name = ? WHERE user_id = ? AND from_account_sync_id = ?')
-          .bind(newName, userId, entity_sync_id),
-        db.prepare('UPDATE read_tx_projection SET to_account_name = ? WHERE user_id = ? AND to_account_sync_id = ?')
-          .bind(newName, userId, entity_sync_id),
-      );
+      await db.prepare('UPDATE read_tx_projection SET account_name = ? WHERE user_id = ? AND account_sync_id = ?')
+        .bind(newName, userId, entity_sync_id).run();
+      await db.prepare('UPDATE read_tx_projection SET from_account_name = ? WHERE user_id = ? AND from_account_sync_id = ?')
+        .bind(newName, userId, entity_sync_id).run();
+      await db.prepare('UPDATE read_tx_projection SET to_account_name = ? WHERE user_id = ? AND to_account_sync_id = ?')
+        .bind(newName, userId, entity_sync_id).run();
     }
 
     const merged = {
@@ -1588,33 +1578,26 @@ async function applyUserChangeToProjection(
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
-      stmts2.push(
-        db.prepare(
-          `UPDATE read_account_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
-        ).bind(...vals),
-      );
+      await db.prepare(
+        `UPDATE read_account_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+      ).bind(...vals).run();
     } else {
-      stmts2.push(
-        db.prepare(
-          `INSERT OR REPLACE INTO read_account_projection
-           (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
-            note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(
-          null, entity_sync_id, userId, merged.name, merged.account_type,
-          merged.currency, merged.initial_balance, merged.note,
-          merged.credit_limit, merged.billing_day,
-          merged.payment_due_day, merged.bank_name,
-          merged.card_last_four, merged.hidden, change.change_id ?? 0,
-        ),
-      );
+      await db.prepare(
+        `INSERT OR REPLACE INTO read_account_projection
+         (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+          note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        null, entity_sync_id, userId, merged.name, merged.account_type,
+        merged.currency, merged.initial_balance, merged.note,
+        merged.credit_limit, merged.billing_day,
+        merged.payment_due_day, merged.bank_name,
+        merged.card_last_four, merged.hidden, change.change_id ?? 0
+      ).run();
     }
-
-    if (stmts2.length > 0) await db.batch(stmts2);
   } else if (entity_type === 'tag') {
-    // Rename cascade：标签改名时更新 read_tx_projection 的 tags_csv（同事务原子写入）
+    // Rename cascade：标签改名时更新 read_tx_projection 的 tags_csv
     const newName = (payload.name as string) ?? null;
-    const tagStmts: any[] = [];
     if (newName) {
       const prevRow = await db.prepare('SELECT name FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
         .bind(entity_sync_id, userId).first<{ name: string | null }>();
@@ -1631,16 +1614,14 @@ async function applyUserChangeToProjection(
           const parts = tx.tags_csv.split(',').map(p => p.trim());
           const replaced = parts.map(p => p === oldName ? newName : p);
           if (replaced.join(',') !== parts.join(',')) {
-            tagStmts.push(
-              db.prepare('UPDATE read_tx_projection SET tags_csv = ? WHERE ledger_id = ? AND sync_id = ?')
-                .bind(replaced.join(','), tx.ledger_id, tx.sync_id),
-            );
+            await db.prepare('UPDATE read_tx_projection SET tags_csv = ? WHERE ledger_id = ? AND sync_id = ?')
+              .bind(replaced.join(','), tx.ledger_id, tx.sync_id).run();
           }
         }
       }
     }
 
-    // merge_with_existing + 投影 upsert
+    // merge_with_existing
     const existingRow = await db.prepare(
       'SELECT name, color FROM read_tag_projection WHERE sync_id = ? AND user_id = ?'
     ).bind(entity_sync_id, userId).first<{ name: string | null; color: string | null }>();
@@ -1659,25 +1640,14 @@ async function applyUserChangeToProjection(
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
-      tagStmts.push(
-        db.prepare(
-          `UPDATE read_tag_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
-        ).bind(...vals),
-      );
+      await db.prepare(
+        `UPDATE read_tag_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+      ).bind(...vals).run();
     } else {
-      tagStmts.push(
-        db.prepare(
-          `INSERT OR REPLACE INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
-           VALUES (?, ?, ?, ?, ?, ?)`
-        ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0),
-      );
-    }
-
-    // 分块批量执行（D1 batch 最多 100 语句）
-    if (tagStmts.length > 0) {
-      for (let i = 0; i < tagStmts.length; i += 100) {
-        await db.batch(tagStmts.slice(i, i + 100));
-      }
+      await db.prepare(
+        `INSERT OR REPLACE INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
     }
   } else if (entity_type === 'exchange_rate_override') {
     if (change.action === 'delete') {
@@ -1725,16 +1695,14 @@ async function applyChangeToProjection(
   },
   r2?: R2Bucket
 ): Promise<void> {
-  // 处理 ledger_snapshot delete - 删除整个账本
+  // 处理 ledger_snapshot delete - 删除整个账本（sequential，D1 db.batch 不兼容）
   if (change.entity_type === 'ledger_snapshot' && change.action === 'delete') {
-    await db.batch([
-      db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledgerId),
-      db.prepare('DELETE FROM read_account_projection WHERE ledger_id = ?').bind(ledgerId),
-      db.prepare('DELETE FROM read_category_projection WHERE ledger_id = ?').bind(ledgerId),
-      db.prepare('DELETE FROM read_tag_projection WHERE ledger_id = ?').bind(ledgerId),
-      db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').bind(ledgerId),
-      db.prepare('DELETE FROM ledgers WHERE id = ?').bind(ledgerId),
-    ]);
+    await db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledgerId).run();
+    await db.prepare('DELETE FROM read_account_projection WHERE ledger_id = ?').bind(ledgerId).run();
+    await db.prepare('DELETE FROM read_category_projection WHERE ledger_id = ?').bind(ledgerId).run();
+    await db.prepare('DELETE FROM read_tag_projection WHERE ledger_id = ?').bind(ledgerId).run();
+    await db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').bind(ledgerId).run();
+    await db.prepare('DELETE FROM ledgers WHERE id = ?').bind(ledgerId).run();
     return;
   }
 
@@ -1800,16 +1768,12 @@ async function applyChangeToProjection(
           } catch {}
         }
 
-        // 删投影 + 紧凑化历史（同事务原子）
-        await db.batch([
-          db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
-            .bind(ledgerId, change.entity_sync_id),
-          db.prepare(
-            `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'transaction' AND entity_sync_id = ? AND action != 'delete'`
-          ).bind(ledgerId, change.entity_sync_id),
-        ]);
+        // 删投影
+        await db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+          .bind(ledgerId, change.entity_sync_id)
+          .run();
 
-        // gc 孤立附件（R2 无法事务化，做 best-effort）
+        // gc 孤立附件：仍被本 ledger 下任何交易引用则保留，完全孤立才删
         // （对齐原版 gc_orphan_attachments_for_ledger + _fileid_still_referenced_in_ledger）。
         // R2 删除是外部副作用，无法事务化，做 best-effort。
         for (const fileId of fileIdsToClean) {
@@ -2125,13 +2089,14 @@ async function applyChangeToProjection(
 
     case 'budget': {
       if (change.action === 'delete') {
-        await db.batch([
-          db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
-            .bind(ledgerId, change.entity_sync_id),
-          db.prepare(
-            `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'budget' AND entity_sync_id = ? AND action != 'delete'`
-          ).bind(ledgerId, change.entity_sync_id),
-        ]);
+        await db
+          .prepare('DELETE FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
+          .bind(ledgerId, change.entity_sync_id)
+          .run();
+        // 与原版 _compact_entity_upsert_events 对齐
+        await db.prepare(
+          `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'budget' AND entity_sync_id = ? AND action != 'delete'`
+        ).bind(ledgerId, change.entity_sync_id).run();
       } else {
         // 合并已有行（与原版 _merge_from_spec 对齐）
         const existing = await db.prepare(

@@ -81,16 +81,15 @@ setupRouter.post('/', async (c) => {
       const passwordHash = await hashPassword(admin_password);
       const userEmail = admin_email.toLowerCase();
       
-      await db.batch([
-        db.prepare(`
-          INSERT INTO users (id, email, password_hash, is_admin, is_enabled)
-          VALUES (?, ?, ?, 1, 1)
-        `).bind(userId, userEmail, passwordHash),
-        db.prepare(`
-          INSERT INTO user_profiles (user_id, display_name, ai_config_json)
-          VALUES (?, ?, ?)
-        `).bind(userId, userEmail.split('@')[0], DEFAULT_AI_CONFIG),
-      ]);
+      await db.prepare(`
+        INSERT INTO users (id, email, password_hash, is_admin, is_enabled)
+        VALUES (?, ?, ?, 1, 1)
+      `).bind(userId, userEmail, passwordHash).run();
+      
+      await db.prepare(`
+        INSERT INTO user_profiles (user_id, display_name, ai_config_json)
+        VALUES (?, ?, ?)
+      `).bind(userId, userEmail.split('@')[0], DEFAULT_AI_CONFIG).run();
       
       return c.json({
         success: true,

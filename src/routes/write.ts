@@ -501,8 +501,7 @@ writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaU
     ...(req.month_start_day !== undefined && { monthStartDay: req.month_start_day }),
   };
 
-  await db.batch([
-    db.prepare(
+  await db.prepare(
       `INSERT INTO sync_changes
        (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
@@ -515,16 +514,16 @@ writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaU
       safeJsonStringify(newPayload),
       serverNow,
       userId,
-    ),
-    db.prepare(
+    ).run();
+
+    await db.prepare(
       `UPDATE ledgers SET name = ?, currency = ?, month_start_day = ? WHERE id = ?`
     ).bind(
       req.ledger_name ?? ledger.external_id,
       req.currency ?? 'CNY',
       req.month_start_day ?? 1,
       ledger.id,
-    ),
-  ]);
+    ).run();
 
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'update', entityType: 'ledger', entityId: ledgerId,
@@ -564,19 +563,17 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
     return c.json({ error: 'No ledger found' }, 400);
   }
 
-  // 删除交易：tombstone + projection 删除必须在同一事务内原子执行
-  // （db.batch = SQL transaction，任一失败整批回滚，避免"tombstone 已提交但投影未删"的半状态）
-  const batchResults = await db.batch([
-    db.prepare(
-      `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
-    ).bind(userId, ledger.id, 'transaction', txSyncId, 'delete', '{}', serverNow, userId),
-    db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
-      .bind(ledger.id, txSyncId),
-  ]);
+  // 删除交易：tombstone + projection 删除（sequential，D1 db.batch 不兼容）
+  const changeResult = await db.prepare(
+    `INSERT INTO sync_changes
+     (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
+  ).bind(userId, ledger.id, 'transaction', txSyncId, 'delete', '{}', serverNow, userId).run();
 
-  const newChangeId = batchResults[0].meta.last_row_id as number;
+  const newChangeId = changeResult.meta.last_row_id as number;
+
+  await db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+    .bind(ledger.id, txSyncId).run();
 
   // 删除前先收集交易关联的附件 fileId，用于清理 R2 文件
   const attRows = await db
