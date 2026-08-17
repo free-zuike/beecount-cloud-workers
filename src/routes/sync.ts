@@ -687,7 +687,8 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         const userGlobalInBatch = processedChanges.filter(pc => isUserGlobalType(pc.change.entity_type));
         const preloaded = await preloadUserGlobalProjections(db, userId, userGlobalInBatch.map(pc => pc.change));
 
-        // 立即应用这一批次的投影更新（避免一次性处理太多）
+        // 立即应用这一批次的投影更新（收集写入语句后分块 db.batch 执行，减少 D1 调用数）
+        const batchCollector: any[] = [];
         for (const { change, ledgerRow, newChangeId } of processedChanges) {
           if (isUserGlobalType(change.entity_type)) {
               await applyUserChangeToProjection(db, userId, {
@@ -696,7 +697,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
                 entity_sync_id: change.entity_sync_id,
                 action: change.action,
                 payload: change.payload,
-              }, c.env.R2, preloaded.get(change.entity_type)?.get(change.entity_sync_id));
+              }, c.env.R2, preloaded.get(change.entity_type)?.get(change.entity_sync_id), batchCollector);
             } else if (ledgerRow) {
               await applyChangeToProjection(db, ledgerRow.id, userId, {
                 change_id: newChangeId,
@@ -707,6 +708,10 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
                 ledger_id: ledgerRow.id,
               }, c.env.R2);
             }
+        }
+        // 批量执行投影写入语句（100 条/批，1 批 = 1 次 D1 API 请求）
+        for (let i = 0; i < batchCollector.length; i += 100) {
+          await db.batch(batchCollector.slice(i, i + 100));
         }
         processedChanges.length = 0; // 清空已处理的列表
       }
@@ -1431,8 +1436,17 @@ async function applyUserChangeToProjection(
   },
   r2?: R2Bucket,
   preloadedRow?: any,
+  batchCollector?: any[],
 ): Promise<void> {
   const { entity_type, entity_sync_id, action, payload } = change;
+
+  /** 当从 push 路径调用时，把投影写入语句收集到 batchCollector 中批量执行
+   * 以大幅减少 D1 调用次数（每条变更 1 次 .run() → 100 条一批 1 次 db.batch）。 */
+  const batchOrRun = (stmt: any) => {
+    if (batchCollector) batchCollector.push(stmt);
+    else return stmt.run();
+    return undefined;
+  };
 
   if (action === 'delete') {
     if (entity_type === 'category') {
@@ -1558,11 +1572,12 @@ async function applyUserChangeToProjection(
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
-      await db.prepare(
+      const pw = db.prepare(
         `UPDATE read_category_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
-      ).bind(...vals).run();
+      ).bind(...vals);
+      await (batchOrRun(pw) ?? undefined);
     } else {
-      await db.prepare(
+      const pw2 = db.prepare(
         `INSERT OR REPLACE INTO read_category_projection
          (ledger_id, sync_id, user_id, name, kind, level, sort_order,
           icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
@@ -1573,7 +1588,8 @@ async function applyUserChangeToProjection(
         merged.level, merged.sort_order, merged.icon, merged.icon_type,
         merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
         merged.parent_name, merged.parent_sync_id, change.change_id ?? 0
-      ).run();
+      );
+      await (batchOrRun(pw2) ?? undefined);
     }
   } else if (entity_type === 'account') {
     // APP 用 camelCase，原版用 snake_case
@@ -1638,11 +1654,12 @@ async function applyUserChangeToProjection(
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
-      await db.prepare(
+      const pw = db.prepare(
         `UPDATE read_account_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
-      ).bind(...vals).run();
+      ).bind(...vals);
+      await (batchOrRun(pw) ?? undefined);
     } else {
-      await db.prepare(
+      const pw2 = db.prepare(
         `INSERT OR REPLACE INTO read_account_projection
          (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
           note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
@@ -1653,7 +1670,8 @@ async function applyUserChangeToProjection(
         merged.credit_limit, merged.billing_day,
         merged.payment_due_day, merged.bank_name,
         merged.card_last_four, merged.hidden, change.change_id ?? 0
-      ).run();
+      );
+      await (batchOrRun(pw2) ?? undefined);
     }
   } else if (entity_type === 'tag') {
     // Rename cascade：标签改名时更新 read_tx_projection 的 tags_csv
@@ -1701,14 +1719,16 @@ async function applyUserChangeToProjection(
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
-      await db.prepare(
+      const pw = db.prepare(
         `UPDATE read_tag_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
-      ).bind(...vals).run();
+      ).bind(...vals);
+      await (batchOrRun(pw) ?? undefined);
     } else {
-      await db.prepare(
+      const pw2 = db.prepare(
         `INSERT OR REPLACE INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
          VALUES (?, ?, ?, ?, ?, ?)`
-      ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
+      ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0);
+      await (batchOrRun(pw2) ?? undefined);
     }
   } else if (entity_type === 'exchange_rate_override') {
     if (change.action === 'delete') {
