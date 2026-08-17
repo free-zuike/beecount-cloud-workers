@@ -803,15 +803,17 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     }
   }
 
-  // sync_changes + projection 同事务原子写入（db.batch = SQL transaction，
-    // 任一失败整批回滚，无需手动回删 sync_changes）
-    const batchResults = await db.batch([
-      db.prepare(
-        `INSERT INTO sync_changes
-         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
-      ).bind(userId, ledger.id, 'transaction', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId),
-      db.prepare(
+  // sync_changes INSERT → 取 change_id → projection INSERT（sequential，D1 不支持 batch 内 last_insert_rowid 跨语句）
+    const changeResult = await db.prepare(
+      `INSERT INTO sync_changes
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
+    ).bind(userId, ledger.id, 'transaction', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId).run();
+
+    const newChangeId = changeResult.meta.last_row_id as number;
+
+    try {
+      await db.prepare(
         `INSERT INTO read_tx_projection
          (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
           category_sync_id, category_name, category_kind,
@@ -822,7 +824,7 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
           exclude_from_stats, exclude_from_budget,
           created_by_user_id, last_edited_by_user_id,
           currency_code, native_amount)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()),
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?)`
       ).bind(
         ledger.id, syncId, userId, req.tx_type, req.amount, happenedAt,
@@ -831,15 +833,17 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
         req.from_account_id ?? null, req.from_account_name ?? null,
         req.to_account_id ?? null, req.to_account_name ?? null,
         resolvedTagsCsv, req.tag_ids ? safeJsonStringify(req.tag_ids) : null,
-        req.attachments ? safeJsonStringify(req.attachments) : null, 0,
+        req.attachments ? safeJsonStringify(req.attachments) : null, 0, newChangeId,
         req.exclude_from_stats != null ? (req.exclude_from_stats ? 1 : 0) : null,
         req.exclude_from_budget != null ? (req.exclude_from_budget ? 1 : 0) : null,
         userId, userId,
         req.currency_code ?? req.currencyCode ?? null,
         req.native_amount ?? req.nativeAmount ?? null,
-      ),
-    ]);
-    const newChangeId = batchResults[0].meta.last_row_id as number;
+      ).run();
+    } catch (projErr) {
+      await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(newChangeId).run();
+      throw projErr;
+    }
 
   serverLogger.info('src.routers.write', '[WRITE] Transaction created successfully, syncId:', syncId, 'ledger.id:', ledger.id);
 
