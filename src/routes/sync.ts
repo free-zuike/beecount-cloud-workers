@@ -465,6 +465,10 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
       newChangeId: number;
     }> = [];
 
+    // 全量预载 user-global 投影已有的行（一次查询替代每批多次 SELECT，大幅减少 D1 调用数）
+    const userGlobalChanges = changes.filter(c => USER_GLOBAL_TYPES.includes(c.entity_type) && !c.ledger_id);
+    const userGlobalPreloaded = await preloadUserGlobalProjections(db, userId, userGlobalChanges.map(c => ({ entity_type: c.entity_type, entity_sync_id: c.entity_sync_id })));
+
     for (let startIdx = 0; startIdx < changes.length; startIdx += BATCH_INSERT_SIZE) {
       const batchChanges = changes.slice(startIdx, startIdx + BATCH_INSERT_SIZE);
       serverLogger.info('src.routers.sync', '[SYNC] Processing insertion batch', Math.floor(startIdx / BATCH_INSERT_SIZE) + 1, 'with', batchChanges.length, 'changes');
@@ -683,10 +687,6 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           }
         }
 
-        // 按批预载 user-global 投影已有的行（一次查询替代每个变更一次 SELECT）
-        const userGlobalInBatch = processedChanges.filter(pc => isUserGlobalType(pc.change.entity_type));
-        const preloaded = await preloadUserGlobalProjections(db, userId, userGlobalInBatch.map(pc => pc.change));
-
         // 立即应用这一批次的投影更新（收集写入语句后分块 db.batch 执行，减少 D1 调用数）
         const batchCollector: any[] = [];
         for (const { change, ledgerRow, newChangeId } of processedChanges) {
@@ -697,7 +697,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
                 entity_sync_id: change.entity_sync_id,
                 action: change.action,
                 payload: change.payload,
-              }, c.env.R2, preloaded.get(change.entity_type)?.get(change.entity_sync_id), batchCollector);
+              }, c.env.R2, userGlobalPreloaded.get(change.entity_type)?.get(change.entity_sync_id), batchCollector);
             } else if (ledgerRow) {
               await applyChangeToProjection(db, ledgerRow.id, userId, {
                 change_id: newChangeId,
