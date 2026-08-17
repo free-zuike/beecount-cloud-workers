@@ -266,7 +266,7 @@ adminRouter.get('/users', async (c) => {
     is_enabled: Boolean(row.is_enabled),
     created_at: row.created_at,
     display_name: row.display_name,
-    avatar_url: row.avatar_file_id ? `/api/v1/profile/avatar/${row.id}?v=${row.avatar_version ?? 0}` : null,
+    avatar_url: row.avatar_file_id,
     avatar_version: row.avatar_version ?? 0,
   }));
 
@@ -419,7 +419,7 @@ adminRouter.patch('/users/:id', zValidator('json', AdminUserPatchSchema), async 
     is_enabled: Boolean(row.is_enabled),
     created_at: row.created_at,
     display_name: row.display_name,
-    avatar_url: row.avatar_file_id ? `/api/v1/profile/avatar/${row.id}?v=${row.avatar_version ?? 0}` : null,
+    avatar_url: row.avatar_file_id,
     avatar_version: row.avatar_version ?? 0,
   };
 
@@ -763,7 +763,7 @@ adminRouter.post('/users/:id/password', zValidator('json', z.object({
     is_enabled: Boolean(updatedUser.is_enabled),
     created_at: updatedUser.created_at,
     display_name: updatedUser.display_name,
-    avatar_url: updatedUser.avatar_file_id ? `/api/v1/profile/avatar/${updatedUser.id}?v=${updatedUser.avatar_version ?? 0}` : null,
+    avatar_url: updatedUser.avatar_file_id,
     avatar_version: updatedUser.avatar_version ?? 0,
   };
 

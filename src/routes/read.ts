@@ -1097,7 +1097,7 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
       created_by_user_id: ownerInfo.id,
       created_by_email: ownerInfo.email,
       created_by_display_name: ownerInfo.display_name,
-      created_by_avatar_url: ownerInfo.avatar_file_id ? `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${ownerInfo.id}?v=${ownerInfo.avatar_version}` : null,
+      created_by_avatar_url: ownerInfo.avatar_file_id,
       created_by_avatar_version: ownerInfo.avatar_version,
     };
   });

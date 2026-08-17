@@ -225,39 +225,4 @@ profileRouter.post('/avatar', async (c) => {
   }
 });
 
-// GET /avatar/:userId - 获取头像图片（从 R2 读取）
-profileRouter.get('/avatar/:userId', async (c) => {
-  const targetUserId = c.req.param('userId');
-  const db = c.env.DB;
-  const r2 = c.env.R2;
-
-  try {
-    const profile = await db
-      .prepare('SELECT avatar_file_id, avatar_version FROM user_profiles WHERE user_id = ?')
-      .bind(targetUserId)
-      .first<{ avatar_file_id: string | null; avatar_version: number | null }>();
-
-    if (!profile?.avatar_file_id) {
-      return new Response(null, { status: 404 });
-    }
-
-    const storagePath = `avatars/${targetUserId}/${profile.avatar_file_id}`;
-    const obj = await r2.get(storagePath);
-
-    if (!obj) {
-      return new Response(null, { status: 404 });
-    }
-
-    const headers = new Headers();
-    headers.set('Content-Type', obj.httpMetadata?.contentType || 'image/jpeg');
-    headers.set('Cache-Control', 'public, max-age=31536000, immutable');
-    headers.set('ETag', `"${profile.avatar_file_id}"`);
-
-    return new Response(obj.body, { headers });
-  } catch (error) {
-    serverLogger.error('src.routers.profile', '[Avatar] Serve error:', error);
-    return new Response(null, { status: 500 });
-  }
-});
-
 export default profileRouter;
