@@ -150,6 +150,26 @@ function AppRoutes() {
       })
   }, [refreshAttempted])
 
+  // access token 60 分钟过期：页面挂机超时后 WS 重连 / HTTP 请求会用旧 token 失败。
+  // 每 50 分钟主动预刷新一次 + 切回标签页时刷新，保证会话内 token 始终新鲜。
+  useEffect(() => {
+    const refreshOnce = () => {
+      if (!getStoredRefreshToken()) return
+      refreshAuth()
+        .then((fresh) => setToken(fresh))
+        .catch(() => {
+          // refresh 失败（如 refresh_token 过期）保持现状，交给 401 流程
+        })
+    }
+    const interval = window.setInterval(refreshOnce, 50 * 60 * 1000)
+    const onFocus = () => refreshOnce()
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [])
+
   const [setupChecked, setSetupChecked] = useState(false)
   const [setupCompleted, setSetupCompleted] = useState(true)
 
