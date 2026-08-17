@@ -868,25 +868,30 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
     } catch (e) {
       serverLogger.error('src.routers.sync', '[SYNC] JSON.stringify failed');
     }
-    if (error instanceof Error) {
-      serverLogger.error('src.routers.sync', '[SYNC] Error message:', error.message);
-      serverLogger.error('src.routers.sync', '[SYNC] Error stack:', error.stack);
-      // 诊断：500 异常摘要落库（失败不阻塞响应），便于直接查 D1 定位
-      try {
-        await db.prepare(
-          `INSERT INTO audit_logs (user_id, action, details_json, level, logger, created_at)
-           VALUES (?, 'sync_push_error', ?, 'ERROR', 'sync.diag', ?)`
-        ).bind(
-          userId,
-          JSON.stringify({ message: error.message, stack: (error.stack ?? '').slice(0, 2000), ts: new Date().toISOString() }),
-          new Date().toISOString(),
-        ).run();
-      } catch {}
+    const errMessage = error instanceof Error
+      ? error.message
+      : (typeof error === 'string' ? error : JSON.stringify(error)?.slice(0, 500) ?? 'Unknown error');
+    const errStack = error instanceof Error ? (error.stack ?? '') : '';
+    serverLogger.error('src.routers.sync', '[SYNC] Error message:', errMessage);
+    if (errStack) serverLogger.error('src.routers.sync', '[SYNC] Error stack:', errStack);
+    // 诊断：500 异常摘要落库（失败不阻塞响应），便于直接查 D1 定位
+    try {
+      await db.prepare(
+        `INSERT INTO audit_logs (user_id, action, details_json, level, logger, created_at)
+         VALUES (?, 'sync_push_error', ?, 'ERROR', 'sync.diag', ?)`
+      ).bind(
+        userId,
+        JSON.stringify({ message: errMessage, stack: errStack.slice(0, 2000), ts: new Date().toISOString() }),
+        new Date().toISOString(),
+      ).run();
+    } catch (diagErr) {
+      serverLogger.error('src.routers.sync', '[SYNC] sync.diag insert failed:', diagErr);
     }
     serverLogger.error('src.routers.sync', '[SYNC] /sync/push error - END ======================================');
     serverLogger.info('src.routers.sync', `[SYNC] ===== ${CODE_VERSION} ERROR =====`);
     
-    return c.json({ error: 'Internal server error' }, 500);
+    // 响应体带上真实错误摘要（app debugPrint 会打出来，便于定位）
+    return c.json({ error: 'Internal server error', detail: errMessage.slice(0, 300) }, 500);
   }
 });
 
