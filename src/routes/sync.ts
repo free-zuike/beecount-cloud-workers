@@ -1434,11 +1434,6 @@ async function applyUserChangeToProjection(
     const iconCloudFileId = (payload as any).iconCloudFileId ?? payload.icon_cloud_file_id ?? null;
     const iconCloudSha256 = (payload as any).iconCloudSha256 ?? payload.icon_cloud_sha256 ?? null;
 
-    // 检查 sync_id 是否已被其他用户使用（防止共享账本分类被复制到当前用户）
-    const existingAnyUser = await db.prepare(
-      'SELECT user_id FROM read_category_projection WHERE sync_id = ? AND user_id != ? LIMIT 1'
-    ).bind(entity_sync_id, userId).first<{ user_id: string }>();
-
     // 合并 rename 检查和现有行查询为一次 SELECT
     const existingRow = await db.prepare(
       'SELECT name, kind, level, sort_order, icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256, parent_name, parent_sync_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
@@ -1449,11 +1444,9 @@ async function applyUserChangeToProjection(
       icon_cloud_sha256: string | null; parent_name: string | null; parent_sync_id: string | null;
     }>();
 
-    // 如果其他用户已有此 sync_id 且当前用户没有 → 跳过
-    if (existingAnyUser && !existingRow) {
-      serverLogger.info('src.routers.sync', '[SYNC] Skipping category creation for sync_id', entity_sync_id, '- already belongs to user', existingAnyUser.user_id);
-      return;
-    }
+    // 对齐原版：user-global category upsert 按 (user_id, sync_id) 主键无条件写入。
+    // 默认分类的 syncId 是确定性 uuid v5（所有用户相同），跨用户「已有就跳过」会把
+    // 新用户的默认分类当别人的数据丢弃 —— 原版无此检查（projection.py _upsert）。
 
     // Rename cascade
     const newName = (payload.name as string) ?? null;
