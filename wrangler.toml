@@ -48,13 +48,6 @@ API_PREFIX = "/api/v1"
 [observability]
 enabled = true
 
-# 单次 Worker 调用允许的最大 API 请求数（D1 查询/子请求都计数，默认 1000）。
-# sync/push 对每个变更要做冲突查询+投影 SELECT+UPDATE/INSERT 多次 D1 调用，
-# 大批量首次同步（新用户一次推 178+ 分类）会超过默认 1000 上限导致 500。
-# 注意：Worker 在 Free 计划，不能设置 cpu_ms（仅付费计划支持）。
-[limits]
-api_limit = 10000
-
 # ssh2 的 .node 原生插件在 try/catch 中加载，wrangler 将其视为数据文件
 [[rules]]
 type = "Data"
