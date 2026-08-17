@@ -333,7 +333,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         ledgerMap[ledger.external_id] = ledger;
       }
       
-      // 创建不存在的账本（批量，同事务原子）
+      // 创建不存在的账本（批量）
       for (const externalId of ledgerExternalIds) {
         if (!ledgerMap[externalId]) {
           // 先检查是否已存在（避免 UNIQUE 约束错误）
@@ -344,19 +344,21 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           }
           serverLogger.info('src.routers.sync', '[SYNC] Creating new ledger:', externalId);
           const newLedgerId = randomUUID();
-          await db.batch([
-            db.prepare(
+          await db
+            .prepare(
               `INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
                VALUES (?, ?, ?, ?, 'CNY', ?)`
             )
-              .bind(newLedgerId, userId, externalId, externalId, serverNow),
-            // 与原版对齐：自动创建 owner 成员记录
-            db.prepare(
+            .bind(newLedgerId, userId, externalId, externalId, serverNow)
+            .run();
+          // 与原版对齐：自动创建 owner 成员记录
+          await db
+            .prepare(
               `INSERT INTO ledger_members (ledger_id, user_id, role, joined_at)
                VALUES (?, ?, 'owner', ?)`
             )
-              .bind(newLedgerId, userId, serverNow),
-          ]);
+            .bind(newLedgerId, userId, serverNow)
+            .run();
           ledgerMap[externalId] = { id: newLedgerId, user_id: userId, external_id: externalId };
         }
       }
@@ -463,6 +465,13 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
       newChangeId: number;
     }> = [];
 
+    // 全量预载 user-global 投影已有的行（一次查询替代每批多次 SELECT，大幅减少 D1 调用数）
+    const userGlobalChanges = changes.filter(c => USER_GLOBAL_TYPES.includes(c.entity_type) && !c.ledger_id);
+    const userGlobalPreloaded = await preloadUserGlobalProjections(db, userId, userGlobalChanges.map(c => ({ entity_type: c.entity_type, entity_sync_id: c.entity_sync_id })));
+
+    // 冲突审计日志收集器：批量执行替代逐条 INSERT，避免超 api_limit
+    const conflictAuditStmts: any[] = [];
+
     for (let startIdx = 0; startIdx < changes.length; startIdx += BATCH_INSERT_SIZE) {
       const batchChanges = changes.slice(startIdx, startIdx + BATCH_INSERT_SIZE);
       serverLogger.info('src.routers.sync', '[SYNC] Processing insertion batch', Math.floor(startIdx / BATCH_INSERT_SIZE) + 1, 'with', batchChanges.length, 'changes');
@@ -481,9 +490,12 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
       }
       
       const insertPromises: Array<{
-        result: Promise<{ meta: { last_row_id: number } }>;
+        stmt: any;
         change: typeof changes[0];
         ledgerRow: typeof ledgerMap[string] | null;
+        lwwKey: string;
+        lwwTs: string;
+        lwwDevice: string;
       }> = [];
 
       for (const change of batchChanges) {
@@ -548,20 +560,24 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           if (conflictList.length < 20) {
             conflictList.push(conflictSample);
           }
-          // 原版对齐：冲突写审计日志
-          await insertAuditLog({
-            db, userId,
-            ledgerId: isUserGlobal ? null : (ledgerRowId ?? null),
-            action: 'sync_push',
-            entityType: 'sync_conflict',
-            details: {
-              ...conflictSample,
-              incomingUpdatedAt: clampedUpdatedAt.toISOString(),
-              existingUpdatedAt: new Date(existingTuple.ts).toISOString(),
-              incomingDeviceId: deviceId,
-              existingDeviceId: existingTuple.deviceId,
-            },
-          });
+          // 原版对齐：冲突写审计日志（收集到 batch 数组，避免逐条 INSERT 超 api_limit）
+          const auditDetails = {
+            ...conflictSample,
+            incomingUpdatedAt: clampedUpdatedAt.toISOString(),
+            existingUpdatedAt: new Date(existingTuple.ts).toISOString(),
+            incomingDeviceId: deviceId,
+            existingDeviceId: existingTuple.deviceId,
+          };
+          conflictAuditStmts.push(
+            db.prepare(
+              `INSERT INTO audit_logs (user_id, ledger_id, action, entity_type, entity_id, details_json, level, logger)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+            ).bind(
+              userId, isUserGlobal ? null : (ledgerRowId ?? null),
+              'sync_push', 'sync_conflict', null,
+              safeJsonStringify(auditDetails), 'INFO', null,
+            ),
+          );
           continue;
         }
 
@@ -623,13 +639,16 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           }
         }
         insertPromises.push({
-          result: db.prepare(
+          stmt: db.prepare(
             `INSERT INTO sync_changes
              (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id, scope)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          ).bind(...bindParams).run(),
+          ).bind(...bindParams),
           change,
           ledgerRow: isUserGlobal ? null : { id: ledgerRowId as string, user_id: userId, external_id: '' },
+          lwwKey: key,
+          lwwTs: clampedUpdatedAt.toISOString(),
+          lwwDevice: deviceId ?? 'unknown',
         });
 
         if (!isUserGlobal && ledgerRowId) {
@@ -651,20 +670,32 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         }
       }
 
-      // 执行这一批次的插入
+      // 执行这一批次的插入（分块 db.batch：一次批量 = 1 次 D1 API 请求，
+      // 大幅减少 API 调用数，避免超 Worker api_limit 上限）
       if (insertPromises.length > 0) {
-        const results = await Promise.all(insertPromises.map(p => p.result));
-        accepted += results.length;
+        const stmts = insertPromises.map(p => p.stmt);
+        const allResults: { meta: { last_row_id: number } }[] = [];
+        for (let i = 0; i < stmts.length; i += 100) {
+          const chunk = stmts.slice(i, i + 100);
+          const res = await db.batch(chunk);
+          allResults.push(...res);
+        }
+        accepted += allResults.length;
         
         // 记录处理的变更以便后续应用投影
         for (let i = 0; i < insertPromises.length; i++) {
-          const { change, ledgerRow } = insertPromises[i];
-          const changeId = results[i].meta.last_row_id as number;
+          const { change, ledgerRow, lwwKey, lwwTs, lwwDevice } = insertPromises[i];
+          const changeId = allResults[i].meta.last_row_id as number;
           maxCursor = Math.max(maxCursor, changeId);
           processedChanges.push({ change, ledgerRow, newChangeId: changeId });
+          // 更新冲突 map：同批内后续重复实体按幂等跳过（对齐原版 flush 语义）
+          if (lwwKey) {
+            existingChangeMap.set(lwwKey, { change_id: changeId, updated_at: lwwTs, updated_by_device_id: lwwDevice });
+          }
         }
 
-        // 立即应用这一批次的投影更新（避免一次性处理太多）
+        // 立即应用这一批次的投影更新（收集写入语句后分块 db.batch 执行，减少 D1 调用数）
+        const batchCollector: any[] = [];
         for (const { change, ledgerRow, newChangeId } of processedChanges) {
           if (isUserGlobalType(change.entity_type)) {
               await applyUserChangeToProjection(db, userId, {
@@ -673,7 +704,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
                 entity_sync_id: change.entity_sync_id,
                 action: change.action,
                 payload: change.payload,
-              }, c.env.R2);
+              }, c.env.R2, userGlobalPreloaded.get(change.entity_type)?.get(change.entity_sync_id), batchCollector);
             } else if (ledgerRow) {
               await applyChangeToProjection(db, ledgerRow.id, userId, {
                 change_id: newChangeId,
@@ -685,6 +716,15 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
               }, c.env.R2);
             }
         }
+        // 批量执行投影写入语句（100 条/批，1 批 = 1 次 D1 API 请求）
+        for (let i = 0; i < batchCollector.length; i += 100) {
+          await db.batch(batchCollector.slice(i, i + 100));
+        }
+        // 批量执行冲突审计 INSERT（100 条/批，避免逐条 INSERT 超 api_limit）
+        for (let i = 0; i < conflictAuditStmts.length; i += 100) {
+          await db.batch(conflictAuditStmts.slice(i, i + 100));
+        }
+        conflictAuditStmts.length = 0;
         processedChanges.length = 0; // 清空已处理的列表
       }
     }
@@ -866,25 +906,30 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
     } catch (e) {
       serverLogger.error('src.routers.sync', '[SYNC] JSON.stringify failed');
     }
-    if (error instanceof Error) {
-      serverLogger.error('src.routers.sync', '[SYNC] Error message:', error.message);
-      serverLogger.error('src.routers.sync', '[SYNC] Error stack:', error.stack);
-      // 诊断：500 异常摘要落库（失败不阻塞响应），便于直接查 D1 定位
-      try {
-        await db.prepare(
-          `INSERT INTO audit_logs (user_id, action, details_json, level, logger, created_at)
-           VALUES (?, 'sync_push_error', ?, 'ERROR', 'sync.diag', ?)`
-        ).bind(
-          userId,
-          JSON.stringify({ message: error.message, stack: (error.stack ?? '').slice(0, 2000), ts: new Date().toISOString() }),
-          new Date().toISOString(),
-        ).run();
-      } catch {}
+    const errMessage = error instanceof Error
+      ? error.message
+      : (typeof error === 'string' ? error : JSON.stringify(error)?.slice(0, 500) ?? 'Unknown error');
+    const errStack = error instanceof Error ? (error.stack ?? '') : '';
+    serverLogger.error('src.routers.sync', '[SYNC] Error message:', errMessage);
+    if (errStack) serverLogger.error('src.routers.sync', '[SYNC] Error stack:', errStack);
+    // 诊断：500 异常摘要落库（失败不阻塞响应），便于直接查 D1 定位
+    try {
+      await db.prepare(
+        `INSERT INTO audit_logs (user_id, action, details_json, level, logger, created_at)
+         VALUES (?, 'sync_push_error', ?, 'ERROR', 'sync.diag', ?)`
+      ).bind(
+        userId,
+        JSON.stringify({ message: errMessage, stack: errStack.slice(0, 2000), ts: new Date().toISOString() }),
+        new Date().toISOString(),
+      ).run();
+    } catch (diagErr) {
+      serverLogger.error('src.routers.sync', '[SYNC] sync.diag insert failed:', diagErr);
     }
     serverLogger.error('src.routers.sync', '[SYNC] /sync/push error - END ======================================');
     serverLogger.info('src.routers.sync', `[SYNC] ===== ${CODE_VERSION} ERROR =====`);
     
-    return c.json({ error: 'Internal server error' }, 500);
+    // 响应体带上真实错误摘要（app debugPrint 会打出来，便于定位）
+    return c.json({ error: 'Internal server error', detail: errMessage.slice(0, 300) }, 500);
   }
 });
 
@@ -1358,6 +1403,38 @@ syncRouter.get('/full', async (c) => {
 // applyUserChangeToProjection - 应用 user-global 变更到投影表
 // ---------------------------------------------------------------------------
 
+async function preloadUserGlobalProjections(
+  db: D1Database,
+  userId: string,
+  changes: Array<{ entity_type: string; entity_sync_id: string }>,
+): Promise<Map<string, Map<string, any>>> {
+  const result = new Map<string, Map<string, any>>();
+  const byType = new Map<string, string[]>();
+  for (const ch of changes) {
+    if (!byType.has(ch.entity_type)) byType.set(ch.entity_type, []);
+    const list = byType.get(ch.entity_type)!;
+    if (!list.includes(ch.entity_sync_id)) list.push(ch.entity_sync_id);
+  }
+  for (const [type, syncIds] of byType.entries()) {
+    const table = type === 'category' ? 'read_category_projection'
+      : type === 'account' ? 'read_account_projection'
+      : type === 'tag' ? 'read_tag_projection'
+      : null;
+    if (!table) continue;
+    const typeMap = new Map<string, any>();
+    for (let i = 0; i < syncIds.length; i += 30) {
+      const chunkIds = syncIds.slice(i, i + 30);
+      const placeholders = chunkIds.map(() => '?').join(',');
+      const rows = await db.prepare(
+        `SELECT * FROM ${table} WHERE user_id = ? AND sync_id IN (${placeholders}) AND ledger_id IS NULL`
+      ).bind(userId, ...chunkIds).all<any>();
+      for (const r of rows.results) typeMap.set(r.sync_id, r);
+    }
+    if (typeMap.size > 0) result.set(type, typeMap);
+  }
+  return result;
+}
+
 async function applyUserChangeToProjection(
   db: D1Database,
   userId: string,
@@ -1369,6 +1446,8 @@ async function applyUserChangeToProjection(
     payload: Record<string, unknown>;
   },
   r2?: R2Bucket,
+  preloadedRow?: any,
+  batchCollector?: any[],
 ): Promise<void> {
   const { entity_type, entity_sync_id, action, payload } = change;
 
