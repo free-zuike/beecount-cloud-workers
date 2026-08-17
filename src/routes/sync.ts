@@ -333,7 +333,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         ledgerMap[ledger.external_id] = ledger;
       }
       
-      // 创建不存在的账本（批量）
+      // 创建不存在的账本（批量，同事务原子）
       for (const externalId of ledgerExternalIds) {
         if (!ledgerMap[externalId]) {
           // 先检查是否已存在（避免 UNIQUE 约束错误）
@@ -344,21 +344,19 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           }
           serverLogger.info('src.routers.sync', '[SYNC] Creating new ledger:', externalId);
           const newLedgerId = randomUUID();
-          await db
-            .prepare(
+          await db.batch([
+            db.prepare(
               `INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
                VALUES (?, ?, ?, ?, 'CNY', ?)`
             )
-            .bind(newLedgerId, userId, externalId, externalId, serverNow)
-            .run();
-          // 与原版对齐：自动创建 owner 成员记录
-          await db
-            .prepare(
+              .bind(newLedgerId, userId, externalId, externalId, serverNow),
+            // 与原版对齐：自动创建 owner 成员记录
+            db.prepare(
               `INSERT INTO ledger_members (ledger_id, user_id, role, joined_at)
                VALUES (?, ?, 'owner', ?)`
             )
-            .bind(newLedgerId, userId, serverNow)
-            .run();
+              .bind(newLedgerId, userId, serverNow),
+          ]);
           ledgerMap[externalId] = { id: newLedgerId, user_id: userId, external_id: externalId };
         }
       }

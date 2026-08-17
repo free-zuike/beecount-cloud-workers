@@ -200,16 +200,17 @@ authRouter.post('/register', zValidator('json', z.object({
   const userId = randomUUID();
   const passwordHash = await hashPassword(password);
 
-  await db.prepare(`
-    INSERT INTO users (id, email, password_hash, is_admin, is_enabled)
-    VALUES (?, ?, ?, 0, 1)
-  `).bind(userId, email, passwordHash).run();
-
-  // Create user profile with default AI config
-  await db.prepare(`
-    INSERT INTO user_profiles (user_id, display_name, ai_config_json)
-    VALUES (?, ?, ?)
-  `).bind(userId, email, DEFAULT_AI_CONFIG).run();
+  // users + user_profiles 同事务写入（对齐原版 db.commit() 单事务）
+  await db.batch([
+    db.prepare(
+      `INSERT INTO users (id, email, password_hash, is_admin, is_enabled)
+       VALUES (?, ?, ?, 0, 1)`
+    ).bind(userId, email, passwordHash),
+    db.prepare(
+      `INSERT INTO user_profiles (user_id, display_name, ai_config_json)
+       VALUES (?, ?, ?)`
+    ).bind(userId, email, DEFAULT_AI_CONFIG),
+  ]);
 
   // Create device（使用 upsert 处理跨用户冲突）
   const finalDeviceId = await upsertDevice(
