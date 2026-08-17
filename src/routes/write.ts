@@ -564,17 +564,19 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
     return c.json({ error: 'No ledger found' }, 400);
   }
 
-  // 写入 SyncChange delete tombstone
-  const changeResult = await db
-    .prepare(
+  // 删除交易：tombstone + projection 删除必须在同一事务内原子执行
+  // （db.batch = SQL transaction，任一失败整批回滚，避免"tombstone 已提交但投影未删"的半状态）
+  const batchResults = await db.batch([
+    db.prepare(
       `INSERT INTO sync_changes
        (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
-    )
-    .bind(userId, ledger.id, 'transaction', txSyncId, 'delete', '{}', serverNow, userId)
-    .run();
+    ).bind(userId, ledger.id, 'transaction', txSyncId, 'delete', '{}', serverNow, userId),
+    db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+      .bind(ledger.id, txSyncId),
+  ]);
 
-  const newChangeId = changeResult.meta.last_row_id as number;
+  const newChangeId = batchResults[0].meta.last_row_id as number;
 
   // 删除前先收集交易关联的附件 fileId，用于清理 R2 文件
   const attRows = await db
@@ -600,14 +602,9 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
     } catch {}
   }
 
-  // 从 projection 删除
-  await db
-    .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
-    .bind(ledger.id, txSyncId)
-    .run();
-
   // 清理附件记录和 R2 文件（检查是否仍被其他 tx 引用，与原版 gc_orphan_attachments 对齐）
-  // D1 无事务，tombstone 已写入后附件清理失败不应阻塞响应（best-effort）
+  // 附件清理依赖删除后投影的引用检查 + R2 文件无法事务化，保持 best-effort
+  // （对齐原版 file_ops 在 commit 后执行；共享附件被其他交易引用时自动保留）
   try {
     for (const fid of fileIdsToClean) {
       const att = attRows.results.find(r => r.id === fid);
@@ -803,19 +800,15 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     }
   }
 
-  const syncChangeResult = await db
-    .prepare(
-      `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
-    )
-    .bind(userId, ledger.id, 'transaction', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId)
-    .run();
-  const newChangeId = syncChangeResult.meta.last_row_id as number;
-
-  try {
-    await db
-      .prepare(
+  // sync_changes + projection 同事务原子写入（db.batch = SQL transaction，
+    // 任一失败整批回滚，无需手动回删 sync_changes）
+    const batchResults = await db.batch([
+      db.prepare(
+        `INSERT INTO sync_changes
+         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
+      ).bind(userId, ledger.id, 'transaction', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId),
+      db.prepare(
         `INSERT INTO read_tx_projection
          (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
           category_sync_id, category_name, category_kind,
@@ -826,27 +819,24 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
           exclude_from_stats, exclude_from_budget,
           created_by_user_id, last_edited_by_user_id,
           currency_code, native_amount)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .bind(
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()),
+         ?, ?, ?, ?, ?, ?)`
+      ).bind(
         ledger.id, syncId, userId, req.tx_type, req.amount, happenedAt,
         req.note ?? null, req.category_id ?? null, req.category_name ?? null, req.category_kind ?? null,
         req.account_id ?? null, req.account_name ?? null,
         req.from_account_id ?? null, req.from_account_name ?? null,
         req.to_account_id ?? null, req.to_account_name ?? null,
         resolvedTagsCsv, req.tag_ids ? safeJsonStringify(req.tag_ids) : null,
-        req.attachments ? safeJsonStringify(req.attachments) : null, 0, newChangeId,
+        req.attachments ? safeJsonStringify(req.attachments) : null, 0,
         req.exclude_from_stats != null ? (req.exclude_from_stats ? 1 : 0) : null,
         req.exclude_from_budget != null ? (req.exclude_from_budget ? 1 : 0) : null,
         userId, userId,
         req.currency_code ?? req.currencyCode ?? null,
         req.native_amount ?? req.nativeAmount ?? null,
-      )
-      .run();
-  } catch (projErr) {
-    await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(newChangeId).run();
-    throw projErr;
-  }
+      ),
+    ]);
+    const newChangeId = batchResults[0].meta.last_row_id as number;
 
   serverLogger.info('src.routers.write', '[WRITE] Transaction created successfully, syncId:', syncId, 'ledger.id:', ledger.id);
 

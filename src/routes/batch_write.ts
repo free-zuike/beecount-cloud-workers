@@ -237,19 +237,13 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
       createdByUserId: userId,
     };
 
-    const insertResult = await db
-      .prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+    // sync_changes + projection 同事务原子写入（db.batch = SQL transaction，
+    // 任一失败整批回滚，不再需要"投影失败回删 sync_changes"的手动补偿）
+    const batchResults = await db.batch([
+      db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
         VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, ?, ?, 'ledger')`)
-      .bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, deviceId)
-      .run();
-
-    const changeId = (insertResult as any).lastRowId;
-    maxChangeId = Math.max(maxChangeId, changeId);
-
-    // 更新 projection（失败时回删 sync_changes）
-    try {
-      await db
-        .prepare(`INSERT OR REPLACE INTO read_tx_projection
+        .bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, deviceId),
+      db.prepare(`INSERT OR REPLACE INTO read_tx_projection
           (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
            category_sync_id, category_name, category_kind,
            account_sync_id, account_name,
@@ -259,7 +253,8 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
            exclude_from_stats, exclude_from_budget,
            created_by_user_id, last_edited_by_user_id,
            currency_code, native_amount)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()),
+          ?, ?, ?, ?, ?, ?)`)
         .bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null,
           categorySyncId, tx.category_name || null, tx.category_kind || null,
           accountSyncId, tx.account_name || null,
@@ -268,17 +263,16 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
           tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null,
           tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null,
           mergeSharedAttachment(tx.attachments, sharedAttachment) ? safeJsonStringify(mergeSharedAttachment(tx.attachments, sharedAttachment)) : null,
-          0, changeId,
+          0,
           tx.exclude_from_stats != null ? (tx.exclude_from_stats ? 1 : 0) : null,
           tx.exclude_from_budget != null ? (tx.exclude_from_budget ? 1 : 0) : null,
           userId, userId,
           tx.currency_code ?? tx.currencyCode ?? null,
-          tx.native_amount ?? tx.nativeAmount ?? null,)
-        .run();
-    } catch (projErr) {
-      await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(changeId).run();
-      throw projErr;
-    }
+          tx.native_amount ?? tx.nativeAmount ?? null,),
+    ]);
+
+    const changeId = batchResults[0].meta.last_row_id as number;
+    maxChangeId = Math.max(maxChangeId, changeId);
 
     createdSyncIds.push(txSyncId);
   }
