@@ -469,6 +469,9 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
     const userGlobalChanges = changes.filter(c => USER_GLOBAL_TYPES.includes(c.entity_type) && !c.ledger_id);
     const userGlobalPreloaded = await preloadUserGlobalProjections(db, userId, userGlobalChanges.map(c => ({ entity_type: c.entity_type, entity_sync_id: c.entity_sync_id })));
 
+    // 冲突审计日志收集器：批量执行替代逐条 INSERT，避免超 api_limit
+    const conflictAuditStmts: any[] = [];
+
     for (let startIdx = 0; startIdx < changes.length; startIdx += BATCH_INSERT_SIZE) {
       const batchChanges = changes.slice(startIdx, startIdx + BATCH_INSERT_SIZE);
       serverLogger.info('src.routers.sync', '[SYNC] Processing insertion batch', Math.floor(startIdx / BATCH_INSERT_SIZE) + 1, 'with', batchChanges.length, 'changes');
@@ -557,20 +560,24 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           if (conflictList.length < 20) {
             conflictList.push(conflictSample);
           }
-          // 原版对齐：冲突写审计日志
-          await insertAuditLog({
-            db, userId,
-            ledgerId: isUserGlobal ? null : (ledgerRowId ?? null),
-            action: 'sync_push',
-            entityType: 'sync_conflict',
-            details: {
-              ...conflictSample,
-              incomingUpdatedAt: clampedUpdatedAt.toISOString(),
-              existingUpdatedAt: new Date(existingTuple.ts).toISOString(),
-              incomingDeviceId: deviceId,
-              existingDeviceId: existingTuple.deviceId,
-            },
-          });
+          // 原版对齐：冲突写审计日志（收集到 batch 数组，避免逐条 INSERT 超 api_limit）
+          const auditDetails = {
+            ...conflictSample,
+            incomingUpdatedAt: clampedUpdatedAt.toISOString(),
+            existingUpdatedAt: new Date(existingTuple.ts).toISOString(),
+            incomingDeviceId: deviceId,
+            existingDeviceId: existingTuple.deviceId,
+          };
+          conflictAuditStmts.push(
+            db.prepare(
+              `INSERT INTO audit_logs (user_id, ledger_id, action, entity_type, entity_id, details_json, level, logger)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+            ).bind(
+              userId, isUserGlobal ? null : (ledgerRowId ?? null),
+              'sync_push', 'sync_conflict', null,
+              safeJsonStringify(auditDetails), 'INFO', null,
+            ),
+          );
           continue;
         }
 
@@ -713,6 +720,11 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         for (let i = 0; i < batchCollector.length; i += 100) {
           await db.batch(batchCollector.slice(i, i + 100));
         }
+        // 批量执行冲突审计 INSERT（100 条/批，避免逐条 INSERT 超 api_limit）
+        for (let i = 0; i < conflictAuditStmts.length; i += 100) {
+          await db.batch(conflictAuditStmts.slice(i, i + 100));
+        }
+        conflictAuditStmts.length = 0;
         processedChanges.length = 0; // 清空已处理的列表
       }
     }
