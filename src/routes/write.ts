@@ -611,12 +611,15 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
       if (!att) continue;
 
       // 检查是否仍被其他 tx 的 attachments_json 引用（用 INSTR 替代 LIKE 避免 SQLite 模式复杂度限制）
+      // 按 ledger 而不是 user 扫 —— 对齐原版 _fileid_still_referenced_in_ledger：
+      // 共享账本里 Editor 上传的附件 user_id=Editor，但投影行可能挂在 owner user_id 下，
+      // 按 user 过滤会漏判 → 误删共享附件。
       const patNoSpace = `"cloudFileId":"${fid}"`;
       const patWithSpace = `"cloudFileId": "${fid}"`;
       const stillReferenced = await db.prepare(
         `SELECT COUNT(*) as cnt FROM read_tx_projection
-         WHERE user_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0)`
-      ).bind(userId, patNoSpace, patWithSpace).first<{ cnt: number }>();
+         WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0)`
+      ).bind(ledger.id, patNoSpace, patWithSpace).first<{ cnt: number }>();
 
       if (stillReferenced && stillReferenced.cnt > 0) continue;
 

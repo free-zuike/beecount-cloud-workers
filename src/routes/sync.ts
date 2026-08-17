@@ -1744,38 +1744,57 @@ async function applyChangeToProjection(
   switch (change.entity_type) {
     case 'transaction': {
       if (change.action === 'delete') {
-        // 删除前收集附件文件 ID（与原版 gc_orphan_attachments_for_ledger 对齐）
-        if (r2) {
+        // 删除前先收集附件 fileId（删投影后 attachments_json 就没了），
+        // 再删投影，最后 gc 孤立附件 —— 对齐原版 sync_applier._delete_tx：
+        // collect → delete tx → gc_orphan_attachments_for_ledger。
+        // tombstone 的 sync_changes 已由 push 插入，这里只做投影副作用。
+        const txRow = await db.prepare(
+          'SELECT attachments_json FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?'
+        ).bind(ledgerId, change.entity_sync_id).first<{ attachments_json: string | null }>();
+
+        const fileIdsToClean: string[] = [];
+        if (txRow?.attachments_json) {
           try {
-            const txRow = await db.prepare(
-              'SELECT attachments_json FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?'
-            ).bind(ledgerId, change.entity_sync_id).first<{ attachments_json: string | null }>();
-            if (txRow?.attachments_json) {
-              const attachments = JSON.parse(txRow.attachments_json);
-              if (Array.isArray(attachments)) {
-                for (const att of attachments) {
-                  // attachments_json 里附件对象用 cloudFileId 字段（与 write.ts 删除逻辑一致）
-                  const fileId = att.cloudFileId || att.id || att.file_id;
-                  if (fileId) {
-                    // 从 attachment_files 获取 storage_path
-                    const attFile = await db.prepare(
-                      "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'transaction'"
-                    ).bind(fileId).first<{ storage_path: string }>();
-                    if (attFile?.storage_path) {
-                      try { await r2.delete(attFile.storage_path); } catch {}
-                    }
-                    await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
-                  }
-                }
+            const attachments = JSON.parse(txRow.attachments_json);
+            if (Array.isArray(attachments)) {
+              for (const att of attachments) {
+                // attachments_json 里附件对象用 cloudFileId 字段（与 write.ts 删除逻辑一致）
+                const fileId = att.cloudFileId || att.id || att.file_id;
+                if (fileId && !fileIdsToClean.includes(fileId)) fileIdsToClean.push(fileId);
               }
             }
           } catch {}
         }
 
-        await db
-          .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+        // 删投影
+        await db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
           .bind(ledgerId, change.entity_sync_id)
           .run();
+
+        // gc 孤立附件：仍被本 ledger 下任何交易引用则保留，完全孤立才删
+        // （对齐原版 gc_orphan_attachments_for_ledger + _fileid_still_referenced_in_ledger）。
+        // R2 删除是外部副作用，无法事务化，做 best-effort。
+        for (const fileId of fileIdsToClean) {
+          const attFile = await db.prepare(
+            "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'transaction'"
+          ).bind(fileId).first<{ storage_path: string }>();
+          if (!attFile) continue;
+
+          // 是否仍被本 ledger 下其他交易引用（共享附件保留）
+          const patNoSpace = `"cloudFileId":"${fileId}"`;
+          const patWithSpace = `"cloudFileId": "${fileId}"`;
+          const stillReferenced = await db.prepare(
+            `SELECT COUNT(*) as cnt FROM read_tx_projection
+             WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0)`
+          ).bind(ledgerId, patNoSpace, patWithSpace).first<{ cnt: number }>();
+          if (stillReferenced && stillReferenced.cnt > 0) continue;
+
+          if (r2 && attFile.storage_path) {
+            try { await r2.delete(attFile.storage_path); } catch {}
+          }
+          await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
+        }
+
         // 与原版 _compact_entity_upsert_events 对齐：清理 upsert 历史
         await db.prepare(
           `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'transaction' AND entity_sync_id = ? AND action != 'delete'`
