@@ -229,11 +229,11 @@ const syncRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) => {
   serverLogger.info('src.routers.sync', `[SYNC] ===== ${CODE_VERSION} START =====`);
+  const userId = c.get('userId');
+  const db = c.env.DB;
   try {
     serverLogger.info('src.routers.sync', '[SYNC] /sync/push started');
-    const userId = c.get('userId');
     serverLogger.info('src.routers.sync', '[SYNC] userId:', userId);
-    const db = c.env.DB;
     const req = c.req.valid('json');
     const entityCounts: Record<string, number> = {};
     for (const ch of (req.changes || [])) {
