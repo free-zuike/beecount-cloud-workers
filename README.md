@@ -19,7 +19,7 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 | 密码混淆 | rclone obscure | 无 | 无法运行 rclone CLI |
 | 定时任务 | APScheduler (Python 线程) | waitUntil (Workers 异步) | 运行时限制 |
 | 并行备份 | rclone fan-out | Promise.allSettled | Workers 原生并行 |
-| 投影事务 | DB transaction rollback | 单条 try/catch | D1 不支持跨语句事务 |
+| 项目事务 | DB transaction (commit/rollback) | db.batch 原子事务 | D1 原生支持 batch 多语句事务，已对齐原版语义 |
 | 备份加密 | age + pyzipper (WZ_AES) | AES-256-GCM (Web Crypto) | 无法运行 age CLI |
 | OAuth2 备份 | rclone 处理 OAuth2 | 直接调用 REST API | Workers 内实现 |
 | 指标监控 | Prometheus | 无 | 无 statsd 基础设施 |
