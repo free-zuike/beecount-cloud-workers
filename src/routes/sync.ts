@@ -1612,8 +1612,9 @@ async function applyUserChangeToProjection(
 
     if (stmts2.length > 0) await db.batch(stmts2);
   } else if (entity_type === 'tag') {
-    // Rename cascade：标签改名时更新 read_tx_projection 的 tags_csv
+    // Rename cascade：标签改名时更新 read_tx_projection 的 tags_csv（同事务原子写入）
     const newName = (payload.name as string) ?? null;
+    const tagStmts: any[] = [];
     if (newName) {
       const prevRow = await db.prepare('SELECT name FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
         .bind(entity_sync_id, userId).first<{ name: string | null }>();
@@ -1630,14 +1631,16 @@ async function applyUserChangeToProjection(
           const parts = tx.tags_csv.split(',').map(p => p.trim());
           const replaced = parts.map(p => p === oldName ? newName : p);
           if (replaced.join(',') !== parts.join(',')) {
-            await db.prepare('UPDATE read_tx_projection SET tags_csv = ? WHERE ledger_id = ? AND sync_id = ?')
-              .bind(replaced.join(','), tx.ledger_id, tx.sync_id).run();
+            tagStmts.push(
+              db.prepare('UPDATE read_tx_projection SET tags_csv = ? WHERE ledger_id = ? AND sync_id = ?')
+                .bind(replaced.join(','), tx.ledger_id, tx.sync_id),
+            );
           }
         }
       }
     }
 
-    // merge_with_existing
+    // merge_with_existing + 投影 upsert
     const existingRow = await db.prepare(
       'SELECT name, color FROM read_tag_projection WHERE sync_id = ? AND user_id = ?'
     ).bind(entity_sync_id, userId).first<{ name: string | null; color: string | null }>();
@@ -1656,14 +1659,25 @@ async function applyUserChangeToProjection(
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
-      await db.prepare(
-        `UPDATE read_tag_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
-      ).bind(...vals).run();
+      tagStmts.push(
+        db.prepare(
+          `UPDATE read_tag_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+        ).bind(...vals),
+      );
     } else {
-      await db.prepare(
-        `INSERT OR REPLACE INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
+      tagStmts.push(
+        db.prepare(
+          `INSERT OR REPLACE INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0),
+      );
+    }
+
+    // 分块批量执行（D1 batch 最多 100 语句）
+    if (tagStmts.length > 0) {
+      for (let i = 0; i < tagStmts.length; i += 100) {
+        await db.batch(tagStmts.slice(i, i + 100));
+      }
     }
   } else if (entity_type === 'exchange_rate_override') {
     if (change.action === 'delete') {
