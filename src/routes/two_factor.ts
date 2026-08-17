@@ -22,7 +22,7 @@ import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
-import { validateAccessToken, createAccessToken, createRefreshToken, verifyPassword, base64urlDecode } from '../auth';
+import { validateAccessToken, createAccessToken, createRefreshToken, verifyPassword, base64urlDecode, sha256 } from '../auth';
 import { upsertDevice } from './auth';
 import { isRateLimited } from '../lib/rate-limit';
 
@@ -425,19 +425,28 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
     app_version, os_version, device_model, c.req.header('CF-Connecting-IP')
   );
 
-  // 创建 DB-backed refresh token —— 使用与 access_token 相同的 scopes
-  const refreshToken = await createRefreshToken(user.id, resolvedDeviceId, db, isApp ? 'app' : 'web', tokenScopes, jwtSecret);
+  // 创建 refresh token + 清理旧 token 同事务原子写入（对齐原版单 commit）
+  const refreshExpiresIn = 30 * 24 * 60 * 60;
+  const refreshTokenValue = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes, refreshExpiresIn, 'refresh');
+  const refreshTokenHash = Array.from(new Uint8Array(await sha256(new TextEncoder().encode(refreshTokenValue)))).map(b => b.toString(16).padStart(2, '0')).join('');
+  const refreshExpiresAt = new Date(Date.now() + refreshExpiresIn * 1000);
+  const refreshTokenId = randomUUID();
 
-  // 清理该设备的旧 token（过期 + 已撤销），防止无限堆积
-  await db.prepare(
-    "DELETE FROM refresh_tokens WHERE user_id = ? AND device_id = ? AND (revoked_at IS NOT NULL OR expires_at < datetime('now'))"
-  ).bind(user.id, resolvedDeviceId).run();
+  await db.batch([
+    db.prepare(
+      `INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at, client_type)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(refreshTokenId, user.id, resolvedDeviceId, refreshTokenHash, refreshExpiresAt.toISOString(), isApp ? 'app' : 'web'),
+    db.prepare(
+      "DELETE FROM refresh_tokens WHERE user_id = ? AND device_id = ? AND (revoked_at IS NOT NULL OR expires_at < datetime('now'))"
+    ).bind(user.id, resolvedDeviceId),
+  ]);
 
   return c.json({
     requires_2fa: false,
     user: { id: user.id, email: user.email, is_admin: Boolean((user as any).is_admin) },
     access_token: accessToken,
-    refresh_token: refreshToken.token,
+    refresh_token: refreshTokenValue,
     expires_in: 3600,
     device_id: resolvedDeviceId,
     scopes: tokenScopes,

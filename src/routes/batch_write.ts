@@ -112,10 +112,13 @@ async function consumeAiImageAsAttachment(
     const obj = await env.R2.get(cacheRow.r2_key);
     if (obj) imageBytes = new Uint8Array(await obj.arrayBuffer());
   }
-  // 无论成功与否都删除缓存（一次性消费；找不到 = 已过期/异用户/无 R2，静默跳过）
-  await db.prepare('DELETE FROM ai_image_cache WHERE image_id = ?').bind(attachImageId).run().catch(() => {});
+  // R2 缓存文件无论成功与否都清理（best-effort，外部副作用无法事务化）
   if (cacheRow?.r2_key && env.R2) await env.R2.delete(cacheRow.r2_key).catch(() => {});
-  if (!imageBytes) return null;
+  if (!imageBytes) {
+    // 缓存已过期/异用户/无 R2：删 DB 缓存行后返回 null
+    await db.prepare('DELETE FROM ai_image_cache WHERE image_id = ?').bind(attachImageId).run().catch(() => {});
+    return null;
+  }
 
   const hashBuf = await crypto.subtle.digest('SHA-256', imageBytes.slice().buffer);
   const sha256 = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -124,6 +127,8 @@ async function consumeAiImageAsAttachment(
     .bind(sha256, ledger.id)
     .first<{ id: string }>();
   if (existing) {
+    // 去重命中：删缓存行后返回已有附件
+    await db.prepare('DELETE FROM ai_image_cache WHERE image_id = ?').bind(attachImageId).run().catch(() => {});
     return {
       cloudFileId: existing.id,
       fileName: 'screenshot.jpg',
@@ -139,11 +144,15 @@ async function consumeAiImageAsAttachment(
   if (env.R2) {
     await env.R2.put(r2Key, imageBytes, { httpMetadata: { contentType: mime } });
   }
-  await db.prepare(
-    `INSERT INTO attachment_files
-     (id, ledger_id, user_id, sha256, size_bytes, mime_type, file_name, storage_path, attachment_kind, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'transaction', ?)`
-  ).bind(fileId, ledger.id, userId, sha256, cacheRow!.size_bytes, mime, `screenshot${fileExt}`, r2Key, nowUtc()).run();
+  // 删缓存 + 插附件同事务原子写入
+  await db.batch([
+    db.prepare('DELETE FROM ai_image_cache WHERE image_id = ?').bind(attachImageId),
+    db.prepare(
+      `INSERT INTO attachment_files
+       (id, ledger_id, user_id, sha256, size_bytes, mime_type, file_name, storage_path, attachment_kind, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'transaction', ?)`
+    ).bind(fileId, ledger.id, userId, sha256, cacheRow!.size_bytes, mime, `screenshot${fileExt}`, r2Key, nowUtc()),
+  ]);
   return {
     cloudFileId: fileId,
     fileName: `screenshot${fileExt}`,
