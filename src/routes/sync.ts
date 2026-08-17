@@ -486,6 +486,9 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         stmt: any;
         change: typeof changes[0];
         ledgerRow: typeof ledgerMap[string] | null;
+        lwwKey: string;
+        lwwTs: string;
+        lwwDevice: string;
       }> = [];
 
       for (const change of batchChanges) {
@@ -632,6 +635,9 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           ).bind(...bindParams),
           change,
           ledgerRow: isUserGlobal ? null : { id: ledgerRowId as string, user_id: userId, external_id: '' },
+          lwwKey: key,
+          lwwTs: clampedUpdatedAt.toISOString(),
+          lwwDevice: deviceId ?? 'unknown',
         });
 
         if (!isUserGlobal && ledgerRowId) {
@@ -667,10 +673,14 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         
         // 记录处理的变更以便后续应用投影
         for (let i = 0; i < insertPromises.length; i++) {
-          const { change, ledgerRow } = insertPromises[i];
+          const { change, ledgerRow, lwwKey, lwwTs, lwwDevice } = insertPromises[i];
           const changeId = allResults[i].meta.last_row_id as number;
           maxCursor = Math.max(maxCursor, changeId);
           processedChanges.push({ change, ledgerRow, newChangeId: changeId });
+          // 更新冲突 map：同批内后续重复实体按幂等跳过（对齐原版 flush 语义）
+          if (lwwKey) {
+            existingChangeMap.set(lwwKey, { change_id: changeId, updated_at: lwwTs, updated_by_device_id: lwwDevice });
+          }
         }
 
         // 按批预载 user-global 投影已有的行（一次查询替代每个变更一次 SELECT）
