@@ -333,7 +333,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         ledgerMap[ledger.external_id] = ledger;
       }
       
-      // 创建不存在的账本（批量）
+      // 创建不存在的账本（批量，同事务原子）
       for (const externalId of ledgerExternalIds) {
         if (!ledgerMap[externalId]) {
           // 先检查是否已存在（避免 UNIQUE 约束错误）
@@ -344,21 +344,19 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
           }
           serverLogger.info('src.routers.sync', '[SYNC] Creating new ledger:', externalId);
           const newLedgerId = randomUUID();
-          await db
-            .prepare(
+          await db.batch([
+            db.prepare(
               `INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
                VALUES (?, ?, ?, ?, 'CNY', ?)`
             )
-            .bind(newLedgerId, userId, externalId, externalId, serverNow)
-            .run();
-          // 与原版对齐：自动创建 owner 成员记录
-          await db
-            .prepare(
+              .bind(newLedgerId, userId, externalId, externalId, serverNow),
+            // 与原版对齐：自动创建 owner 成员记录
+            db.prepare(
               `INSERT INTO ledger_members (ledger_id, user_id, role, joined_at)
                VALUES (?, ?, 'owner', ?)`
             )
-            .bind(newLedgerId, userId, serverNow)
-            .run();
+              .bind(newLedgerId, userId, serverNow),
+          ]);
           ledgerMap[externalId] = { id: newLedgerId, user_id: userId, external_id: externalId };
         }
       }
@@ -465,10 +463,6 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
       newChangeId: number;
     }> = [];
 
-    // 全量预载 user-global 投影已有的行（一次查询替代每批多次 SELECT，大幅减少 D1 调用数）
-    const userGlobalChanges = changes.filter(c => USER_GLOBAL_TYPES.includes(c.entity_type) && !c.ledger_id);
-    const userGlobalPreloaded = await preloadUserGlobalProjections(db, userId, userGlobalChanges.map(c => ({ entity_type: c.entity_type, entity_sync_id: c.entity_sync_id })));
-
     for (let startIdx = 0; startIdx < changes.length; startIdx += BATCH_INSERT_SIZE) {
       const batchChanges = changes.slice(startIdx, startIdx + BATCH_INSERT_SIZE);
       serverLogger.info('src.routers.sync', '[SYNC] Processing insertion batch', Math.floor(startIdx / BATCH_INSERT_SIZE) + 1, 'with', batchChanges.length, 'changes');
@@ -487,12 +481,9 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
       }
       
       const insertPromises: Array<{
-        stmt: any;
+        result: Promise<{ meta: { last_row_id: number } }>;
         change: typeof changes[0];
         ledgerRow: typeof ledgerMap[string] | null;
-        lwwKey: string;
-        lwwTs: string;
-        lwwDevice: string;
       }> = [];
 
       for (const change of batchChanges) {
@@ -557,15 +548,20 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           if (conflictList.length < 20) {
             conflictList.push(conflictSample);
           }
-          // 原版对齐：冲突写审计日志（收集到 batch 数组，避免逐条 INSERT 超 api_limit）
-          const auditDetails = {
-            ...conflictSample,
-            incomingUpdatedAt: clampedUpdatedAt.toISOString(),
-            existingUpdatedAt: new Date(existingTuple.ts).toISOString(),
-            incomingDeviceId: deviceId,
-            existingDeviceId: existingTuple.deviceId,
-          };
-          // 冲突拒绝：不写审计日志（避免逐条 INSERT 超 api_limit，冲突计数已计入 final sync_push 审计）
+          // 原版对齐：冲突写审计日志
+          await insertAuditLog({
+            db, userId,
+            ledgerId: isUserGlobal ? null : (ledgerRowId ?? null),
+            action: 'sync_push',
+            entityType: 'sync_conflict',
+            details: {
+              ...conflictSample,
+              incomingUpdatedAt: clampedUpdatedAt.toISOString(),
+              existingUpdatedAt: new Date(existingTuple.ts).toISOString(),
+              incomingDeviceId: deviceId,
+              existingDeviceId: existingTuple.deviceId,
+            },
+          });
           continue;
         }
 
@@ -627,16 +623,13 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           }
         }
         insertPromises.push({
-          stmt: db.prepare(
+          result: db.prepare(
             `INSERT INTO sync_changes
              (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id, scope)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          ).bind(...bindParams),
+          ).bind(...bindParams).run(),
           change,
           ledgerRow: isUserGlobal ? null : { id: ledgerRowId as string, user_id: userId, external_id: '' },
-          lwwKey: key,
-          lwwTs: clampedUpdatedAt.toISOString(),
-          lwwDevice: deviceId ?? 'unknown',
         });
 
         if (!isUserGlobal && ledgerRowId) {
@@ -658,32 +651,20 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         }
       }
 
-      // 执行这一批次的插入（分块 db.batch：一次批量 = 1 次 D1 API 请求，
-      // 大幅减少 API 调用数，避免超 Worker api_limit 上限）
+      // 执行这一批次的插入
       if (insertPromises.length > 0) {
-        const stmts = insertPromises.map(p => p.stmt);
-        const allResults: { meta: { last_row_id: number } }[] = [];
-        for (let i = 0; i < stmts.length; i += 100) {
-          const chunk = stmts.slice(i, i + 100);
-          const res = await db.batch(chunk);
-          allResults.push(...res);
-        }
-        accepted += allResults.length;
+        const results = await Promise.all(insertPromises.map(p => p.result));
+        accepted += results.length;
         
         // 记录处理的变更以便后续应用投影
         for (let i = 0; i < insertPromises.length; i++) {
-          const { change, ledgerRow, lwwKey, lwwTs, lwwDevice } = insertPromises[i];
-          const changeId = allResults[i].meta.last_row_id as number;
+          const { change, ledgerRow } = insertPromises[i];
+          const changeId = results[i].meta.last_row_id as number;
           maxCursor = Math.max(maxCursor, changeId);
           processedChanges.push({ change, ledgerRow, newChangeId: changeId });
-          // 更新冲突 map：同批内后续重复实体按幂等跳过（对齐原版 flush 语义）
-          if (lwwKey) {
-            existingChangeMap.set(lwwKey, { change_id: changeId, updated_at: lwwTs, updated_by_device_id: lwwDevice });
-          }
         }
 
-        // 立即应用这一批次的投影更新（收集写入语句后分块 db.batch 执行，减少 D1 调用数）
-        const batchCollector: any[] = [];
+        // 立即应用这一批次的投影更新（避免一次性处理太多）
         for (const { change, ledgerRow, newChangeId } of processedChanges) {
           if (isUserGlobalType(change.entity_type)) {
               await applyUserChangeToProjection(db, userId, {
@@ -692,7 +673,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
                 entity_sync_id: change.entity_sync_id,
                 action: change.action,
                 payload: change.payload,
-              }, c.env.R2, userGlobalPreloaded.get(change.entity_type)?.get(change.entity_sync_id), batchCollector);
+              }, c.env.R2);
             } else if (ledgerRow) {
               await applyChangeToProjection(db, ledgerRow.id, userId, {
                 change_id: newChangeId,
@@ -703,10 +684,6 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
                 ledger_id: ledgerRow.id,
               }, c.env.R2);
             }
-        }
-        // 批量执行投影写入语句（100 条/批，1 批 = 1 次 D1 API 请求）
-        for (let i = 0; i < batchCollector.length; i += 100) {
-          await db.batch(batchCollector.slice(i, i + 100));
         }
         processedChanges.length = 0; // 清空已处理的列表
       }
@@ -889,30 +866,25 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
     } catch (e) {
       serverLogger.error('src.routers.sync', '[SYNC] JSON.stringify failed');
     }
-    const errMessage = error instanceof Error
-      ? error.message
-      : (typeof error === 'string' ? error : JSON.stringify(error)?.slice(0, 500) ?? 'Unknown error');
-    const errStack = error instanceof Error ? (error.stack ?? '') : '';
-    serverLogger.error('src.routers.sync', '[SYNC] Error message:', errMessage);
-    if (errStack) serverLogger.error('src.routers.sync', '[SYNC] Error stack:', errStack);
-    // 诊断：500 异常摘要落库（失败不阻塞响应），便于直接查 D1 定位
-    try {
-      await db.prepare(
-        `INSERT INTO audit_logs (user_id, action, details_json, level, logger, created_at)
-         VALUES (?, 'sync_push_error', ?, 'ERROR', 'sync.diag', ?)`
-      ).bind(
-        userId,
-        JSON.stringify({ message: errMessage, stack: errStack.slice(0, 2000), ts: new Date().toISOString() }),
-        new Date().toISOString(),
-      ).run();
-    } catch (diagErr) {
-      serverLogger.error('src.routers.sync', '[SYNC] sync.diag insert failed:', diagErr);
+    if (error instanceof Error) {
+      serverLogger.error('src.routers.sync', '[SYNC] Error message:', error.message);
+      serverLogger.error('src.routers.sync', '[SYNC] Error stack:', error.stack);
+      // 诊断：500 异常摘要落库（失败不阻塞响应），便于直接查 D1 定位
+      try {
+        await db.prepare(
+          `INSERT INTO audit_logs (user_id, action, details_json, level, logger, created_at)
+           VALUES (?, 'sync_push_error', ?, 'ERROR', 'sync.diag', ?)`
+        ).bind(
+          userId,
+          JSON.stringify({ message: error.message, stack: (error.stack ?? '').slice(0, 2000), ts: new Date().toISOString() }),
+          new Date().toISOString(),
+        ).run();
+      } catch {}
     }
     serverLogger.error('src.routers.sync', '[SYNC] /sync/push error - END ======================================');
     serverLogger.info('src.routers.sync', `[SYNC] ===== ${CODE_VERSION} ERROR =====`);
     
-    // 响应体带上真实错误摘要（app debugPrint 会打出来，便于定位）
-    return c.json({ error: 'Internal server error', detail: errMessage.slice(0, 300) }, 500);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
@@ -1386,39 +1358,6 @@ syncRouter.get('/full', async (c) => {
 // applyUserChangeToProjection - 应用 user-global 变更到投影表
 // ---------------------------------------------------------------------------
 
-/** 批量预载 user-global 投影已有行（一次查询替代每个变更一次 SELECT，减少 D1 调用数） */
-async function preloadUserGlobalProjections(
-  db: D1Database,
-  userId: string,
-  changes: Array<{ entity_type: string; entity_sync_id: string }>,
-): Promise<Map<string, Map<string, any>>> {
-  const result = new Map<string, Map<string, any>>();
-  const byType = new Map<string, string[]>();
-  for (const ch of changes) {
-    if (!byType.has(ch.entity_type)) byType.set(ch.entity_type, []);
-    const list = byType.get(ch.entity_type)!;
-    if (!list.includes(ch.entity_sync_id)) list.push(ch.entity_sync_id);
-  }
-  for (const [type, syncIds] of byType.entries()) {
-    const table = type === 'category' ? 'read_category_projection'
-      : type === 'account' ? 'read_account_projection'
-      : type === 'tag' ? 'read_tag_projection'
-      : null;
-    if (!table) continue;
-    const typeMap = new Map<string, any>();
-    for (let i = 0; i < syncIds.length; i += 30) {
-      const chunkIds = syncIds.slice(i, i + 30);
-      const placeholders = chunkIds.map(() => '?').join(',');
-      const rows = await db.prepare(
-        `SELECT * FROM ${table} WHERE user_id = ? AND sync_id IN (${placeholders}) AND ledger_id IS NULL`
-      ).bind(userId, ...chunkIds).all<any>();
-      for (const r of rows.results) typeMap.set(r.sync_id, r);
-    }
-    if (typeMap.size > 0) result.set(type, typeMap);
-  }
-  return result;
-}
-
 async function applyUserChangeToProjection(
   db: D1Database,
   userId: string,
@@ -1430,70 +1369,60 @@ async function applyUserChangeToProjection(
     payload: Record<string, unknown>;
   },
   r2?: R2Bucket,
-  preloadedRow?: any,
-  batchCollector?: any[],
 ): Promise<void> {
   const { entity_type, entity_sync_id, action, payload } = change;
 
-  /** 当从 push 路径调用时，把投影写入语句收集到 batchCollector 中批量执行
-   * 以大幅减少 D1 调用次数（每条变更 1 次 .run() → 100 条一批 1 次 db.batch）。 */
-  const batchOrRun = (stmt: any) => {
-    if (batchCollector) batchCollector.push(stmt);
-    else return stmt.run();
-    return undefined;
-  };
-
   if (action === 'delete') {
     if (entity_type === 'category') {
-      // 删除前清理分类图标 R2 文件（与原版 gc_orphan_attachments 对齐）
-      if (r2) {
+      // 删除前收集图标信息（SELECT 在外，batch 内只做 DB 写）
+      const catIcon = r2 ? await db.prepare(
+        'SELECT icon_cloud_file_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
+      ).bind(entity_sync_id, userId).first<{ icon_cloud_file_id: string | null }>() : null;
+      const fileId = catIcon?.icon_cloud_file_id;
+
+      // 删投影 + 紧凑化历史（同事务原子）
+      await db.batch([
+        db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+          .bind(entity_sync_id, userId),
+        db.prepare(
+          `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
+        ).bind(userId, entity_type, entity_sync_id),
+      ]);
+
+      // gc 孤立图标（best-effort，投影已删后才能检查引用）
+      if (fileId) {
         try {
-          const catIcon = await db.prepare(
-            'SELECT icon_cloud_file_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
-          ).bind(entity_sync_id, userId).first<{ icon_cloud_file_id: string | null }>();
-          if (catIcon?.icon_cloud_file_id) {
-            const fileId = catIcon.icon_cloud_file_id;
-            // 先删 projection 行（gc_orphan 要求目标行已删后再调）
-            await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
-              .bind(entity_sync_id, userId).run();
-            // 检查是否仍被其他 category 引用
-            const stillUsed = await db.prepare(
-              'SELECT COUNT(*) as cnt FROM read_category_projection WHERE icon_cloud_file_id = ? AND user_id = ?'
-            ).bind(fileId, userId).first<{ cnt: number }>();
-            if (!stillUsed || stillUsed.cnt === 0) {
-              // 无引用，安全删除 R2 + attachment_files
-              const iconRow = await db.prepare(
-                "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'category_icon'"
-              ).bind(fileId).first<{ storage_path: string }>();
-              if (iconRow?.storage_path && r2) {
-                try { await r2.delete(iconRow.storage_path); } catch {}
-              }
-              await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
+          const stillUsed = await db.prepare(
+            'SELECT COUNT(*) as cnt FROM read_category_projection WHERE icon_cloud_file_id = ? AND user_id = ?'
+          ).bind(fileId, userId).first<{ cnt: number }>();
+          if (!stillUsed || stillUsed.cnt === 0) {
+            const iconRow = await db.prepare(
+              "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'category_icon'"
+            ).bind(fileId).first<{ storage_path: string }>();
+            if (iconRow?.storage_path && r2) {
+              try { await r2.delete(iconRow.storage_path); } catch {}
             }
-          } else {
-            // 无图标，只删 projection 行
-            await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
-              .bind(entity_sync_id, userId).run();
+            await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
           }
-        } catch {
-          await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
-            .bind(entity_sync_id, userId).run();
-        }
-      } else {
-        await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
-          .bind(entity_sync_id, userId).run();
+        } catch {}
       }
     } else if (entity_type === 'account') {
-      await db.prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
-        .bind(entity_sync_id, userId).run();
+      await db.batch([
+        db.prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
+          .bind(entity_sync_id, userId),
+        db.prepare(
+          `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
+        ).bind(userId, entity_type, entity_sync_id),
+      ]);
     } else if (entity_type === 'tag') {
-      await db.prepare('DELETE FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
-        .bind(entity_sync_id, userId).run();
+      await db.batch([
+        db.prepare('DELETE FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
+          .bind(entity_sync_id, userId),
+        db.prepare(
+          `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
+        ).bind(userId, entity_type, entity_sync_id),
+      ]);
     }
-    // 与原版 _compact_entity_upsert_events 对齐：实体删除后清掉 upsert 历史，只留 delete 事件
-    await db.prepare(
-      `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
-    ).bind(userId, entity_type, entity_sync_id).run();
     return;
   }
 
@@ -1514,25 +1443,28 @@ async function applyUserChangeToProjection(
     const iconCloudFileId = (payload as any).iconCloudFileId ?? payload.icon_cloud_file_id ?? null;
     const iconCloudSha256 = (payload as any).iconCloudSha256 ?? payload.icon_cloud_sha256 ?? null;
 
-    // 合并 rename 检查和现有行查询为一次 SELECT（可用 push 路径预载行代替，减少 D1 调用）
-    const existingRow = preloadedRow ?? (await db.prepare(
+    // 合并 rename 检查和现有行查询为一次 SELECT
+    const existingRow = await db.prepare(
       'SELECT name, kind, level, sort_order, icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256, parent_name, parent_sync_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
     ).bind(entity_sync_id, userId).first<{
       name: string | null; kind: string | null; level: number | null;
       sort_order: number | null; icon: string | null; icon_type: string | null;
       custom_icon_path: string | null; icon_cloud_file_id: string | null;
       icon_cloud_sha256: string | null; parent_name: string | null; parent_sync_id: string | null;
-    }>());
+    }>();
 
     // 对齐原版：user-global category upsert 按 (user_id, sync_id) 主键无条件写入。
     // 默认分类的 syncId 是确定性 uuid v5（所有用户相同），跨用户「已有就跳过」会把
     // 新用户的默认分类当别人的数据丢弃 —— 原版无此检查（projection.py _upsert）。
 
-    // Rename cascade
+    // Rename cascade + 投影 upsert 同事务原子写入
     const newName = (payload.name as string) ?? null;
+    const stmts: any[] = [];
     if (newName && existingRow?.name && existingRow.name !== newName) {
-      await db.prepare('UPDATE read_tx_projection SET category_name = ?, category_kind = ? WHERE user_id = ? AND category_sync_id = ?')
-        .bind(newName, payload.kind ?? existingRow.kind ?? null, userId, entity_sync_id).run();
+      stmts.push(
+        db.prepare('UPDATE read_tx_projection SET category_name = ?, category_kind = ? WHERE user_id = ? AND category_sync_id = ?')
+          .bind(newName, payload.kind ?? existingRow.kind ?? null, userId, entity_sync_id),
+      );
     }
 
     const merged = {
@@ -1567,25 +1499,29 @@ async function applyUserChangeToProjection(
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
-      const pw = db.prepare(
-        `UPDATE read_category_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
-      ).bind(...vals);
-      await (batchOrRun(pw) ?? undefined);
-    } else {
-      const pw2 = db.prepare(
-        `INSERT OR REPLACE INTO read_category_projection
-         (ledger_id, sync_id, user_id, name, kind, level, sort_order,
-          icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
-          parent_name, parent_sync_id, source_change_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        null, entity_sync_id, userId, merged.name, merged.kind,
-        merged.level, merged.sort_order, merged.icon, merged.icon_type,
-        merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
-        merged.parent_name, merged.parent_sync_id, change.change_id ?? 0
+      stmts.push(
+        db.prepare(
+          `UPDATE read_category_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+        ).bind(...vals),
       );
-      await (batchOrRun(pw2) ?? undefined);
+    } else {
+      stmts.push(
+        db.prepare(
+          `INSERT OR REPLACE INTO read_category_projection
+           (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+            icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+            parent_name, parent_sync_id, source_change_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          null, entity_sync_id, userId, merged.name, merged.kind,
+          merged.level, merged.sort_order, merged.icon, merged.icon_type,
+          merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
+          merged.parent_name, merged.parent_sync_id, change.change_id ?? 0,
+        ),
+      );
     }
+
+    if (stmts.length > 0) await db.batch(stmts);
   } else if (entity_type === 'account') {
     // APP 用 camelCase，原版用 snake_case
     const accountType = (payload as any).accountType ?? payload.account_type ?? (payload as any).type ?? null;
@@ -1596,25 +1532,28 @@ async function applyUserChangeToProjection(
     const bankName = (payload as any).bankName ?? payload.bank_name ?? null;
     const cardLastFour = (payload as any).cardLastFour ?? payload.card_last_four ?? null;
 
-    // 合并 rename 检查和现有行查询为一次 SELECT（可用 push 路径预载行代替）
-    const existingRow = preloadedRow ?? (await db.prepare(
+    // 合并 rename 检查和现有行查询为一次 SELECT
+    const existingRow = await db.prepare(
       'SELECT name, account_type, currency, initial_balance, note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden FROM read_account_projection WHERE sync_id = ? AND user_id = ?'
     ).bind(entity_sync_id, userId).first<{
       name: string | null; account_type: string | null; currency: string | null;
       initial_balance: number | null; note: string | null; credit_limit: number | null;
       billing_day: number | null; payment_due_day: number | null;
       bank_name: string | null; card_last_four: string | null; hidden: number | null;
-    }>());
+    }>();
 
-    // Rename cascade
+    // Rename cascade + 投影 upsert 同事务原子写入
     const newName = (payload.name as string) ?? null;
+    const stmts2: any[] = [];
     if (newName && existingRow?.name && existingRow.name !== newName) {
-      await db.prepare('UPDATE read_tx_projection SET account_name = ? WHERE user_id = ? AND account_sync_id = ?')
-        .bind(newName, userId, entity_sync_id).run();
-      await db.prepare('UPDATE read_tx_projection SET from_account_name = ? WHERE user_id = ? AND from_account_sync_id = ?')
-        .bind(newName, userId, entity_sync_id).run();
-      await db.prepare('UPDATE read_tx_projection SET to_account_name = ? WHERE user_id = ? AND to_account_sync_id = ?')
-        .bind(newName, userId, entity_sync_id).run();
+      stmts2.push(
+        db.prepare('UPDATE read_tx_projection SET account_name = ? WHERE user_id = ? AND account_sync_id = ?')
+          .bind(newName, userId, entity_sync_id),
+        db.prepare('UPDATE read_tx_projection SET from_account_name = ? WHERE user_id = ? AND from_account_sync_id = ?')
+          .bind(newName, userId, entity_sync_id),
+        db.prepare('UPDATE read_tx_projection SET to_account_name = ? WHERE user_id = ? AND to_account_sync_id = ?')
+          .bind(newName, userId, entity_sync_id),
+      );
     }
 
     const merged = {
@@ -1649,32 +1588,35 @@ async function applyUserChangeToProjection(
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
-      const pw = db.prepare(
-        `UPDATE read_account_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
-      ).bind(...vals);
-      await (batchOrRun(pw) ?? undefined);
-    } else {
-      const pw2 = db.prepare(
-        `INSERT OR REPLACE INTO read_account_projection
-         (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
-          note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        null, entity_sync_id, userId, merged.name, merged.account_type,
-        merged.currency, merged.initial_balance, merged.note,
-        merged.credit_limit, merged.billing_day,
-        merged.payment_due_day, merged.bank_name,
-        merged.card_last_four, merged.hidden, change.change_id ?? 0
+      stmts2.push(
+        db.prepare(
+          `UPDATE read_account_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+        ).bind(...vals),
       );
-      await (batchOrRun(pw2) ?? undefined);
+    } else {
+      stmts2.push(
+        db.prepare(
+          `INSERT OR REPLACE INTO read_account_projection
+           (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+            note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          null, entity_sync_id, userId, merged.name, merged.account_type,
+          merged.currency, merged.initial_balance, merged.note,
+          merged.credit_limit, merged.billing_day,
+          merged.payment_due_day, merged.bank_name,
+          merged.card_last_four, merged.hidden, change.change_id ?? 0,
+        ),
+      );
     }
+
+    if (stmts2.length > 0) await db.batch(stmts2);
   } else if (entity_type === 'tag') {
     // Rename cascade：标签改名时更新 read_tx_projection 的 tags_csv
     const newName = (payload.name as string) ?? null;
     if (newName) {
-      const prevRow = preloadedRow as { name: string | null } | null | undefined
-        ?? (await db.prepare('SELECT name FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
-          .bind(entity_sync_id, userId).first<{ name: string | null }>());
+      const prevRow = await db.prepare('SELECT name FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
+        .bind(entity_sync_id, userId).first<{ name: string | null }>();
       const oldName = prevRow?.name;
       if (oldName && oldName !== newName) {
         // 按 tag_sync_ids_json 精确匹配
@@ -1695,10 +1637,10 @@ async function applyUserChangeToProjection(
       }
     }
 
-    // merge_with_existing（可用 push 路径预载行代替，减少 D1 调用）
-    const existingRow = preloadedRow ?? (await db.prepare(
+    // merge_with_existing
+    const existingRow = await db.prepare(
       'SELECT name, color FROM read_tag_projection WHERE sync_id = ? AND user_id = ?'
-    ).bind(entity_sync_id, userId).first<{ name: string | null; color: string | null }>());
+    ).bind(entity_sync_id, userId).first<{ name: string | null; color: string | null }>();
 
     const merged = {
       name: payload.name ?? existingRow?.name ?? null,
@@ -1714,16 +1656,14 @@ async function applyUserChangeToProjection(
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
-      const pw = db.prepare(
+      await db.prepare(
         `UPDATE read_tag_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
-      ).bind(...vals);
-      await (batchOrRun(pw) ?? undefined);
+      ).bind(...vals).run();
     } else {
-      const pw2 = db.prepare(
+      await db.prepare(
         `INSERT OR REPLACE INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
          VALUES (?, ?, ?, ?, ?, ?)`
-      ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0);
-      await (batchOrRun(pw2) ?? undefined);
+      ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
     }
   } else if (entity_type === 'exchange_rate_override') {
     if (change.action === 'delete') {
@@ -1771,14 +1711,16 @@ async function applyChangeToProjection(
   },
   r2?: R2Bucket
 ): Promise<void> {
-  // 处理 ledger_snapshot delete - 删除整个账本（sequential，D1 db.batch 不兼容）
+  // 处理 ledger_snapshot delete - 删除整个账本
   if (change.entity_type === 'ledger_snapshot' && change.action === 'delete') {
-    await db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledgerId).run();
-    await db.prepare('DELETE FROM read_account_projection WHERE ledger_id = ?').bind(ledgerId).run();
-    await db.prepare('DELETE FROM read_category_projection WHERE ledger_id = ?').bind(ledgerId).run();
-    await db.prepare('DELETE FROM read_tag_projection WHERE ledger_id = ?').bind(ledgerId).run();
-    await db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').bind(ledgerId).run();
-    await db.prepare('DELETE FROM ledgers WHERE id = ?').bind(ledgerId).run();
+    await db.batch([
+      db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM read_account_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM read_category_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM read_tag_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').bind(ledgerId),
+      db.prepare('DELETE FROM ledgers WHERE id = ?').bind(ledgerId),
+    ]);
     return;
   }
 
@@ -1844,12 +1786,16 @@ async function applyChangeToProjection(
           } catch {}
         }
 
-        // 删投影
-        await db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .run();
+        // 删投影 + 紧凑化历史（同事务原子）
+        await db.batch([
+          db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+            .bind(ledgerId, change.entity_sync_id),
+          db.prepare(
+            `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'transaction' AND entity_sync_id = ? AND action != 'delete'`
+          ).bind(ledgerId, change.entity_sync_id),
+        ]);
 
-        // gc 孤立附件：仍被本 ledger 下任何交易引用则保留，完全孤立才删
+        // gc 孤立附件（R2 无法事务化，做 best-effort）
         // （对齐原版 gc_orphan_attachments_for_ledger + _fileid_still_referenced_in_ledger）。
         // R2 删除是外部副作用，无法事务化，做 best-effort。
         for (const fileId of fileIdsToClean) {
@@ -2165,14 +2111,13 @@ async function applyChangeToProjection(
 
     case 'budget': {
       if (change.action === 'delete') {
-        await db
-          .prepare('DELETE FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
-          .run();
-        // 与原版 _compact_entity_upsert_events 对齐
-        await db.prepare(
-          `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'budget' AND entity_sync_id = ? AND action != 'delete'`
-        ).bind(ledgerId, change.entity_sync_id).run();
+        await db.batch([
+          db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?')
+            .bind(ledgerId, change.entity_sync_id),
+          db.prepare(
+            `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'budget' AND entity_sync_id = ? AND action != 'delete'`
+          ).bind(ledgerId, change.entity_sync_id),
+        ]);
       } else {
         // 合并已有行（与原版 _merge_from_spec 对齐）
         const existing = await db.prepare(

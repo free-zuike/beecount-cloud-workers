@@ -560,52 +560,54 @@ importRouter.post('/:token/execute', async (c) => {
             const syncId = randomUUID();
             const now = nowUtc();
             const happenedAt = (tx.happenedAt || now).slice(0, 10);
-
-            const result = await db.prepare(
-              `INSERT INTO sync_changes
-               (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, scope)
-               VALUES (?, ?, ?, ?, 'upsert', ?, ?, 'web-import', 'ledger')`
-            ).bind(
-              userId, ledger.id, 'transaction',
-              syncId, JSON.stringify(payload), now,
-            ).run();
-
-            // 记录 change_id 和 sync_id 用于回滚
-            if (result.meta.last_row_id) {
-              insertedChangeIds.push(result.meta.last_row_id as number);
-              insertedSyncIds.push(syncId);
-            }
-
-            // 直接写入投影表，确保数据立即可见
             const allTags = [...new Set([...tx.tagNames, ...autoTagNames])];
             const tagsCsv = allTags.length ? allTags.join(',') : null;
-            await db.prepare(
-              `INSERT OR REPLACE INTO read_tx_projection
-               (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
-                category_sync_id, category_name, category_kind,
-                account_sync_id, account_name,
-                from_account_sync_id, from_account_name,
-                to_account_sync_id, to_account_name,
-                tags_csv, tag_sync_ids_json, tx_index, source_change_id,
-                exclude_from_stats, exclude_from_budget,
-                created_by_user_id, last_edited_by_user_id,
-                currency_code, native_amount)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            ).bind(
-              ledger.id, syncId, userId,
-              tx.txType, tx.amount, happenedAt,
-              tx.note ?? null,
-              tx.categoryId ?? null, tx.categoryName ?? null, tx.categoryKind ?? null,
-              tx.accountId ?? null, tx.accountName ?? null,
-              tx.fromAccountId ?? null, tx.fromAccountName ?? null,
-              tx.toAccountId ?? null, tx.toAccountName ?? null,
-              tagsCsv, tx.tagIds ? JSON.stringify(tx.tagIds) : null,
-              0, result.meta.last_row_id ?? 0,
-              tx.excludeFromStats != null ? (tx.excludeFromStats ? 1 : 0) : null,
-              tx.excludeFromBudget != null ? (tx.excludeFromBudget ? 1 : 0) : null,
-              userId, userId,
-              tx.currencyCode ?? null, tx.nativeAmount ?? tx.amount,
-            ).run();
+
+            // sync_changes + projection 同事务原子写入
+            const batchResults = await db.batch([
+              db.prepare(
+                `INSERT INTO sync_changes
+                 (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, scope)
+                 VALUES (?, ?, ?, ?, 'upsert', ?, ?, 'web-import', 'ledger')`
+              ).bind(
+                userId, ledger.id, 'transaction',
+                syncId, JSON.stringify(payload), now,
+              ),
+              db.prepare(
+                `INSERT OR REPLACE INTO read_tx_projection
+                 (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
+                  category_sync_id, category_name, category_kind,
+                  account_sync_id, account_name,
+                  from_account_sync_id, from_account_name,
+                  to_account_sync_id, to_account_name,
+                  tags_csv, tag_sync_ids_json, tx_index, source_change_id,
+                  exclude_from_stats, exclude_from_budget,
+                  created_by_user_id, last_edited_by_user_id,
+                  currency_code, native_amount)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()),
+                  ?, ?, ?, ?, ?, ?)`
+              ).bind(
+                ledger.id, syncId, userId,
+                tx.txType, tx.amount, happenedAt,
+                tx.note ?? null,
+                tx.categoryId ?? null, tx.categoryName ?? null, tx.categoryKind ?? null,
+                tx.accountId ?? null, tx.accountName ?? null,
+                tx.fromAccountId ?? null, tx.fromAccountName ?? null,
+                tx.toAccountId ?? null, tx.toAccountName ?? null,
+                tagsCsv, tx.tagIds ? JSON.stringify(tx.tagIds) : null,
+                0,
+                tx.excludeFromStats != null ? (tx.excludeFromStats ? 1 : 0) : null,
+                tx.excludeFromBudget != null ? (tx.excludeFromBudget ? 1 : 0) : null,
+                userId, userId,
+                tx.currencyCode ?? null, tx.nativeAmount ?? tx.amount,
+              ),
+            ]);
+
+            const changeId = batchResults[0].meta.last_row_id as number;
+            if (changeId) {
+              insertedChangeIds.push(changeId);
+              insertedSyncIds.push(syncId);
+            }
 
             imported++;
           } catch (err) {
@@ -624,13 +626,21 @@ importRouter.post('/:token/execute', async (c) => {
           }
         }
 
-        // 如果有错误且已导入部分数据，回滚（删除已插入的 sync_changes 和投影表）
+        // 如果有错误且已导入部分数据，回滚（分块批量删除，同事务原子）
         if (errors.length > 0 && insertedChangeIds.length > 0) {
+          const rollbackStmts: any[] = [];
           for (let i = 0; i < insertedChangeIds.length; i++) {
-            await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(insertedChangeIds[i]).run();
+            rollbackStmts.push(
+              db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(insertedChangeIds[i]),
+            );
             if (insertedSyncIds[i]) {
-              await db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?').bind(ledger.id, insertedSyncIds[i]).run();
+              rollbackStmts.push(
+                db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?').bind(ledger.id, insertedSyncIds[i]),
+              );
             }
+          }
+          for (let i = 0; i < rollbackStmts.length; i += 100) {
+            await db.batch(rollbackStmts.slice(i, i + 100));
           }
           sendEvent('error', {
             message: `Import failed after ${imported} rows. Rolled back ${insertedChangeIds.length} changes.`,

@@ -112,10 +112,13 @@ async function consumeAiImageAsAttachment(
     const obj = await env.R2.get(cacheRow.r2_key);
     if (obj) imageBytes = new Uint8Array(await obj.arrayBuffer());
   }
-  // 无论成功与否都删除缓存（一次性消费；找不到 = 已过期/异用户/无 R2，静默跳过）
-  await db.prepare('DELETE FROM ai_image_cache WHERE image_id = ?').bind(attachImageId).run().catch(() => {});
+  // R2 缓存文件无论成功与否都清理（best-effort，外部副作用无法事务化）
   if (cacheRow?.r2_key && env.R2) await env.R2.delete(cacheRow.r2_key).catch(() => {});
-  if (!imageBytes) return null;
+  if (!imageBytes) {
+    // 缓存已过期/异用户/无 R2：删 DB 缓存行后返回 null
+    await db.prepare('DELETE FROM ai_image_cache WHERE image_id = ?').bind(attachImageId).run().catch(() => {});
+    return null;
+  }
 
   const hashBuf = await crypto.subtle.digest('SHA-256', imageBytes.slice().buffer);
   const sha256 = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -124,6 +127,8 @@ async function consumeAiImageAsAttachment(
     .bind(sha256, ledger.id)
     .first<{ id: string }>();
   if (existing) {
+    // 去重命中：删缓存行后返回已有附件
+    await db.prepare('DELETE FROM ai_image_cache WHERE image_id = ?').bind(attachImageId).run().catch(() => {});
     return {
       cloudFileId: existing.id,
       fileName: 'screenshot.jpg',
@@ -139,11 +144,15 @@ async function consumeAiImageAsAttachment(
   if (env.R2) {
     await env.R2.put(r2Key, imageBytes, { httpMetadata: { contentType: mime } });
   }
-  await db.prepare(
-    `INSERT INTO attachment_files
-     (id, ledger_id, user_id, sha256, size_bytes, mime_type, file_name, storage_path, attachment_kind, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'transaction', ?)`
-  ).bind(fileId, ledger.id, userId, sha256, cacheRow!.size_bytes, mime, `screenshot${fileExt}`, r2Key, nowUtc()).run();
+  // 删缓存 + 插附件同事务原子写入
+  await db.batch([
+    db.prepare('DELETE FROM ai_image_cache WHERE image_id = ?').bind(attachImageId),
+    db.prepare(
+      `INSERT INTO attachment_files
+       (id, ledger_id, user_id, sha256, size_bytes, mime_type, file_name, storage_path, attachment_kind, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'transaction', ?)`
+    ).bind(fileId, ledger.id, userId, sha256, cacheRow!.size_bytes, mime, `screenshot${fileExt}`, r2Key, nowUtc()),
+  ]);
   return {
     cloudFileId: fileId,
     fileName: `screenshot${fileExt}`,
@@ -237,15 +246,13 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
       createdByUserId: userId,
     };
 
-    // sync_changes INSERT → 取 change_id → projection INSERT（sequential，D1 不支持 batch 内 last_insert_rowid 跨语句）
-    const insertResult = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+    // sync_changes + projection 同事务原子写入（db.batch = SQL transaction，
+    // 任一失败整批回滚，不再需要"投影失败回删 sync_changes"的手动补偿）
+    const batchResults = await db.batch([
+      db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
         VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, ?, ?, 'ledger')`)
-        .bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, deviceId).run();
-    const changeId = insertResult.meta.last_row_id as number;
-    maxChangeId = Math.max(maxChangeId, changeId);
-
-    try {
-      await db.prepare(`INSERT OR REPLACE INTO read_tx_projection
+        .bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, deviceId),
+      db.prepare(`INSERT OR REPLACE INTO read_tx_projection
           (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
            category_sync_id, category_name, category_kind,
            account_sync_id, account_name,
@@ -255,7 +262,7 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
            exclude_from_stats, exclude_from_budget,
            created_by_user_id, last_edited_by_user_id,
            currency_code, native_amount)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()),
           ?, ?, ?, ?, ?, ?)`)
         .bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null,
           categorySyncId, tx.category_name || null, tx.category_kind || null,
@@ -265,16 +272,16 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
           tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null,
           tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null,
           mergeSharedAttachment(tx.attachments, sharedAttachment) ? safeJsonStringify(mergeSharedAttachment(tx.attachments, sharedAttachment)) : null,
-          0, changeId,
+          0,
           tx.exclude_from_stats != null ? (tx.exclude_from_stats ? 1 : 0) : null,
           tx.exclude_from_budget != null ? (tx.exclude_from_budget ? 1 : 0) : null,
           userId, userId,
           tx.currency_code ?? tx.currencyCode ?? null,
-          tx.native_amount ?? tx.nativeAmount ?? null,).run();
-    } catch (projErr) {
-      await db.prepare('DELETE FROM sync_changes WHERE change_id = ?').bind(changeId).run();
-      throw projErr;
-    }
+          tx.native_amount ?? tx.nativeAmount ?? null,),
+    ]);
+
+    const changeId = batchResults[0].meta.last_row_id as number;
+    maxChangeId = Math.max(maxChangeId, changeId);
 
     createdSyncIds.push(txSyncId);
   }
@@ -326,25 +333,40 @@ const batchDeleteHandler = async (c: any) => {
   const deviceId = req.device_id ?? 'batch-write';
   let deletedCount = 0;
   const deletedIds: string[] = [];
+  const stmts: any[] = [];
+  const deleteIndices: number[] = [];
 
   for (const txSyncId of req.tx_ids) {
-    await db
-      .prepare(
+    const insertIdx = stmts.length;
+    stmts.push(
+      db.prepare(
         `INSERT INTO sync_changes
          (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id, scope)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
       )
-      .bind(userId, ledgerId, 'transaction', txSyncId, 'delete', '{}', serverNow, deviceId, userId)
-      .run();
+        .bind(userId, ledgerId, 'transaction', txSyncId, 'delete', '{}', serverNow, deviceId, userId),
+    );
+    stmts.push(
+      db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+        .bind(ledgerId, txSyncId),
+    );
+    deleteIndices.push(insertIdx + 1);
+  }
 
-    const deleteResult = await db
-      .prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
-      .bind(ledgerId, txSyncId)
-      .run();
+  // 分块批量执行（D1 batch 最多 100 语句）
+  const allResults: { meta: { last_row_id: number; changes: number } }[] = [];
+  for (let i = 0; i < stmts.length; i += 100) {
+    const chunk = stmts.slice(i, i + 100);
+    const results = await db.batch(chunk);
+    allResults.push(...results);
+  }
 
-    if (deleteResult.meta.changes !== undefined && deleteResult.meta.changes > 0) {
+  for (let j = 0; j < deleteIndices.length; j++) {
+    const idx = deleteIndices[j];
+    const result = allResults[idx];
+    if (result.meta.changes > 0) {
       deletedCount++;
-      deletedIds.push(txSyncId);
+      deletedIds.push(req.tx_ids[j]);
     }
   }
 
@@ -419,11 +441,12 @@ batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch', zValidator('json'
     }
 
     const payload: Record<string, unknown> = { syncId: txSyncId, type: txType, amount: tx.amount, happenedAt: tx.happened_at, note: tx.note || null, categoryId: categorySyncId, accountId: accountSyncId, fromAccountId: tx.from_account_id || null, toAccountId: tx.to_account_id || null, tags: tx.tags || null, attachments: mergeSharedAttachment(tx.attachments, sharedAttachment), updatedByUserId: userId, createdByUserId: userId };
-    const insertResult = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope) VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, ?, ?, 'ledger')`).bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, deviceId).run();
-    const changeId = (insertResult as any).lastRowId;
+    const batchResults = await db.batch([
+      db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope) VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, ?, ?, 'ledger')`).bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, deviceId),
+      db.prepare(`INSERT OR REPLACE INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, category_name, category_kind, account_sync_id, account_name, from_account_sync_id, from_account_name, to_account_sync_id, to_account_name, tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id, exclude_from_stats, exclude_from_budget, created_by_user_id, last_edited_by_user_id, currency_code, native_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()), ?, ?, ?, ?, ?, ?)`).bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null, categorySyncId, tx.category_name || null, tx.category_kind || null, accountSyncId, tx.account_name || null, tx.from_account_id || null, tx.from_account_name || null, tx.to_account_id || null, tx.to_account_name || null, tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null, tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null, mergeSharedAttachment(tx.attachments, sharedAttachment) ? safeJsonStringify(mergeSharedAttachment(tx.attachments, sharedAttachment)) : null, 0, tx.exclude_from_stats != null ? (tx.exclude_from_stats ? 1 : 0) : null, tx.exclude_from_budget != null ? (tx.exclude_from_budget ? 1 : 0) : null, userId, userId, tx.currency_code ?? tx.currencyCode ?? null, tx.native_amount ?? tx.nativeAmount ?? null),
+    ]);
+    const changeId = batchResults[0].meta.last_row_id as number;
     maxChangeId = Math.max(maxChangeId, changeId);
-
-    await db.prepare(`INSERT OR REPLACE INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, category_name, category_kind, account_sync_id, account_name, from_account_sync_id, from_account_name, to_account_sync_id, to_account_name, tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id, exclude_from_stats, exclude_from_budget, created_by_user_id, last_edited_by_user_id, currency_code, native_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null, categorySyncId, tx.category_name || null, tx.category_kind || null, accountSyncId, tx.account_name || null, tx.from_account_id || null, tx.from_account_name || null, tx.to_account_id || null, tx.to_account_name || null, tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null, tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null, mergeSharedAttachment(tx.attachments, sharedAttachment) ? safeJsonStringify(mergeSharedAttachment(tx.attachments, sharedAttachment)) : null, 0, changeId, tx.exclude_from_stats != null ? (tx.exclude_from_stats ? 1 : 0) : null, tx.exclude_from_budget != null ? (tx.exclude_from_budget ? 1 : 0) : null, userId, userId, tx.currency_code ?? tx.currencyCode ?? null, tx.native_amount ?? tx.nativeAmount ?? null).run();
     createdSyncIds.push(txSyncId);
   }
 
