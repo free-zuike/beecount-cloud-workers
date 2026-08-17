@@ -871,6 +871,17 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
     if (error instanceof Error) {
       serverLogger.error('src.routers.sync', '[SYNC] Error message:', error.message);
       serverLogger.error('src.routers.sync', '[SYNC] Error stack:', error.stack);
+      // 诊断：500 异常摘要落库（失败不阻塞响应），便于直接查 D1 定位
+      try {
+        await db.prepare(
+          `INSERT INTO audit_logs (user_id, action, details_json, level, logger, created_at)
+           VALUES (?, 'sync_push_error', ?, 'ERROR', 'sync.diag', ?)`
+        ).bind(
+          userId,
+          JSON.stringify({ message: error.message, stack: (error.stack ?? '').slice(0, 2000), ts: new Date().toISOString() }),
+          new Date().toISOString(),
+        ).run();
+      } catch {}
     }
     serverLogger.error('src.routers.sync', '[SYNC] /sync/push error - END ======================================');
     serverLogger.info('src.routers.sync', `[SYNC] ===== ${CODE_VERSION} ERROR =====`);
