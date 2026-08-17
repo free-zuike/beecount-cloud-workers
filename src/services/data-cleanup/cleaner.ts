@@ -10,10 +10,12 @@ import type { CleanupRecord, CleanupResult } from './types';
 /**
  * 清理孤立数据记录。
  * 按 type 分发清理操作，与原版 _dispatch 对齐。
+ * [r2] 可选：附件孤儿清理时删除 R2 物理文件（对齐原版 file_ops）。
  */
 export async function clean(
   db: D1Database,
-  records: CleanupRecord[]
+  records: CleanupRecord[],
+  r2?: R2Bucket
 ): Promise<CleanupResult> {
   let successCount = 0;
   const failures: Array<{ record_key: string; error: string }> = [];
@@ -91,6 +93,25 @@ export async function clean(
           successCount++;
         } else {
           failures.push({ record_key: recordKey, error: 'account record 缺 sync_id' });
+        }
+      } else if (record.type === 'attachment_no_ref') {
+        // B1: 删 AttachmentFile 行 + R2 物理文件（best-effort）。对齐原版
+        // _delete_attachment_with_file：DB 行删除是事实，R2 unlink 失败不阻塞。
+        if (record.row_id) {
+          const att = await db.prepare(
+            'SELECT storage_path FROM attachment_files WHERE id = ?'
+          ).bind(record.row_id).first<{ storage_path: string }>();
+          await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(record.row_id).run();
+          if (att?.storage_path && r2) {
+            try {
+              await r2.delete(att.storage_path);
+            } catch {
+              // R2 unlink 失败不阻塞（对齐原版 warn 不抛）
+            }
+          }
+          successCount++;
+        } else {
+          failures.push({ record_key: recordKey, error: 'attachment record 缺 row_id' });
         }
       } else {
         failures.push({

@@ -1195,7 +1195,7 @@ adminRouter.post('/data-cleanup/clean', async (c) => {
   const db = c.env.DB;
   const body = await c.req.json().catch(() => ({ records: [] }));
   const { clean } = await import('../services/data-cleanup/cleaner');
-  const result = await clean(db, body.records || []);
+  const result = await clean(db, body.records || [], c.env.R2);
   return c.json(result);
 });
 

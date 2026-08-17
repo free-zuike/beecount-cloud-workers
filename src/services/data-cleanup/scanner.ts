@@ -145,6 +145,61 @@ async function scanSyncChangeMissingEntity(db: D1Database): Promise<OrphanRecord
 }
 
 /**
+ * 扫描 AttachmentFile 行没被任何 tx (attachments_json) 或 category
+ * (icon_cloud_file_id) 引用 — 对齐原版 _scan_attachment_no_ref (B1)。
+ * 上传附件后未保存交易 / AI 草稿放弃 等场景会产生这类孤儿。
+ */
+async function scanAttachmentNoRef(db: D1Database): Promise<OrphanRecord[]> {
+  const rows = await db.prepare(
+    `SELECT id, user_id, size_bytes, file_name, storage_path, attachment_kind
+     FROM attachment_files
+     LIMIT ?`
+  ).bind(MAX_ORPHANS).all<{
+    id: string;
+    user_id: string;
+    size_bytes: number | null;
+    file_name: string | null;
+    storage_path: string;
+    attachment_kind: string;
+  }>();
+
+  const orphans: OrphanRecord[] = [];
+  for (const row of rows.results) {
+    // 判定是否仍被引用（对齐原版 _fileid_still_referenced：tx 的 attachments_json
+    // 两种空格变体 + category 图标的 icon_cloud_file_id；INSTR 避免 LIKE 模式复杂度限制）
+    const patNoSpace = `"cloudFileId":"${row.id}"`;
+    const patWithSpace = `"cloudFileId": "${row.id}"`;
+    const txHit = await db.prepare(
+      `SELECT COUNT(*) as cnt FROM read_tx_projection
+       WHERE user_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0)`
+    ).bind(row.user_id, patNoSpace, patWithSpace).first<{ cnt: number }>();
+
+    let stillReferenced = txHit && txHit.cnt > 0;
+    if (!stillReferenced) {
+      const catHit = await db.prepare(
+        `SELECT COUNT(*) as cnt FROM read_category_projection
+         WHERE user_id = ? AND icon_cloud_file_id = ?`
+      ).bind(row.user_id, row.id).first<{ cnt: number }>();
+      stillReferenced = catHit && catHit.cnt > 0;
+    }
+
+    if (stillReferenced) continue;
+
+    orphans.push({
+      type: 'attachment_no_ref' as const,
+      user_id: row.user_id,
+      row_id: row.id,
+      title: row.file_name || row.id.slice(0, 12),
+      subtitle: `附件无引用 · ${row.attachment_kind}`,
+      file_path: row.storage_path,
+      size_bytes: row.size_bytes ?? 0,
+    });
+  }
+
+  return orphans;
+}
+
+/**
  * 扫描所有类型的孤立数据，返回完整的扫描报告。
  * 与原版 scan_all() 对齐。
  */
@@ -165,6 +220,10 @@ export async function scanAll(db: D1Database): Promise<ScanReport> {
   // 同步变更孤立数据
   const syncChangeOrphans = await scanSyncChangeMissingEntity(db);
   syncOrphans.push(...syncChangeOrphans);
+
+  // 文件类孤立数据：附件行无任何引用（对齐原版 B1）
+  const attachmentNoRef = await scanAttachmentNoRef(db);
+  fileOrphans.push(...attachmentNoRef);
 
   let totalSizeBytes = 0;
   for (const orphan of fileOrphans) {
