@@ -1457,11 +1457,14 @@ async function applyUserChangeToProjection(
     // 默认分类的 syncId 是确定性 uuid v5（所有用户相同），跨用户「已有就跳过」会把
     // 新用户的默认分类当别人的数据丢弃 —— 原版无此检查（projection.py _upsert）。
 
-    // Rename cascade
+    // Rename cascade + 投影 upsert 同事务原子写入
     const newName = (payload.name as string) ?? null;
+    const stmts: any[] = [];
     if (newName && existingRow?.name && existingRow.name !== newName) {
-      await db.prepare('UPDATE read_tx_projection SET category_name = ?, category_kind = ? WHERE user_id = ? AND category_sync_id = ?')
-        .bind(newName, payload.kind ?? existingRow.kind ?? null, userId, entity_sync_id).run();
+      stmts.push(
+        db.prepare('UPDATE read_tx_projection SET category_name = ?, category_kind = ? WHERE user_id = ? AND category_sync_id = ?')
+          .bind(newName, payload.kind ?? existingRow.kind ?? null, userId, entity_sync_id),
+      );
     }
 
     const merged = {
@@ -1496,23 +1499,29 @@ async function applyUserChangeToProjection(
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
-      await db.prepare(
-        `UPDATE read_category_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
-      ).bind(...vals).run();
+      stmts.push(
+        db.prepare(
+          `UPDATE read_category_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+        ).bind(...vals),
+      );
     } else {
-      await db.prepare(
-        `INSERT OR REPLACE INTO read_category_projection
-         (ledger_id, sync_id, user_id, name, kind, level, sort_order,
-          icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
-          parent_name, parent_sync_id, source_change_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        null, entity_sync_id, userId, merged.name, merged.kind,
-        merged.level, merged.sort_order, merged.icon, merged.icon_type,
-        merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
-        merged.parent_name, merged.parent_sync_id, change.change_id ?? 0
-      ).run();
+      stmts.push(
+        db.prepare(
+          `INSERT OR REPLACE INTO read_category_projection
+           (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+            icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
+            parent_name, parent_sync_id, source_change_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          null, entity_sync_id, userId, merged.name, merged.kind,
+          merged.level, merged.sort_order, merged.icon, merged.icon_type,
+          merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
+          merged.parent_name, merged.parent_sync_id, change.change_id ?? 0,
+        ),
+      );
     }
+
+    if (stmts.length > 0) await db.batch(stmts);
   } else if (entity_type === 'account') {
     // APP 用 camelCase，原版用 snake_case
     const accountType = (payload as any).accountType ?? payload.account_type ?? (payload as any).type ?? null;
@@ -1533,15 +1542,18 @@ async function applyUserChangeToProjection(
       bank_name: string | null; card_last_four: string | null; hidden: number | null;
     }>();
 
-    // Rename cascade
+    // Rename cascade + 投影 upsert 同事务原子写入
     const newName = (payload.name as string) ?? null;
+    const stmts2: any[] = [];
     if (newName && existingRow?.name && existingRow.name !== newName) {
-      await db.prepare('UPDATE read_tx_projection SET account_name = ? WHERE user_id = ? AND account_sync_id = ?')
-        .bind(newName, userId, entity_sync_id).run();
-      await db.prepare('UPDATE read_tx_projection SET from_account_name = ? WHERE user_id = ? AND from_account_sync_id = ?')
-        .bind(newName, userId, entity_sync_id).run();
-      await db.prepare('UPDATE read_tx_projection SET to_account_name = ? WHERE user_id = ? AND to_account_sync_id = ?')
-        .bind(newName, userId, entity_sync_id).run();
+      stmts2.push(
+        db.prepare('UPDATE read_tx_projection SET account_name = ? WHERE user_id = ? AND account_sync_id = ?')
+          .bind(newName, userId, entity_sync_id),
+        db.prepare('UPDATE read_tx_projection SET from_account_name = ? WHERE user_id = ? AND from_account_sync_id = ?')
+          .bind(newName, userId, entity_sync_id),
+        db.prepare('UPDATE read_tx_projection SET to_account_name = ? WHERE user_id = ? AND to_account_sync_id = ?')
+          .bind(newName, userId, entity_sync_id),
+      );
     }
 
     const merged = {
@@ -1576,23 +1588,29 @@ async function applyUserChangeToProjection(
       sets.push('source_change_id = ?');
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
-      await db.prepare(
-        `UPDATE read_account_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
-      ).bind(...vals).run();
+      stmts2.push(
+        db.prepare(
+          `UPDATE read_account_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+        ).bind(...vals),
+      );
     } else {
-      await db.prepare(
-        `INSERT OR REPLACE INTO read_account_projection
-         (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
-          note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        null, entity_sync_id, userId, merged.name, merged.account_type,
-        merged.currency, merged.initial_balance, merged.note,
-        merged.credit_limit, merged.billing_day,
-        merged.payment_due_day, merged.bank_name,
-        merged.card_last_four, merged.hidden, change.change_id ?? 0
-      ).run();
+      stmts2.push(
+        db.prepare(
+          `INSERT OR REPLACE INTO read_account_projection
+           (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+            note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          null, entity_sync_id, userId, merged.name, merged.account_type,
+          merged.currency, merged.initial_balance, merged.note,
+          merged.credit_limit, merged.billing_day,
+          merged.payment_due_day, merged.bank_name,
+          merged.card_last_four, merged.hidden, change.change_id ?? 0,
+        ),
+      );
     }
+
+    if (stmts2.length > 0) await db.batch(stmts2);
   } else if (entity_type === 'tag') {
     // Rename cascade：标签改名时更新 read_tx_projection 的 tags_csv
     const newName = (payload.name as string) ?? null;
