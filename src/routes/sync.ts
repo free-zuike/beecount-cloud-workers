@@ -483,7 +483,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
       }
       
       const insertPromises: Array<{
-        result: Promise<{ meta: { last_row_id: number } }>;
+        stmt: any;
         change: typeof changes[0];
         ledgerRow: typeof ledgerMap[string] | null;
       }> = [];
@@ -625,11 +625,11 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           }
         }
         insertPromises.push({
-          result: db.prepare(
+          stmt: db.prepare(
             `INSERT INTO sync_changes
              (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id, scope)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          ).bind(...bindParams).run(),
+          ).bind(...bindParams),
           change,
           ledgerRow: isUserGlobal ? null : { id: ledgerRowId as string, user_id: userId, external_id: '' },
         });
@@ -653,18 +653,29 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         }
       }
 
-      // 执行这一批次的插入
+      // 执行这一批次的插入（分块 db.batch：一次批量 = 1 次 D1 API 请求，
+      // 大幅减少 API 调用数，避免超 Worker api_limit 上限）
       if (insertPromises.length > 0) {
-        const results = await Promise.all(insertPromises.map(p => p.result));
-        accepted += results.length;
+        const stmts = insertPromises.map(p => p.stmt);
+        const allResults: { meta: { last_row_id: number } }[] = [];
+        for (let i = 0; i < stmts.length; i += 100) {
+          const chunk = stmts.slice(i, i + 100);
+          const res = await db.batch(chunk);
+          allResults.push(...res);
+        }
+        accepted += allResults.length;
         
         // 记录处理的变更以便后续应用投影
         for (let i = 0; i < insertPromises.length; i++) {
           const { change, ledgerRow } = insertPromises[i];
-          const changeId = results[i].meta.last_row_id as number;
+          const changeId = allResults[i].meta.last_row_id as number;
           maxCursor = Math.max(maxCursor, changeId);
           processedChanges.push({ change, ledgerRow, newChangeId: changeId });
         }
+
+        // 按批预载 user-global 投影已有的行（一次查询替代每个变更一次 SELECT）
+        const userGlobalInBatch = processedChanges.filter(pc => isUserGlobalType(pc.change.entity_type));
+        const preloaded = await preloadUserGlobalProjections(db, userId, userGlobalInBatch.map(pc => pc.change));
 
         // 立即应用这一批次的投影更新（避免一次性处理太多）
         for (const { change, ledgerRow, newChangeId } of processedChanges) {
@@ -675,7 +686,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
                 entity_sync_id: change.entity_sync_id,
                 action: change.action,
                 payload: change.payload,
-              }, c.env.R2);
+              }, c.env.R2, preloaded.get(change.entity_type)?.get(change.entity_sync_id));
             } else if (ledgerRow) {
               await applyChangeToProjection(db, ledgerRow.id, userId, {
                 change_id: newChangeId,
@@ -1365,6 +1376,39 @@ syncRouter.get('/full', async (c) => {
 // applyUserChangeToProjection - 应用 user-global 变更到投影表
 // ---------------------------------------------------------------------------
 
+/** 批量预载 user-global 投影已有行（一次查询替代每个变更一次 SELECT，减少 D1 调用数） */
+async function preloadUserGlobalProjections(
+  db: D1Database,
+  userId: string,
+  changes: Array<{ entity_type: string; entity_sync_id: string }>,
+): Promise<Map<string, Map<string, any>>> {
+  const result = new Map<string, Map<string, any>>();
+  const byType = new Map<string, string[]>();
+  for (const ch of changes) {
+    if (!byType.has(ch.entity_type)) byType.set(ch.entity_type, []);
+    const list = byType.get(ch.entity_type)!;
+    if (!list.includes(ch.entity_sync_id)) list.push(ch.entity_sync_id);
+  }
+  for (const [type, syncIds] of byType.entries()) {
+    const table = type === 'category' ? 'read_category_projection'
+      : type === 'account' ? 'read_account_projection'
+      : type === 'tag' ? 'read_tag_projection'
+      : null;
+    if (!table) continue;
+    const typeMap = new Map<string, any>();
+    for (let i = 0; i < syncIds.length; i += 30) {
+      const chunkIds = syncIds.slice(i, i + 30);
+      const placeholders = chunkIds.map(() => '?').join(',');
+      const rows = await db.prepare(
+        `SELECT * FROM ${table} WHERE user_id = ? AND sync_id IN (${placeholders}) AND ledger_id IS NULL`
+      ).bind(userId, ...chunkIds).all<any>();
+      for (const r of rows.results) typeMap.set(r.sync_id, r);
+    }
+    if (typeMap.size > 0) result.set(type, typeMap);
+  }
+  return result;
+}
+
 async function applyUserChangeToProjection(
   db: D1Database,
   userId: string,
@@ -1376,6 +1420,7 @@ async function applyUserChangeToProjection(
     payload: Record<string, unknown>;
   },
   r2?: R2Bucket,
+  preloadedRow?: any,
 ): Promise<void> {
   const { entity_type, entity_sync_id, action, payload } = change;
 
@@ -1450,15 +1495,15 @@ async function applyUserChangeToProjection(
     const iconCloudFileId = (payload as any).iconCloudFileId ?? payload.icon_cloud_file_id ?? null;
     const iconCloudSha256 = (payload as any).iconCloudSha256 ?? payload.icon_cloud_sha256 ?? null;
 
-    // 合并 rename 检查和现有行查询为一次 SELECT
-    const existingRow = await db.prepare(
+    // 合并 rename 检查和现有行查询为一次 SELECT（可用 push 路径预载行代替，减少 D1 调用）
+    const existingRow = preloadedRow ?? (await db.prepare(
       'SELECT name, kind, level, sort_order, icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256, parent_name, parent_sync_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
     ).bind(entity_sync_id, userId).first<{
       name: string | null; kind: string | null; level: number | null;
       sort_order: number | null; icon: string | null; icon_type: string | null;
       custom_icon_path: string | null; icon_cloud_file_id: string | null;
       icon_cloud_sha256: string | null; parent_name: string | null; parent_sync_id: string | null;
-    }>();
+    }>());
 
     // 对齐原版：user-global category upsert 按 (user_id, sync_id) 主键无条件写入。
     // 默认分类的 syncId 是确定性 uuid v5（所有用户相同），跨用户「已有就跳过」会把
@@ -1530,15 +1575,15 @@ async function applyUserChangeToProjection(
     const bankName = (payload as any).bankName ?? payload.bank_name ?? null;
     const cardLastFour = (payload as any).cardLastFour ?? payload.card_last_four ?? null;
 
-    // 合并 rename 检查和现有行查询为一次 SELECT
-    const existingRow = await db.prepare(
+    // 合并 rename 检查和现有行查询为一次 SELECT（可用 push 路径预载行代替）
+    const existingRow = preloadedRow ?? (await db.prepare(
       'SELECT name, account_type, currency, initial_balance, note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden FROM read_account_projection WHERE sync_id = ? AND user_id = ?'
     ).bind(entity_sync_id, userId).first<{
       name: string | null; account_type: string | null; currency: string | null;
       initial_balance: number | null; note: string | null; credit_limit: number | null;
       billing_day: number | null; payment_due_day: number | null;
       bank_name: string | null; card_last_four: string | null; hidden: number | null;
-    }>();
+    }>());
 
     // Rename cascade
     const newName = (payload.name as string) ?? null;
@@ -1604,8 +1649,9 @@ async function applyUserChangeToProjection(
     // Rename cascade：标签改名时更新 read_tx_projection 的 tags_csv
     const newName = (payload.name as string) ?? null;
     if (newName) {
-      const prevRow = await db.prepare('SELECT name FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
-        .bind(entity_sync_id, userId).first<{ name: string | null }>();
+      const prevRow = preloadedRow as { name: string | null } | null | undefined
+        ?? (await db.prepare('SELECT name FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
+          .bind(entity_sync_id, userId).first<{ name: string | null }>());
       const oldName = prevRow?.name;
       if (oldName && oldName !== newName) {
         // 按 tag_sync_ids_json 精确匹配
@@ -1626,10 +1672,10 @@ async function applyUserChangeToProjection(
       }
     }
 
-    // merge_with_existing
-    const existingRow = await db.prepare(
+    // merge_with_existing（可用 push 路径预载行代替，减少 D1 调用）
+    const existingRow = preloadedRow ?? (await db.prepare(
       'SELECT name, color FROM read_tag_projection WHERE sync_id = ? AND user_id = ?'
-    ).bind(entity_sync_id, userId).first<{ name: string | null; color: string | null }>();
+    ).bind(entity_sync_id, userId).first<{ name: string | null; color: string | null }>());
 
     const merged = {
       name: payload.name ?? existingRow?.name ?? null,
