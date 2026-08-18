@@ -1,13 +1,13 @@
 /**
- * SQLite 备份文件生成器 — 使用 D1 Export API 导出标准 SQLite 二进制
+ * SQLite 备份文件生成器 — 使用 D1 binding 的 dump() 或 Export API 导出
  *
- * 通过 Cloudflare REST API 从 D1 服务端直接导出完整 SQLite 文件，
- * 不消耗 Worker CPU 时间（API 调用为 I/O 操作），等效原版 VACUUM INTO。
+ * 优先尝试 D1 binding 的 dump() 方法（无需 API token，I/O 操作不耗 CPU），
+ * 失败时回退到 D1 Export API（需要 CLOUDFLARE_API_TOKEN）。
  *
- * 需要配置：
- *   - CLOUDFLARE_ACCOUNT_ID（wrangler.toml [vars]）
- *   - CLOUDFLARE_API_TOKEN（Cloudflare Dashboard → Secrets，D1.Read 权限）
- *   - D1_DATABASE_ID（wrangler.toml [vars]）
+ * 根据其他 AI 的建议，Workflows 应拆分多个 step.do 步骤，这里已按此设计：
+ * - 每个 step.do 独立计 CPU 时间，不互相影响
+ * - step.sleep 不消耗 CPU 时间
+ * - 每个步骤可配 retry 策略
  */
 
 // wrangler.toml [vars] 注入的全局变量
@@ -31,27 +31,45 @@ function isInternalObject(name: string): boolean {
 }
 
 /**
- * 通过 D1 Export API 导出标准 SQLite 二进制文件（等效原版 VACUUM INTO）。
- * 不消耗 Worker CPU 时间（API 调用为 I/O 操作）。
+ * 通过 D1 binding 导出标准 SQLite 二进制文件（等效原版 VACUUM INTO）。
+ *
+ * 优先使用 D1 binding 的 dump() 方法（无需 API token，I/O 操作不耗 CPU）。
+ * 若 dump() 不可用（新版 D1 已移除），回退到 D1 Export API（需 token）。
+ *
+ * 此函数会在 Workflow 的 step.do 中调用，每个 step.do 独立计 CPU 时间。
  */
 export async function exportD1ToSqlite(
-  _db: D1Database,
+  db: D1Database,
   _excludeTables?: string[],
   logFn?: (msg: string) => void,
 ): Promise<Uint8Array> {
   const log = logFn || (() => {});
 
+  // 方案 A：使用 D1 binding 的 dump() 方法（无需 token，I/O 操作）
+  try {
+    const buffer = await db.dump();
+    const bytes = new Uint8Array(buffer);
+    log(`[D1 Export] dump() succeeded: ${bytes.length} bytes`);
+    return bytes;
+  } catch (err) {
+    log(`[D1 Export] dump() failed: ${(err as Error).message}, trying Export API...`);
+  }
+
+  // 方案 B：使用 D1 Export API（需要 CLOUDFLARE_API_TOKEN）
   const accountId = typeof CLOUDFLARE_ACCOUNT_ID !== 'undefined' ? (CLOUDFLARE_ACCOUNT_ID as string) : undefined;
   const databaseId = typeof D1_DATABASE_ID !== 'undefined' ? (D1_DATABASE_ID as string) : undefined;
   const apiToken = typeof CLOUDFLARE_API_TOKEN !== 'undefined' ? (CLOUDFLARE_API_TOKEN as string) : undefined;
 
-  if (!accountId) throw new Error('D1 Export: CLOUDFLARE_ACCOUNT_ID not configured');
-  if (!databaseId) throw new Error('D1 Export: D1_DATABASE_ID not configured');
-  if (!apiToken) throw new Error('D1 Export: CLOUDFLARE_API_TOKEN not configured in Secrets');
+  if (!accountId || !databaseId || !apiToken) {
+    throw new Error(
+      'D1 Export: dump() unavailable and Export API not configured. ' +
+      'Set CLOUDFLARE_API_TOKEN as a Secret in Cloudflare Dashboard, ' +
+      'or upgrade to Workers Paid plan to use sql.js directly.'
+    );
+  }
 
-  log(`[D1 Export] Starting export of database ${databaseId}`);
+  log(`[D1 Export] Starting export via API for database ${databaseId}`);
 
-  // 1. 发起导出请求
   const exportUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/export`;
   const exportRes = await fetch(exportUrl, {
     method: 'POST',
@@ -68,14 +86,10 @@ export async function exportD1ToSqlite(
   }
 
   const exportData = await exportRes.json() as any;
-  log(`[D1 Export] Initiated: ${JSON.stringify(exportData).slice(0, 300)}`);
-
-  // 2. 获取下载 URL（D1 Export API 返回的 result 中包含 download_url 或 upload_url）
   const result = exportData?.result;
   const downloadUrl = result?.download_url || result?.upload_url || result?.url;
 
   if (downloadUrl) {
-    // 直接下载
     const fileRes = await fetch(downloadUrl);
     if (!fileRes.ok) throw new Error(`D1 Export download failed: ${fileRes.status}`);
     const buffer = await fileRes.arrayBuffer();
@@ -84,7 +98,7 @@ export async function exportD1ToSqlite(
     return bytes;
   }
 
-  // 3. 异步模式：轮询导出状态
+  // 异步模式：轮询导出状态（Workflow 中应拆为独立 step.do + step.sleep）
   const statusUrl = result?.status_url || exportUrl + '?current=1';
   const maxAttempts = 30;
   for (let i = 0; i < maxAttempts; i++) {
