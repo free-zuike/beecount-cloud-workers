@@ -558,27 +558,12 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
     return c.json({ error: 'No ledger found' }, 400);
   }
 
-  // 删除交易：tombstone + projection 删除必须在同一事务内原子执行
-  // （db.batch = SQL transaction，任一失败整批回滚，避免"tombstone 已提交但投影未删"的半状态）
-  const batchResults = await db.batch([
-    db.prepare(
-      `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
-    ).bind(userId, ledger.id, 'transaction', txSyncId, 'delete', '{}', serverNow, userId),
-    db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
-      .bind(ledger.id, txSyncId),
-  ]);
-
-  const newChangeId = batchResults[0].meta.last_row_id as number;
-
-  // 删除前先收集交易关联的附件 fileId，用于清理 R2 文件
+  // 先收集交易关联的附件 fileId（必须在删除投影之前读取，否则 attachments_json 消失）
   const attRows = await db
     .prepare('SELECT id, storage_path FROM attachment_files WHERE ledger_id = ? AND attachment_kind = ?')
     .bind(ledger.id, 'transaction')
     .all<{ id: string; storage_path: string }>();
 
-  // 从 transaction 投影中读取 attachments_json 匹配具体 fileId
   const txRow = await db
     .prepare('SELECT attachments_json FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
     .bind(ledger.id, txSyncId)
@@ -595,6 +580,19 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
       }
     } catch {}
   }
+
+  // 删除交易：tombstone + projection 删除必须在同一事务内原子执行
+  const batchResults = await db.batch([
+    db.prepare(
+      `INSERT INTO sync_changes
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
+    ).bind(userId, ledger.id, 'transaction', txSyncId, 'delete', '{}', serverNow, userId),
+    db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+      .bind(ledger.id, txSyncId),
+  ]);
+
+  const newChangeId = batchResults[0].meta.last_row_id as number;
 
   // 清理附件记录和 R2 文件（检查是否仍被其他 tx 引用，与原版 gc_orphan_attachments 对齐）
   // 附件清理依赖删除后投影的引用检查 + R2 文件无法事务化，保持 best-effort
