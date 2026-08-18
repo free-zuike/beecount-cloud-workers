@@ -21,5 +21,16 @@ declare module 'sql.js' {
     close(): void;
   }
 
-  export default function initSqlJs(config?: { wasmBinary?: Uint8Array }): Promise<SqlJsStatic>;
+  export interface InitSqlJsConfig {
+    wasmBinary?: Uint8Array;
+    instantiateWasm?: (imports: WebAssembly.Imports, callback: (module: WebAssembly.Module, instance: WebAssembly.Instance) => void) => Record<string, unknown>;
+  }
+
+  export default function initSqlJs(config?: InitSqlJsConfig): Promise<SqlJsStatic>;
+}
+
+// wrangler wasm_modules 绑定声明
+declare module 'sql_wasm' {
+  const wasm: WebAssembly.Module;
+  export default wasm;
 }

@@ -51,6 +51,10 @@ API_PREFIX = "/api/v1"
 [observability]
 enabled = true
 
+# sql.js WASM 模块（预编译，避免 Workers 运行时编译限制）
+[wasm_modules]
+sql_wasm = "./node_modules/sql.js/dist/sql-wasm.wasm"
+
 # ssh2 的 .node 原生插件在 try/catch 中加载，wrangler 将其视为数据文件
 [[rules]]
 type = "Data"

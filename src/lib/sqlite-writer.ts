@@ -26,19 +26,41 @@ function isInternalObject(name: string): boolean {
 
 const D1_BATCH_SIZE = 1000;
 
-let sqlJsPromise: ReturnType<typeof initSqlJs> | null = null;
+let sqlJsPromise: Promise<import('sql.js').SqlJsStatic> | null = null;
 
-function getSqlJs(): ReturnType<typeof initSqlJs> {
+async function getSqlJs(): Promise<import('sql.js').SqlJsStatic> {
   if (!sqlJsPromise) {
-    // sql.js 的 Emscripten loader 在初始化时检测环境，需要 self.location 存在
-    // Workflows 环境可能没有 HTTP 请求上下文，self.location 可能为 undefined
+    // Workflows 环境可能缺少 self.location，sql.js Emscripten loader 需要它
     if (typeof self !== 'undefined' && !(self as any).location) {
       (self as any).location = { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:', host: 'localhost', hostname: 'localhost', port: '80', pathname: '/', search: '', hash: '' };
     }
-    const raw = atob(SQL_WASM_BASE64);
-    const bytes = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-    sqlJsPromise = initSqlJs({ wasmBinary: bytes });
+
+    // 优先使用 wasm_modules 绑定（预编译 WebAssembly.Module，Workers 允许）
+    // 回退 wasmBinary（Node.js 测试环境）
+    let wasmModule: WebAssembly.Module | null = null;
+    try {
+      // 在 wrangler 打包时，'sql_wasm' 是 wasm_modules 绑定的导入名
+      const m = await import('sql_wasm');
+      wasmModule = m.default;
+    } catch {
+      // 测试环境或本地开发：无 wasm_modules 绑定，忽略
+    }
+
+    if (wasmModule) {
+      sqlJsPromise = initSqlJs({
+        instantiateWasm: (imports: WebAssembly.Imports, callback: (module: WebAssembly.Module, instance: WebAssembly.Instance) => void) => {
+          WebAssembly.instantiate(wasmModule!, imports).then((result: any) => {
+            callback(result.module!, result.instance!);
+          });
+          return {};
+        },
+      });
+    } else {
+      const raw = atob(SQL_WASM_BASE64);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      sqlJsPromise = initSqlJs({ wasmBinary: bytes });
+    }
   }
   return sqlJsPromise;
 }
