@@ -35,7 +35,9 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 | `meta.json` | 元数据 |
 | `.jwt_secret` | JWT 签名密钥（从环境变量读取） |
 | `attachments/` | 附件 |
-| `db.json` | **无 Token 时的回退格式** — 未配置 `CLOUDFLARE_API_TOKEN` 时跳过 `db.sqlite3`，仅生成此文件，仍可通过 Web 恢复 |
+| `db.json` | 未配置 `CLOUDFLARE_API_TOKEN` 时的回退格式，仅生成此文件，仍可通过 Web 恢复 |
+
+**注意**：`db.sqlite3` 生成依赖 `CLOUDFLARE_API_TOKEN`（D1.Read 权限），未配置时跳过 `db.sqlite3`。
 
 与原版差异：
 
@@ -44,7 +46,7 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 | SQLite 生成 | VACUUM INTO（本地文件系统） | D1 Export API（REST API，不耗 CPU） |
 | 加密 | pyzipper WZ_AES | @zip.js/zip.js AES-256（同一标准） |
 | 附件来源 | 本地文件系统 hardlink | R2 对象存储 |
-| Token 依赖 | 无 | 需 `CLOUDFLARE_API_TOKEN`，未配置则跳过 `db.sqlite3`，仅生成 `db.json` |
+| Token 依赖 | 无 | 需 `CLOUDFLARE_API_TOKEN`，否则无 `db.sqlite3` |
 
 ## 功能特性
 
@@ -104,21 +106,51 @@ npm run deploy
 ```toml
 name = "beecount-cloud-workers"
 main = "src/index.ts"
+compatibility_date = "2026-06-18"
+compatibility_flags = ["nodejs_compat"]
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[alias]
+tslib = "tslib"
+"@modelcontextprotocol/sdk" = "./node_modules/@modelcontextprotocol/sdk/dist/esm/index.js"
+"ssh2/lib/protocol/crypto/poly1305.js" = "./shims/ssh2-poly1305.js"
+"age-encryption" = "./node_modules/age-encryption/dist/index.js"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "beecount-cloud"
 database_id = "你的数据库ID"
 
+[[durable_objects.bindings]]
+name = "BEECOUNT_DO"
+class_name = "BeeCountDO"
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "beecount-storage"
+
+[[workflows]]
+name = "backup-workflow"
+binding = "BACKUP_WORKFLOW"
+class_name = "BackupWorkflow"
+
 [vars]
 API_PREFIX = "/api/v1"
-JWT_SECRET = "你的JWT密钥"
+CLOUDFLARE_ACCOUNT_ID = "你的Cloudflare账户ID"
+D1_DATABASE_ID = "你的数据库ID"
+# CLOUDFLARE_API_TOKEN 在 CI 部署时自动注入，或手动设置 Secret
 
-# 可选：关闭注册
-# REGISTRATION_ENABLED = "false"
+[observability]
+enabled = true
 
-# 可选：邀请分享域名（默认自动获取请求域名）
-# INVITE_SHARE_ORIGIN = "https://invite.beecount.qzz.io"
+[assets]
+directory = "./frontend/apps/web/dist"
+binding = "ASSETS"
+
+# JWT_SECRET 通过 Cloudflare Dashboard → Secrets 设置
+# 或 CLI: npx wrangler secret put JWT_SECRET
 ```
 
 ### AI 配置
@@ -256,16 +288,13 @@ beecount-cloud-workers/
 
 ## 数据库
 
-```bash
-npx wrangler d1 execute beecount-cloud --remote --file=./schema.sql
-```
+数据库表结构由代码自动创建（`src/db/schema.ts` 中的 `CREATE TABLE IF NOT EXISTS` 在首次请求时执行），无需手动执行 SQL。
 
 ## 本地开发
 
 ```bash
 npm install
 npx wrangler d1 create beecount-cloud --local
-npx wrangler d1 execute beecount-cloud --local --file=./schema.sql
 npx wrangler dev
 ```
 
