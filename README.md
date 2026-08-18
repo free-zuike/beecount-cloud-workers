@@ -12,18 +12,61 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 
 | 差异项 | 原版 | Workers | 原因 |
 |--------|------|---------|------|
-| 数据库 | PostgreSQL/SQLite | D1 (SQLite) | 备份改用 createSqliteWithData 生成 .sqlite3 文件，与原版 VACUUM INTO 等效 |
+| 数据库 | PostgreSQL/SQLite | D1 (SQLite) | 备份用 D1 Export API 生成 .sqlite3 文件，与原版 VACUUM INTO 等效 |
 | 布尔存储 | 原生 boolean | INTEGER 0/1 | SQLite 限制 |
-| 附件存储 | 本地文件系统 | R2 对象存储 | Workers 无本地文件系统 |
-| 加密备份 | age (X25519 + ChaCha20-Poly1305) | age-encryption (npm 官方实现) | 已对齐，使用同一 age 格式，备份文件互通 |
+| 附件存储 | 本地文件系统或 S3 | R2 对象存储 | Workers 无本地文件系统 |
+| 加密备份 | pyzipper (WZ_AES) | @zip.js/zip.js 加密 ZIP | 使用同一 AES-256 标准，备份文件互通 |
 | 密码混淆 | rclone obscure | 无 | 无法运行 rclone CLI |
-| 定时任务 | APScheduler (Python 线程) | waitUntil (Workers 异步) | 运行时限制 |
+| 定时任务 | APScheduler (Python 线程) | Workflows + Cron | Workers 运行时限制 |
 | 并行备份 | rclone fan-out | Promise.allSettled | Workers 原生并行 |
 | 项目事务 | DB transaction (commit/rollback) | db.batch 原子事务 | D1 原生支持 batch 多语句事务，已对齐原版语义 |
-| 备份加密 | age + pyzipper (WZ_AES) | AES-256-GCM (Web Crypto) | 无法运行 age CLI |
 | OAuth2 备份 | rclone 处理 OAuth2 | 直接调用 REST API | Workers 内实现 |
 | 指标监控 | Prometheus | 无 | 无 statsd 基础设施 |
 | 注册控制 | 环境变量 REGISTRATION_ENABLED | 环境变量 REGISTRATION_ENABLED | 已对齐 |
+| 前端部署 | 前后端分离部署 | Workers Assets 同域部署 | 一起部署到同一 Workers 域名，无需跨域配置 |
+
+## 备份格式
+
+与原版完全兼容，备份文件包含：
+
+| 文件 | 说明 |
+|------|------|
+| `db.sqlite3` | 标准 SQLite 二进制文件（等效原版 VACUUM INTO），可直接用 Python sqlite3 打开恢复 |
+| `meta.json` | 元数据（schemaVersion/appVersion/createdAt/userId/scheduleId 等） |
+| `.jwt_secret` | JWT 签名密钥（可选，恢复后保持登录态） |
+| `attachments/` | 附件文件目录 |
+| `db.json` | TS 版额外保留的 JSON 格式（仅用于内部恢复端，原版忽略） |
+
+文件名格式：`YYYYMMDD-HHMMSS.tar.gz`（明文）或 `YYYYMMDD-HHMMSS.zip`（AES-256 加密）
+
+### 有无 API Token 的区别
+
+备份通过 **D1 Export API** 生成 `db.sqlite3`，需要 `CLOUDFLARE_API_TOKEN`（D1.Read 权限）：
+
+| 配置 | db.sqlite3 生成 | 耗时 | 说明 |
+|------|----------------|------|------|
+| ✅ 配置了 `CLOUDFLARE_API_TOKEN` | 通过 D1 Export API 生成（I/O 操作，不耗 CPU） | 快（~2s） | 推荐，生成标准 SQLite 文件 |
+| ❌ 未配置 token | 跳过 db.sqlite3，仅生成 db.json | 快 | 功能完整，仅与原版 Python 不兼容 |
+
+**配置方式**（推荐 GitHub Actions 自动注入）：
+
+1. 在 [Cloudflare Dashboard → My Profile → API Tokens](https://dash.cloudflare.com/profile/api-tokens) 创建 token
+2. 权限选择 **D1 - Read**（只读，安全）
+3. 在 GitHub 仓库 Secrets 中添加 `CLOUDFLARE_API_TOKEN`
+4. GitHub Action 部署时自动注入到 `wrangler.toml [vars]`
+
+## 前端说明
+
+前端使用 React + Vite 构建，与原版 Flutter 移动端不同：
+
+| 差异项 | 原版 | Workers |
+|--------|------|---------|
+| 前端框架 | Flutter (移动端) | React + Vite (Web) |
+| 部署方式 | 独立部署 | Workers Assets 同域部署，无需跨域配置 |
+| 功能覆盖 | 完整移动端 | 核心功能 Web 端（账本/交易/统计/管理） |
+| API 兼容 | 同一 API | 100% 兼容同一 API 协议 |
+
+Web 前端通过 `frontend/` 目录管理，构建产物部署到 `Workers Assets`，与 API 同域名，无需额外配置 CORS。
 
 ## 功能特性
 
