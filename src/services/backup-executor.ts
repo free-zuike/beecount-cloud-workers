@@ -291,7 +291,16 @@ export async function generateBackupBytes(
 
   logWrap(`[Backup] Starting full database backup, user: ${userId}`);
 
-  // 1. db.json（后向兼容 TS 旧恢复端 + R2 列表摘要，先导出确保 SQLite 失败时仍有数据）
+  // 1. db.sqlite3（主格式，与原版 VACUUM INTO 等效）
+  let sqliteBytes: Uint8Array | null = null;
+  try {
+    sqliteBytes = await exportD1ToSqlite(db, undefined, logWrap);
+    logWrap(`[Backup] db.sqlite3: ${sqliteBytes.length} bytes`);
+  } catch (err) {
+    logWrap(`[Backup] db.sqlite3 generation failed: ${(err as Error).message}`);
+  }
+
+  // 2. db.json（后向兼容 TS 旧恢复端 + R2 列表摘要）
   const tables: Record<string, unknown[]> = {};
   const tableNames = (await listUserTables(db)).filter(n => !EXCLUDED_BACKUP_TABLES.has(n));
   for (const tableName of tableNames) {
@@ -303,15 +312,7 @@ export async function generateBackupBytes(
     }
   }
 
-  // 2. db.sqlite3（主格式，与原版 VACUUM INTO 等效）
-  //    sql.js WASM 在 Workers 环境可能受限，失败时降级仅用 db.json
-  let sqliteBytes: Uint8Array | null = null;
-  try {
-    sqliteBytes = await exportD1ToSqlite(db, undefined, logWrap);
-    logWrap(`[Backup] db.sqlite3: ${sqliteBytes.length} bytes`);
-  } catch (err) {
-    logWrap(`[Backup] db.sqlite3 generation failed, falling back to db.json only: ${(err as Error).message}${(err as Error).stack ? ` | ${(err as Error).stack?.split('\\n').slice(0, 3).join(' > ')}` : ''}`);
-  }
+
 
   // 3. R2 附件
   let attachments = new Map<string, Uint8Array>();

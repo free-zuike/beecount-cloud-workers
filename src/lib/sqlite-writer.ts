@@ -30,6 +30,11 @@ let sqlJsPromise: ReturnType<typeof initSqlJs> | null = null;
 
 function getSqlJs(): ReturnType<typeof initSqlJs> {
   if (!sqlJsPromise) {
+    // sql.js 的 Emscripten loader 在初始化时检测环境，需要 self.location 存在
+    // Workflows 环境可能没有 HTTP 请求上下文，self.location 可能为 undefined
+    if (typeof self !== 'undefined' && !(self as any).location) {
+      (self as any).location = { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:', host: 'localhost', hostname: 'localhost', port: '80', pathname: '/', search: '', hash: '' };
+    }
     const raw = atob(SQL_WASM_BASE64);
     const bytes = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
