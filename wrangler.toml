@@ -48,7 +48,8 @@ API_PREFIX = "/api/v1"
 # D1 Export API 所需：账户 ID 和数据库 ID（对应 [[d1_databases]] 中的 database_id）
 CLOUDFLARE_ACCOUNT_ID = "3f762871bd2e6a373f70d3b3a8e5dc88"
 D1_DATABASE_ID = "393b596d-31c5-436a-828c-7baab2b113b2"
-# CLOUDFLARE_API_TOKEN 需在 Cloudflare Dashboard → Workers → beecount-cloud-workers → Settings → Variables and Secrets 中设置（D1.Read 权限）
+# CLOUDFLARE_API_TOKEN 在 CI 部署时通过 sed 动态注入（不提交到 git）
+CLOUDFLARE_API_TOKEN = "ci-injected-at-deploy-time"
 # JWT_SECRET 通过 Cloudflare Dashboard → Workers → Settings → Variables and Secrets 设置
 # 或 CLI: npx wrangler secret put JWT_SECRET
 

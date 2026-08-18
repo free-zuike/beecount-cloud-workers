@@ -60,7 +60,9 @@ jobs:
           DB_ID="${{ steps.d1.outputs.database_id }}"
           echo "Patching database_id to: $DB_ID"
           sed -i "s|database_id = \"[^\"]*\"|database_id = \"$DB_ID\"|" wrangler.toml
-          grep "database_id" wrangler.toml
+          # 注入 API token（从 GitHub Secrets 读，不提交到 git）
+          sed -i "s|CLOUDFLARE_API_TOKEN = \"ci-injected-at-deploy-time\"|CLOUDFLARE_API_TOKEN = \"${{ secrets.CLOUDFLARE_API_TOKEN }}\"|" wrangler.toml
+          grep "database_id\|CLOUDFLARE_API_TOKEN" wrangler.toml
 
       - name: Build frontend
         run: cd frontend && pnpm install --no-frozen-lockfile && pnpm build
