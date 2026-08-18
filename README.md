@@ -39,6 +39,17 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 
 文件名格式：`YYYYMMDD-HHMMSS.tar.gz`（明文）或 `YYYYMMDD-HHMMSS.zip`（AES-256 加密）
 
+### 与原版备份的差异
+
+| 差异项 | 原版 Python | Workers 版 |
+|--------|-------------|-----------|
+| SQLite 生成 | VACUUM INTO（本地 SQLite 文件系统操作） | D1 Export API 导出（REST API 调用，I/O 操作不耗 CPU） |
+| 加密方式 | pyzipper WZ_AES（Python 库） | @zip.js/zip.js AES-256（JS 库，同一标准，文件互通） |
+| 额外文件 | 无 | `db.json`（兼容 TS 旧恢复端，原版恢复时忽略） |
+| API Token 依赖 | 无 | 需要 `CLOUDFLARE_API_TOKEN`（未配置则跳过 `db.sqlite3`，仅生成 `db.json`） |
+| 附件来源 | 本地文件系统 hardlink | R2 对象存储下载 |
+| `.jwt_secret` 来源 | 本地文件系统 | 从 `JWT_SECRET` 环境变量读取 |
+
 ### 有无 API Token 的区别
 
 备份通过 **D1 Export API** 生成 `db.sqlite3`，需要 `CLOUDFLARE_API_TOKEN`（D1.Read 权限）：
