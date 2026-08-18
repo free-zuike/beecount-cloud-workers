@@ -57,16 +57,13 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 
 ## 前端说明
 
-前端使用 React + Vite 构建，与原版 Flutter 移动端不同：
+前端基于同一 React + Vite 代码库，与原版前端功能一致：
 
 | 差异项 | 原版 | Workers |
 |--------|------|---------|
-| 前端框架 | Flutter (移动端) | React + Vite (Web) |
-| 部署方式 | 独立部署 | Workers Assets 同域部署，无需跨域配置 |
-| 功能覆盖 | 完整移动端 | 核心功能 Web 端（账本/交易/统计/管理） |
-| API 兼容 | 同一 API | 100% 兼容同一 API 协议 |
-
-Web 前端通过 `frontend/` 目录管理，构建产物部署到 `Workers Assets`，与 API 同域名，无需额外配置 CORS。
+| 部署方式 | 独立部署（API 与前端分离） | Workers Assets 同域部署，API 和前端在同一域名下 |
+| API 地址 | 需配置后端 API 地址 | 自动同域，无需额外配置 |
+| 功能覆盖 | 完全一致 | 完全一致 |
 
 ## 功能特性
 
