@@ -8,6 +8,8 @@ type Env = {
   BEECOUNT_DO: DurableObjectNamespace;
   JWT_SECRET: string;
   CLOUDFLARE_API_TOKEN?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  D1_DATABASE_ID?: string;
 };
 
 type BackupParams = {
@@ -61,7 +63,12 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
           { retries: { limit: 2, delay: '30 seconds', backoff: 'exponential' } },
           async () => {
             // 在 step 内保存到 R2，避免 step 返回 > 1MB 的数据
-            const bytes = await exportD1ToSqlite(db, undefined, logFn, this.env.CLOUDFLARE_API_TOKEN);
+            const bytes = await exportD1ToSqlite(
+              db, undefined, logFn,
+              this.env.CLOUDFLARE_API_TOKEN,
+              this.env.CLOUDFLARE_ACCOUNT_ID as string,
+              this.env.D1_DATABASE_ID as string,
+            );
             const key = `temp/backup-${runId}/db.sqlite3`;
             await this.env.R2.put(key, bytes, { httpMetadata: { contentType: 'application/octet-stream' } });
             logFn(`[SQLite] db.sqlite3 saved to R2: ${bytes.length} bytes`);
