@@ -68,13 +68,12 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 
 ## 前端说明
 
-前端基于同一 React + Vite 代码库，与原版前端功能一致：
+前端基于同一 React + Vite 代码库，文件差异仅 1 个：
 
 | 差异项 | 原版 | Workers |
 |--------|------|---------|
-| 部署方式 | 独立部署（API 与前端分离） | Workers Assets 同域部署，API 和前端在同一域名下 |
-| API 地址 | 需配置后端 API 地址 | 自动同域，无需额外配置 |
-| 功能覆盖 | 完全一致 | 完全一致 |
+| 额外文件 | 无 | `frontend/apps/web/src/app/SetupForm.tsx` — 首次访问时创建管理员账户的页面 |
+| 部署方式 | 独立部署，需配置后端 API 地址 | Workers Assets 同域部署，API 和前端在同一域名下，无需跨域配置 |
 
 ## 功能特性
 
