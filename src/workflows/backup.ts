@@ -50,34 +50,49 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
 
     try {
       // ============================================================
-      // 生成 db.sqlite3（D1 Export API 单步 I/O 操作，不耗 CPU）
+      // 生成 db.sqlite3（D1 Export API 单步 I/O 操作）
+      // 保存到 R2 临时对象避免 step.do 输出 > 1MB 限制
       // ============================================================
-      let sqliteState: Uint8Array | null = null;
+      let sqliteR2Key: string | null = null;
       try {
         logFn(`[SQLite] Export API token available: ${!!this.env.CLOUDFLARE_API_TOKEN}`);
-        sqliteState = await step.do(
+        const sqliteBytes = await step.do(
           'sqlite-export',
           { retries: { limit: 2, delay: '30 seconds', backoff: 'exponential' } },
           async () => exportD1ToSqlite(db, undefined, logFn, this.env.CLOUDFLARE_API_TOKEN),
         );
-        logFn(`[SQLite] db.sqlite3: ${sqliteState.length} bytes`);
+        // 保存到 R2 临时对象（workflow 输出 < 1MB 限制，但 R2 无此限制）
+        sqliteR2Key = `temp/backup-${runId}/db.sqlite3`;
+        await this.env.R2.put(sqliteR2Key, sqliteBytes, { httpMetadata: { contentType: 'application/octet-stream' } });
+        logFn(`[SQLite] db.sqlite3 saved to R2: ${sqliteBytes.length} bytes`);
       } catch (err) {
         logFn(`[SQLite] db.sqlite3 generation failed: ${(err as Error).message}`);
       }
 
-      // Step B: 执行备份（传入预生成的 SQLite 字节，没有则为 null）
+      // Step B: 执行备份（传入 R2 key，从 R2 读取 SQLite 字节）
       await broadcast({ type: 'backup_progress', phase: 'fan_out_start', runId });
       const backupResult = await step.do(
         'backup-fan-out',
         { retries: { limit: 1, delay: '1 minute', backoff: 'exponential' } },
-        async () =>
-          await performBackupFanOut(
+        async () => {
+          // 从 R2 读取预生成的 SQLite 字节
+          let preSqliteBytes: Uint8Array | null = null;
+          if (sqliteR2Key) {
+            const obj = await this.env.R2.get(sqliteR2Key);
+            if (obj) {
+              preSqliteBytes = new Uint8Array(await obj.arrayBuffer());
+              // 清理临时对象
+              this.env.R2.delete(sqliteR2Key).catch(() => {});
+            }
+          }
+          return await performBackupFanOut(
             db, runId, userId, ledgerId, effectiveConfigs, shouldEncrypt,
             this.env.R2, logFn, retentionDays,
             (phase) => { broadcast({ type: 'backup_progress', phase, runId }).catch(() => {}); },
             { scheduleId: scheduleId ?? null, scheduleName: null },
-            sqliteState,
-          ),
+            preSqliteBytes,
+          );
+        },
       );
 
       const finishedAt = new Date().toISOString();
