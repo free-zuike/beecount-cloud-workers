@@ -25,55 +25,35 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 | 注册控制 | 环境变量 REGISTRATION_ENABLED | 环境变量 REGISTRATION_ENABLED | 已对齐 |
 | 前端部署 | 前后端分离部署 | Workers Assets 同域部署 | 一起部署到同一 Workers 域名，无需跨域配置 |
 
-## 备份格式
+## 备份
 
-与原版完全兼容，备份文件包含：
+备份文件格式与原版完全兼容，文件名 `YYYYMMDD-HHMMSS.tar.gz`（明文）或 `.zip`（AES-256 加密）。
 
 | 文件 | 说明 |
 |------|------|
-| `db.sqlite3` | 标准 SQLite 二进制文件（等效原版 VACUUM INTO），可直接用 Python sqlite3 打开恢复 |
-| `meta.json` | 元数据（schemaVersion/appVersion/createdAt/userId/scheduleId 等） |
-| `.jwt_secret` | JWT 签名密钥（可选，恢复后保持登录态） |
-| `attachments/` | 附件文件目录 |
-| `db.json` | TS 版额外保留的 JSON 格式（仅用于内部恢复端，原版忽略） |
+| `db.sqlite3` | 标准 SQLite 二进制（D1 Export API 导出，等效原版 VACUUM INTO） |
+| `meta.json` | 元数据 |
+| `.jwt_secret` | JWT 签名密钥（从环境变量读取） |
+| `attachments/` | 附件 |
+| `db.json` | **仅 Workers 版** — 兼容旧恢复端，原版忽略 |
 
-文件名格式：`YYYYMMDD-HHMMSS.tar.gz`（明文）或 `YYYYMMDD-HHMMSS.zip`（AES-256 加密）
-
-### 与原版备份的差异
-
-| 差异项 | 原版 Python | Workers 版 |
-|--------|-------------|-----------|
-| SQLite 生成 | VACUUM INTO（本地 SQLite 文件系统操作） | D1 Export API 导出（REST API 调用，I/O 操作不耗 CPU） |
-| 加密方式 | pyzipper WZ_AES（Python 库） | @zip.js/zip.js AES-256（JS 库，同一标准，文件互通） |
-| 额外文件 | 无 | `db.json`（兼容 TS 旧恢复端，原版恢复时忽略） |
-| API Token 依赖 | 无 | 需要 `CLOUDFLARE_API_TOKEN`（未配置则跳过 `db.sqlite3`，仅生成 `db.json`） |
-| 附件来源 | 本地文件系统 hardlink | R2 对象存储下载 |
-| `.jwt_secret` 来源 | 本地文件系统 | 从 `JWT_SECRET` 环境变量读取 |
-
-### 有无 API Token 的区别
-
-备份通过 **D1 Export API** 生成 `db.sqlite3`，需要 `CLOUDFLARE_API_TOKEN`（D1.Read 权限）：
-
-| 配置 | db.sqlite3 生成 | 耗时 | 说明 |
-|------|----------------|------|------|
-| ✅ 配置了 `CLOUDFLARE_API_TOKEN` | 通过 D1 Export API 生成（I/O 操作，不耗 CPU） | 快（~2s） | 推荐，生成标准 SQLite 文件 |
-| ❌ 未配置 token | 跳过 db.sqlite3，仅生成 db.json | 快 | 功能完整，仅与原版 Python 不兼容 |
-
-**配置方式**（推荐 GitHub Actions 自动注入）：
-
-1. 在 [Cloudflare Dashboard → My Profile → API Tokens](https://dash.cloudflare.com/profile/api-tokens) 创建 token
-2. 权限选择 **D1 - Read**（只读，安全）
-3. 在 GitHub 仓库 Secrets 中添加 `CLOUDFLARE_API_TOKEN`
-4. GitHub Action 部署时自动注入到 `wrangler.toml [vars]`
-
-## 前端说明
-
-前端基于同一 React + Vite 代码库，文件差异仅 1 个：
+与原版差异：
 
 | 差异项 | 原版 | Workers |
 |--------|------|---------|
-| 额外文件 | 无 | `frontend/apps/web/src/app/SetupForm.tsx` — 首次访问时创建管理员账户的页面 |
-| 部署方式 | 独立部署，需配置后端 API 地址 | Workers Assets 同域部署，API 和前端在同一域名下，无需跨域配置 |
+| SQLite 生成 | VACUUM INTO（本地文件系统） | D1 Export API（REST API，不耗 CPU） |
+| 加密 | pyzipper WZ_AES | @zip.js/zip.js AES-256（同一标准） |
+| 附件来源 | 本地文件系统 hardlink | R2 对象存储 |
+| Token 依赖 | 无 | 需 `CLOUDFLARE_API_TOKEN`，未配置则跳过 `db.sqlite3` |
+
+## 前端
+
+前端基于同一 React + Vite 代码库，仅 1 个文件差异：
+
+| 差异项 | 原版 | Workers |
+|--------|------|---------|
+| 额外文件 | 无 | `SetupForm.tsx`（首次访问创建管理员） |
+| 部署方式 | 独立部署，需配置 API 地址 | Workers Assets 同域部署，无需跨域配置 |
 
 ## 功能特性
 
