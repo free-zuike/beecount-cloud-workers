@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
 import { performBackupFanOut } from '../services/backup-executor';
-import { exportD1Init, exportD1InsertBatch, DEFAULT_EXCLUDED_TABLES } from '../lib/sqlite-writer';
+import { exportD1ToSqlite } from '../lib/sqlite-writer';
 
 type Env = {
   DB: D1Database;
@@ -49,33 +49,21 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
 
     try {
       // ============================================================
-      // 拆分 SQLite 生成为多个 step.do，每步独立 CPU 预算
+      // 生成 db.sqlite3（D1 Export API 单步 I/O 操作，不耗 CPU）
       // ============================================================
-
-      // Step A: 初始化 sql.js + 执行 DDL
-      let sqliteState = await step.do(
-        'sqlite-init',
-        { retries: { limit: 2, delay: '30 seconds', backoff: 'exponential' } },
-        async () => exportD1Init(db, logFn),
-      );
-
-      // Step B: 获取所有业务表，分批插入（每批 5 张表）
-      const allTables = await db.prepare(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%' ORDER BY name`,
-      ).all<{ name: string }>();
-      const tableNames = ((allTables.results || []).map(x => x.name)).filter(n => !DEFAULT_EXCLUDED_TABLES.includes(n));
-      const BATCH = 5;
-      for (let i = 0; i < tableNames.length; i += BATCH) {
-        const batch = tableNames.slice(i, i + BATCH);
+      let sqliteState: Uint8Array | null = null;
+      try {
         sqliteState = await step.do(
-          `sqlite-insert-${i / BATCH}`,
+          'sqlite-export',
           { retries: { limit: 2, delay: '30 seconds', backoff: 'exponential' } },
-          async () => exportD1InsertBatch(db, sqliteState, batch, logFn),
+          async () => exportD1ToSqlite(db, undefined, logFn),
         );
+        logFn(`[SQLite] db.sqlite3: ${sqliteState.length} bytes`);
+      } catch (err) {
+        logFn(`[SQLite] db.sqlite3 generation failed: ${(err as Error).message}`);
       }
-      logFn(`[SQLite] db.sqlite3 built: ${sqliteState.length} bytes`);
 
-      // Step C: 执行备份（传入预生成的 SQLite 字节）
+      // Step B: 执行备份（传入预生成的 SQLite 字节，没有则为 null）
       await broadcast({ type: 'backup_progress', phase: 'fan_out_start', runId });
       const backupResult = await step.do(
         'backup-fan-out',

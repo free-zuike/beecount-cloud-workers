@@ -8,6 +8,11 @@
  *   3. 最终 state 就是 db.sqlite3 字节
  */
 
+// wrangler.toml [vars] 注入的全局变量
+declare var CLOUDFLARE_ACCOUNT_ID: string | undefined;
+declare var D1_DATABASE_ID: string | undefined;
+declare var CLOUDFLARE_API_TOKEN: string | undefined;
+
 /** 备份默认排除的"运维类"表（对齐原版 db_snapshot.py）：保留 schema、清数据 */
 export const DEFAULT_EXCLUDED_TABLES = [
   'backup_runs', 'backup_run_targets', 'sync_push_idempotency',
@@ -121,7 +126,10 @@ export async function exportD1InsertBatch(
 }
 
 /**
- * 便捷函数：串行执行全部步骤（非 Workflow 环境用，直接 import 使用）。
+ * 导出 SQLite 二进制文件，优先级：
+ *   1. D1 binding dump() — 最快，无需 token
+ *   2. D1 Export API — I/O 操作，不耗 CPU，需 CLOUDFLARE_API_TOKEN
+ *   3. sql.js 逐表导出 — CPU 密集型，免费版不可用，Workers Paid 可用
  */
 export async function exportD1ToSqlite(
   db: D1Database,
@@ -129,15 +137,54 @@ export async function exportD1ToSqlite(
   logFn?: (msg: string) => void,
 ): Promise<Uint8Array> {
   const log = logFn || (() => {});
+
+  // 方案 A: db.dump() — 最快路径
+  try {
+    const buffer = await db.dump();
+    const bytes = new Uint8Array(buffer);
+    log(`[SQLite] dump() succeeded: ${bytes.length} bytes`);
+    return bytes;
+  } catch (e) {
+    log(`[SQLite] dump() failed: ${(e as Error).message}`);
+  }
+
+  // 方案 B: D1 Export API — I/O 操作，不耗 CPU
+  const apiToken = typeof CLOUDFLARE_API_TOKEN !== 'undefined' ? (CLOUDFLARE_API_TOKEN as string) : undefined;
+  const accountId = typeof CLOUDFLARE_ACCOUNT_ID !== 'undefined' ? (CLOUDFLARE_ACCOUNT_ID as string) : undefined;
+  const databaseId = typeof D1_DATABASE_ID !== 'undefined' ? (D1_DATABASE_ID as string) : undefined;
+  if (apiToken && accountId && databaseId) {
+    log(`[SQLite] Using D1 Export API...`);
+    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/export`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+    });
+    if (res.ok) {
+      const data = await res.json() as any;
+      const downloadUrl = data?.result?.download_url || data?.result?.upload_url || data?.result?.url;
+      if (downloadUrl) {
+        const fileRes = await fetch(downloadUrl);
+        if (fileRes.ok) {
+          const buffer = await fileRes.arrayBuffer();
+          const bytes = new Uint8Array(buffer);
+          log(`[SQLite] Export API: ${bytes.length} bytes`);
+          return bytes;
+        }
+      }
+    }
+    log(`[SQLite] Export API failed: ${res.status}`);
+  }
+
+  // 方案 C: sql.js 逐表导出（CPU 密集型，免费版可能超时）
+  log(`[SQLite] Falling back to sql.js (CPU-intensive)`);
   let state = await exportD1Init(db, log);
   const allTables = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%' ORDER BY name`).all<{ name: string }>();
   const names = ((allTables.results || []).map(x => x.name)).filter(n => !DEFAULT_EXCLUDED_TABLES.includes(n));
-  // 每批 5 张表，避免单步 CPU 超限
   const BATCH = 5;
   for (let i = 0; i < names.length; i += BATCH) {
     state = await exportD1InsertBatch(db, state, names.slice(i, i + BATCH), log);
   }
-  log(`[SQLite] db.sqlite3 built: ${state.length} bytes`);
+  log(`[SQLite] sql.js fallback: ${state.length} bytes`);
   return state;
 }
 
