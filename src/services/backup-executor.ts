@@ -11,7 +11,7 @@ import { createTarGz } from '../lib/tar';
 import { encryptData } from '../lib/encryption';
 import { computeRetentionDeletes, filterBackupFiles } from './backup-retention';
 import { uploadToOAuth2Provider, listOAuth2Files, deleteOAuth2File, refreshAccessToken } from '../lib/oauth2-storage';
-import { createSqliteWithData } from '../lib/sqlite-writer';
+
 
 // ===========================
 // WebDAV 工具函数
@@ -318,14 +318,8 @@ export async function generateBackupBytes(
   // 构建文件条目（供 tar.gz �?ZIP 使用�?
   const entries: { name: string; data: Uint8Array }[] = [];
   entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: '1.6.1', createdAt: new Date().toISOString(), userId, includeAttachments: true }, null, 2)) });
-  // 生成完整 db.sqlite3（与原版 VACUUM INTO 导出的 .sqlite3 文件等效）
-  try {
-    const { createSqliteWithData } = await import('../lib/sqlite-writer');
-    entries.push({ name: 'db.sqlite3', data: createSqliteWithData(tables as Record<string, unknown[]>) });
-  } catch (e) {
-    logWrap(`[Backup] Failed to create db.sqlite3: ${e}, falling back to db.json`);
-    entries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: new Date().toISOString(), version: '1.0', schema_version: 1, user_id: userId, tables }, null, 2)) });
-  }
+  // 使用 db.json 格式（与原版兼容）
+  entries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: new Date().toISOString(), version: '1.0', schema_version: 1, user_id: userId, tables }, null, 2)) });
   for (const [key, value] of attachments) entries.push({ name: key, data: value });
 
   let backupBytes = await withRetry(() => createTarGz(entries), 2, 1000, 'create tar.gz');
