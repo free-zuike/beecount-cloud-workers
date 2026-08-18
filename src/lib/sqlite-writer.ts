@@ -155,7 +155,7 @@ export async function exportD1ToSqlite(
       throw new Error(`D1 Export API returned ${res.status}: ${errText.slice(0, 200)}`);
     }
     const data = await res.json() as any;
-    const downloadUrl = data?.result?.download_url || data?.result?.upload_url || data?.result?.url;
+    const downloadUrl = data?.result?.signed_url || data?.result?.download_url || data?.result?.upload_url || data?.result?.url;
     if (!downloadUrl) {
       throw new Error(`D1 Export API: no download URL in response: ${JSON.stringify(data).slice(0, 300)}`);
     }
