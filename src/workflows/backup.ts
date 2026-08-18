@@ -7,6 +7,7 @@ type Env = {
   R2: R2Bucket;
   BEECOUNT_DO: DurableObjectNamespace;
   JWT_SECRET: string;
+  CLOUDFLARE_API_TOKEN?: string;
 };
 
 type BackupParams = {
@@ -56,7 +57,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
         sqliteState = await step.do(
           'sqlite-export',
           { retries: { limit: 2, delay: '30 seconds', backoff: 'exponential' } },
-          async () => exportD1ToSqlite(db, undefined, logFn),
+          async () => exportD1ToSqlite(db, undefined, logFn, this.env.CLOUDFLARE_API_TOKEN),
         );
         logFn(`[SQLite] db.sqlite3: ${sqliteState.length} bytes`);
       } catch (err) {

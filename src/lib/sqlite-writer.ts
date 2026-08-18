@@ -11,7 +11,6 @@
 // wrangler.toml [vars] 注入的全局变量
 declare var CLOUDFLARE_ACCOUNT_ID: string | undefined;
 declare var D1_DATABASE_ID: string | undefined;
-declare var CLOUDFLARE_API_TOKEN: string | undefined;
 
 /** 备份默认排除的"运维类"表（对齐原版 db_snapshot.py）：保留 schema、清数据 */
 export const DEFAULT_EXCLUDED_TABLES = [
@@ -135,6 +134,7 @@ export async function exportD1ToSqlite(
   db: D1Database,
   _excludeTables?: string[],
   logFn?: (msg: string) => void,
+  apiToken?: string | null, // 从 Workflow env 传入，避免 Secret 无法作为全局变量
 ): Promise<Uint8Array> {
   const log = logFn || (() => {});
 
@@ -149,7 +149,6 @@ export async function exportD1ToSqlite(
   }
 
   // 方案 B: D1 Export API — I/O 操作，不耗 CPU
-  const apiToken = typeof CLOUDFLARE_API_TOKEN !== 'undefined' ? (CLOUDFLARE_API_TOKEN as string) : undefined;
   const accountId = typeof CLOUDFLARE_ACCOUNT_ID !== 'undefined' ? (CLOUDFLARE_ACCOUNT_ID as string) : undefined;
   const databaseId = typeof D1_DATABASE_ID !== 'undefined' ? (D1_DATABASE_ID as string) : undefined;
   if (apiToken && accountId && databaseId) {
