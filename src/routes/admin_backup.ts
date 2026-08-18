@@ -391,6 +391,7 @@ type Bindings = {
   S3_SECRET_ACCESS_KEY?: string;
   S3_BUCKET_NAME?: string;
   CLOUDFLARE_API_TOKEN?: string;
+  BACKUP_WORKFLOW: Workflow;
 };
 
 type Variables = {
@@ -1672,110 +1673,53 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
   // 原版不广�?running 状态，只在备份完成时广播最终状�?
 
   // 后台执行备份（模仿原�?threading.Thread�?
-  c.executionCtx.waitUntil((async () => {
-    // 广播 backup_progress �?前端显示 "运行�?· phase" 横幅
+  // 通过 Workflow 后台执行备份（无 30s 超时限制；_r2Bucket 实例不可序列化，剔除后由 Workflow 重建）
+  if (c.env.BACKUP_WORKFLOW) {
     try {
-      await broadcastViaDO(c.env, schedule.user_id, {
-        type: 'backup_progress',
-        phase: 'fan_out_start',
-        bytesTransferred: 0,
-        bytesTotal: 0,
+      await c.env.BACKUP_WORKFLOW.create({
+        params: {
+          runId,
+          userId: schedule.user_id,
+          ledgerId: ledgerId || 'global',
+          remoteConfigs: remoteConfigs.map(({ remoteId, config }) => {
+            const { _r2Bucket, ...rest } = config;
+            return { remoteId, config: rest };
+          }),
+          shouldEncrypt,
+          retentionDays: schedule.retention_days ?? undefined,
+          scheduleId: schedule.id,
+          serverNow,
+        },
       });
-    } catch {}
-
-    try {
-      // 收集日志
-      const logLines: string[] = [];
-      const logFn = (msg: string) => {
-        const ts = new Date().toISOString();
-        logLines.push(`[${ts}] ${msg}`);
-      };
-
-      logFn(`backup start, run=${runId} label=${serverNow.replace(/[:.]/g, '').slice(0, 15)} remotes=['${remoteId || 'local'}']`);
-
-      const backupResult = await performBackupFanOut(db, runId, schedule.user_id, ledgerId || 'global', remoteConfigs, shouldEncrypt, c.env.R2, logFn, schedule.retention_days ?? undefined, (phase) => {
-        broadcastViaDO(c.env, schedule.user_id, { type: 'backup_progress', phase, runId }).catch(() => {});
-      });
-      const finishedAt = new Date().toISOString();
-      const finalStatus = backupResult.success ? 'succeeded' : 'failed';
-
-      logFn(`backup ${finalStatus}, size=${backupResult.backupSize || 0} bytes`);
-      const logText = logLines.join('\n');
-
-      await db.prepare(
-        `UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?, log_text = ?
-         WHERE id = ?`
-      ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
-            backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
-            backupResult.success ? null : backupResult.message, logText, runId).run();
-
-      // 为每个远端创�?backup_run_targets 记录（与原版 fan-out 对齐�?
-      for (const rc of remoteConfigs) {
-        try {
-          await db.prepare(
-            `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, bytes_transferred, error_message)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`
-          ).bind(runId, rc.remoteId, finalStatus, serverNow, finishedAt,
-                backupResult.backupSize || null, backupResult.success ? null : backupResult.message).run();
-        } catch (e) {
-          serverLogger.error('src.routers.admin', '[Backup] Failed to insert backup_run_targets:', (e as Error).message);
-        }
-      }
-
-      await db.prepare(
-        `UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?
-         WHERE id = ?`
-      ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
-            backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
-            backupResult.success ? null : backupResult.message, runId).run();
-
-      // 广播最终状�?
-      await broadcastViaDO(c.env, schedule.user_id, {
-        type: 'backup_status', scheduleId: schedule.id, status: finalStatus, runId,
-      });
-
-      // 备份保留策略清理（与原版 retention_days 对齐�?
-      if (schedule.retention_days && schedule.retention_days > 0) {
-        try {
-          const cutoffDate = new Date(Date.now() - schedule.retention_days * 24 * 3600000).toISOString();
-          const oldRuns = await db.prepare(
-            `SELECT id, backup_path FROM backup_runs WHERE schedule_id = ? AND status IN ('succeeded','partial') AND finished_at < ? ORDER BY finished_at ASC`
-          ).bind(schedule.id, cutoffDate).all<{ id: number; backup_path: string | null }>();
-          if (oldRuns.results && oldRuns.results.length > 0) {
-            for (const oldRun of oldRuns.results) {
-              if (oldRun.backup_path && c.env.R2) {
-                try { await c.env.R2.delete(oldRun.backup_path); } catch {}
-              }
-              await db.prepare('DELETE FROM backup_run_targets WHERE run_id = ?').bind(oldRun.id).run();
-              await db.prepare('DELETE FROM backup_runs WHERE id = ?').bind(oldRun.id).run();
-            }
-            serverLogger.info('src.routers.admin', `[Backup] Retention: cleaned ${oldRuns.results.length} old runs (>${schedule.retention_days} days)`);
-          }
-        } catch (e) {
-          serverLogger.error('src.routers.admin', '[Backup] Retention cleanup failed (non-fatal):', e);
-        }
-      }
-    } catch (err) {
-      const finishedAt = new Date().toISOString();
-      const logText = `[${new Date().toISOString()}] backup failed: ${(err as Error).message}`;
-      await db.prepare(
-        `UPDATE backup_runs SET status = 'failed', finished_at = ?, error_message = ?, log_text = ? WHERE id = ?`
-      ).bind(finishedAt, (err as Error).message, logText, runId).run();
-
-      // 为每个远端创�?backup_run_targets 记录（错误路径）
-      for (const rc of remoteConfigs) {
-        try {
-          await db.prepare(
-            `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, error_message)
-             VALUES (?, ?, 'failed', ?, ?, ?)`
-          ).bind(runId, rc.remoteId, serverNow, finishedAt, (err as Error).message).run();
-        } catch {}
-      }
-      await broadcastViaDO(c.env, schedule.user_id, {
-        type: 'backup_status', scheduleId: schedule.id, status: 'failed', runId,
-      });
+    } catch (wfErr) {
+      serverLogger.error('src.routers.admin', '[Backup] Failed to start backup workflow:', (wfErr as Error).message);
+      await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?')
+        .bind('failed', new Date().toISOString(), (wfErr as Error).message, runId).run();
     }
-  })());
+  } else {
+    c.executionCtx.waitUntil((async () => {
+      const logLines: string[] = [];
+      const logFn = (msg: string) => { logLines.push(`[${new Date().toISOString()}] ${msg}`); };
+      try {
+        const backupResult = await performBackupFanOut(db, runId, schedule.user_id, ledgerId || 'global', remoteConfigs, shouldEncrypt, c.env.R2, logFn, schedule.retention_days ?? undefined, (phase) => {
+          broadcastViaDO(c.env, schedule.user_id, { type: 'backup_progress', phase, runId }).catch(() => {});
+        });
+        const finishedAt = new Date().toISOString();
+        const finalStatus = backupResult.success ? 'succeeded' : 'failed';
+        await db.prepare(
+          'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?, log_text = ? WHERE id = ?'
+        ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
+              backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
+              backupResult.success ? null : backupResult.message, logLines.join('\n'), runId).run();
+        await broadcastViaDO(c.env, schedule.user_id, { type: 'backup_status', scheduleId: schedule.id, status: finalStatus, runId });
+      } catch (err) {
+        const finishedAt = new Date().toISOString();
+        await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ?, log_text = ? WHERE id = ?')
+          .bind('failed', finishedAt, (err as Error).message, logLines.join('\n'), runId).run();
+        await broadcastViaDO(c.env, schedule.user_id, { type: 'backup_status', status: 'failed', runId });
+      }
+    })());
+  }
 
   // 立即返回 running 状态（与原�?202 模式一致）
   return c.json({
@@ -1936,46 +1880,53 @@ backupRouter.post('/run-now', apiValidator('json', RunNowSchema), async (c) => {
   const runId = runInsertResult.meta.last_row_id as number;
 
   // 后台执行备份
-  c.executionCtx.waitUntil((async () => {
-    const logLines: string[] = [];
-    const logFn = (msg: string) => { logLines.push(`[${new Date().toISOString()}] ${msg}`); };
+  // 通过 Workflow 后台执行备份（无 30s 超时限制；_r2Bucket 实例不可序列化，剔除后由 Workflow 重建）
+  if (c.env.BACKUP_WORKFLOW) {
     try {
-      const backupResult = await performBackupFanOut(db, runId, userId, ledger.id, remoteConfigs, shouldEncrypt, c.env.R2, logFn, undefined, (phase) => {
-        broadcastViaDO(c.env, userId, { type: 'backup_progress', phase, runId }).catch(() => {});
+      await c.env.BACKUP_WORKFLOW.create({
+        params: {
+          runId,
+          userId,
+          ledgerId: ledger.id,
+          remoteConfigs: remoteConfigs.map(({ remoteId, config }) => {
+            const { _r2Bucket, ...rest } = config;
+            return { remoteId, config: rest };
+          }),
+          shouldEncrypt,
+          retentionDays: undefined,
+          scheduleId: null,
+          serverNow,
+        },
       });
-      const finishedAt = new Date().toISOString();
-      const finalStatus = backupResult.success ? 'succeeded' : 'failed';
-
-      await db.prepare(
-        `UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?, log_text = ? WHERE id = ?`
-      ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
-            backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
-            backupResult.success ? null : backupResult.message, logLines.join('\n'), runId).run();
-
-      for (const rc of remoteConfigs) {
-        try {
-          await db.prepare(
-            `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, bytes_transferred, error_message)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`
-          ).bind(runId, rc.remoteId, finalStatus, serverNow, finishedAt,
-                backupResult.backupSize || null, backupResult.success ? null : backupResult.message).run();
-        } catch {}
-      }
-
-      await broadcastViaDO(c.env, userId, { type: 'backup_status', status: finalStatus, runId });
-    } catch (err) {
-      const finishedAt = new Date().toISOString();
-      await db.prepare(`UPDATE backup_runs SET status = 'failed', finished_at = ?, error_message = ?, log_text = ? WHERE id = ?`)
-        .bind(finishedAt, (err as Error).message, logLines.join('\n'), runId).run();
-      for (const rc of remoteConfigs) {
-        try {
-          await db.prepare(`INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, error_message) VALUES (?, ?, 'failed', ?, ?, ?)`)
-            .bind(runId, rc.remoteId, serverNow, finishedAt, (err as Error).message).run();
-        } catch {}
-      }
-      await broadcastViaDO(c.env, userId, { type: 'backup_status', status: 'failed', runId });
+    } catch (wfErr) {
+      serverLogger.error('src.routers.admin', '[Backup] Failed to start backup workflow:', (wfErr as Error).message);
+      await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?')
+        .bind('failed', new Date().toISOString(), (wfErr as Error).message, runId).run();
     }
-  })());
+  } else {
+    c.executionCtx.waitUntil((async () => {
+      const logLines: string[] = [];
+      const logFn = (msg: string) => { logLines.push(`[${new Date().toISOString()}] ${msg}`); };
+      try {
+        const backupResult = await performBackupFanOut(db, runId, userId, ledger.id, remoteConfigs, shouldEncrypt, c.env.R2, logFn, undefined, (phase) => {
+          broadcastViaDO(c.env, userId, { type: 'backup_progress', phase, runId }).catch(() => {});
+        });
+        const finishedAt = new Date().toISOString();
+        const finalStatus = backupResult.success ? 'succeeded' : 'failed';
+        await db.prepare(
+          'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?, log_text = ? WHERE id = ?'
+        ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
+              backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
+              backupResult.success ? null : backupResult.message, logLines.join('\n'), runId).run();
+        await broadcastViaDO(c.env, userId, { type: 'backup_status', status: finalStatus, runId });
+      } catch (err) {
+        const finishedAt = new Date().toISOString();
+        await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ?, log_text = ? WHERE id = ?')
+          .bind('failed', finishedAt, (err as Error).message, logLines.join('\n'), runId).run();
+        await broadcastViaDO(c.env, userId, { type: 'backup_status', status: 'failed', runId });
+      }
+    })());
+  }
 
   return c.json({
     id: runId,

@@ -1,96 +1,121 @@
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
-import { serverLogger } from '../lib/logger';
+import { performBackupFanOut } from '../services/backup-executor';
 
 type Env = {
   DB: D1Database;
   R2: R2Bucket;
-  JWT_SECRET: string;
-  CLOUDFLARE_ACCOUNT_ID: string;
-  CLOUDFLARE_API_TOKEN: string;
   BEECOUNT_DO: DurableObjectNamespace;
+  JWT_SECRET: string;
 };
 
-export class BackupWorkflow extends WorkflowEntrypoint<Env> {
-  async run(event: WorkflowEvent<unknown>, step: WorkflowStep) {
-    const accountId = this.env.CLOUDFLARE_ACCOUNT_ID;
-    // database_id from wrangler.toml — but we need it at runtime
-    // We'll query it from the D1 binding metadata or use a hardcoded value
-    const databaseId = this.env.DB.databaseId || '';
+// Workflow 参数必须可 JSON 序列化，_r2Bucket（R2Bucket 实例）在触发点剔除，此处重建
+type BackupParams = {
+  runId: number;
+  userId: string;
+  ledgerId: string;
+  remoteConfigs: Array<{ remoteId: string; config: Record<string, string> }>;
+  shouldEncrypt: boolean;
+  retentionDays?: number;
+  scheduleId?: number | null;
+  serverNow: string;
+};
 
-    if (!accountId || !databaseId) {
-      serverLogger.error('src.workflows.backup', 'Missing CLOUDFLARE_ACCOUNT_ID or databaseId');
-      return;
-    }
-
-    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/export`;
-    const headers = new Headers();
-    headers.append('Content-Type', 'application/json');
-    headers.append('Authorization', `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`);
-
-    // Step 1: Start D1 export
-    const bookmark = await step.do('start D1 export', async () => {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ output_format: 'polling' }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`D1 export failed: ${res.status} ${text.slice(0, 200)}`);
-      }
-      const { result } = (await res.json()) as any;
-      if (!result?.at_bookmark) throw new Error('Missing at_bookmark from D1 export');
-      return result.at_bookmark as string;
-    });
-
-    // Step 2: Poll until export is ready, then download
-    const signedUrl = await step.do(
-      'download D1 export',
-      {
-        retries: { limit: 10, delay: '5 seconds', backoff: 'exponential' },
-        timeout: '5 minutes',
-      },
-      async () => {
-        const res = await fetch(url, {
+export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
+  async run(event: WorkflowEvent<BackupParams>, step: WorkflowStep) {
+    const { runId, userId, ledgerId, remoteConfigs, shouldEncrypt, retentionDays, scheduleId, serverNow } = event.payload;
+    const db = this.env.DB;
+    const logLines: string[] = [];
+    const logFn = (msg: string) => logLines.push(`[${new Date().toISOString()}] ${msg}`);
+    const broadcast = async (message: Record<string, unknown>) => {
+      try {
+        const doId = this.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
+        const stub = this.env.BEECOUNT_DO.get(doId);
+        await stub.fetch(new URL('/broadcast', 'http://do'), {
           method: 'POST',
-          headers,
-          body: JSON.stringify({ current_bookmark: bookmark }),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: JSON.stringify(message) }),
         });
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(`D1 export poll failed: ${res.status} ${text.slice(0, 200)}`);
-        }
-        const { result } = (await res.json()) as any;
-        if (!result?.signed_url) throw new Error('Export not ready yet');
-        return result.signed_url as string;
-      },
+      } catch { /* non-critical */ }
+    };
+
+    // 1. 重建远端配置（r2 类型注入 R2 bucket）
+    const effectiveConfigs: Array<{ remoteId: string; config: Record<string, string> }> = remoteConfigs.map((rc) =>
+      rc.config.backend_type === 'r2' && this.env.R2
+        ? { ...rc, config: { ...rc.config, _r2Bucket: this.env.R2 } as unknown as Record<string, string> }
+        : rc,
     );
 
-    // Step 3: Download the SQL dump
-    const sqlDump = await step.do('download SQL dump', async () => {
-      const res = await fetch(signedUrl);
-      if (!res.ok) throw new Error(`Failed to download dump: ${res.status}`);
-      return new Uint8Array(await res.arrayBuffer());
-    });
+    await broadcast({ type: 'backup_progress', phase: 'fan_out_start', runId, bytesTransferred: 0, bytesTotal: 0 });
 
-    // Step 4: Encrypt with age (if password is configured)
-    const backupPath = `backups/d1-${new Date().toISOString().replace(/[:.]/g, '-')}.sql`;
     try {
-      const { encryptData } = await import('../lib/encryption');
-      // We need a password — for now, store unencrypted
-      // TODO: get password from remote config
-      await this.env.R2.put(backupPath, sqlDump, {
-        httpMetadata: { contentType: 'application/sql' },
-      });
-      serverLogger.info('src.workflows.backup', `Backup saved to R2: ${backupPath} (${sqlDump.length} bytes)`);
-    } catch (e) {
-      // Fallback: store unencrypted
-      await this.env.R2.put(backupPath, sqlDump, {
-        httpMetadata: { contentType: 'application/sql' },
-      });
-      serverLogger.info('src.workflows.backup', `Backup saved to R2 (unencrypted): ${backupPath}`);
+      // 2. 执行备份（Workflows 无 30s 超时限制）
+      const backupResult = await step.do(
+        'backup-fan-out',
+        { retries: { limit: 2, delay: '1 minute', backoff: 'exponential' } },
+        async () =>
+          await performBackupFanOut(
+            db, runId, userId, ledgerId, effectiveConfigs, shouldEncrypt,
+            this.env.R2, logFn, retentionDays,
+            (phase) => { broadcast({ type: 'backup_progress', phase, runId }).catch(() => {}); },
+          ),
+      );
+
+      const finishedAt = new Date().toISOString();
+      const finalStatus = backupResult.success ? 'succeeded' : 'failed';
+      logFn(`backup ${finalStatus}, size=${backupResult.backupSize || 0} bytes`);
+
+      // 3. 更新 backup_runs 状态
+      await db.prepare(
+        `UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?, log_text = ?
+         WHERE id = ?`,
+      ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
+            backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
+            backupResult.success ? null : backupResult.message, logLines.join('\n'), runId).run();
+
+      // 4. 每个远端创建 backup_run_targets 记录（与原版 fan-out 对齐）
+      for (const rc of effectiveConfigs) {
+        try {
+          await db.prepare(
+            `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, bytes_transferred, error_message)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          ).bind(runId, rc.remoteId, finalStatus, serverNow, finishedAt,
+                backupResult.backupSize || null, backupResult.success ? null : backupResult.message).run();
+        } catch { /* ignore */ }
+      }
+
+      // 5. 广播最终状态
+      await broadcast({ type: 'backup_status', status: finalStatus, runId, scheduleId: scheduleId ?? undefined });
+
+      // 6. 更新调度最后状态（原版 schedule.last_run_status 对齐）
+      if (scheduleId) {
+        try {
+          await db.prepare(
+            'UPDATE backup_schedules SET last_run_at = ?, last_run_status = ? WHERE id = ?',
+          ).bind(finishedAt, finalStatus, scheduleId).run();
+        } catch { /* ignore */ }
+      }
+    } catch (err) {
+      const finishedAt = new Date().toISOString();
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      await db.prepare(
+        `UPDATE backup_runs SET status = 'failed', finished_at = ?, error_message = ?, log_text = ? WHERE id = ?`,
+      ).bind(finishedAt, errorMsg, logLines.join('\n'), runId).run();
+      for (const rc of effectiveConfigs) {
+        try {
+          await db.prepare(
+            `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, error_message)
+             VALUES (?, ?, 'failed', ?, ?, ?)`,
+          ).bind(runId, rc.remoteId, serverNow, finishedAt, errorMsg).run();
+        } catch { /* ignore */ }
+      }
+      await broadcast({ type: 'backup_status', status: 'failed', runId, scheduleId: scheduleId ?? undefined });
+      if (scheduleId) {
+        try {
+          await db.prepare(
+            'UPDATE backup_schedules SET last_run_at = ?, last_run_status = ? WHERE id = ?',
+          ).bind(finishedAt, 'failed', scheduleId).run();
+        } catch { /* ignore */ }
+      }
     }
   }
 }
-
-export default { BackupWorkflow };
