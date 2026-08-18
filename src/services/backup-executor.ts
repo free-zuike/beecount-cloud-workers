@@ -285,6 +285,7 @@ export async function generateBackupBytes(
   logFn?: (msg: string) => void,
   schedule?: { scheduleId: number | null; scheduleName: string | null },
   preSqliteBytes?: Uint8Array | null,
+  jwtSecret?: string | null,
 ): Promise<GeneratedBackup> {
   const log = logFn || console.log;
   const logLines: string[] = [];
@@ -333,6 +334,7 @@ export async function generateBackupBytes(
   const entries: { name: string; data: Uint8Array }[] = [];
   entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: APP_VERSION, createdAt: now, scheduleId: schedule?.scheduleId ?? null, scheduleName: schedule?.scheduleName ?? null, userId, includeAttachments: true }, null, 2)) });
   if (sqliteBytes) entries.push({ name: 'db.sqlite3', data: sqliteBytes });
+  if (jwtSecret) entries.push({ name: '.jwt_secret', data: new TextEncoder().encode(jwtSecret) });
   entries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: now, version: '1.0', schema_version: 1, user_id: userId, tables }, null, 2)) });
   for (const [key, value] of attachments) entries.push({ name: key, data: value });
 
@@ -684,6 +686,7 @@ export async function performBackupFanOut(
   progressFn?: (phase: string, meta?: Record<string, unknown>) => void,
   schedule?: { scheduleId: number | null; scheduleName: string | null },
   preSqliteBytes?: Uint8Array | null,
+  jwtSecret?: string | null,
 ): Promise<BackupResult> {
   const log = logFn || console.log;
   const logLines: string[] = [];
@@ -692,7 +695,7 @@ export async function performBackupFanOut(
   progressFn?.('starting');
 
   // 1. 生成一次备份字�?
-  const generated = await generateBackupBytes(db, userId, ledgerId, r2, logFn, schedule, preSqliteBytes);
+  const generated = await generateBackupBytes(db, userId, ledgerId, r2, logFn, schedule, preSqliteBytes, jwtSecret);
   logLines.push(...generated.logLines);
   progressFn?.('snapshot_db');
   progressFn?.('snapshot_attachments');

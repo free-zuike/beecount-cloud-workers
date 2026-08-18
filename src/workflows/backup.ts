@@ -93,7 +93,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
             if (obj) {
               preSqliteBytes = new Uint8Array(await obj.arrayBuffer());
               // 清理临时对象
-              this.env.R2.delete(sqliteR2Key).catch(() => {});
+              this.env.R2.delete(sqliteR2Key!).catch(() => {});
             }
           }
           return await performBackupFanOut(
@@ -102,7 +102,9 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
             (phase) => { broadcast({ type: 'backup_progress', phase, runId }).catch(() => {}); },
             { scheduleId: scheduleId ?? null, scheduleName: null },
             preSqliteBytes,
+            this.env.JWT_SECRET,
           );
+          if (sqliteR2Key) this.env.R2.delete(sqliteR2Key!).catch(() => {});
         },
       );
 
