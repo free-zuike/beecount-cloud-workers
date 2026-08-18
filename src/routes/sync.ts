@@ -336,20 +336,26 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       // 创建不存在的账本（批量）
       for (const externalId of ledgerExternalIds) {
         if (!ledgerMap[externalId]) {
-          // 先检查是否已存在（避免 UNIQUE 约束错误）
           const existing = await db.prepare('SELECT id, user_id FROM ledgers WHERE user_id = ? AND external_id = ?').bind(userId, externalId).first<{ id: string; user_id: string }>();
           if (existing) {
             ledgerMap[externalId] = { id: existing.id, user_id: existing.user_id, external_id: externalId };
             continue;
           }
-          serverLogger.info('src.routers.sync', '[SYNC] Creating new ledger:', externalId);
+          // 从 sync changes 中查找账本名称（如果本次 push 包含账本 upsert）
+          let ledgerName = externalId;
+          const ledgerChange = changes.find(c => c.ledger_id === externalId && (c.entity_type === 'ledger' || c.entity_type === 'ledger_snapshot') && c.action === 'upsert');
+          if (ledgerChange?.payload) {
+            const p = ledgerChange.payload as Record<string, unknown>;
+            ledgerName = (p.ledgerName ?? p.ledger_name ?? p.name ?? externalId) as string;
+          }
+          serverLogger.info('src.routers.sync', '[SYNC] Creating new ledger:', externalId, 'name:', ledgerName);
           const newLedgerId = randomUUID();
           await db
             .prepare(
               `INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
                VALUES (?, ?, ?, ?, 'CNY', ?)`
             )
-            .bind(newLedgerId, userId, externalId, externalId, serverNow)
+            .bind(newLedgerId, userId, externalId, ledgerName, serverNow)
             .run();
           // 与原版对齐：自动创建 owner 成员记录
           await db
