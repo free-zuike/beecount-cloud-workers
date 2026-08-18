@@ -35,15 +35,15 @@ async function getSqlJs(): Promise<import('sql.js').SqlJsStatic> {
       (self as any).location = { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:', host: 'localhost', hostname: 'localhost', port: '80', pathname: '/', search: '', hash: '' };
     }
 
-    // 优先使用 wasm_modules 绑定（预编译 WebAssembly.Module，Workers 允许）
-    // 回退 wasmBinary（Node.js 测试环境）
+    // 优先使用预编译 WebAssembly.Module（wrangler 构建时导入 .wasm 文件）
+    // 回退 wasmBinary（Node.js 测试环境，esbuild 无法处理 .wasm 导入）
     let wasmModule: WebAssembly.Module | null = null;
     try {
-      // 在 wrangler 打包时，'sql_wasm' 是 wasm_modules 绑定的导入名
-      const m = await import('sql_wasm');
-      wasmModule = m.default;
+      // wrangler 4.x 支持直接 import .wasm 文件，返回 WebAssembly.Module
+      const m = await import('../../node_modules/sql.js/dist/sql-wasm.wasm');
+      wasmModule = m.default || m;
     } catch {
-      // 测试环境或本地开发：无 wasm_modules 绑定，忽略
+      // 测试环境或本地开发：无 .wasm 导入支持，忽略
     }
 
     if (wasmModule) {
