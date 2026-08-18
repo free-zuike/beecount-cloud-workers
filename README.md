@@ -35,7 +35,7 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 | `meta.json` | 元数据 |
 | `.jwt_secret` | JWT 签名密钥（从环境变量读取） |
 | `attachments/` | 附件 |
-| `db.json` | **仅 Workers 版** — 兼容旧恢复端，原版忽略 |
+| `db.json` | **无 Token 时的回退格式** — 未配置 `CLOUDFLARE_API_TOKEN` 时跳过 `db.sqlite3`，仅生成此文件，仍可通过 Web 恢复 |
 
 与原版差异：
 
@@ -44,16 +44,7 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 | SQLite 生成 | VACUUM INTO（本地文件系统） | D1 Export API（REST API，不耗 CPU） |
 | 加密 | pyzipper WZ_AES | @zip.js/zip.js AES-256（同一标准） |
 | 附件来源 | 本地文件系统 hardlink | R2 对象存储 |
-| Token 依赖 | 无 | 需 `CLOUDFLARE_API_TOKEN`，未配置则跳过 `db.sqlite3` |
-
-## 前端
-
-前端基于同一 React + Vite 代码库，仅 1 个文件差异：
-
-| 差异项 | 原版 | Workers |
-|--------|------|---------|
-| 额外文件 | 无 | `SetupForm.tsx`（首次访问创建管理员） |
-| 部署方式 | 独立部署，需配置 API 地址 | Workers Assets 同域部署，无需跨域配置 |
+| Token 依赖 | 无 | 需 `CLOUDFLARE_API_TOKEN`，未配置则跳过 `db.sqlite3`，仅生成 `db.json` |
 
 ## 功能特性
 
@@ -86,8 +77,8 @@ chmod +x setup.sh
 
 1. Fork 仓库
 2. 添加 Secrets：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`
-3. 创建 D1 数据库并更新 `wrangler.toml` 的 `database_id`
-4. 推送到 main 分支自动部署
+3. 推送到 main 分支自动部署
+4. 如需备份生成 `db.sqlite3`，需配置 `CLOUDFLARE_API_TOKEN`（D1.Read 权限），否则备份仅生成 `db.json`
 
 ### 方式三：手动部署
 
@@ -95,7 +86,7 @@ chmod +x setup.sh
 npm install
 npx wrangler login
 npx wrangler d1 create beecount-cloud
-npx wrangler d1 execute beecount-cloud --remote --file=./schema.sql
+# 数据库表结构由代码自动创建（首次请求时自动执行迁移），无需手动执行 SQL
 npm run deploy
 ```
 
