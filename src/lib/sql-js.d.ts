@@ -29,8 +29,8 @@ declare module 'sql.js' {
   export default function initSqlJs(config?: InitSqlJsConfig): Promise<SqlJsStatic>;
 }
 
-// .wasm 文件导入类型声明（wrangler 构建时处理）
-declare module '*.wasm' {
-  const wasm: WebAssembly.Module;
-  export default wasm;
+// asm.js 变体（纯 JS 实现，无需 WASM，兼容 Cloudflare Workers）
+declare module 'sql.js/dist/sql-asm.js' {
+  export * from 'sql.js';
+  export { default } from 'sql.js';
 }

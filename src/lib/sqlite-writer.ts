@@ -1,13 +1,13 @@
 /**
- * SQLite 备份文件生成器 — 基于 sql.js（SQLite wasm）把 D1 数据导出为
- * 标准 SQLite 二进制文件（db.sqlite3），与原版 Python 的 VACUUM INTO 等效：
+ * SQLite 备份文件生成器 — 基于 sql.js（asm.js 变体，纯 JS 无需 WASM）
+ * 把 D1 数据导出为标准 SQLite 二进制文件（db.sqlite3），与原版 Python
+ * 的 VACUUM INTO 等效：
  *  - schema 完整保留（原样执行 sqlite_master 里的 DDL，含索引/触发器）
  *  - 运维类表只留 schema、清数据（对齐原版 db_snapshot.py DEFAULT_EXCLUDED_TABLES）
  *  - 输出 SQLite format 3 文件，原版（Python sqlite3）可直接打开恢复
  */
 
-import initSqlJs from 'sql.js';
-import { SQL_WASM_BASE64 } from './sql-wasm-data';
+import initSqlJs from 'sql.js/dist/sql-asm.js';
 
 /** 备份默认排除的"运维类"表（对齐原版 db_snapshot.py）：保留 schema、清数据 */
 export const DEFAULT_EXCLUDED_TABLES = [
@@ -30,37 +30,12 @@ let sqlJsPromise: Promise<import('sql.js').SqlJsStatic> | null = null;
 
 async function getSqlJs(): Promise<import('sql.js').SqlJsStatic> {
   if (!sqlJsPromise) {
-    // Workflows 环境可能缺少 self.location，sql.js Emscripten loader 需要它
+    // sql.js 的 Emscripten loader 在 Workflows 环境可能缺少 self.location
     if (typeof self !== 'undefined' && !(self as any).location) {
       (self as any).location = { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:', host: 'localhost', hostname: 'localhost', port: '80', pathname: '/', search: '', hash: '' };
     }
-
-    // 优先使用预编译 WebAssembly.Module（wrangler 构建时导入 .wasm 文件）
-    // 回退 wasmBinary（Node.js 测试环境，esbuild 无法处理 .wasm 导入）
-    let wasmModule: WebAssembly.Module | null = null;
-    try {
-      // wrangler 4.x 支持直接 import .wasm 文件，返回 WebAssembly.Module
-      const m = await import('../../node_modules/sql.js/dist/sql-wasm.wasm');
-      wasmModule = m.default || m;
-    } catch {
-      // 测试环境或本地开发：无 .wasm 导入支持，忽略
-    }
-
-    if (wasmModule) {
-      sqlJsPromise = initSqlJs({
-        instantiateWasm: (imports: WebAssembly.Imports, callback: (module: WebAssembly.Module, instance: WebAssembly.Instance) => void) => {
-          WebAssembly.instantiate(wasmModule!, imports).then((result: any) => {
-            callback(result.module!, result.instance!);
-          });
-          return {};
-        },
-      });
-    } else {
-      const raw = atob(SQL_WASM_BASE64);
-      const bytes = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-      sqlJsPromise = initSqlJs({ wasmBinary: bytes });
-    }
+    // 使用 sql-asm.js（纯 JS 实现，无需 WASM 编译，兼容 Cloudflare Workers）
+    sqlJsPromise = initSqlJs();
   }
   return sqlJsPromise;
 }
