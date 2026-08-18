@@ -151,6 +151,7 @@ export async function exportD1ToSqlite(
   // 方案 B: D1 Export API — I/O 操作，不耗 CPU
   const accountId = typeof CLOUDFLARE_ACCOUNT_ID !== 'undefined' ? (CLOUDFLARE_ACCOUNT_ID as string) : undefined;
   const databaseId = typeof D1_DATABASE_ID !== 'undefined' ? (D1_DATABASE_ID as string) : undefined;
+  log(`[SQLite] Export API check: token=${!!apiToken} account=${!!accountId} db=${!!databaseId}`);
   if (apiToken && accountId && databaseId) {
     log(`[SQLite] Using D1 Export API...`);
     const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/export`;

@@ -54,6 +54,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
       // ============================================================
       let sqliteState: Uint8Array | null = null;
       try {
+        logFn(`[SQLite] Export API token available: ${!!this.env.CLOUDFLARE_API_TOKEN}`);
         sqliteState = await step.do(
           'sqlite-export',
           { retries: { limit: 2, delay: '30 seconds', backoff: 'exponential' } },
