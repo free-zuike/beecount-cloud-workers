@@ -1703,7 +1703,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
       try {
         const backupResult = await performBackupFanOut(db, runId, schedule.user_id, ledgerId || 'global', remoteConfigs, shouldEncrypt, c.env.R2, logFn, schedule.retention_days ?? undefined, (phase) => {
           broadcastViaDO(c.env, schedule.user_id, { type: 'backup_progress', phase, runId }).catch(() => {});
-        });
+        }, { scheduleId: schedule.id, scheduleName: schedule.name ?? null });
         const finishedAt = new Date().toISOString();
         const finalStatus = backupResult.success ? 'succeeded' : 'failed';
         await db.prepare(

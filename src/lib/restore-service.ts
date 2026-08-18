@@ -9,6 +9,14 @@
 import { configure } from '@zip.js/zip.js';
 configure({ useWebWorkers: false });
 import { ZipReader, Uint8ArrayReader, Uint8ArrayWriter } from '@zip.js/zip.js/index-native.js';
+import { readSqliteToTables } from './sqlite-writer';
+
+/**
+ * 统一归档内文件名：原版 tar 用 arcname='.' 会产生 './db.sqlite3' 前缀，去掉
+ */
+function normalizeEntryName(name: string): string {
+  return name.replace(/^\.\//, '');
+}
 
 export interface RestoreProgress {
   phase: 'downloading' | 'importing' | 'uploading' | 'done' | 'failed';
@@ -65,7 +73,8 @@ async function downloadAndExtractBackup(
       const writer = new Uint8ArrayWriter();
       await ze.getData?.(writer, { password });
       const fileData = writer.getData() as unknown as Uint8Array;
-      entries.push({ name: ze.filename, size: fileData.length, data: fileData });
+      const normalized = normalizeEntryName(ze.filename);
+      if (normalized) entries.push({ name: normalized, size: fileData.length, data: fileData });
     }
     await reader.close();
   } else if (data.length > 10) {
@@ -103,10 +112,6 @@ async function downloadAndExtractBackup(
   const metaEntry = entries.find(e => e.name === 'meta.json');
   const meta = metaEntry ? JSON.parse(new TextDecoder().decode(metaEntry.data)) : {};
 
-  // 提取 db.json
-  const dbJsonEntry = entries.find(e => e.name === 'db.json');
-  const dbJson = dbJsonEntry ? JSON.parse(new TextDecoder().decode(dbJsonEntry.data)) : {};
-
   // 提取附件
   const attachments = new Map<string, Uint8Array>();
   for (const entry of entries) {
@@ -115,7 +120,21 @@ async function downloadAndExtractBackup(
     }
   }
 
-  return { meta, tables: dbJson.tables || {}, attachments };
+  // 数据来源优先 db.json（老 TS 备份格式，向后兼容）；否则读 db.sqlite3（原版格式）
+  let tables: Record<string, unknown[]> = {};
+  const dbJsonEntry = entries.find(e => e.name === 'db.json');
+  if (dbJsonEntry) {
+    const dbJson = JSON.parse(new TextDecoder().decode(dbJsonEntry.data));
+    tables = dbJson.tables || {};
+  } else {
+    const sqliteEntry = entries.find(e => e.name === 'db.sqlite3');
+    if (sqliteEntry) {
+      const { tables: sqliteTables } = await readSqliteToTables(sqliteEntry.data);
+      tables = sqliteTables;
+    }
+  }
+
+  return { meta, tables, attachments };
 }
 
 /**
@@ -165,7 +184,10 @@ function parseTar(data: Uint8Array): { name: string; size: number; data: Uint8Ar
     const fileData = data.slice(contentOffset, contentOffset + size);
     
     if (name !== '.' && name !== './') {
-      entries.push({ name, size, data: fileData });
+      const normalized = normalizeEntryName(name);
+      if (normalized) {
+        entries.push({ name: normalized, size, data: fileData });
+      }
     }
     
     offset = contentOffset + Math.ceil(size / 512) * 512;

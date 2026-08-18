@@ -57,6 +57,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
             db, runId, userId, ledgerId, effectiveConfigs, shouldEncrypt,
             this.env.R2, logFn, retentionDays,
             (phase) => { broadcast({ type: 'backup_progress', phase, runId }).catch(() => {}); },
+            { scheduleId: scheduleId ?? null, scheduleName: null },
           ),
       );
 

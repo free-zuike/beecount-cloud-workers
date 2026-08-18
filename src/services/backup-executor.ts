@@ -8,7 +8,9 @@ import { uploadToS3, listS3Objects, deleteS3Object, downloadFromS3 } from '../li
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
-import { encryptData } from '../lib/encryption';
+import { createEncryptedZip } from '../lib/zip-lib';
+import { exportD1ToSqlite, DEFAULT_EXCLUDED_TABLES } from '../lib/sqlite-writer';
+import { APP_VERSION } from '../version';
 import { computeRetentionDeletes, filterBackupFiles } from './backup-retention';
 import { uploadToOAuth2Provider, listOAuth2Files, deleteOAuth2File, refreshAccessToken } from '../lib/oauth2-storage';
 
@@ -157,33 +159,19 @@ async function getEncryptionPassword(
  * 排除：backup_runs, backup_run_targets, sync_push_idempotency, audit_logs, refresh_tokens, mcp_call_logs
  * 保留：PAT 表（用户 LLM 配置依赖�? backup_remotes/schedules（配置保留）, 所有用户数据表
  */
-const BACKUP_TABLES = [
-  'users',
-  'user_profiles',
-  'devices',
-  'ledgers',
-  'ledger_members',
-  'ledger_invites',
-  'sync_changes',
-  'sync_cursors',
-  'read_tx_projection',
-  'read_account_projection',
-  'read_category_projection',
-  'read_tag_projection',
-  'read_budget_projection',
-  'attachment_files',
-  'personal_access_tokens',
-  'backup_remotes',
-  'backup_schedules',
-  'backup_runs',
-  'backup_run_targets',
-  // 'backup_schedule_remotes', // 表可能不存在，跳�?
-  'system_settings',
-  'recovery_codes',
-  'exchange_rate_overrides',
-  'backup_snapshots',
-  'backup_restores',
-];
+/**
+ * 需要备份的表（与原版 db_snapshot.py DEFAULT_EXCLUDED_TABLES 对齐：
+ * 运维类表排除数据，schema 由 db.sqlite3 完整保留）
+ */
+const EXCLUDED_BACKUP_TABLES = new Set(DEFAULT_EXCLUDED_TABLES);
+
+/** 获取全部业务表（排除 SQLite/D1 内部对象） */
+async function listUserTables(db: D1Database): Promise<string[]> {
+  const r = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%' ORDER BY name`).all<{ name: string }>();
+  return (r.results || []).map(x => x.name);
+}
+
+
 
 /** D1 每次查询最多返回的行数 */
 const D1_BATCH_SIZE = 1000;
@@ -281,6 +269,13 @@ export interface GeneratedBackup {
 
 /**
  * 生成备份字节（与原版 fan-out 对齐：生成一次，上传到多个远端）
+ *
+ * 格式与原版 Python 备份完全一致（可互相恢复）：
+ *   - db.sqlite3：标准 SQLite 二进制（sql.js 构建，等效原版 VACUUM INTO）
+ *   - meta.json： 原版字段（schemaVersion/appVersion/createdAt/scheduleId/scheduleName/userId/includeAttachments）
+ *   - db.json：  后向兼容 TS 旧恢复端（仅用于内部恢复路径，原版忽略）
+ *   - attachments/：R2 附件原样
+ * 未加密 → tar.gz；加密 → AES-256 ZIP（对齐原版 pyzipper WZ_AES，7-Zip/解压工具可直接开）
  */
 export async function generateBackupBytes(
   db: D1Database,
@@ -288,6 +283,7 @@ export async function generateBackupBytes(
   ledgerId: string,
   r2?: R2Bucket,
   logFn?: (msg: string) => void,
+  schedule?: { scheduleId: number | null; scheduleName: string | null },
 ): Promise<GeneratedBackup> {
   const log = logFn || console.log;
   const logLines: string[] = [];
@@ -295,9 +291,14 @@ export async function generateBackupBytes(
 
   logWrap(`[Backup] Starting full database backup, user: ${userId}`);
 
-  // 导出所有用户数据表
+  // 1. db.sqlite3（主格式，与原版 VACUUM INTO 等效）
+  const sqliteBytes = await exportD1ToSqlite(db, undefined, logWrap);
+  logWrap(`[Backup] db.sqlite3: ${sqliteBytes.length} bytes`);
+
+  // 2. db.json（后向兼容 TS 旧恢复端 + R2 列表摘要）
   const tables: Record<string, unknown[]> = {};
-  for (const tableName of BACKUP_TABLES) {
+  const tableNames = (await listUserTables(db)).filter(n => !EXCLUDED_BACKUP_TABLES.has(n));
+  for (const tableName of tableNames) {
     try {
       const rows = await withRetry(() => exportTable(db, tableName), 3, 1000, `export ${tableName}`);
       if (rows.length > 0) tables[tableName] = rows;
@@ -306,7 +307,7 @@ export async function generateBackupBytes(
     }
   }
 
-  // R2 附件
+  // 3. R2 附件
   let attachments = new Map<string, Uint8Array>();
   if (r2) {
     try {
@@ -315,15 +316,16 @@ export async function generateBackupBytes(
     } catch {}
   }
 
-  // 构建文件条目（供 tar.gz �?ZIP 使用�?
+  // 4. 构建文件条目（供 tar.gz / ZIP 使用；原版解包后根目录直接是这些文件）
+  const now = new Date().toISOString();
   const entries: { name: string; data: Uint8Array }[] = [];
-  entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: '1.6.1', createdAt: new Date().toISOString(), userId, includeAttachments: true }, null, 2)) });
-  // 使用 db.json 格式（与原版兼容）
-  entries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: new Date().toISOString(), version: '1.0', schema_version: 1, user_id: userId, tables }, null, 2)) });
+  entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: APP_VERSION, createdAt: now, scheduleId: schedule?.scheduleId ?? null, scheduleName: schedule?.scheduleName ?? null, userId, includeAttachments: true }, null, 2)) });
+  entries.push({ name: 'db.sqlite3', data: sqliteBytes });
+  entries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: now, version: '1.0', schema_version: 1, user_id: userId, tables }, null, 2)) });
   for (const [key, value] of attachments) entries.push({ name: key, data: value });
 
   let backupBytes = await withRetry(() => createTarGz(entries), 2, 1000, 'create tar.gz');
-  logWrap(`[Backup] tar.gz created: ${backupBytes.length} bytes, ${Object.keys(tables).length} tables`);
+  logWrap(`[Backup] tar.gz created: ${backupBytes.length} bytes, ${Object.keys(tables).length} tables, attachments ${attachments.size}`);
 
   return { backupBytes, entries, encrypted: false, backupSize: backupBytes.length, logLines };
 }
@@ -662,6 +664,7 @@ export async function performBackupFanOut(
   logFn?: (msg: string) => void,
   retentionDays?: number,
   progressFn?: (phase: string, meta?: Record<string, unknown>) => void,
+  schedule?: { scheduleId: number | null; scheduleName: string | null },
 ): Promise<BackupResult> {
   const log = logFn || console.log;
   const logLines: string[] = [];
@@ -670,23 +673,23 @@ export async function performBackupFanOut(
   progressFn?.('starting');
 
   // 1. 生成一次备份字�?
-  const generated = await generateBackupBytes(db, userId, ledgerId, r2, logFn);
+  const generated = await generateBackupBytes(db, userId, ledgerId, r2, logFn, schedule);
   logLines.push(...generated.logLines);
   progressFn?.('snapshot_db');
   progressFn?.('snapshot_attachments');
   progressFn?.('packing');
 
   // 2. 加密（如果需要）�?对齐原版：直接加密文件到 ZIP，无中间 tar �?
+  // 加密（需要时）→ 对齐原版 build_encrypted_zip：整个备份以 AES-256 ZIP 输出（zip 内各文件直接平铺，无中间 tar 层）
   let backupBytes = generated.backupBytes;
   let encrypted = false;
   if (shouldEncrypt && remoteConfigs.length > 0) {
     const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.zipryption_password;
     if (pw) {
       try {
-        // 将文件直接添加到 ZIP（对齐原�?tar_builder.py build_encrypted_zip�?
-        backupBytes = await encryptData(generated.backupBytes, pw);
+        backupBytes = await createEncryptedZip(generated.entries, pw);
         encrypted = true;
-        logWrap(`[Backup] Encrypted (age): ${backupBytes.length} bytes`);
+        logWrap(`[Backup] Encrypted (AES-256 ZIP): ${backupBytes.length} bytes`);
       } catch (e) {
         logWrap(`[Backup] Encryption failed: ${e}`);
       }

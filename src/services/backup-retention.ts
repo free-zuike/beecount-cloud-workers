@@ -3,13 +3,20 @@
  *
  * 解析备份文件名 → 按 retention_days 计算待删列表 → 保留至少 N 份
  *
- * 文件名格式:
- *   - 加密: 20260612-040000.zip
- *   - 明文: 20260612-040000.tar.gz
- *   - 老格式: 20260612-040000Z.tar.gz / 20260612-040000Z.tar.gz.age
+ * 支持的文件名格式（原版三种 + TS 现有格式）:
+ *   - 原版加密:  20260612-040000.zip
+ *   - 原版明文:  20260612-040000.tar.gz
+ *   - 原版老格式: 20260612-040000Z.tar.gz / 20260612-040000Z.tar.gz.age（Z = UTC）
+ *   - TS 现有:   20260612160400_backup.tar.gz / .zip / .tar.gz.age
+ *
+ * 时间语义:带 Z 后缀按 UTC；其余按当地生成时间处理（TS 文件名用 UTC+8 时间
+ * 生成，当作 UTC 解析会多保留 ~8h，属安全方向，与原版近似等价）。
  */
 
-const TAR_NAME_RE = /^(\d{14})_backup(?:\.zip|\.tar\.gz(?:\.age)?)$/;
+// TS 现有格式: 20260612160400_backup.tar.gz / .zip / .tar.gz.age
+const TS_NAME_RE = /^(\d{14})_backup(?:\.zip|\.tar\.gz(?:\.age)?)$/;
+// 原版格式: 20260612-040000(.zip|.tar.gz[.age])，可选 Z 后缀（UTC）
+const ORIG_NAME_RE = /^(\d{8})-(\d{6})(Z?)(?:\.zip|\.tar\.gz(?:\.age)?)$/;
 
 export interface RemoteFile {
   name: string;
@@ -18,24 +25,34 @@ export interface RemoteFile {
 }
 
 /**
- * 解析备份文件名中的时间戳
+ * 解析备份文件名中的时间戳（返回 UTC Date）
  */
 export function parseBackupFilename(name: string): Date | null {
   // 只取文件名部分（去掉路径前缀）
   const basename = name.split('/').pop() || name;
-  const m = TAR_NAME_RE.exec(basename);
-  if (!m) return null;
-  const dateStr = m[1]; // YYYYMMDDHHMMSS (14 digits)
 
-  const year = parseInt(dateStr.slice(0, 4), 10);
-  const month = parseInt(dateStr.slice(4, 6), 10) - 1;
-  const day = parseInt(dateStr.slice(6, 8), 10);
-  const hour = parseInt(dateStr.slice(8, 10), 10);
-  const min = parseInt(dateStr.slice(10, 12), 10);
-  const sec = parseInt(dateStr.slice(12, 14), 10);
+  const tsMatch = TS_NAME_RE.exec(basename);
+  if (tsMatch) {
+    const s = tsMatch[1]; // YYYYMMDDHHMMSS (14 digits)
+    return new Date(Date.UTC(
+      parseInt(s.slice(0, 4), 10), parseInt(s.slice(4, 6), 10) - 1,
+      parseInt(s.slice(6, 8), 10), parseInt(s.slice(8, 10), 10),
+      parseInt(s.slice(10, 12), 10), parseInt(s.slice(12, 14), 10),
+    ));
+  }
 
-  // TS 版使用 UTC+8 本地时间生成时间戳，当作 UTC 处理
-  return new Date(Date.UTC(year, month, day, hour, min, sec));
+  const origMatch = ORIG_NAME_RE.exec(basename);
+  if (origMatch) {
+    const dateS = origMatch[1]; // YYYYMMDD
+    const timeS = origMatch[2]; // HHMMSS
+    // 无 Z：按 UTC 近似（保留偏多，安全方向；与原版 local-tz 语义差 ≤ 时区偏移）
+    return new Date(Date.UTC(
+      parseInt(dateS.slice(0, 4), 10), parseInt(dateS.slice(4, 6), 10) - 1,
+      parseInt(dateS.slice(6, 8), 10), parseInt(timeS.slice(0, 2), 10),
+      parseInt(timeS.slice(2, 4), 10), parseInt(timeS.slice(4, 6), 10),
+    ));
+  }
+  return null;
 }
 
 /**
