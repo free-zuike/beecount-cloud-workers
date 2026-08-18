@@ -291,11 +291,7 @@ export async function generateBackupBytes(
 
   logWrap(`[Backup] Starting full database backup, user: ${userId}`);
 
-  // 1. db.sqlite3（主格式，与原版 VACUUM INTO 等效）
-  const sqliteBytes = await exportD1ToSqlite(db, undefined, logWrap);
-  logWrap(`[Backup] db.sqlite3: ${sqliteBytes.length} bytes`);
-
-  // 2. db.json（后向兼容 TS 旧恢复端 + R2 列表摘要）
+  // 1. db.json（后向兼容 TS 旧恢复端 + R2 列表摘要，先导出确保 SQLite 失败时仍有数据）
   const tables: Record<string, unknown[]> = {};
   const tableNames = (await listUserTables(db)).filter(n => !EXCLUDED_BACKUP_TABLES.has(n));
   for (const tableName of tableNames) {
@@ -305,6 +301,16 @@ export async function generateBackupBytes(
     } catch (err) {
       logWrap(`[Backup] Skipping ${tableName}: ${(err as Error).message}`);
     }
+  }
+
+  // 2. db.sqlite3（主格式，与原版 VACUUM INTO 等效）
+  //    sql.js WASM 在 Workers 环境可能受限，失败时降级仅用 db.json
+  let sqliteBytes: Uint8Array | null = null;
+  try {
+    sqliteBytes = await exportD1ToSqlite(db, undefined, logWrap);
+    logWrap(`[Backup] db.sqlite3: ${sqliteBytes.length} bytes`);
+  } catch (err) {
+    logWrap(`[Backup] db.sqlite3 generation failed, falling back to db.json only: ${(err as Error).message}${(err as Error).stack ? ` | ${(err as Error).stack?.split('\\n').slice(0, 3).join(' > ')}` : ''}`);
   }
 
   // 3. R2 附件
@@ -320,7 +326,7 @@ export async function generateBackupBytes(
   const now = new Date().toISOString();
   const entries: { name: string; data: Uint8Array }[] = [];
   entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: APP_VERSION, createdAt: now, scheduleId: schedule?.scheduleId ?? null, scheduleName: schedule?.scheduleName ?? null, userId, includeAttachments: true }, null, 2)) });
-  entries.push({ name: 'db.sqlite3', data: sqliteBytes });
+  if (sqliteBytes) entries.push({ name: 'db.sqlite3', data: sqliteBytes });
   entries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: now, version: '1.0', schema_version: 1, user_id: userId, tables }, null, 2)) });
   for (const [key, value] of attachments) entries.push({ name: key, data: value });
 
