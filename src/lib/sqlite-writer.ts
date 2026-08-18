@@ -138,17 +138,8 @@ export async function exportD1ToSqlite(
 ): Promise<Uint8Array> {
   const log = logFn || (() => {});
 
-  // 方案 A: db.dump() — 最快路径
-  try {
-    const buffer = await db.dump();
-    const bytes = new Uint8Array(buffer);
-    log(`[SQLite] dump() succeeded: ${bytes.length} bytes`);
-    return bytes;
-  } catch (e) {
-    log(`[SQLite] dump() failed: ${(e as Error).message}`);
-  }
-
-  // 方案 B: D1 Export API — I/O 操作，不耗 CPU
+  // 方案 A: D1 Export API — I/O 操作，不耗 CPU
+  // 跳过 db.dump()（新版 D1 已移除，且可能 hang）
   const accountId = typeof CLOUDFLARE_ACCOUNT_ID !== 'undefined' ? (CLOUDFLARE_ACCOUNT_ID as string) : undefined;
   const databaseId = typeof D1_DATABASE_ID !== 'undefined' ? (D1_DATABASE_ID as string) : undefined;
   log(`[SQLite] Export API check: token=${!!apiToken} account=${!!accountId} db=${!!databaseId}`);
@@ -158,12 +149,13 @@ export async function exportD1ToSqlite(
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(30000),
     });
     if (res.ok) {
       const data = await res.json() as any;
       const downloadUrl = data?.result?.download_url || data?.result?.upload_url || data?.result?.url;
       if (downloadUrl) {
-        const fileRes = await fetch(downloadUrl);
+        const fileRes = await fetch(downloadUrl, { signal: AbortSignal.timeout(60000) });
         if (fileRes.ok) {
           const buffer = await fileRes.arrayBuffer();
           const bytes = new Uint8Array(buffer);
