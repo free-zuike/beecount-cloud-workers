@@ -56,15 +56,19 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
       let sqliteR2Key: string | null = null;
       try {
         logFn(`[SQLite] Export API token available: ${!!this.env.CLOUDFLARE_API_TOKEN}`);
-        const sqliteBytes = await step.do(
+        await step.do(
           'sqlite-export',
           { retries: { limit: 2, delay: '30 seconds', backoff: 'exponential' } },
-          async () => exportD1ToSqlite(db, undefined, logFn, this.env.CLOUDFLARE_API_TOKEN),
+          async () => {
+            // 在 step 内保存到 R2，避免 step 返回 > 1MB 的数据
+            const bytes = await exportD1ToSqlite(db, undefined, logFn, this.env.CLOUDFLARE_API_TOKEN);
+            const key = `temp/backup-${runId}/db.sqlite3`;
+            await this.env.R2.put(key, bytes, { httpMetadata: { contentType: 'application/octet-stream' } });
+            logFn(`[SQLite] db.sqlite3 saved to R2: ${bytes.length} bytes`);
+            return 'ok'; // 返回小字符串，避免 1MB 限制
+          },
         );
-        // 保存到 R2 临时对象（workflow 输出 < 1MB 限制，但 R2 无此限制）
         sqliteR2Key = `temp/backup-${runId}/db.sqlite3`;
-        await this.env.R2.put(sqliteR2Key, sqliteBytes, { httpMetadata: { contentType: 'application/octet-stream' } });
-        logFn(`[SQLite] db.sqlite3 saved to R2: ${sqliteBytes.length} bytes`);
       } catch (err) {
         logFn(`[SQLite] db.sqlite3 generation failed: ${(err as Error).message}`);
       }
