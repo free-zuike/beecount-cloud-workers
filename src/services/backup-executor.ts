@@ -284,6 +284,7 @@ export async function generateBackupBytes(
   r2?: R2Bucket,
   logFn?: (msg: string) => void,
   schedule?: { scheduleId: number | null; scheduleName: string | null },
+  preSqliteBytes?: Uint8Array | null,
 ): Promise<GeneratedBackup> {
   const log = logFn || console.log;
   const logLines: string[] = [];
@@ -292,12 +293,16 @@ export async function generateBackupBytes(
   logWrap(`[Backup] Starting full database backup, user: ${userId}`);
 
   // 1. db.sqlite3（主格式，与原版 VACUUM INTO 等效）
-  let sqliteBytes: Uint8Array | null = null;
-  try {
-    sqliteBytes = await exportD1ToSqlite(db, undefined, logWrap);
-    logWrap(`[Backup] db.sqlite3: ${sqliteBytes.length} bytes`);
-  } catch (err) {
-    logWrap(`[Backup] db.sqlite3 generation failed: ${(err as Error).message}`);
+  let sqliteBytes: Uint8Array | null = preSqliteBytes ?? null;
+  if (sqliteBytes) {
+    logWrap(`[Backup] db.sqlite3: ${sqliteBytes.length} bytes (pre-generated)`);
+  } else {
+    try {
+      sqliteBytes = await exportD1ToSqlite(db, undefined, logWrap);
+      logWrap(`[Backup] db.sqlite3: ${sqliteBytes.length} bytes`);
+    } catch (err) {
+      logWrap(`[Backup] db.sqlite3 generation failed: ${(err as Error).message}`);
+    }
   }
 
   // 2. db.json（后向兼容 TS 旧恢复端 + R2 列表摘要）
@@ -678,6 +683,7 @@ export async function performBackupFanOut(
   retentionDays?: number,
   progressFn?: (phase: string, meta?: Record<string, unknown>) => void,
   schedule?: { scheduleId: number | null; scheduleName: string | null },
+  preSqliteBytes?: Uint8Array | null,
 ): Promise<BackupResult> {
   const log = logFn || console.log;
   const logLines: string[] = [];
@@ -686,7 +692,7 @@ export async function performBackupFanOut(
   progressFn?.('starting');
 
   // 1. 生成一次备份字�?
-  const generated = await generateBackupBytes(db, userId, ledgerId, r2, logFn, schedule);
+  const generated = await generateBackupBytes(db, userId, ledgerId, r2, logFn, schedule, preSqliteBytes);
   logLines.push(...generated.logLines);
   progressFn?.('snapshot_db');
   progressFn?.('snapshot_attachments');
