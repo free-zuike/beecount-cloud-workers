@@ -341,13 +341,14 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
             ledgerMap[externalId] = { id: existing.id, user_id: existing.user_id, external_id: externalId };
             continue;
           }
-          // 从 sync changes 中查找账本名称（如果本次 push 包含账本 upsert）
-          let ledgerName = externalId;
+          // 从 sync changes 中查找账本名称（如果本次 push 包含 ledger upsert）
+          let ledgerName: string | null = null;
           const ledgerChange = changes.find(c => c.ledger_id === externalId && (c.entity_type === 'ledger' || c.entity_type === 'ledger_snapshot') && c.action === 'upsert');
           if (ledgerChange?.payload) {
             const p = ledgerChange.payload as Record<string, unknown>;
-            ledgerName = (p.ledgerName ?? p.ledger_name ?? p.name ?? externalId) as string;
+            ledgerName = (p.ledgerName ?? p.ledger_name ?? p.name ?? null) as string | null;
           }
+          // 对齐原版 Python：name 可为 NULL，后续 ledger upsert 会更新
           serverLogger.info('src.routers.sync', '[SYNC] Creating new ledger:', externalId, 'name:', ledgerName);
           const newLedgerId = randomUUID();
           await db
