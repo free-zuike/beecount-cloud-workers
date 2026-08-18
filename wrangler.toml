@@ -34,12 +34,19 @@ class_name = "BeeCountDO"
 binding = "R2"
 bucket_name = "beecount-storage"
 
+[[workflows]]
+name = "backup-workflow"
+binding = "BACKUP_WORKFLOW"
+class_name = "BackupWorkflow"
+
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["BeeCountDO"]
 
 [vars]
 API_PREFIX = "/api/v1"
+D1_DATABASE_ID = "393b596d-31c5-436a-828c-7baab2b113b2"
+CLOUDFLARE_ACCOUNT_ID = "7d07d1f879d0dcc67dba7c6a02e48c0d"
 # JWT_SECRET 通过 Cloudflare Dashboard → Workers → Settings → Variables and Secrets 设置
 # 或 CLI: npx wrangler secret put JWT_SECRET
 # CLOUDFLARE_ACCOUNT_ID 和 CLOUDFLARE_API_TOKEN 用于 D1 备份导出
