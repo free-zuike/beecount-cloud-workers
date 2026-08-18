@@ -12,7 +12,7 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 
 | 差异项 | 原版 | Workers | 原因 |
 |--------|------|---------|------|
-| 数据库 | PostgreSQL/SQLite | D1 (SQLite) | D1 不支持 VACUUM INTO，改用 JSON 导出 |
+| 数据库 | PostgreSQL/SQLite | D1 (SQLite) | 备份改用 createSqliteWithData 生成 .sqlite3 文件，与原版 VACUUM INTO 等效 |
 | 布尔存储 | 原生 boolean | INTEGER 0/1 | SQLite 限制 |
 | 附件存储 | 本地文件系统 | R2 对象存储 | Workers 无本地文件系统 |
 | 加密备份 | age (X25519 + ChaCha20-Poly1305) | age-encryption (npm 官方实现) | 已对齐，使用同一 age 格式，备份文件互通 |
