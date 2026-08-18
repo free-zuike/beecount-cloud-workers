@@ -147,7 +147,7 @@ export async function exportD1ToSqlite(
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ output_format: 'sqlite' }),
+      body: JSON.stringify({ output_format: 'file' }),
       signal: AbortSignal.timeout(30000),
     });
     if (!res.ok) {
