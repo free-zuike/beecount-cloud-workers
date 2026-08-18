@@ -151,33 +151,31 @@ export async function exportD1ToSqlite(
       headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(30000),
     });
-    if (res.ok) {
-      const data = await res.json() as any;
-      const downloadUrl = data?.result?.download_url || data?.result?.upload_url || data?.result?.url;
-      if (downloadUrl) {
-        const fileRes = await fetch(downloadUrl, { signal: AbortSignal.timeout(60000) });
-        if (fileRes.ok) {
-          const buffer = await fileRes.arrayBuffer();
-          const bytes = new Uint8Array(buffer);
-          log(`[SQLite] Export API: ${bytes.length} bytes`);
-          return bytes;
-        }
-      }
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`D1 Export API returned ${res.status}: ${errText.slice(0, 200)}`);
     }
-    log(`[SQLite] Export API failed: ${res.status}`);
+    const data = await res.json() as any;
+    const downloadUrl = data?.result?.download_url || data?.result?.upload_url || data?.result?.url;
+    if (!downloadUrl) {
+      throw new Error(`D1 Export API: no download URL in response: ${JSON.stringify(data).slice(0, 300)}`);
+    }
+    log(`[SQLite] Downloading from ${downloadUrl.slice(0, 80)}...`);
+    const fileRes = await fetch(downloadUrl, { signal: AbortSignal.timeout(60000) });
+    if (!fileRes.ok) {
+      throw new Error(`D1 Export download failed: ${fileRes.status}`);
+    }
+    const buffer = await fileRes.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    log(`[SQLite] Export API: ${bytes.length} bytes`);
+    return bytes;
   }
 
-  // 方案 C: sql.js 逐表导出（CPU 密集型，免费版可能超时）
-  log(`[SQLite] Falling back to sql.js (CPU-intensive)`);
-  let state = await exportD1Init(db, log);
-  const allTables = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%' ORDER BY name`).all<{ name: string }>();
-  const names = ((allTables.results || []).map(x => x.name)).filter(n => !DEFAULT_EXCLUDED_TABLES.includes(n));
-  const BATCH = 5;
-  for (let i = 0; i < names.length; i += BATCH) {
-    state = await exportD1InsertBatch(db, state, names.slice(i, i + BATCH), log);
-  }
-  log(`[SQLite] sql.js fallback: ${state.length} bytes`);
-  return state;
+  throw new Error(
+    'D1 Export: token/accountId/databaseId not configured. ' +
+    'Set CLOUDFLARE_API_TOKEN as a Secret via GitHub Action, ' +
+    'ensure CLOUDFLARE_ACCOUNT_ID and D1_DATABASE_ID in wrangler.toml [vars].'
+  );
 }
 
 /**
