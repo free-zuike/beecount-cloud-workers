@@ -61,6 +61,10 @@ export async function exportD1ToSqlite(
   const log = logFn || (() => {});
   const SQL = await getSqlJs();
   const out = new SQL.Database();
+  // 批量插入性能优化：关闭同步写入、内存日志、大缓存
+  out.run('PRAGMA synchronous = OFF');
+  out.run('PRAGMA journal_mode = MEMORY');
+  out.run('PRAGMA cache_size = -64000');
 
   // 1. 原样执行全部 DDL（表/索引/视图/触发器），跳过内部对象
   const schemaResult = await db
@@ -96,6 +100,8 @@ export async function exportD1ToSqlite(
       const quoted = columns.map(c => `"${c}"`).join(',');
       let offset = 0;
       let tableCount = 0;
+      // 显式事务：整表 INSERT 在一个事务内
+      out.run('BEGIN');
       while (true) {
         const rows = await db.prepare(`SELECT * FROM "${t.name}" LIMIT ? OFFSET ?`).bind(D1_BATCH_SIZE, offset).all<Record<string, unknown>>();
         const batch = rows.results || [];
@@ -113,6 +119,7 @@ export async function exportD1ToSqlite(
         offset += batch.length;
         if (batch.length < D1_BATCH_SIZE) break;
       }
+      out.run('COMMIT');
       log(`[SQLite] ${t.name}: ${tableCount} rows`);
     } catch (e) {
       tableFailed++;
