@@ -21,15 +21,10 @@ declare module 'sql.js' {
     close(): void;
   }
 
-  export interface InitSqlJsConfig {
-    wasmBinary?: Uint8Array;
-    instantiateWasm?: (imports: WebAssembly.Imports, callback: (module: WebAssembly.Module, instance: WebAssembly.Instance) => void) => Record<string, unknown>;
-  }
-
-  export default function initSqlJs(config?: InitSqlJsConfig): Promise<SqlJsStatic>;
+  export default function initSqlJs(): Promise<SqlJsStatic>;
 }
 
-// asm.js 变体（纯 JS 实现，无需 WASM，兼容 Cloudflare Workers）
+// asm.js 变体（纯 JS 实现，无需 WASM，兼容 Cloudflare Workers 恢复 API）
 declare module 'sql.js/dist/sql-asm.js' {
   export * from 'sql.js';
   export { default } from 'sql.js';
