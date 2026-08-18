@@ -62,6 +62,9 @@ jobs:
           sed -i "s|database_id = \"[^\"]*\"|database_id = \"$DB_ID\"|" wrangler.toml
           grep "database_id" wrangler.toml
 
+      - name: Set D1 Export API token
+        run: npx wrangler secret put CLOUDFLARE_API_TOKEN <<< "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+
       - name: Build frontend
         run: cd frontend && pnpm install --no-frozen-lockfile && pnpm build
 
