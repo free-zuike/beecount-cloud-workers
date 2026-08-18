@@ -19,6 +19,7 @@ tslib = "tslib"
 "@modelcontextprotocol/sdk" = "./node_modules/@modelcontextprotocol/sdk/dist/esm/index.js"
 "zod/v4" = "./node_modules/zod/v4/index.js"
 "ssh2/lib/protocol/crypto/poly1305.js" = "./shims/ssh2-poly1305.js"
+"age-encryption" = "./node_modules/age-encryption/dist/index.js"
 
 [[d1_databases]]
 binding = "DB"
