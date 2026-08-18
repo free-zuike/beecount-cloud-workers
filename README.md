@@ -15,7 +15,7 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 | 数据库 | PostgreSQL/SQLite | D1 (SQLite) | D1 不支持 VACUUM INTO，改用 JSON 导出 |
 | 布尔存储 | 原生 boolean | INTEGER 0/1 | SQLite 限制 |
 | 附件存储 | 本地文件系统 | R2 对象存储 | Workers 无本地文件系统 |
-| 加密备份 | age + pyzipper | AES-256-GCM (Web Crypto) | 无法运行 age CLI |
+| 加密备份 | age (X25519 + ChaCha20-Poly1305) | age-encryption (npm 官方实现) | 已对齐，使用同一 age 格式，备份文件互通 |
 | 密码混淆 | rclone obscure | 无 | 无法运行 rclone CLI |
 | 定时任务 | APScheduler (Python 线程) | waitUntil (Workers 异步) | 运行时限制 |
 | 并行备份 | rclone fan-out | Promise.allSettled | Workers 原生并行 |

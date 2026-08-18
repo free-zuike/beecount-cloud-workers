@@ -1,14 +1,14 @@
 /**
- * 备份执行�?- 提取公共的备份执行逻辑
+ * 备份执行�?- 提取公共的备份执行逻辑
  *
- * �?src/index.ts（定时任务）�?src/routes/admin_backup.ts（管理员手动触发）共�?
+ * �?src/index.ts（定时任务）�?src/routes/admin_backup.ts（管理员手动触发）共�?
  */
 
 import { uploadToS3, listS3Objects, deleteS3Object, downloadFromS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
-import { createEncryptedZip } from '../lib/zip-lib';
+import { encryptData } from '../lib/encryption';
 import { computeRetentionDeletes, filterBackupFiles } from './backup-retention';
 import { uploadToOAuth2Provider, listOAuth2Files, deleteOAuth2File, refreshAccessToken } from '../lib/oauth2-storage';
 import { createSqliteWithData } from '../lib/sqlite-writer';
@@ -128,7 +128,7 @@ export interface BackupResult {
 }
 
 // ===========================
-// AES-256 加密 ZIP �?使用 '../lib/zip-lib' �?createEncryptedZip（基�?@zip.js/zip.js�?
+// AES-256 加密 ZIP �?使用 '../lib/zip-lib' �?createEncryptedZip（基�?@zip.js/zip.js�?
 // ===========================
 
 async function getEncryptionPassword(
@@ -153,9 +153,9 @@ async function getEncryptionPassword(
 }
 
 /**
- * 需要备份的用户数据表（排除运维类表，与原版 db_snapshot.py DEFAULT_EXCLUDED_TABLES 对齐�?
+ * 需要备份的用户数据表（排除运维类表，与原版 db_snapshot.py DEFAULT_EXCLUDED_TABLES 对齐�?
  * 排除：backup_runs, backup_run_targets, sync_push_idempotency, audit_logs, refresh_tokens, mcp_call_logs
- * 保留：PAT 表（用户 LLM 配置依赖�? backup_remotes/schedules（配置保留）, 所有用户数据表
+ * 保留：PAT 表（用户 LLM 配置依赖�? backup_remotes/schedules（配置保留）, 所有用户数据表
  */
 const BACKUP_TABLES = [
   'users',
@@ -177,7 +177,7 @@ const BACKUP_TABLES = [
   'backup_schedules',
   'backup_runs',
   'backup_run_targets',
-  // 'backup_schedule_remotes', // 表可能不存在，跳�?
+  // 'backup_schedule_remotes', // 表可能不存在，跳�?
   'system_settings',
   'recovery_codes',
   'exchange_rate_overrides',
@@ -189,7 +189,7 @@ const BACKUP_TABLES = [
 const D1_BATCH_SIZE = 1000;
 
 /**
- * 导出单张表的所有数据（分批查询，处�?D1 行数限制�?
+ * 导出单张表的所有数据（分批查询，处�?D1 行数限制�?
  */
 async function exportTable(db: D1Database, tableName: string): Promise<unknown[]> {
   const allRows: unknown[] = [];
@@ -208,8 +208,8 @@ async function exportTable(db: D1Database, tableName: string): Promise<unknown[]
 }
 
 /**
- * �?R2 获取所有附件文�?
- * 返回 { name: Uint8Array } 映射，name �?tar 中的路径
+ * �?R2 获取所有附件文�?
+ * 返回 { name: Uint8Array } 映射，name �?tar 中的路径
  */
 async function fetchR2Attachments(r2: R2Bucket): Promise<Map<string, Uint8Array>> {
   const attachments = new Map<string, Uint8Array>();
@@ -315,7 +315,7 @@ export async function generateBackupBytes(
     } catch {}
   }
 
-  // 构建文件条目（供 tar.gz �?ZIP 使用�?
+  // 构建文件条目（供 tar.gz �?ZIP 使用�?
   const entries: { name: string; data: Uint8Array }[] = [];
   entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: '1.6.1', createdAt: new Date().toISOString(), userId, includeAttachments: true }, null, 2)) });
   try {
@@ -332,7 +332,7 @@ export async function generateBackupBytes(
 }
 
 /**
- * 列出远端存储中的文件（用�?retention 清理�?
+ * 列出远端存储中的文件（用�?retention 清理�?
  */
 export async function listRemoteFiles(
   config: Record<string, string>,
@@ -359,7 +359,7 @@ export async function listRemoteFiles(
   }
 
   if (config.backend_type === 'webdav') {
-    // WebDAV 列出文件（PROPFIND�?
+    // WebDAV 列出文件（PROPFIND�?
     try {
       const baseUrl = config.url!;
       const username = config.username!;
@@ -420,7 +420,7 @@ export async function listRemoteFiles(
 }
 
 /**
- * 从远端删除文件（用于 retention 清理�?
+ * 从远端删除文件（用于 retention 清理�?
  */
 export async function deleteRemoteFile(
   config: Record<string, string>,
@@ -498,7 +498,7 @@ export async function deleteRemoteFile(
 }
 
 /**
- * 上传备份到单个远端（与原�?fan-out 单个 worker 对齐�?
+ * 上传备份到单个远端（与原�?fan-out 单个 worker 对齐�?
  */
 export async function uploadBackupToRemote(
   backupBytes: Uint8Array,
@@ -512,7 +512,7 @@ export async function uploadBackupToRemote(
   if (remoteConfig.backend_type === 's3' || remoteConfig.backend_type === 'b2') {
     const isB2 = remoteConfig.backend_type === 'b2';
     let endpoint = remoteConfig.endpoint;
-    // B2 �?API 获取 S3 兼容端点（原�?rclone 方式�?
+    // B2 �?API 获取 S3 兼容端点（原�?rclone 方式�?
     if (isB2 && !endpoint) {
       try {
         const b2Auth = await fetch('https://api.backblazeb2.com/b2api/v2/b2_authorize_account', {
@@ -526,7 +526,7 @@ export async function uploadBackupToRemote(
     }
     if (!endpoint) endpoint = isB2 ? 'https://s3.eu-central-003.backblazeb2.com' : 'https://s3.amazonaws.com';
     const bucket = remoteConfig.bucket;
-    // B2 �?account/key 字段名（rclone 风格），S3 �?access_key_id/secret_access_key
+    // B2 �?account/key 字段名（rclone 风格），S3 �?access_key_id/secret_access_key
     const accessKey = (isB2 ? (remoteConfig.account || remoteConfig.access_key_id) : (remoteConfig.access_key_id || remoteConfig.key))?.trim();
     const secretKey = (isB2 ? (remoteConfig.key || remoteConfig.secret_access_key) : (remoteConfig.secret_access_key || remoteConfig.account))?.trim();
     const region = isB2
@@ -652,7 +652,7 @@ export async function uploadBackupToRemote(
 }
 
 /**
- * 并行上传备份到多个远端（与原�?fan-out ThreadPoolExecutor 对齐�?
+ * 并行上传备份到多个远端（与原�?fan-out ThreadPoolExecutor 对齐�?
  */
 export async function performBackupFanOut(
   db: D1Database,
@@ -672,24 +672,24 @@ export async function performBackupFanOut(
 
   progressFn?.('starting');
 
-  // 1. 生成一次备份字�?
+  // 1. 生成一次备份字�?
   const generated = await generateBackupBytes(db, userId, ledgerId, r2, logFn);
   logLines.push(...generated.logLines);
   progressFn?.('snapshot_db');
   progressFn?.('snapshot_attachments');
   progressFn?.('packing');
 
-  // 2. 加密（如果需要）�?对齐原版：直接加密文件到 ZIP，无中间 tar �?
+  // 2. 加密（如果需要）�?对齐原版：直接加密文件到 ZIP，无中间 tar �?
   let backupBytes = generated.backupBytes;
   let encrypted = false;
   if (shouldEncrypt && remoteConfigs.length > 0) {
     const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.zipryption_password;
     if (pw) {
       try {
-        // 将文件直接添加到 ZIP（对齐原�?tar_builder.py build_encrypted_zip�?
-        backupBytes = await createEncryptedZip(generated.entries, pw);
+        // 将文件直接添加到 ZIP（对齐原�?tar_builder.py build_encrypted_zip�?
+        backupBytes = await encryptData(generated.backupBytes, pw);
         encrypted = true;
-        logWrap(`[Backup] Encrypted (AES-256 ZIP): ${backupBytes.length} bytes`);
+        logWrap(`[Backup] Encrypted (age): ${backupBytes.length} bytes`);
       } catch (e) {
         logWrap(`[Backup] Encryption failed: ${e}`);
       }
@@ -711,7 +711,7 @@ export async function performBackupFanOut(
     }));
   }
 
-  // 4. 并行上传到所有远端（与原�?ThreadPoolExecutor fan-out 对齐�?
+  // 4. 并行上传到所有远端（与原�?ThreadPoolExecutor fan-out 对齐�?
   const remoteIds = effectiveConfigs.map(r => r.remoteId);
   logWrap(`[Backup] Fan-out to ${effectiveConfigs.length} remotes: ${remoteIds.join(', ')}`);
   progressFn?.('fan_out_start');
@@ -728,7 +728,7 @@ export async function performBackupFanOut(
   const successful = uploadResults.filter(r => r.status === 'fulfilled' && r.value.ok);
   const failed = uploadResults.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok));
 
-  // 4. 取第一个有 key 的成功路径（不限�?R2�?
+  // 4. 取第一个有 key 的成功路径（不限�?R2�?
   let backupPath: string | null = null;
   if (successful.length > 0) {
     for (const result of successful) {
@@ -740,7 +740,7 @@ export async function performBackupFanOut(
     }
   }
 
-  // 5. 上传附件�?R2
+  // 5. 上传附件�?R2
   let attachmentsUploaded = 0;
   if (r2) {
     try {
@@ -751,7 +751,7 @@ export async function performBackupFanOut(
     } catch {}
   }
 
-  // 6. 保留策略（只�?schedule 模式且有成功上传时执行）
+  // 6. 保留策略（只�?schedule 模式且有成功上传时执行）
   if (retentionDays && retentionDays > 0 && successful.length > 0) {
     logWrap(`[Backup] Retention: running with retention_days=${retentionDays}`);
     for (const result of successful) {
@@ -792,14 +792,14 @@ export async function performBackupFanOut(
 
 /**
  * 计算下次运行时间
- * Cron 表达式格�? 分钟 小时 日期 月份 星期
- * cronExpr 中的时间�?UTC 时间
- * @param cronExpr cron表达式（UTC时间�?
- * @param timezoneOffset 用户时区偏移（分钟，东八区为-480，仅用于显示�?
+ * Cron 表达式格�? 分钟 小时 日期 月份 星期
+ * cronExpr 中的时间�?UTC 时间
+ * @param cronExpr cron表达式（UTC时间�?
+ * @param timezoneOffset 用户时区偏移（分钟，东八区为-480，仅用于显示�?
  */
 /**
- * 验证 cron 表达式是否合法（5 字段：分 �?�?�?周）
- * 与原�?APScheduler CronTrigger.from_crontab() 对齐
+ * 验证 cron 表达式是否合法（5 字段：分 �?�?�?周）
+ * 与原�?APScheduler CronTrigger.from_crontab() 对齐
  */
 export function validateCronExpression(cronExpr: string): { valid: boolean; error?: string } {
   const parts = cronExpr.trim().split(/\s+/);
@@ -871,10 +871,10 @@ export function calculateNextRun(cronExpr: string, timezoneOffset: number | stri
     const targetMinute = minuteStr === '*' ? 0 : parseInt(minuteStr, 10);
     const targetHour = hourStr === '*' ? 0 : parseInt(hourStr, 10);
 
-    // 解析时区偏移（分钟），支�?IANA 时区�?
+    // 解析时区偏移（分钟），支�?IANA 时区�?
     let offsetMs = 0;
     if (typeof timezoneOffset === 'string' && timezoneOffset) {
-      // IANA 时区名，�?Date 计算当前偏移
+      // IANA 时区名，�?Date 计算当前偏移
       const now = new Date();
       const utcMs = now.getTime();
       const localStr = now.toLocaleString('en-US', { timeZone: timezoneOffset });
@@ -884,20 +884,20 @@ export function calculateNextRun(cronExpr: string, timezoneOffset: number | stri
       offsetMs = timezoneOffset * 60 * 1000;
     }
 
-    // �?cron 时间视为本地时间（带时区偏移），计算对应�?UTC 时间
+    // �?cron 时间视为本地时间（带时区偏移），计算对应�?UTC 时间
     // timezone_offset 使用 JS 约定（new Date().getTimezoneOffset()）：UTC+8 = -480
     // 公式：UTC = 本地时间 + timezone_offset（分钟）
-    // 例如�?4:00 CST = 04:00 UTC + (-480min) = 04:00 UTC - 8h = 20:00 UTC 前一�?
+    // 例如�?4:00 CST = 04:00 UTC + (-480min) = 04:00 UTC - 8h = 20:00 UTC 前一�?
     const now = new Date();
     const nowMs = now.getTime();
 
-    // 创建目标时间（将 cron �?hour/minute 设为 UTC 时间�?
+    // 创建目标时间（将 cron �?hour/minute 设为 UTC 时间�?
     const targetDate = new Date();
     targetDate.setUTCHours(targetHour, targetMinute, 0, 0);
-    // 加上时区偏移得到实际 UTC 时间（JS 约定：UTC+8 = -480，加 -480分钟 = �?小时�?
+    // 加上时区偏移得到实际 UTC 时间（JS 约定：UTC+8 = -480，加 -480分钟 = �?小时�?
     let targetUtcMs = targetDate.getTime() + offsetMs;
 
-    // 如果目标时间已过，加一�?
+    // 如果目标时间已过，加一�?
     while (targetUtcMs <= nowMs) {
       targetUtcMs += 24 * 60 * 60 * 1000;
     }

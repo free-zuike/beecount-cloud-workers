@@ -68,19 +68,35 @@ async function downloadAndExtractBackup(
       entries.push({ name: ze.filename, size: fileData.length, data: fileData });
     }
     await reader.close();
-  } else if (backupPath.endsWith('.enc')) {
-    // AES-256-GCM 加密 tar.gz
-    if (!password) {
-      throw new Error('Encrypted backup requires password');
+  } else if (data.length > 10) {
+    // age 加密格式（ASCII armored 或二进制格式）
+    const header = new TextDecoder().decode(data.slice(0, 40));
+    const isAge = header.includes('age-encryption.org') || header.startsWith('-----BEGIN AGE');
+    if (isAge) {
+      if (!password) {
+        throw new Error('Encrypted backup requires password');
+      }
+      const { decryptData } = await import('./encryption');
+      data = new Uint8Array(await decryptData(data, password));
+      const decompressed = await decompressGzip(data);
+      entries = parseTar(decompressed);
+    } else if (backupPath.endsWith('.enc')) {
+      // AES-256-GCM 加密 tar.gz
+      if (!password) {
+        throw new Error('Encrypted backup requires password');
+      }
+      const { decryptData } = await import('./encryption');
+      data = new Uint8Array(await decryptData(data, password));
+      const decompressed = await decompressGzip(data);
+      entries = parseTar(decompressed);
+    } else {
+      // 未加密 tar.gz
+      const decompressed = await decompressGzip(data);
+      entries = parseTar(decompressed);
     }
-    const { decryptData } = await import('./encryption');
-    data = new Uint8Array(await decryptData(data, password));
-    const decompressed = await decompressGzip(data);
-    entries = parseTar(decompressed);
   } else {
-    // 未加密 tar.gz
-    const decompressed = await decompressGzip(data);
-    entries = parseTar(decompressed);
+    // 无法识别的格式
+    entries = [];
   }
 
   // 提取 meta.json
