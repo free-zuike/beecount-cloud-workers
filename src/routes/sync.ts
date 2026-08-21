@@ -506,6 +506,11 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
       }> = [];
 
       for (const change of batchChanges) {
+        // 对齐原版：附件不写 sync_changes（App 不识别 attachment 实体类型，
+        // 附件信息通过交易 payload 的 attachments 字段同步）
+        if (change.entity_type === 'attachment') {
+          continue;
+        }
         // user-global 实体：category/account/tag 可以不依附 ledger
         const USER_GLOBAL_LEDGER_SENTINEL = '__user_global__';
 const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override'];
