@@ -295,7 +295,8 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     
     // 清理已有的 attachment sync_changes（对齐原版：附件不写 sync_changes）
     // 兼容之前版本已创建的残留数据，避免 App/Web 同步计数不一致
-    await db.prepare(`DELETE FROM sync_changes WHERE user_id = ? AND entity_type = 'attachment'`).bind(userId).run();
+    const _r = await db.prepare(`DELETE FROM sync_changes WHERE user_id = ? AND entity_type = 'attachment'`).bind(userId).run();
+    serverLogger.info('[SYNC] Cleaned attachment sync_changes:', (_r as any)?.meta?.changes ?? 0);
     
     // 空变更快速返回
     if (changes.length === 0) {
@@ -1090,7 +1091,8 @@ syncRouter.get('/pull', async (c) => {
 
   try {
     // 清理已有的 attachment sync_changes（对齐原版：附件不写 sync_changes）
-    await db.prepare(`DELETE FROM sync_changes WHERE user_id = ? AND entity_type = 'attachment'`).bind(userId).run();
+    const _r = await db.prepare(`DELETE FROM sync_changes WHERE user_id = ? AND entity_type = 'attachment'`).bind(userId).run();
+    serverLogger.info('[SYNC] Pull cleaned attachment:', (_r as any)?.meta?.changes ?? 0);
 
     // 设备验证 + heartbeat
     if (deviceId) {
