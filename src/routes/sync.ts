@@ -1089,6 +1089,9 @@ syncRouter.get('/pull', async (c) => {
   serverLogger.info('src.routers.sync', '[SYNC] /sync/pull since:', since, 'limit:', limit, 'ledger_id:', ledgerId, 'device_id:', deviceId);
 
   try {
+    // 清理已有的 attachment sync_changes（对齐原版：附件不写 sync_changes）
+    await db.prepare(`DELETE FROM sync_changes WHERE user_id = ? AND entity_type = 'attachment'`).bind(userId).run();
+
     // 设备验证 + heartbeat
     if (deviceId) {
       const device = await db
