@@ -393,11 +393,24 @@ const handleUpload = async (c: any) => {
             .bind(fileId, ledger.id, userId, sha256Hash, size, mimeType, actualFileName, storageKey, now)
             .run();
 
+        // 并发去重兜底：多个请求同时上传同一文件时（去重检查与 INSERT 之间
+        // 是竞态），统一返回最早插入的那行 id，避免同一文件出现多个 file_id。
+        // 重复行可在后续数据清理中合并。
+        const canonical = await db
+            .prepare(
+                `SELECT id FROM attachment_files
+                 WHERE sha256 = ? AND ledger_id = ? AND attachment_kind = 'transaction'
+                 ORDER BY created_at ASC, id ASC LIMIT 1`
+            )
+            .bind(sha256Hash, ledger.id)
+            .first() as { id: string } | null;
+        const effectiveFileId = canonical?.id ?? fileId;
+
         // 对齐原版：附件不写 sync_changes（App 不识别 attachment 实体类型，
         // 附件信息通过交易 payload 的 attachments 字段同步）
 
         const response = {
-            file_id: fileId,
+            file_id: effectiveFileId,
             ledger_id: ledger.external_id,
             sha256: sha256Hash,
             size,
