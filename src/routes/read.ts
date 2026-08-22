@@ -818,7 +818,7 @@ readRouter.get('/ledgers/:ledgerExternalId/stats', async (c) => {
         .first<{ cnt: number }>(),
       db
         .prepare(
-          `SELECT COUNT(*) as cnt FROM attachment_files
+          `SELECT COUNT(DISTINCT sha256) as cnt FROM attachment_files
            WHERE ledger_id = ? AND attachment_kind = 'transaction'`
         )
         .bind(ledger.id)
@@ -868,7 +868,7 @@ readRouter.get('/ledgers/:ledgerExternalId/stats', async (c) => {
     ledgerIds.length > 0
       ? db
           .prepare(
-            `SELECT COUNT(*) as cnt FROM attachment_files a
+            `SELECT COUNT(DISTINCT a.sha256) as cnt FROM attachment_files a
              WHERE a.ledger_id IN (${ledgerIds.map(() => '?').join(',')}) AND a.attachment_kind = 'transaction'`
           )
           .bind(...ledgerIds)
