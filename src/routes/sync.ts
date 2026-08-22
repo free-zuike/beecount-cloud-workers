@@ -1092,8 +1092,8 @@ syncRouter.get('/pull', async (c) => {
 
   try {
     // 清理已有的 attachment sync_changes
-    await db.prepare(DELETE FROM sync_changes WHERE user_id = ? AND entity_type = 'attachment').bind(userId).run();
-    await db.prepare(UPDATE sync_changes SET updated_by_device_id = NULL WHERE user_id = ? AND updated_by_device_id = 'unknown').bind(userId).run();
+    await db.prepare(`DELETE FROM sync_changes WHERE user_id = ? AND entity_type = 'attachment'`).bind(userId).run();
+    await db.prepare(`UPDATE sync_changes SET updated_by_device_id = NULL WHERE user_id = ? AND updated_by_device_id = 'unknown'`).bind(userId).run();
 
 // 设备验证 + heartbeat
     if (deviceId) {
