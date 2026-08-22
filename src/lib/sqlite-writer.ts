@@ -148,7 +148,7 @@ export async function exportD1ToSqlite(
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ output_format: 'file' }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(90000),
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
@@ -159,8 +159,8 @@ export async function exportD1ToSqlite(
     if (!downloadUrl) {
       throw new Error(`D1 Export API: no download URL in response: ${JSON.stringify(data).slice(0, 300)}`);
     }
-    log(`[SQLite] Downloading from ${downloadUrl.slice(0, 80)}...`);
-    const fileRes = await fetch(downloadUrl, { signal: AbortSignal.timeout(60000) });
+    log(`[SQLite] Export initiated, downloading from signed URL...`);
+    const fileRes = await fetch(downloadUrl, { signal: AbortSignal.timeout(120000) });
     if (!fileRes.ok) {
       throw new Error(`D1 Export download failed: ${fileRes.status}`);
     }
