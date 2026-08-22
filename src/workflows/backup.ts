@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
-import { performBackupFanOut } from '../services/backup-executor';
+import { uploadPreparedBackup } from '../services/backup-executor';
 import { exportD1ToSqlite } from '../lib/sqlite-writer';
 
 type Env = {
@@ -80,31 +80,71 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
         logFn(`[SQLite] db.sqlite3 generation failed: ${(err as Error).message}`);
       }
 
-      // Step B: 执行备份（传入 R2 key，从 R2 读取 SQLite 字节）
+      // ============================================================
+      // 打包：调用 Durable Object（DO 每次请求 30s CPU 预算，绕开
+      // Workflow 步骤 10ms CPU 限制）。DO 内生成 db.json + 附件 +
+      // tar.gz / AES zip，存回 R2，返回小 key。
+      // ============================================================
+      let pactR2Key: string | null = null;
+      const outKey = `temp/backup-${runId}/backup${shouldEncrypt ? '.zip' : '.tar.gz'}`;
+      if (sqliteR2Key) {
+        try {
+          await step.do(
+            'backup-pack',
+            { retries: { limit: 2, delay: '30 seconds', backoff: 'exponential' } },
+            async () => {
+              const stub = this.env.BEECOUNT_DO.get(this.env.BEECOUNT_DO.idFromName(`pack-${runId}`));
+              const res = await stub.fetch('http://do/backup-pack', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sqliteR2Key,
+                  outR2Key: outKey,
+                  userId, ledgerId, runId,
+                  shouldEncrypt,
+                  password: effectiveConfigs[0]?.config?.age_passphrase || effectiveConfigs[0]?.config?.zipryption_password || undefined,
+                  scheduleId: scheduleId ?? null, scheduleName: null,
+                  jwtSecret: this.env.JWT_SECRET || null,
+                }),
+              });
+              if (!res.ok) throw new Error(`backup-pack failed: ${await res.text()}`);
+              const r = await res.json() as { ok: boolean; size?: number; error?: string };
+              if (!r.ok) throw new Error(r.error || 'backup-pack failed');
+              logFn(`[Backup] DO packed: ${r.size} bytes`);
+              return 'ok';
+            },
+          );
+          pactR2Key = outKey;
+        } catch (err) {
+          logFn(`[Backup] DO pack failed: ${(err as Error).message}`);
+          pactR2Key = null;
+        }
+      }
+
+      // Step C: 上传（自由 Workflow 步骤，只做 I/O 上传）
       await broadcast({ type: 'backup_progress', phase: 'fan_out_start', runId });
       const backupResult = await step.do(
         'backup-fan-out',
         { retries: { limit: 1, delay: '1 minute', backoff: 'exponential' } },
         async () => {
-          // 从 R2 读取预生成的 SQLite 字节
-          let preSqliteBytes: Uint8Array | null = null;
-          if (sqliteR2Key) {
-            const obj = await this.env.R2.get(sqliteR2Key);
+          if (pactR2Key) {
+            const obj = await this.env.R2.get(pactR2Key);
             if (obj) {
-              preSqliteBytes = new Uint8Array(await obj.arrayBuffer());
-              // 清理临时对象
-              this.env.R2.delete(sqliteR2Key!).catch(() => {});
+              const bytes = new Uint8Array(await obj.arrayBuffer());
+              return await uploadPreparedBackup(
+                db, runId, userId, ledgerId, effectiveConfigs,
+                this.env.R2, logFn, retentionDays,
+                (phase) => { broadcast({ type: 'backup_progress', phase, runId }).catch(() => {}); },
+                bytes, shouldEncrypt,
+              );
             }
           }
-          return await performBackupFanOut(
-            db, runId, userId, ledgerId, effectiveConfigs, shouldEncrypt,
-            this.env.R2, logFn, retentionDays,
-            (phase) => { broadcast({ type: 'backup_progress', phase, runId }).catch(() => {}); },
-            { scheduleId: scheduleId ?? null, scheduleName: null },
-            preSqliteBytes,
-            this.env.JWT_SECRET,
-          );
-          if (sqliteR2Key) this.env.R2.delete(sqliteR2Key!).catch(() => {});
+          return {
+            success: false,
+            message: 'Backup bytes not available (pack failed)',
+            backupSize: 0,
+            attachmentsUploaded: 0,
+          };
         },
       );
 

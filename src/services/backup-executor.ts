@@ -718,6 +718,33 @@ export async function performBackupFanOut(
     }
   }
 
+  // 3. 上传已打包的备份：alias 解析 + 并行上传 + retention
+  return await uploadPreparedBackup(
+    db, runId, userId, ledgerId, remoteConfigs, r2, logFn, retentionDays, progressFn, backupBytes, encrypted,
+  );
+}
+
+/**
+ * 上传已打包的备份字节到所有远端（alias 解析 + 并行上传 + retention）。
+ * 供 Workflow 在 DO 打包完成后调用（DO 内 30s CPU 预算打包，此处只做 I/O 上传）。
+ */
+export async function uploadPreparedBackup(
+  db: D1Database,
+  runId: number,
+  userId: string,
+  ledgerId: string,
+  remoteConfigs: Array<{ remoteId: string; config: Record<string, string> }>,
+  r2: R2Bucket | undefined,
+  logFn: ((msg: string) => void) | undefined,
+  retentionDays: number | undefined,
+  progressFn: ((phase: string, meta?: Record<string, unknown>) => void) | undefined,
+  backupBytes: Uint8Array,
+  encrypted: boolean,
+): Promise<BackupResult> {
+  const log = logFn || console.log;
+  const logLines: string[] = [];
+  const logWrap = (msg: string) => { log(msg); logLines.push(`[${new Date().toISOString()}] ${msg}`); };
+
   // 3. 解析 alias 远端
   let effectiveConfigs = remoteConfigs;
   const hasAlias = remoteConfigs.some(rc => rc.config.backend_type === 'alias');
@@ -811,6 +838,8 @@ export async function performBackupFanOut(
     attachmentsUploaded,
   };
 }
+
+
 
 /**
  * 计算下次运行时间

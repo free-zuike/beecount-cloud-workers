@@ -1,14 +1,23 @@
 import { DurableObject } from 'cloudflare:workers';
+import { generateBackupBytes } from '../services/backup-executor';
+import { createEncryptedZip } from '../lib/zip-lib';
+
+type BackupPackEnv = {
+  DB: D1Database;
+  R2: R2Bucket;
+  BEECOUNT_DO: DurableObjectNamespace;
+};
 
 /**
  * BeeCount 统一 Durable Object
  *
- * 一个 class，三种用途，通过 instance name 区分：
+ * 一个 class，四种用途，通过 instance name 区分：
  * - ws-{userId}   → WebSocket 连接管理
  * - log-{userId}  → 环形日志缓冲
  * - lock-{taskId} → 分布式任务锁
+ * - pack-{runId}  → 备份打包（DO 有 30s CPU 预算，绕开免费版 10ms 限制）
  */
-export class BeeCountDO extends DurableObject {
+export class BeeCountDO extends DurableObject<BackupPackEnv> {
   private buffer: Array<{ id: number; level: string; source: string; message: string; timestamp: string }> = [];
   private maxLogSize = 1000;
   private nextSeq = 0;
@@ -114,7 +123,60 @@ export class BeeCountDO extends DurableObject {
       return new Response('ok');
     }
 
+    // ===== 备份打包模式（DO 30s CPU 预算，Workflow 步骤仅有 10ms） =====
+    if (path.endsWith('/backup-pack')) {
+      return await this.handleBackupPack(request);
+    }
+
     return new Response('Not found', { status: 404 });
+  }
+
+  /** 打包备份：读 R2 sqlite → 生成 db.json/附件/tar.gz（或 AES zip）→ 写回 R2 */
+  private async handleBackupPack(request: Request): Promise<Response> {
+    try {
+      const body = await request.json<{
+        sqliteR2Key: string;
+        outR2Key: string;
+        userId: string;
+        ledgerId: string;
+        runId: number;
+        shouldEncrypt: boolean;
+        password?: string;
+        scheduleId?: number | null;
+        scheduleName?: string | null;
+        jwtSecret?: string | null;
+      }>();
+      const db = this.env.DB;
+      const r2 = this.env.R2;
+      const logFn = (msg: string) => console.log(`[BackupPack] ${msg}`);
+
+      const obj = await r2.get(body.sqliteR2Key);
+      if (!obj) throw new Error(`sqlite temp not found: ${body.sqliteR2Key}`);
+      const sqlite = new Uint8Array(await obj.arrayBuffer());
+      logFn(`loaded sqlite: ${sqlite.length} bytes`);
+
+      const generated = await generateBackupBytes(
+        db, body.userId, body.ledgerId, r2, logFn,
+        { scheduleId: body.scheduleId ?? null, scheduleName: body.scheduleName ?? null },
+        sqlite, body.jwtSecret ?? null,
+      );
+
+      let bytes = generated.backupBytes;
+      let encrypted = false;
+      if (body.shouldEncrypt && body.password) {
+        bytes = await createEncryptedZip(generated.entries, body.password);
+        encrypted = true;
+      }
+      logFn(`packed: ${bytes.length} bytes, encrypted=${encrypted}`);
+
+      await r2.put(body.outR2Key, bytes, {
+        httpMetadata: { contentType: encrypted ? 'application/zip' : 'application/gzip' },
+      });
+      return Response.json({ ok: true, size: bytes.length, encrypted });
+    } catch (e) {
+      console.error('[BackupPack] failed:', e);
+      return Response.json({ ok: false, error: (e as Error).message }, { status: 500 });
+    }
   }
 
   // WebSocket 事件
