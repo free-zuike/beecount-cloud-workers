@@ -143,7 +143,7 @@ async function ensureMcpTag(db: D1Database, userId: string, ledgerExternalId: st
   const existing = await db.prepare('SELECT sync_id FROM read_tag_projection WHERE user_id = ? AND name = ?').bind(userId, MCP_DEFAULT_TAG).first<any>();
   if (existing) return;
   const sid = randomUUID();
-  await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`).bind(userId, '', 'tag', sid, 'upsert', JSON.stringify({ syncId: sid, name: MCP_DEFAULT_TAG, color: MCP_DEFAULT_TAG_COLOR, sortOrder: 0 }), nowUtc(), userId).run();
+  await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'web-console', 'ledger')`).bind(userId, '', 'tag', sid, 'upsert', JSON.stringify({ syncId: sid, name: MCP_DEFAULT_TAG, color: MCP_DEFAULT_TAG_COLOR, sortOrder: 0 }), nowUtc(), userId).run();
 }
 
 // AI 解析文本（对齐原版 _parse_dt）

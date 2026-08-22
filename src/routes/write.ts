@@ -585,8 +585,8 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
   const batchResults = await db.batch([
     db.prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'web-console', 'ledger')`
     ).bind(userId, ledger.id, 'transaction', txSyncId, 'delete', '{}', serverNow, userId),
     db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
       .bind(ledger.id, txSyncId),
@@ -676,7 +676,7 @@ writeRouter.delete('/ledgers/:ledgerId', async (c) => {
   // 全量 DB 写在一个事务里（tombstone + 投影清空 + 成员 + 附件 + 历史 + 游标，对齐原版单 commit）
   const batchResults = await db.batch([
     db.prepare(
-      `INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id)
+      `INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
       .bind(userId, ledger.id, 'ledger_snapshot', ledger.external_id, 'delete', '{}', serverNow, userId),
@@ -792,8 +792,8 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     const batchResults = await db.batch([
       db.prepare(
         `INSERT INTO sync_changes
-         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
+         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'web-console', 'ledger')`
       ).bind(userId, ledger.id, 'transaction', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId),
       db.prepare(
         `INSERT INTO read_tx_projection
@@ -948,8 +948,8 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
   const batchResults = await db.batch([
     db.prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
     )
       .bind(userId, 'account', accountSyncId, 'upsert', changePayload, serverNow, userId),
     projectionStmt,
@@ -998,8 +998,8 @@ writeRouter.delete('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteBa
   const batchResults = await db.batch([
     db.prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
     )
       .bind(userId, 'account', accountSyncId, 'delete', '{}', serverNow, userId),
     db.prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
@@ -1052,8 +1052,8 @@ writeRouter.patch('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteTagUpda
   const batchResults = await db.batch([
     db.prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
     )
       .bind(userId, 'tag', tagSyncId, 'upsert', fullTag ? safeJsonStringify({
         syncId: tagSyncId,
@@ -1113,8 +1113,8 @@ writeRouter.delete('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteBaseSc
   const batchResults = await db.batch([
     db.prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
     )
       .bind(userId, 'tag', tagSyncId, 'delete', '{}', serverNow, userId),
     db.prepare('DELETE FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
@@ -1228,8 +1228,8 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   const batchResults = await db.batch([
     db.prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'web-console', 'ledger')`
     )
       .bind(userId, ledger.id, 'transaction', txSyncId, 'upsert', safeJsonStringify(newPayload), serverNow, userId),
     db.prepare(
@@ -1322,8 +1322,8 @@ writeRouter.post('/ledgers/:ledgerId/accounts', zValidator('json', WriteAccountC
   const batchResults = await db.batch([
     db.prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
     )
       .bind(userId, 'account', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId),
     db.prepare(
@@ -1421,8 +1421,8 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
   const batchResults = await db.batch([
     db.prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
     )
       .bind(userId, 'category', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId),
     db.prepare(
@@ -1538,8 +1538,8 @@ writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteC
   const batchResults = await db.batch([
     db.prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
     )
       .bind(userId, 'category', categorySyncId, 'upsert', fullPayload, serverNow, userId),
     projectionStmt,
@@ -1594,8 +1594,8 @@ writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', Write
   const batchResults = await db.batch([
     db.prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
     )
       .bind(userId, 'category', categorySyncId, 'delete', '{}', serverNow, userId),
     db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
@@ -1669,8 +1669,8 @@ writeRouter.post('/ledgers/:ledgerId/tags', zValidator('json', WriteTagCreateSch
   const batchResults = await db.batch([
     db.prepare(
       `INSERT INTO sync_changes
-       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
+       (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
     )
       .bind(userId, 'tag', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId),
     db.prepare(
@@ -2136,8 +2136,8 @@ writeRouter.post('/categories/init-defaults', async (c) => {
     const stmts = [
       db.prepare(
         `INSERT INTO sync_changes
-         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
+         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
       )
         .bind(userId, 'category', parentSyncId, 'upsert', safeJsonStringify(payload), serverNow, userId),
       db.prepare(
@@ -2171,8 +2171,8 @@ writeRouter.post('/categories/init-defaults', async (c) => {
         stmts.push(
           db.prepare(
             `INSERT INTO sync_changes
-             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-             VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'user')`
+             (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+             VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
           )
             .bind(userId, 'category', childSyncId, 'upsert', safeJsonStringify(childPayload), serverNow, userId),
           db.prepare(
@@ -2238,8 +2238,8 @@ writeRouter.put('/exchange-rate-overrides', zValidator('json', ExchangeRateSchem
   const existing = await db.prepare('SELECT base_currency FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
     .bind(userId, base_currency, quote_currency).first();
   const batchResults = await db.batch([
-    db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-    VALUES (?, NULL, 'exchange_rate_override', ?, 'upsert', ?, ?, ?, 'user')`)
+    db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+    VALUES (?, NULL, 'exchange_rate_override', ?, 'upsert', ?, ?, ?, 'web-console', 'user')`)
       .bind(userId, syncId, JSON.stringify({ syncId, baseCurrency: base_currency, quoteCurrency: quote_currency, rate: String(rate), updatedAt: serverNow }), serverNow, userId),
     existing
       ? db.prepare('UPDATE exchange_rate_overrides SET rate = ?, updated_at = ? WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
@@ -2297,8 +2297,8 @@ writeRouter.delete('/exchange-rate-overrides', async (c) => {
   const deleteSyncId = existingRow?.sync_id || syncId;
 
   const delResult = await db.batch([
-    db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, scope)
-    VALUES (?, NULL, 'exchange_rate_override', ?, 'delete', ?, ?, ?, 'user')`)
+    db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+    VALUES (?, NULL, 'exchange_rate_override', ?, 'delete', ?, ?, ?, 'web-console', 'user')`)
       .bind(userId, deleteSyncId, '{}', serverNow, userId),
     db.prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
       .bind(userId, baseCurrency, quoteCurrency),
