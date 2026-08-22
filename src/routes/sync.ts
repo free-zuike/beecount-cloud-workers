@@ -646,7 +646,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
             change.action ?? 'upsert',
             safeJsonStringify(payloadForStorage ?? {}),
             clampedUpdatedAt.toISOString(),
-            deviceId ?? 'unknown',
+            deviceId ?? null,
             userId,
             scope ?? 'ledger',
         ];
@@ -666,7 +666,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           ledgerRow: isUserGlobal ? null : { id: ledgerRowId as string, user_id: userId, external_id: '' },
           lwwKey: key,
           lwwTs: clampedUpdatedAt.toISOString(),
-          lwwDevice: deviceId ?? 'unknown',
+          lwwDevice: deviceId ?? null,
         });
 
         if (!isUserGlobal && ledgerRowId) {
@@ -1134,7 +1134,7 @@ syncRouter.get('/pull', async (c) => {
 
     // 与原版对齐：过滤设备自身变更（依赖 WS 推送获取实时更新）
     if (deviceId) {
-      query += ' AND (c.updated_by_device_id IS NULL OR c.updated_by_device_id != ?)';
+      query += ' AND c.updated_by_device_id != ?';
       params.push(deviceId);
     }
     
