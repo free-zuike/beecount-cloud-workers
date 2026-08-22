@@ -293,12 +293,6 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
     const changes = req.changes;
     
-    // 清理已知的残留数据：对齐原版行为
-    // 1. attachment 类型的 sync_changes（App 不识别 attachment 实体类型）
-    await db.prepare(`DELETE FROM sync_changes WHERE user_id = ? AND entity_type = 'attachment'`).bind(userId).run();
-    // 2. 旧代码把无 device_id 的变更存成 'unknown' 而非 NULL，导致设备过滤失效
-    await db.prepare(`UPDATE sync_changes SET updated_by_device_id = NULL WHERE user_id = ? AND updated_by_device_id = 'unknown'`).bind(userId).run();
-    
     // 空变更快速返回
     if (changes.length === 0) {
       const maxRow = await db
@@ -1091,10 +1085,6 @@ syncRouter.get('/pull', async (c) => {
   serverLogger.info('src.routers.sync', '[SYNC] /sync/pull since:', since, 'limit:', limit, 'ledger_id:', ledgerId, 'device_id:', deviceId);
 
   try {
-    // 清理已有的 attachment sync_changes
-    await db.prepare(`DELETE FROM sync_changes WHERE user_id = ? AND entity_type = 'attachment'`).bind(userId).run();
-    await db.prepare(`UPDATE sync_changes SET updated_by_device_id = NULL WHERE user_id = ? AND updated_by_device_id = 'unknown'`).bind(userId).run();
-
 // 设备验证 + heartbeat
     if (deviceId) {
       const device = await db
