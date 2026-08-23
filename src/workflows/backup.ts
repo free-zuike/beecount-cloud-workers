@@ -154,7 +154,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
                 attachmentsUploaded: 0,
               };
             }
-            let combinedSize = 0;
+            let primarySize = 0;
             let firstPath: string | undefined;
             let allSuccess = true;
             const messages: string[] = [];
@@ -162,7 +162,8 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
               const obj = await this.env.R2.get(f.r2Key);
               if (!obj) { allSuccess = false; messages.push(`${f.r2Key} not found`); continue; }
               const bytes = new Uint8Array(await obj.arrayBuffer());
-              combinedSize += bytes.length;
+              // 主文件大小：第一个文件（有 sqlite 时是 sqlite，无 token 时是 json），不叠加
+              if (primarySize === 0) primarySize = bytes.length;
               // 从 r2Key 提取后缀（backup-json.tar.gz → -json；backup.tar.gz → 无后缀=原版名称）
               const suffixMatch = f.r2Key.match(/-json\./);
               const suffix = suffixMatch ? '-json' : '';
@@ -179,7 +180,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
             return {
               success: allSuccess,
               message: messages.join('; '),
-              backupSize: combinedSize,
+              backupSize: primarySize,
               backupPath: firstPath,
               attachmentsUploaded: 0,
             };
