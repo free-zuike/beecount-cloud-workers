@@ -96,42 +96,45 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
       // 打包：调用 Durable Object（DO 每次请求 30s CPU 预算，绕开
       // Workflow 步骤 10ms CPU 限制）。DO 内生成 db.json + 附件 +
       // tar.gz / AES zip，存回 R2，返回小 key。
+      //
+      // 有 CLOUDFLARE_API_TOKEN → sqliteR2Key 非空 → DO 读取 db.sqlite3
+      //   + 清理运维表 + 生成 db.json + 附件 → 打包（与原版互恢复）
+      // 无 token → sqliteR2Key 为 null → DO 跳过 sqlite，仅生成
+      //   db.json + 附件 → 打包（TS 版自有格式，仍可恢复）
       // ============================================================
-      let pactR2Key: string | null = null;
+      let packR2Key: string | null = null;
       const outKey = `temp/backup-${runId}/backup${shouldEncrypt ? '.zip' : '.tar.gz'}`;
-      if (sqliteR2Key) {
-        try {
-          await step.do(
-            'backup-pack',
-            { retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' } },
-            async () => {
-              const stub = this.env.BEECOUNT_DO.get(this.env.BEECOUNT_DO.idFromName(`pack-${runId}`));
-              const res = await stub.fetch('http://do/backup-pack', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  sqliteR2Key,
-                  outR2Key: outKey,
-                  userId, ledgerId, runId,
-                  shouldEncrypt,
-                  password: effectiveConfigs[0]?.config?.age_passphrase || effectiveConfigs[0]?.config?.zipryption_password || undefined,
-                  scheduleId: scheduleId ?? null, scheduleName: null,
-                  jwtSecret: this.env.JWT_SECRET || null,
-                }),
-              });
-              if (!res.ok) throw new Error(`backup-pack failed: ${await res.text()}`);
-              const r = await res.json() as { ok: boolean; size?: number; error?: string };
-              if (!r.ok) throw new Error(r.error || 'backup-pack failed');
-              logFn(`[Backup] DO packed: ${r.size} bytes`);
-              return 'ok';
-            },
-          );
-          pactR2Key = outKey;
-          await flushLogs();
-        } catch (err) {
-          logFn(`[Backup] DO pack failed: ${(err as Error).message}`);
-          pactR2Key = null;
-        }
+      try {
+        await step.do(
+          'backup-pack',
+          { retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' } },
+          async () => {
+            const stub = this.env.BEECOUNT_DO.get(this.env.BEECOUNT_DO.idFromName(`pack-${runId}`));
+            const res = await stub.fetch('http://do/backup-pack', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sqliteR2Key: sqliteR2Key, // null 时 DO 跳过 sqlite，仅用 db.json
+                outR2Key: outKey,
+                userId, ledgerId, runId,
+                shouldEncrypt,
+                password: effectiveConfigs[0]?.config?.age_passphrase || effectiveConfigs[0]?.config?.zipryption_password || undefined,
+                scheduleId: scheduleId ?? null, scheduleName: null,
+                jwtSecret: this.env.JWT_SECRET || null,
+              }),
+            });
+            if (!res.ok) throw new Error(`backup-pack failed: ${await res.text()}`);
+            const r = await res.json() as { ok: boolean; size?: number; error?: string };
+            if (!r.ok) throw new Error(r.error || 'backup-pack failed');
+            logFn(`[Backup] DO packed: ${r.size} bytes`);
+            return 'ok';
+          },
+        );
+        packR2Key = outKey;
+        await flushLogs();
+      } catch (err) {
+        logFn(`[Backup] DO pack failed: ${(err as Error).message}`);
+        packR2Key = null;
       }
 
       // Step C: 上传（自由 Workflow 步骤，只做 I/O 上传）
@@ -141,8 +144,8 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
         { retries: { limit: 1, delay: '1 minute', backoff: 'exponential' } },
         async () => {
           try {
-            if (pactR2Key) {
-              const obj = await this.env.R2.get(pactR2Key);
+            if (packR2Key) {
+              const obj = await this.env.R2.get(packR2Key);
               if (obj) {
                 const bytes = new Uint8Array(await obj.arrayBuffer());
                 return await uploadPreparedBackup(
@@ -161,7 +164,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
             };
           } finally {
             // 上传完成后清理临时中转文件（R2 失败不阻塞）
-            if (pactR2Key) this.env.R2.delete(pactR2Key).catch(() => {});
+            if (packR2Key) this.env.R2.delete(packR2Key).catch(() => {});
             if (sqliteR2Key) this.env.R2.delete(sqliteR2Key).catch(() => {});
           }
         },

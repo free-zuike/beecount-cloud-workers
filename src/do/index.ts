@@ -131,11 +131,17 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
     return new Response('Not found', { status: 404 });
   }
 
-  /** 打包备份：读 R2 sqlite → 生成 db.json/附件/tar.gz（或 AES zip）→ 写回 R2 */
+  /** 打包备份：读 R2 sqlite（可选）→ 生成 db.json/附件/tar.gz（或 AES zip）→ 写回 R2
+   *
+   * sqliteR2Key 非空：有 CLOUDFLARE_API_TOKEN → 读取 db.sqlite3 + 清理运维表 +
+   *   生成 db.json + 附件 → 打包（与原版互恢复）
+   * sqliteR2Key 为 null：无 token → 跳过 sqlite，仅生成 db.json + 附件 → 打包
+   *   （TS 版自有格式，仍可正常恢复）
+   */
   private async handleBackupPack(request: Request): Promise<Response> {
     try {
       const body = await request.json<{
-        sqliteR2Key: string;
+        sqliteR2Key: string | null;
         outR2Key: string;
         userId: string;
         ledgerId: string;
@@ -150,32 +156,39 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
       const r2 = this.env.R2;
       const logFn = (msg: string) => console.log(`[BackupPack] ${msg}`);
 
-      const obj = await r2.get(body.sqliteR2Key);
-      if (!obj) throw new Error(`sqlite temp not found: ${body.sqliteR2Key}`);
-      let sqlite: Uint8Array = new Uint8Array(await obj.arrayBuffer());
-      logFn(`loaded sqlite: ${sqlite.length} bytes`);
+      let sqlite: Uint8Array | null = null;
 
-      // 对齐原版 VACUUM INTO 后的运维表清理（best-effort）：
-      // 保留 backup_runs / backup_run_targets（备份历史，用户要求不归零），
-      // 清空其余运维表数据（schema 保留）
-      try {
-        const initSqlJs = (await import('sql.js/dist/sql-asm.js')).default;
-        if (typeof self !== 'undefined' && !(self as any).location) {
-          (self as any).location = { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:', host: 'localhost', hostname: 'localhost', port: '80', pathname: '/', search: '', hash: '' };
+      // 有 db.sqlite3（用户提供了 CLOUDFLARE_API_TOKEN）→ 加载 + 清理运维表
+      if (body.sqliteR2Key) {
+        const obj = await r2.get(body.sqliteR2Key);
+        if (!obj) throw new Error(`sqlite temp not found: ${body.sqliteR2Key}`);
+        sqlite = new Uint8Array(await obj.arrayBuffer());
+        logFn(`loaded sqlite: ${sqlite.length} bytes`);
+
+        // 对齐原版 VACUUM INTO 后的运维表清理（best-effort）：
+        // 保留 backup_runs / backup_run_targets（备份历史，用户要求不归零），
+        // 清空其余运维表数据（schema 保留）
+        try {
+          const initSqlJs = (await import('sql.js/dist/sql-asm.js')).default;
+          if (typeof self !== 'undefined' && !(self as any).location) {
+            (self as any).location = { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:', host: 'localhost', hostname: 'localhost', port: '80', pathname: '/', search: '', hash: '' };
+          }
+          const SQL = await initSqlJs();
+          const sdb = new SQL.Database(sqlite);
+          sdb.run(
+            'DELETE FROM sync_push_idempotency;' +
+            'DELETE FROM audit_logs;' +
+            'DELETE FROM refresh_tokens;' +
+            'DELETE FROM mcp_call_logs;'
+          );
+          sqlite = sdb.export();
+          sdb.close();
+          logFn(`cleaned operational tables, sqlite: ${sqlite.length} bytes`);
+        } catch (e) {
+          logFn(`operational table cleanup skipped: ${(e as Error).message}`);
         }
-        const SQL = await initSqlJs();
-        const sdb = new SQL.Database(sqlite);
-        sdb.run(
-          'DELETE FROM sync_push_idempotency;' +
-          'DELETE FROM audit_logs;' +
-          'DELETE FROM refresh_tokens;' +
-          'DELETE FROM mcp_call_logs;'
-        );
-        sqlite = sdb.export();
-        sdb.close();
-        logFn(`cleaned operational tables, sqlite: ${sqlite.length} bytes`);
-      } catch (e) {
-        logFn(`operational table cleanup skipped: ${(e as Error).message}`);
+      } else {
+        logFn(`no sqliteR2Key (no CLOUDFLARE_API_TOKEN) — using db.json only`);
       }
 
       const generated = await generateBackupBytes(
