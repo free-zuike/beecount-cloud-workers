@@ -79,7 +79,7 @@ export async function processBackupSchedule(
   schedule: any,
   beeCountDO?: DurableObjectNamespace,
   r2?: R2Bucket,
-  env?: { CLOUDFLARE_API_TOKEN?: string; BEECOUNT_DO?: DurableObjectNamespace },
+  env?: { CLOUDFLARE_API_TOKEN?: string; BEECOUNT_DO?: DurableObjectNamespace; BACKUP_WORKFLOW?: any },
 ) {
   // 清理超时的 pending 备份
   await cleanupStalePendingBackups(db);
@@ -206,83 +206,57 @@ export async function processBackupSchedule(
     }, 'backup_progress');
 
     try {
-      console.log(`[CRON] Starting backup for schedule ${schedule.id}, run ${runId}...`);
-      const backupResult = await performBackupFanOut(db, runId!, schedule.user_id, ledger.id, remoteConfigs, shouldEncrypt, r2, logFn, schedule.retention_days ?? undefined, (phase) => {
-        // 进度广播不能阻塞备份流程
-        broadcastProgress(beeCountDO, schedule.user_id, { phase, runId, scheduleId: schedule.id }, 'backup_progress').catch(() => {});
-      });
-      const finishedAt = new Date().toISOString();
-
-      console.log(`[CRON] Backup result: success=${backupResult.success}, size=${backupResult.backupSize}, path=${backupResult.backupPath}`);
-
-      // 创建 backup_run_targets 记录（每个 remote 一条）
-      for (const rc of remoteConfigs) {
-        try {
-          await db.prepare(
-            `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, bytes_transferred)
-             VALUES (?, ?, ?, ?, ?, ?)`
-          ).bind(
-            runId,
-            rc.remoteId,
-            'succeeded',
-            startedAt,
-            finishedAt,
-            backupResult.backupSize || 0
-          ).run();
-          logFn(`Created backup_run_target for remote ${rc.remoteId}`);
-        } catch (targetErr) {
-          console.error(`[CRON] Failed to create backup_run_target: ${(targetErr as Error).message}`);
-        }
-      }
-
-      // 更新备份状态
-      const logText = logLines.join('\n').slice(0, 1024 * 1024); // 最大 1MB
-      const updateSql = backupResult.success
-        ? 'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, log_text = ? WHERE id = ?'
-        : 'UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ?, log_text = ? WHERE id = ?';
-      
-      const updateParams = backupResult.success
-        ? ['succeeded', finishedAt, backupResult.backupSize || null, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null, logText, runId]
-        : ['failed', finishedAt, backupResult.message || null, logText, runId];
-
-      console.log(`[CRON] Updating backup_runs: id=${runId}, status=${backupResult.success ? 'succeeded' : 'failed'}`);
-      
-      try {
+      if (env?.BACKUP_WORKFLOW) {
+        // 自动备份与手动路径一致：Workflow（sqlite-export + DO 打包 + fan-out）
+        await env.BACKUP_WORKFLOW.create({
+          params: {
+            runId: runId!,
+            userId: schedule.user_id,
+            ledgerId: ledger.id,
+            remoteConfigs: remoteConfigs.map(({ remoteId, config }) => {
+              const { _r2Bucket, ...rest } = config;
+              return { remoteId, config: rest };
+            }),
+            shouldEncrypt,
+            retentionDays: schedule.retention_days ?? undefined,
+            scheduleId: schedule.id,
+            serverNow: startedAt,
+          },
+        });
+        console.log(`[CRON] Backup workflow triggered for schedule ${schedule.id}, run ${runId}`);
+      } else {
+        console.log(`[CRON] Starting legacy backup for schedule ${schedule.id}, run ${runId}...`);
+        const backupResult = await performBackupFanOut(db, runId!, schedule.user_id, ledger.id, remoteConfigs, shouldEncrypt, r2, logFn, schedule.retention_days ?? undefined, (phase) => {
+          broadcastProgress(beeCountDO, schedule.user_id, { phase, runId, scheduleId: schedule.id }, 'backup_progress').catch(() => {});
+        });
+        const finishedAt = new Date().toISOString();
+        const logText = logLines.join('\n').slice(0, 1024 * 1024);
+        const updateSql = backupResult.success
+          ? 'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, log_text = ? WHERE id = ?'
+          : 'UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ?, log_text = ? WHERE id = ?';
+        const updateParams = backupResult.success
+          ? ['succeeded', finishedAt, backupResult.backupSize || null, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null, logText, runId]
+          : ['failed', finishedAt, backupResult.message || null, logText, runId];
         await db.prepare(updateSql).bind(...updateParams).run();
-        console.log(`[CRON] Backup status updated successfully for run ${runId}`);
-      } catch (dbErr) {
-        console.error(`[CRON] Failed to update backup_runs status: ${(dbErr as Error).message}`);
-        console.error(`[CRON] Update SQL: ${updateSql}`);
-        console.error(`[CRON] Update params: ${JSON.stringify(updateParams)}`);
-      }
-
-      // 广播完成事件（对齐原版 on_progress）
-      await broadcastProgress(beeCountDO, schedule.user_id, {
-        status: backupResult.success ? 'succeeded' : 'failed',
-        runId, scheduleId: schedule.id,
-        backupSize: backupResult.backupSize,
-        backupPath: backupResult.backupPath,
-      });
-
-      // 更新调度状态
-      try {
-        const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
-        await db.prepare('UPDATE backup_schedules SET last_run_at = ?, last_run_status = ?, next_run_at = ?, updated_at = ? WHERE id = ?')
-          .bind(startedAt, backupResult.success ? 'succeeded' : 'failed', nextRun, startedAt, schedule.id).run();
-        console.log(`[CRON] Schedule status updated for schedule ${schedule.id}`);
-      } catch (schedErr) {
-        console.error(`[CRON] Failed to update backup_schedules: ${(schedErr as Error).message}`);
+        await broadcastProgress(beeCountDO, schedule.user_id, {
+          status: backupResult.success ? 'succeeded' : 'failed', runId, scheduleId: schedule.id,
+          backupSize: backupResult.backupSize, backupPath: backupResult.backupPath,
+        });
+        try {
+          const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
+          await db.prepare('UPDATE backup_schedules SET last_run_at = ?, last_run_status = ?, next_run_at = ?, updated_at = ? WHERE id = ?')
+            .bind(startedAt, backupResult.success ? 'succeeded' : 'failed', nextRun, startedAt, schedule.id).run();
+        } catch (schedErr) {
+          console.error(`[CRON] Failed to update backup_schedules: ${(schedErr as Error).message}`);
+        }
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       const finishedAt = new Date().toISOString();
-      console.error(`[CRON] Exception during backup for schedule ${schedule.id}:`, error);
-
-      // 广播失败事件
+      console.error(`[CRON] Exception during backup trigger for schedule ${schedule.id}:`, error);
       await broadcastProgress(beeCountDO, schedule.user_id, {
         status: 'failed', runId, scheduleId: schedule.id, error: errorMsg,
       });
-      
       try {
         await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?')
           .bind('failed', finishedAt, errorMsg, runId).run();

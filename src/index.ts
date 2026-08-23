@@ -49,6 +49,7 @@ type Bindings = {
   S3_PATH_STYLE?: string;
   S3_CDN_DOMAIN?: string;
   CLOUDFLARE_API_TOKEN?: string;
+  BACKUP_WORKFLOW?: any;
 };
 
 type Variables = {
@@ -377,6 +378,7 @@ export default {
           await processBackupSchedule(db, schedule, env.BEECOUNT_DO, env.R2, {
             CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN,
             BEECOUNT_DO: env.BEECOUNT_DO,
+            BACKUP_WORKFLOW: env.BACKUP_WORKFLOW,
           });
         } catch (scheduleError) {
           console.error(`[CRON] Error processing schedule ${schedule.id}:`, scheduleError);
