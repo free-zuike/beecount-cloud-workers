@@ -812,17 +812,7 @@ export async function uploadPreparedBackup(
     }
   }
 
-  // 5. 上传附件�?R2
-  let attachmentsUploaded = 0;
-  if (r2) {
-    try {
-      const attachments = await fetchR2Attachments(r2);
-      for (const [key, data] of attachments) {
-        try { await r2.put(key, data); attachmentsUploaded++; } catch {}
-      }
-    } catch {}
-  }
-
+  // 5. 附件已打包进 backup.zip / tar.gz，无需单独重新上传到 R2（原残留逻辑已删）
   // 6. 保留策略（只�?schedule 模式且有成功上传时执行）
   if (retentionDays && retentionDays > 0 && successful.length > 0) {
     logWrap(`[Backup] Retention: running with retention_days=${retentionDays}`);
@@ -858,7 +848,7 @@ export async function uploadPreparedBackup(
       : `${successful.length}/${remoteConfigs.length} succeeded, ${failed.length} failed`,
     backupSize: backupBytes.length,
     backupPath: backupPath || undefined,
-    attachmentsUploaded,
+    attachmentsUploaded: 0,
   };
 }
 
