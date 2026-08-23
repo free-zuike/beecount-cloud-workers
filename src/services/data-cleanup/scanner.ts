@@ -123,12 +123,13 @@ async function scanAccountMissingSyncChange(db: D1Database): Promise<OrphanRecor
  * 扫描 sync_changes 中引用了不存在实体的记录
  */
 async function scanSyncChangeMissingEntity(db: D1Database): Promise<OrphanRecord[]> {
-  // 查找 entity_type=transaction 但在 read_tx_projection 中不存在的 sync_changes
+  // 查找 upsert sync_changes 引用了不存在的投影行（真正的孤儿）。
+  // 排除 action='delete' 的 tombstone —— tombstone 本来就指向已删除的投影行，不是孤儿。
   const result = await db.prepare(`
     SELECT sc.change_id, sc.entity_sync_id, sc.entity_type, sc.ledger_id, sc.user_id
     FROM sync_changes sc
     LEFT JOIN read_tx_projection p ON sc.entity_sync_id = p.sync_id AND sc.entity_type = 'transaction'
-    WHERE sc.entity_type = 'transaction' AND p.sync_id IS NULL
+    WHERE sc.entity_type = 'transaction' AND sc.action != 'delete' AND p.sync_id IS NULL
     LIMIT ?
   `).bind(MAX_ORPHANS).all<{ change_id: number; entity_sync_id: string; entity_type: string; ledger_id: string; user_id: string }>();
 
