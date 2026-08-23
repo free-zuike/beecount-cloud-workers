@@ -199,18 +199,20 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
       );
 
       // 拆分为两个独立归档，减小单文件体积防超时
+      // 附件只放一份：有 sqlite 时放 sqlite 文件（与原版一致），无 sqlite 时放 json 文件
       const allEntries = generated.entries;
-      const isAttachment = (name: string) =>
-        name.startsWith('attachments/') || name.startsWith('avatars/') || name.startsWith('category-icons/');
+  const isAttachment = (name: string) =>
+    name.startsWith('attachments/') || name.startsWith('avatars/') || name.startsWith('category-icons/');
 
-      // sqlite 版归档：meta.json + db.sqlite3 + .jwt_secret + 附件
-      const sqliteEntries = allEntries.filter(e =>
-        e.name === 'meta.json' || e.name === 'db.sqlite3' || e.name === '.jwt_secret' || isAttachment(e.name)
-      );
-      // json 版归档：meta.json + db.json + .jwt_secret + 附件
-      const jsonEntries = allEntries.filter(e =>
-        e.name === 'meta.json' || e.name === 'db.json' || e.name === '.jwt_secret' || isAttachment(e.name)
-      );
+  // sqlite 版归档：meta.json + db.sqlite3 + .jwt_secret + 附件（与原版一致）
+  const sqliteEntries = allEntries.filter(e =>
+    e.name === 'meta.json' || e.name === 'db.sqlite3' || e.name === '.jwt_secret' || isAttachment(e.name)
+  );
+  // json 版归档：有 sqlite 时不含附件（仅数据，体积小）；无 sqlite 时含附件（独立可恢复）
+  const jsonEntries = allEntries.filter(e =>
+    e.name === 'meta.json' || e.name === 'db.json' || e.name === '.jwt_secret' ||
+    (!sqlite && isAttachment(e.name))
+  );
 
       const baseKey = body.outR2Key;
       const files: { r2Key: string; size: number; encrypted: boolean }[] = [];
