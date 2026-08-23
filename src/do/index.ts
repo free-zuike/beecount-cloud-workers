@@ -152,8 +152,31 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
 
       const obj = await r2.get(body.sqliteR2Key);
       if (!obj) throw new Error(`sqlite temp not found: ${body.sqliteR2Key}`);
-      const sqlite = new Uint8Array(await obj.arrayBuffer());
+      let sqlite: Uint8Array = new Uint8Array(await obj.arrayBuffer());
       logFn(`loaded sqlite: ${sqlite.length} bytes`);
+
+      // 对齐原版 VACUUM INTO 后的运维表清理（best-effort）：
+      // 保留 backup_runs / backup_run_targets（备份历史，用户要求不归零），
+      // 清空其余运维表数据（schema 保留）
+      try {
+        const initSqlJs = (await import('sql.js/dist/sql-asm.js')).default;
+        if (typeof self !== 'undefined' && !(self as any).location) {
+          (self as any).location = { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:', host: 'localhost', hostname: 'localhost', port: '80', pathname: '/', search: '', hash: '' };
+        }
+        const SQL = await initSqlJs();
+        const sdb = new SQL.Database(sqlite);
+        sdb.run(
+          'DELETE FROM sync_push_idempotency;' +
+          'DELETE FROM audit_logs;' +
+          'DELETE FROM refresh_tokens;' +
+          'DELETE FROM mcp_call_logs;'
+        );
+        sqlite = sdb.export();
+        sdb.close();
+        logFn(`cleaned operational tables, sqlite: ${sqlite.length} bytes`);
+      } catch (e) {
+        logFn(`operational table cleanup skipped: ${(e as Error).message}`);
+      }
 
       const generated = await generateBackupBytes(
         db, body.userId, body.ledgerId, r2, logFn,
