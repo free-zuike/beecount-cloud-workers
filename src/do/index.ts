@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { generateBackupBytes } from '../services/backup-executor';
 import { createEncryptedZip } from '../lib/zip-lib';
+import { createTarGz } from '../lib/tar';
 
 type BackupPackEnv = {
   DB: D1Database;
@@ -197,18 +198,54 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
         sqlite, body.jwtSecret ?? null,
       );
 
-      let bytes = generated.backupBytes;
-      let encrypted = false;
-      if (body.shouldEncrypt && body.password) {
-        bytes = await createEncryptedZip(generated.entries, body.password);
-        encrypted = true;
-      }
-      logFn(`packed: ${bytes.length} bytes, encrypted=${encrypted}`);
+      // 拆分为两个独立归档，减小单文件体积防超时
+      const allEntries = generated.entries;
+      const isAttachment = (name: string) =>
+        name.startsWith('attachments/') || name.startsWith('avatars/') || name.startsWith('category-icons/');
 
-      await r2.put(body.outR2Key, bytes, {
-        httpMetadata: { contentType: encrypted ? 'application/zip' : 'application/gzip' },
+      // sqlite 版归档：meta.json + db.sqlite3 + .jwt_secret + 附件
+      const sqliteEntries = allEntries.filter(e =>
+        e.name === 'meta.json' || e.name === 'db.sqlite3' || e.name === '.jwt_secret' || isAttachment(e.name)
+      );
+      // json 版归档：meta.json + db.json + .jwt_secret + 附件
+      const jsonEntries = allEntries.filter(e =>
+        e.name === 'meta.json' || e.name === 'db.json' || e.name === '.jwt_secret' || isAttachment(e.name)
+      );
+
+      const baseKey = body.outR2Key;
+      const files: { r2Key: string; size: number; encrypted: boolean }[] = [];
+
+      // 有 db.sqlite3 → 生成 sqlite 版独立文件
+      if (sqlite) {
+        const sqliteKey = baseKey.replace(/\.(tar\.gz|zip)$/, '-sqlite.$1');
+        let bytes = await createTarGz(sqliteEntries);
+        let enc = false;
+        if (body.shouldEncrypt && body.password) {
+          bytes = await createEncryptedZip(sqliteEntries, body.password);
+          enc = true;
+        }
+        await r2.put(sqliteKey, bytes, {
+          httpMetadata: { contentType: enc ? 'application/zip' : 'application/gzip' },
+        });
+        logFn(`sqlite archive: ${bytes.length} bytes, encrypted=${enc}`);
+        files.push({ r2Key: sqliteKey, size: bytes.length, encrypted: enc });
+      }
+
+      // 始终生成 json 版独立文件
+      const jsonKey = baseKey.replace(/\.(tar\.gz|zip)$/, '-json.$1');
+      let jsonBytes = await createTarGz(jsonEntries);
+      let jsonEnc = false;
+      if (body.shouldEncrypt && body.password) {
+        jsonBytes = await createEncryptedZip(jsonEntries, body.password);
+        jsonEnc = true;
+      }
+      await r2.put(jsonKey, jsonBytes, {
+        httpMetadata: { contentType: jsonEnc ? 'application/zip' : 'application/gzip' },
       });
-      return Response.json({ ok: true, size: bytes.length, encrypted });
+      logFn(`json archive: ${jsonBytes.length} bytes, encrypted=${jsonEnc}`);
+      files.push({ r2Key: jsonKey, size: jsonBytes.length, encrypted: jsonEnc });
+
+      return Response.json({ ok: true, files });
     } catch (e) {
       console.error('[BackupPack] failed:', e);
       return Response.json({ ok: false, error: (e as Error).message }, { status: 500 });

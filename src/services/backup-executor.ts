@@ -542,8 +542,10 @@ export async function uploadBackupToRemote(
   remoteConfig: Record<string, string>,
   userId: string,
   logFn?: (msg: string) => void,
+  filenameSuffix?: string,
 ): Promise<{ ok: boolean; message: string; key?: string }> {
   const log = logFn || console.log;
+  const suffix = filenameSuffix || '';
 
   if (remoteConfig.backend_type === 's3' || remoteConfig.backend_type === 'b2') {
     const isB2 = remoteConfig.backend_type === 'b2';
@@ -578,7 +580,7 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const y = localTime.getFullYear(); const mo = String(localTime.getMonth()+1).padStart(2,'0'); const d = String(localTime.getDate()).padStart(2,'0'); const h = String(localTime.getHours()).padStart(2,'0'); const mi = String(localTime.getMinutes()).padStart(2,'0'); const s = String(localTime.getSeconds()).padStart(2,'0');
     const ts = `${y}${mo}${d}-${h}${mi}${s}`;
-    const key = `${prefix}backups/${userId}/${ts}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
 
     const result = await uploadToS3(endpoint, bucket, accessKey, secretKey, region, key, backupBytes, 'application/gzip');
     return result.ok ? { ok: true, message: 'Upload successful', key } : { ok: false, message: result.message };
@@ -592,7 +594,7 @@ export async function uploadBackupToRemote(
     if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
     else prefix = 'beecount/';
-    const key = `${prefix}backups/${userId}/${ts}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
     const webdavUser = remoteConfig.username || remoteConfig.user;
     const webdavPass = remoteConfig.password || remoteConfig.pass;
     const result = await uploadToWebDav(remoteConfig.url!, webdavUser!, webdavPass!, key, backupBytes);
@@ -604,7 +606,7 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const y = localTime.getFullYear(); const mo = String(localTime.getMonth()+1).padStart(2,'0'); const d = String(localTime.getDate()).padStart(2,'0'); const h = String(localTime.getHours()).padStart(2,'0'); const mi = String(localTime.getMinutes()).padStart(2,'0'); const s = String(localTime.getSeconds()).padStart(2,'0');
     const ts = `${y}${mo}${d}-${h}${mi}${s}`;
-    const key = `beecount/backups/${userId}/${ts}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `beecount/backups/${userId}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
     await bucket.put(key, backupBytes, { httpMetadata: { contentType: 'application/gzip' } });
     return { ok: true, message: 'R2 upload successful', key };
   }
@@ -620,7 +622,7 @@ export async function uploadBackupToRemote(
     if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
     else prefix = 'beecount/';
-    const key = `${prefix}backups/${userId}/${ts}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
     const result = await uploadToOAuth2Provider(remoteConfig, key, backupBytes);
     return result ? { ok: true, message: 'Upload successful', key } : { ok: false, message: 'Upload failed' };
   }
@@ -642,7 +644,7 @@ export async function uploadBackupToRemote(
     if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
     else prefix = 'beecount/';
-    const key = `${prefix}backups/${userId}/${ts}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
 
     try {
       const { createFtpClient } = await import('../lib/ftp');
@@ -672,7 +674,7 @@ export async function uploadBackupToRemote(
     if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
     else prefix = 'beecount/';
-    const key = `${prefix}backups/${userId}/${ts}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
 
     try {
       const { createSftpClient } = await import('../lib/sftp');
@@ -763,6 +765,7 @@ export async function uploadPreparedBackup(
   progressFn: ((phase: string, meta?: Record<string, unknown>) => void) | undefined,
   backupBytes: Uint8Array,
   encrypted: boolean,
+  filenameSuffix?: string,
 ): Promise<BackupResult> {
   const log = logFn || console.log;
   const logLines: string[] = [];
@@ -791,7 +794,7 @@ export async function uploadPreparedBackup(
   const uploadResults = await Promise.allSettled(
     effectiveConfigs.map(async ({ remoteId, config }) => {
       progressFn?.('uploading', { remoteId });
-      const result = await uploadBackupToRemote(backupBytes, encrypted, config, userId, logWrap);
+      const result = await uploadBackupToRemote(backupBytes, encrypted, config, userId, logWrap, filenameSuffix);
       logWrap(`[Backup] Remote ${remoteId}: ${result.ok ? 'success' : 'failed'} ${result.message}`);
       return { remoteId, ...result };
     })
