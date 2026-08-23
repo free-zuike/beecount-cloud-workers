@@ -65,11 +65,18 @@ app.use('*', async (c, next) => {
 });
 
 let initialized = false;
+let setupCompleted = false;
 async function ensureInitialized(db: D1Database, logBuffer?: DurableObjectNamespace): Promise<void> {
   if (!initialized) {
     await initializeDatabase(db);
     initLogger(db, logBuffer);
     initialized = true;
+  }
+  if (!setupCompleted) {
+    try {
+      const settings = await db.prepare("SELECT setup_completed FROM system_settings WHERE id = ?").bind('default').first<{ setup_completed: number }>();
+      if (settings?.setup_completed === 1) setupCompleted = true;
+    } catch { /* transient D1 error, retry next request */ }
   }
 }
 app.use('*', async (c, next) => {
@@ -302,9 +309,12 @@ app.get('/invite/:code', (c) => {
 // 根路径 - 检查 setup 状态，未完成则输出 setup 页面
 app.get('/', async (c) => {
   try {
-    const settings = await c.env.DB.prepare("SELECT setup_completed FROM system_settings WHERE id = ?").bind('default').first<{ setup_completed: number }>();
+    if (!setupCompleted) {
+      const settings = await c.env.DB.prepare("SELECT setup_completed FROM system_settings WHERE id = ?").bind('default').first<{ setup_completed: number }>();
     if (!settings || settings.setup_completed !== 1) {
       return c.html(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>BeeCount - 初始化</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:-apple-system,system-ui,sans-serif;max-width:420px;margin:60px auto;padding:0 20px}h1{font-size:22px;margin-bottom:4px}p{color:#666;margin-bottom:28px;font-size:14px}label{display:block;margin-bottom:4px;font-weight:600;font-size:13px;color:#374151}input,select{width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;margin-bottom:16px;font-size:15px;box-sizing:border-box;outline:none}input:focus,select:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.15)}button{background:#2563eb;color:#fff;border:none;padding:11px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;width:100%}button:hover{background:#1d4ed8}.error{color:#dc2626;font-size:13px;margin-top:10px;text-align:center}.success{color:#16a34a;font-size:13px;margin-top:10px;text-align:center}</style></head><body><h1>初始化系统</h1><p>创建管理员账户，开始使用 BeeCount</p><form id="f"><label>管理员邮箱</label><input type="email" id="e" placeholder="admin@example.com" required><label>密码</label><input type="password" id="p" minlength="6" placeholder="至少 6 位" required><label>时区</label><select id="t"><option value="-720">-12:00</option><option value="-660">-11:00</option><option value="-600">-10:00</option><option value="-540">-09:00</option><option value="-480" selected>UTC+8 北京时间</option><option value="-420">+07:00</option><option value="-360">+06:00</option><option value="-300">+05:00</option><option value="-240">+04:00</option><option value="-180">+03:00</option><option value="-120">+02:00</option><option value="-60">+01:00</option><option value="0">UTC</option></select><button type="submit">完成初始化</button></form><p id="m"></p><script>document.getElementById('f').onsubmit=async(e)=>{e.preventDefault();const r=await fetch('/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({admin_email:document.getElementById('e').value,admin_password:document.getElementById('p').value,timezone_offset:parseInt(document.getElementById('t').value),admin_mode:'manual'})});const d=await r.json();if(d.success){document.getElementById('m').className='success';document.getElementById('m').textContent='初始化成功，即将跳转...';setTimeout(()=>window.location.href='/app',1500)}else{document.getElementById('m').className='error';document.getElementById('m').textContent=d.error||'设置失败'}}</script></body></html>`);
+    }
+    setupCompleted = true;
     }
     return c.redirect('/app', 302);
   } catch {
