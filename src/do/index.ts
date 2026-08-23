@@ -218,11 +218,13 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
       // 有 db.sqlite3 → 生成原版格式文件（无后缀，与原版命名一致）
       if (sqlite) {
         const sqliteKey = baseKey; // 原版名称，不加后缀
-        let bytes = await createTarGz(sqliteEntries);
+        let bytes: Uint8Array;
         let enc = false;
         if (body.shouldEncrypt && body.password) {
           bytes = await createEncryptedZip(sqliteEntries, body.password);
           enc = true;
+        } else {
+          bytes = await createTarGz(sqliteEntries);
         }
         await r2.put(sqliteKey, bytes, {
           httpMetadata: { contentType: enc ? 'application/zip' : 'application/gzip' },
@@ -233,11 +235,13 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
 
       // 始终生成 json 版独立文件（加 -json 后缀区分）
       const jsonKey = baseKey.replace(/\.(tar\.gz|zip)$/, '-json.$1');
-      let jsonBytes = await createTarGz(jsonEntries);
+      let jsonBytes: Uint8Array;
       let jsonEnc = false;
       if (body.shouldEncrypt && body.password) {
         jsonBytes = await createEncryptedZip(jsonEntries, body.password);
         jsonEnc = true;
+      } else {
+        jsonBytes = await createTarGz(jsonEntries);
       }
       await r2.put(jsonKey, jsonBytes, {
         httpMetadata: { contentType: jsonEnc ? 'application/zip' : 'application/gzip' },

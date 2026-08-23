@@ -826,7 +826,7 @@ export async function uploadPreparedBackup(
       try {
         const items = await listRemoteFiles(remoteConfig.config);
         const backupFiles = filterBackupFiles(items);
-        const toDelete = computeRetentionDeletes(backupFiles, retentionDays);
+        const toDelete = computeRetentionDeletes(backupFiles, retentionDays, undefined, 2);
         for (const f of toDelete) {
           try {
             await deleteRemoteFile(remoteConfig.config, f.path || f.name);

@@ -16,7 +16,8 @@
 // TS 现有格式: 20260612160400_backup.tar.gz / .zip / .tar.gz.age
 const TS_NAME_RE = /^(\d{14})_backup(?:\.zip|\.tar\.gz(?:\.age)?)$/;
 // 原版格式: 20260612-040000(.zip|.tar.gz[.age])，可选 Z 后缀（UTC）
-const ORIG_NAME_RE = /^(\d{8})-(\d{6})(Z?)(?:\.zip|\.tar\.gz(?:\.age)?)$/;
+// 新增可选 -json 后缀（TS 版 db.json 独立归档，retention 需一并清理）
+const ORIG_NAME_RE = /^(\d{8})-(\d{6})(Z?)(-json)?(?:\.zip|\.tar\.gz(?:\.age)?)$/;
 
 export interface RemoteFile {
   name: string;
