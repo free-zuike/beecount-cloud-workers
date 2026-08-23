@@ -233,14 +233,12 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
       if (obj) yield { name: key, data: new Uint8Array(await obj.arrayBuffer()) };
     }
   };
-  // json 版：有 sqlite 时不含附件（sqlite 文件已有）；无 sqlite 时含全部附件
+  // json 版：始终含附件（流式下载不全加载内存，两个文件各自独立可恢复）
   const jsonGen = async function* (): AsyncGenerator<{ name: string; data: Uint8Array }> {
     for (const e of jsonBase) yield e;
-    if (!sqlite) {
-      for (const key of attachmentKeys) {
-        const obj = await r2.get(key);
-        if (obj) yield { name: key, data: new Uint8Array(await obj.arrayBuffer()) };
-      }
+    for (const key of attachmentKeys) {
+      const obj = await r2.get(key);
+      if (obj) yield { name: key, data: new Uint8Array(await obj.arrayBuffer()) };
     }
   };
 
