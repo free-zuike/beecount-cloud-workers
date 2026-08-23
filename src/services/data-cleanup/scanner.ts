@@ -151,7 +151,7 @@ async function scanSyncChangeMissingEntity(db: D1Database): Promise<OrphanRecord
  */
 async function scanAttachmentNoRef(db: D1Database): Promise<OrphanRecord[]> {
   const rows = await db.prepare(
-    `SELECT id, user_id, size_bytes, file_name, storage_path, attachment_kind
+    `SELECT id, user_id, size_bytes, file_name, storage_path, attachment_kind, sha256
      FROM attachment_files
      LIMIT ?`
   ).bind(MAX_ORPHANS).all<{
@@ -161,6 +161,7 @@ async function scanAttachmentNoRef(db: D1Database): Promise<OrphanRecord[]> {
     file_name: string | null;
     storage_path: string;
     attachment_kind: string;
+    sha256: string | null;
   }>();
 
   const orphans: OrphanRecord[] = [];
@@ -169,10 +170,13 @@ async function scanAttachmentNoRef(db: D1Database): Promise<OrphanRecord[]> {
     // 两种空格变体 + category 图标的 icon_cloud_file_id；INSTR 避免 LIKE 模式复杂度限制）
     const patNoSpace = `"cloudFileId":"${row.id}"`;
     const patWithSpace = `"cloudFileId": "${row.id}"`;
+    // App 端（Flutter）attachments_json 用 fileName（sha 哈希）而非 cloudFileId，
+    // 格式：{"fileName":"sha_<sha256>.jpg"}，需同时检查
+    const shaPat = row.sha256 ? `sha_${row.sha256}.jpg` : null;
     const txHit = await db.prepare(
       `SELECT COUNT(*) as cnt FROM read_tx_projection
-       WHERE user_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0)`
-    ).bind(row.user_id, patNoSpace, patWithSpace).first<{ cnt: number }>();
+       WHERE user_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0${shaPat ? ' OR INSTR(attachments_json, ?) > 0' : ''})`
+    ).bind(row.user_id, patNoSpace, patWithSpace, ...(shaPat ? [shaPat] : [])).first<{ cnt: number }>();
 
     let stillReferenced = txHit && txHit.cnt > 0;
     if (!stillReferenced) {

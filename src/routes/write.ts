@@ -560,9 +560,9 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
 
   // 先收集交易关联的附件 fileId（必须在删除投影之前读取，否则 attachments_json 消失）
   const attRows = await db
-    .prepare('SELECT id, storage_path FROM attachment_files WHERE ledger_id = ? AND attachment_kind = ?')
+    .prepare('SELECT id, storage_path, sha256 FROM attachment_files WHERE ledger_id = ? AND attachment_kind = ?')
     .bind(ledger.id, 'transaction')
-    .all<{ id: string; storage_path: string }>();
+    .all<{ id: string; storage_path: string; sha256: string | null }>();
 
   const txRow = await db
     .prepare('SELECT attachments_json FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
@@ -606,12 +606,14 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
       // 按 ledger 而不是 user 扫 —— 对齐原版 _fileid_still_referenced_in_ledger：
       // 共享账本里 Editor 上传的附件 user_id=Editor，但投影行可能挂在 owner user_id 下，
       // 按 user 过滤会漏判 → 误删共享附件。
+      // Web 端用 cloudFileId 引用，Flutter App 端用 fileName（sha_<sha256>.jpg），同时检查
       const patNoSpace = `"cloudFileId":"${fid}"`;
       const patWithSpace = `"cloudFileId": "${fid}"`;
+      const shaPat = att.sha256 ? `sha_${att.sha256}.jpg` : null;
       const stillReferenced = await db.prepare(
         `SELECT COUNT(*) as cnt FROM read_tx_projection
-         WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0)`
-      ).bind(ledger.id, patNoSpace, patWithSpace).first<{ cnt: number }>();
+         WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0${shaPat ? ' OR INSTR(attachments_json, ?) > 0' : ''})`
+      ).bind(ledger.id, patNoSpace, patWithSpace, ...(shaPat ? [shaPat] : [])).first<{ cnt: number }>();
 
       if (stillReferenced && stillReferenced.cnt > 0) continue;
 

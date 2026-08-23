@@ -1865,14 +1865,21 @@ async function applyChangeToProjection(
         ).bind(ledgerId, change.entity_sync_id).first<{ attachments_json: string | null }>();
 
         const fileIdsToClean: string[] = [];
+        const shaHashesToClean: string[] = [];
         if (txRow?.attachments_json) {
           try {
             const attachments = JSON.parse(txRow.attachments_json);
             if (Array.isArray(attachments)) {
               for (const att of attachments) {
-                // attachments_json 里附件对象用 cloudFileId 字段（与 write.ts 删除逻辑一致）
+                // Web 端用 cloudFileId，Flutter App 端用 fileName（sha_<sha256>.jpg）
                 const fileId = att.cloudFileId || att.id || att.file_id;
                 if (fileId && !fileIdsToClean.includes(fileId)) fileIdsToClean.push(fileId);
+                // Flutter App 的 fileName 格式：sha_<sha256>.jpg
+                const fn = att.fileName || att.file_name || '';
+                if (typeof fn === 'string' && fn.startsWith('sha_') && fn.endsWith('.jpg')) {
+                  const sha = fn.slice(4, -4); // 去掉 "sha_" 前缀和 ".jpg" 后缀
+                  if (sha && !shaHashesToClean.includes(sha)) shaHashesToClean.push(sha);
+                }
               }
             }
           } catch {}
@@ -1892,23 +1899,44 @@ async function applyChangeToProjection(
         // R2 删除是外部副作用，无法事务化，做 best-effort。
         for (const fileId of fileIdsToClean) {
           const attFile = await db.prepare(
-            "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'transaction'"
-          ).bind(fileId).first<{ storage_path: string }>();
+            "SELECT storage_path, sha256 FROM attachment_files WHERE id = ? AND attachment_kind = 'transaction'"
+          ).bind(fileId).first<{ storage_path: string; sha256: string | null }>();
           if (!attFile) continue;
 
           // 是否仍被本 ledger 下其他交易引用（共享附件保留）
           const patNoSpace = `"cloudFileId":"${fileId}"`;
           const patWithSpace = `"cloudFileId": "${fileId}"`;
+          const shaPat = attFile.sha256 ? `sha_${attFile.sha256}.jpg` : null;
           const stillReferenced = await db.prepare(
             `SELECT COUNT(*) as cnt FROM read_tx_projection
-             WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0)`
-          ).bind(ledgerId, patNoSpace, patWithSpace).first<{ cnt: number }>();
+             WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0${shaPat ? ' OR INSTR(attachments_json, ?) > 0' : ''})`
+          ).bind(ledgerId, patNoSpace, patWithSpace, ...(shaPat ? [shaPat] : [])).first<{ cnt: number }>();
           if (stillReferenced && stillReferenced.cnt > 0) continue;
 
           if (r2 && attFile.storage_path) {
             try { await r2.delete(attFile.storage_path); } catch {}
           }
           await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
+        }
+
+        // 按 sha256 查找 Flutter App 端创建的附件（fileName 格式，无 cloudFileId）并清理
+        for (const sha of shaHashesToClean) {
+          const attFile = await db.prepare(
+            "SELECT id, storage_path, sha256 FROM attachment_files WHERE sha256 = ? AND attachment_kind = 'transaction' LIMIT 1"
+          ).bind(sha).first<{ id: string; storage_path: string; sha256: string | null }>();
+          if (!attFile) continue;
+          // 检查是否仍被其他交易引用
+          const shaPat = `sha_${sha}.jpg`;
+          const stillReferenced = await db.prepare(
+            `SELECT COUNT(*) as cnt FROM read_tx_projection
+             WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0)`
+          ).bind(ledgerId, `"cloudFileId":"${attFile.id}"`, `"cloudFileId": "${attFile.id}"`, shaPat).first<{ cnt: number }>();
+          // 注意：这里同时检查了 cloudFileId（web 端）和 shaPat（Flutter 端）
+          if (stillReferenced && stillReferenced.cnt > 0) continue;
+          if (r2 && attFile.storage_path) {
+            try { await r2.delete(attFile.storage_path); } catch {}
+          }
+          await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(attFile.id).run();
         }
 
         // 与原版 _compact_entity_upsert_events 对齐：清理 upsert 历史

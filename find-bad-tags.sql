@@ -1,0 +1,1 @@
+SELECT change_id FROM sync_changes WHERE payload_json LIKE '%"tags":[%' AND entity_type = 'transaction'
