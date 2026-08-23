@@ -173,7 +173,20 @@ async function listUserTables(db: D1Database): Promise<string[]> {
 
 
 
-/** D1 每次查询最多返回的行数 */
+/** 并行执行异步操作，限制并发数（对齐 D1/R2 的 6 连接限制） */
+async function parallelMap<T, R>(
+  items: T[],
+  fn: (item: T, index: number) => Promise<R>,
+  concurrency: number = 6,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const batchResults = await Promise.all(batch.map((item, j) => fn(item, i + j)));
+    results.push(...batchResults);
+  }
+  return results;
+}
 const D1_BATCH_SIZE = 1000;
 
 /**
@@ -207,6 +220,7 @@ async function fetchR2Attachments(r2: R2Bucket): Promise<Map<string, Uint8Array>
 
   let totalFiles = 0;
   let totalSize = 0;
+  const fileKeys: string[] = [];
 
   for (const prefix of prefixes) {
     let cursor: string | undefined;
@@ -215,23 +229,27 @@ async function fetchR2Attachments(r2: R2Bucket): Promise<Map<string, Uint8Array>
       cursor = listed.truncated ? listed.cursor : undefined;
 
       for (const obj of listed.objects) {
-        try {
-          const data = await r2.get(obj.key);
-          if (data) {
-            const arrayBuffer = await data.arrayBuffer();
-            attachments.set(obj.key, new Uint8Array(arrayBuffer));
-            totalFiles++;
-            totalSize += obj.size;
-            console.log(`[Backup] Fetched: ${obj.key} (${obj.size} bytes)`);
-          }
-        } catch (err) {
-          console.error(`[Backup] Failed to fetch ${obj.key}: ${(err as Error).message}`);
-        }
+        fileKeys.push(obj.key);
+        totalSize += obj.size;
       }
     } while (cursor);
   }
 
-  console.log(`[Backup] Total R2 files: ${totalFiles} files, ${totalSize} bytes`);
+  // 并行下载附件（6 并发，对齐 D1/R2 连接限制）
+  await parallelMap(fileKeys, async (key) => {
+    try {
+      const data = await r2.get(key);
+      if (data) {
+        const arrayBuffer = await data.arrayBuffer();
+        attachments.set(key, new Uint8Array(arrayBuffer));
+        totalFiles++;
+      }
+    } catch (err) {
+      console.error(`[Backup] Failed to fetch ${key}: ${(err as Error).message}`);
+    }
+  }, 6);
+
+  console.log(`[Backup] Fetched: ${totalFiles} files, ${totalSize} bytes`);
   return attachments;
 }
 
@@ -309,13 +327,18 @@ export async function generateBackupBytes(
   // 2. db.json（后向兼容 TS 旧恢复端 + R2 列表摘要）
   const tables: Record<string, unknown[]> = {};
   const tableNames = (await listUserTables(db)).filter(n => !EXCLUDED_BACKUP_TABLES.has(n));
-  for (const tableName of tableNames) {
+  // 并行导出所有表：每次 6 张表并行查 D1，减小串行等待
+  const tableResults = await parallelMap(tableNames, async (tableName) => {
     try {
       const rows = await withRetry(() => exportTable(db, tableName), 3, 1000, `export ${tableName}`);
-      if (rows.length > 0) tables[tableName] = rows;
+      return { tableName, rows };
     } catch (err) {
       logWrap(`[Backup] Skipping ${tableName}: ${(err as Error).message}`);
+      return { tableName, rows: null };
     }
+  }, 6);
+  for (const { tableName, rows } of tableResults) {
+    if (rows && rows.length > 0) tables[tableName] = rows;
   }
 
 
