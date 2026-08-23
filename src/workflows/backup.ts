@@ -29,6 +29,13 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
     const db = this.env.DB;
     const logLines: string[] = [];
     const logFn = (msg: string) => logLines.push(`[${new Date().toISOString()}] ${msg}`);
+    /** 将当前日志写入 DB，备份过程中刷新详情页可见逐步更新的日志 */
+    const flushLogs = async () => {
+      try {
+        await db.prepare('UPDATE backup_runs SET log_text = ? WHERE id = ?')
+          .bind(logLines.join('\n').slice(0, 1024 * 1024), runId).run();
+      } catch { /* non-critical */ }
+    };
     const broadcast = async (message: Record<string, unknown>) => {
       try {
         const doId = this.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
@@ -76,6 +83,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
           },
         );
         sqliteR2Key = `temp/backup-${runId}/db.sqlite3`;
+        await flushLogs();
       } catch (err) {
         logFn(`[SQLite] db.sqlite3 generation failed: ${(err as Error).message}`);
       }
@@ -115,6 +123,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
             },
           );
           pactR2Key = outKey;
+          await flushLogs();
         } catch (err) {
           logFn(`[Backup] DO pack failed: ${(err as Error).message}`);
           pactR2Key = null;
