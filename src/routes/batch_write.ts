@@ -350,7 +350,11 @@ const batchDeleteHandler = async (c: any) => {
       db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
         .bind(ledgerId, txSyncId),
     );
-    deleteIndices.push(insertIdx + 1);
+    stmts.push(
+      db.prepare(
+        `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'transaction' AND entity_sync_id = ? AND action != 'delete'`
+      ).bind(ledgerId, txSyncId),
+    );
   }
 
   // 分块批量执行（D1 batch 最多 100 语句）

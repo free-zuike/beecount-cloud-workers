@@ -581,7 +581,7 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
     } catch {}
   }
 
-  // 删除交易：tombstone + projection 删除必须在同一事务内原子执行
+  // 删除交易：tombstone + projection 删除 + 旧 upsert 清理必须在同一事务内原子执行
   const batchResults = await db.batch([
     db.prepare(
       `INSERT INTO sync_changes
@@ -590,6 +590,10 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
     ).bind(userId, ledger.id, 'transaction', txSyncId, 'delete', '{}', serverNow, userId),
     db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
       .bind(ledger.id, txSyncId),
+    // 对齐原版 _compact_entity_upsert_events：清理旧 upsert 历史，防止 stale upsert 复活
+    db.prepare(
+      `DELETE FROM sync_changes WHERE ledger_id = ? AND entity_type = 'transaction' AND entity_sync_id = ? AND action != 'delete'`
+    ).bind(ledger.id, txSyncId),
   ]);
 
   const newChangeId = batchResults[0].meta.last_row_id as number;
