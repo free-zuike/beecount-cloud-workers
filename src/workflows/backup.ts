@@ -163,8 +163,9 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
               if (!obj) { allSuccess = false; messages.push(`${f.r2Key} not found`); continue; }
               const bytes = new Uint8Array(await obj.arrayBuffer());
               combinedSize += bytes.length;
-              // 从 r2Key 提取后缀（backup-sqlite.tar.gz → -sqlite）
-              const suffix = (f.r2Key.match(/-(sqlite|json)\./)?.[1]) ? `-${f.r2Key.match(/-(sqlite|json)\./)![1]}` : '';
+              // 从 r2Key 提取后缀（backup-json.tar.gz → -json；backup.tar.gz → 无后缀=原版名称）
+              const suffixMatch = f.r2Key.match(/-json\./);
+              const suffix = suffixMatch ? '-json' : '';
               const result = await uploadPreparedBackup(
                 db, runId, userId, ledgerId, effectiveConfigs,
                 this.env.R2, logFn, retentionDays,

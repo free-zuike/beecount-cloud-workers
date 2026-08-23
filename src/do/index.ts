@@ -215,9 +215,9 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
       const baseKey = body.outR2Key;
       const files: { r2Key: string; size: number; encrypted: boolean }[] = [];
 
-      // 有 db.sqlite3 → 生成 sqlite 版独立文件
+      // 有 db.sqlite3 → 生成原版格式文件（无后缀，与原版命名一致）
       if (sqlite) {
-        const sqliteKey = baseKey.replace(/\.(tar\.gz|zip)$/, '-sqlite.$1');
+        const sqliteKey = baseKey; // 原版名称，不加后缀
         let bytes = await createTarGz(sqliteEntries);
         let enc = false;
         if (body.shouldEncrypt && body.password) {
@@ -231,7 +231,7 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
         files.push({ r2Key: sqliteKey, size: bytes.length, encrypted: enc });
       }
 
-      // 始终生成 json 版独立文件
+      // 始终生成 json 版独立文件（加 -json 后缀区分）
       const jsonKey = baseKey.replace(/\.(tar\.gz|zip)$/, '-json.$1');
       let jsonBytes = await createTarGz(jsonEntries);
       let jsonEnc = false;
