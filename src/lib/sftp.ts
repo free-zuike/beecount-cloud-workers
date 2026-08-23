@@ -181,12 +181,37 @@ class SftpClient {
   async upload(remotePath: string, data: Uint8Array): Promise<boolean> {
     return this.withSftp((sftp) => {
       return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Upload timeout')), 30000);
-        sftp.writeFile(remotePath, Buffer.from(data), (err: Error | undefined) => {
-          clearTimeout(timeout);
-          if (err) return reject(err);
-          resolve(true);
-        });
+        // 递归创建目录（忽略已存在的错误）
+        const dirPath = remotePath.substring(0, remotePath.lastIndexOf('/'));
+        if (dirPath) {
+          const parts = dirPath.split('/').filter(Boolean);
+          let current = '';
+          const mkdirChain = (idx: number) => {
+            if (idx >= parts.length) {
+              // 所有目录创建完毕，开始上传文件
+              const timeout = setTimeout(() => reject(new Error('Upload timeout')), 30000);
+              sftp.writeFile(remotePath, Buffer.from(data), (err: Error | undefined) => {
+                clearTimeout(timeout);
+                if (err) return reject(err);
+                resolve(true);
+              });
+              return;
+            }
+            current += '/' + parts[idx];
+            sftp.mkdir(current, (err: Error | undefined) => {
+              // 忽略已存在的错误，继续创建下一级
+              mkdirChain(idx + 1);
+            });
+          };
+          mkdirChain(0);
+        } else {
+          const timeout = setTimeout(() => reject(new Error('Upload timeout')), 30000);
+          sftp.writeFile(remotePath, Buffer.from(data), (err: Error | undefined) => {
+            clearTimeout(timeout);
+            if (err) return reject(err);
+            resolve(true);
+          });
+        }
       });
     });
   }

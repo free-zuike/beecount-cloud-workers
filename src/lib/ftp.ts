@@ -160,6 +160,17 @@ class FtpClient {
       // Enter binary mode
       await this.sendCommand(socket, 'TYPE I');
 
+      // 递归创建目录（忽略已存在的错误）
+      const dirPath = remotePath.substring(0, remotePath.lastIndexOf('/'));
+      if (dirPath) {
+        const parts = dirPath.split('/').filter(Boolean);
+        let current = '';
+        for (const part of parts) {
+          current += '/' + part;
+          try { await this.sendCommand(socket, `MKD ${current}`); } catch {}
+        }
+      }
+
       // Enter passive mode to get data connection
       const pasvResponse = await this.sendCommand(socket, 'PASV');
       const pasvMatch = pasvResponse.match(/\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)/);
