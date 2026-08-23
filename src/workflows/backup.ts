@@ -127,24 +127,30 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
         'backup-fan-out',
         { retries: { limit: 1, delay: '1 minute', backoff: 'exponential' } },
         async () => {
-          if (pactR2Key) {
-            const obj = await this.env.R2.get(pactR2Key);
-            if (obj) {
-              const bytes = new Uint8Array(await obj.arrayBuffer());
-              return await uploadPreparedBackup(
-                db, runId, userId, ledgerId, effectiveConfigs,
-                this.env.R2, logFn, retentionDays,
-                (phase) => { broadcast({ type: 'backup_progress', phase, runId }).catch(() => {}); },
-                bytes, shouldEncrypt,
-              );
+          try {
+            if (pactR2Key) {
+              const obj = await this.env.R2.get(pactR2Key);
+              if (obj) {
+                const bytes = new Uint8Array(await obj.arrayBuffer());
+                return await uploadPreparedBackup(
+                  db, runId, userId, ledgerId, effectiveConfigs,
+                  this.env.R2, logFn, retentionDays,
+                  (phase) => { broadcast({ type: 'backup_progress', phase, runId }).catch(() => {}); },
+                  bytes, shouldEncrypt,
+                );
+              }
             }
+            return {
+              success: false,
+              message: 'Backup bytes not available (pack failed)',
+              backupSize: 0,
+              attachmentsUploaded: 0,
+            };
+          } finally {
+            // 上传完成后清理临时中转文件（R2 失败不阻塞）
+            if (pactR2Key) this.env.R2.delete(pactR2Key).catch(() => {});
+            if (sqliteR2Key) this.env.R2.delete(sqliteR2Key).catch(() => {});
           }
-          return {
-            success: false,
-            message: 'Backup bytes not available (pack failed)',
-            backupSize: 0,
-            attachmentsUploaded: 0,
-          };
         },
       );
 
