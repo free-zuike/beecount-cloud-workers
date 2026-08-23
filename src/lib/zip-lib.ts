@@ -31,6 +31,28 @@ export async function createEncryptedZip(
 }
 
 /**
+ * 流式创建 AES-256 加密 ZIP — 接受异步迭代器，逐个添加条目。
+ * 同一时间只有一个条目的数据在内存，用于大附件场景。
+ */
+export async function createEncryptedZipStream(
+  entries: AsyncIterable<{ name: string; data: Uint8Array }>,
+  password: string,
+): Promise<Uint8Array> {
+  const writer = new Uint8ArrayWriter();
+  const zipWriter = new ZipWriter(writer, {
+    password,
+    encryptionStrength: 3, // AES-256
+  });
+
+  for await (const file of entries) {
+    await zipWriter.add(file.name, new Uint8ArrayReader(file.data));
+  }
+
+  await zipWriter.close();
+  return writer.getData() as unknown as Uint8Array;
+}
+
+/**
  * 创建不加密的标准 ZIP 文件
  */
 export async function createZip(

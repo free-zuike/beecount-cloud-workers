@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { generateBackupBytes } from '../services/backup-executor';
-import { createEncryptedZip } from '../lib/zip-lib';
-import { createTarGz } from '../lib/tar';
+import { createEncryptedZipStream } from '../lib/zip-lib';
+import { createTarGzStream } from '../lib/tar';
 
 type BackupPackEnv = {
   DB: D1Database;
@@ -192,41 +192,71 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
         logFn(`no sqliteR2Key (no CLOUDFLARE_API_TOKEN) — using db.json only`);
       }
 
+      // 生成数据条目（不含附件，r2=undefined 跳过附件下载）
       const generated = await generateBackupBytes(
-        db, body.userId, body.ledgerId, r2, logFn,
+        db, body.userId, body.ledgerId, undefined, logFn,
         { scheduleId: body.scheduleId ?? null, scheduleName: body.scheduleName ?? null },
         sqlite, body.jwtSecret ?? null,
       );
 
-      // 拆分为两个独立归档，减小单文件体积防超时
-      // 附件只放一份：有 sqlite 时放 sqlite 文件（与原版一致），无 sqlite 时放 json 文件
-      const allEntries = generated.entries;
+      // 列出所有附件 key（逐个下载写入，不全加载到内存）
+      const attachmentKeys: string[] = [];
+      for (const prefix of ['attachments/', 'avatars/', 'category-icons/']) {
+        let cursor: string | undefined;
+        do {
+          const listed = await r2.list({ prefix, cursor, limit: 1000 });
+          cursor = listed.truncated ? listed.cursor : undefined;
+          for (const obj of listed.objects) attachmentKeys.push(obj.key);
+        } while (cursor);
+      }
+      logFn(`found ${attachmentKeys.length} attachments, total ${generated.entries.length} base entries`);
+
+      // 拆分基础条目
+      const baseEntries = generated.entries;
   const isAttachment = (name: string) =>
     name.startsWith('attachments/') || name.startsWith('avatars/') || name.startsWith('category-icons/');
 
-  // sqlite 版归档：meta.json + db.sqlite3 + .jwt_secret + 附件（与原版一致）
-  const sqliteEntries = allEntries.filter(e =>
-    e.name === 'meta.json' || e.name === 'db.sqlite3' || e.name === '.jwt_secret' || isAttachment(e.name)
+  // sqlite 版基础条目：meta.json + db.sqlite3 + .jwt_secret
+  const sqliteBase = baseEntries.filter(e =>
+    e.name === 'meta.json' || e.name === 'db.sqlite3' || e.name === '.jwt_secret'
   );
-  // json 版归档：有 sqlite 时不含附件（仅数据，体积小）；无 sqlite 时含附件（独立可恢复）
-  const jsonEntries = allEntries.filter(e =>
-    e.name === 'meta.json' || e.name === 'db.json' || e.name === '.jwt_secret' ||
-    (!sqlite && isAttachment(e.name))
+  // json 版基础条目：meta.json + db.json + .jwt_secret
+  const jsonBase = baseEntries.filter(e =>
+    e.name === 'meta.json' || e.name === 'db.json' || e.name === '.jwt_secret'
   );
+
+  // 流式生成器：基础条目 + 附件逐个下载
+  const sqliteGen = async function* (): AsyncGenerator<{ name: string; data: Uint8Array }> {
+    for (const e of sqliteBase) yield e;
+    for (const key of attachmentKeys) {
+      const obj = await r2.get(key);
+      if (obj) yield { name: key, data: new Uint8Array(await obj.arrayBuffer()) };
+    }
+  };
+  // json 版：有 sqlite 时不含附件（sqlite 文件已有）；无 sqlite 时含全部附件
+  const jsonGen = async function* (): AsyncGenerator<{ name: string; data: Uint8Array }> {
+    for (const e of jsonBase) yield e;
+    if (!sqlite) {
+      for (const key of attachmentKeys) {
+        const obj = await r2.get(key);
+        if (obj) yield { name: key, data: new Uint8Array(await obj.arrayBuffer()) };
+      }
+    }
+  };
 
       const baseKey = body.outR2Key;
       const files: { r2Key: string; size: number; encrypted: boolean }[] = [];
 
-      // 有 db.sqlite3 → 生成原版格式文件（无后缀，与原版命名一致）
+      // 有 db.sqlite3 → 流式生成原版格式文件（附件逐个下载写入，不全加载到内存）
       if (sqlite) {
-        const sqliteKey = baseKey; // 原版名称，不加后缀
+        const sqliteKey = baseKey;
         let bytes: Uint8Array;
         let enc = false;
         if (body.shouldEncrypt && body.password) {
-          bytes = await createEncryptedZip(sqliteEntries, body.password);
+          bytes = await createEncryptedZipStream(sqliteGen(), body.password);
           enc = true;
         } else {
-          bytes = await createTarGz(sqliteEntries);
+          bytes = await createTarGzStream(sqliteGen());
         }
         await r2.put(sqliteKey, bytes, {
           httpMetadata: { contentType: enc ? 'application/zip' : 'application/gzip' },
@@ -235,15 +265,15 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
         files.push({ r2Key: sqliteKey, size: bytes.length, encrypted: enc });
       }
 
-      // 始终生成 json 版独立文件（加 -json 后缀区分）
+      // 流式生成 json 版独立文件
       const jsonKey = baseKey.replace(/\.(tar\.gz|zip)$/, '-json.$1');
       let jsonBytes: Uint8Array;
       let jsonEnc = false;
       if (body.shouldEncrypt && body.password) {
-        jsonBytes = await createEncryptedZip(jsonEntries, body.password);
+        jsonBytes = await createEncryptedZipStream(jsonGen(), body.password);
         jsonEnc = true;
       } else {
-        jsonBytes = await createTarGz(jsonEntries);
+        jsonBytes = await createTarGzStream(jsonGen());
       }
       await r2.put(jsonKey, jsonBytes, {
         httpMetadata: { contentType: jsonEnc ? 'application/zip' : 'application/gzip' },
