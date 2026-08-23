@@ -580,7 +580,7 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const y = localTime.getFullYear(); const mo = String(localTime.getMonth()+1).padStart(2,'0'); const d = String(localTime.getDate()).padStart(2,'0'); const h = String(localTime.getHours()).padStart(2,'0'); const mi = String(localTime.getMinutes()).padStart(2,'0'); const s = String(localTime.getSeconds()).padStart(2,'0');
     const ts = `${y}${mo}${d}-${h}${mi}${s}`;
-    const key = `${prefix}backups/${userId}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
 
     const result = await uploadToS3(endpoint, bucket, accessKey, secretKey, region, key, backupBytes, 'application/gzip');
     return result.ok ? { ok: true, message: 'Upload successful', key } : { ok: false, message: result.message };
@@ -594,7 +594,7 @@ export async function uploadBackupToRemote(
     if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
     else prefix = 'beecount/';
-    const key = `${prefix}backups/${userId}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
     const webdavUser = remoteConfig.username || remoteConfig.user;
     const webdavPass = remoteConfig.password || remoteConfig.pass;
     const result = await uploadToWebDav(remoteConfig.url!, webdavUser!, webdavPass!, key, backupBytes);
@@ -606,7 +606,7 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const y = localTime.getFullYear(); const mo = String(localTime.getMonth()+1).padStart(2,'0'); const d = String(localTime.getDate()).padStart(2,'0'); const h = String(localTime.getHours()).padStart(2,'0'); const mi = String(localTime.getMinutes()).padStart(2,'0'); const s = String(localTime.getSeconds()).padStart(2,'0');
     const ts = `${y}${mo}${d}-${h}${mi}${s}`;
-    const key = `beecount/backups/${userId}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `beecount/backups/${userId}/${ts}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
     await bucket.put(key, backupBytes, { httpMetadata: { contentType: 'application/gzip' } });
     return { ok: true, message: 'R2 upload successful', key };
   }
@@ -622,7 +622,7 @@ export async function uploadBackupToRemote(
     if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
     else prefix = 'beecount/';
-    const key = `${prefix}backups/${userId}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
     const result = await uploadToOAuth2Provider(remoteConfig, key, backupBytes);
     return result ? { ok: true, message: 'Upload successful', key } : { ok: false, message: 'Upload failed' };
   }
@@ -644,7 +644,7 @@ export async function uploadBackupToRemote(
     if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
     else prefix = 'beecount/';
-    const key = `${prefix}backups/${userId}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
 
     try {
       const { createFtpClient } = await import('../lib/ftp');
@@ -674,7 +674,7 @@ export async function uploadBackupToRemote(
     if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
     else prefix = 'beecount/';
-    const key = `${prefix}backups/${userId}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${ts}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
 
     try {
       const { createSftpClient } = await import('../lib/sftp');
