@@ -32,6 +32,8 @@ export type SyncEventKind =
   | 'backup_progress'
   /** 备份终态事件,字段:status='succeeded'/'partial'/'failed'。 */
   | 'backup_status'
+  /** 备份运行中的日志行,字段:log / runId。由 Workflow 每步实时推送。 */
+  | 'backup_log'
   /** restore 阶段进度,字段:phase='downloading'/'extracting'/'done'/'failed'。 */
   | 'restore_progress'
   /** 本地 poller 拉到一批 change_envelope;payload.changes 是 envelope 数组 */

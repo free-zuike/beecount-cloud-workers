@@ -28,7 +28,11 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
     const { runId, userId, ledgerId, remoteConfigs, shouldEncrypt, retentionDays, scheduleId, serverNow } = event.payload;
     const db = this.env.DB;
     const logLines: string[] = [];
-    const logFn = (msg: string) => logLines.push(`[${new Date().toISOString()}] ${msg}`);
+    const logFn = (msg: string) => {
+      const line = `[${new Date().toISOString()}] ${msg}`;
+      logLines.push(line);
+      broadcast({ type: 'backup_log', log: line, runId }).catch(() => {});
+    };
     /** 将当前日志写入 DB，备份过程中刷新详情页可见逐步更新的日志 */
     const flushLogs = async () => {
       try {

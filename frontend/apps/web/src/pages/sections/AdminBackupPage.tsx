@@ -89,6 +89,7 @@ export function AdminBackupPage() {
   const [schedules, setSchedules] = useState<BackupSchedule[]>([])
   const [runs, setRuns] = useState<BackupRun[]>([])
   const [liveProgress, setLiveProgress] = useState<LiveProgress | null>(null)
+  const [liveLog, setLiveLog] = useState<string[]>([])
 
   // Restore 相关 state
   const [restoreRun, setRestoreRun] = useState<BackupRun | null>(null)
@@ -154,6 +155,7 @@ export function AdminBackupPage() {
   useSyncEvent('backup_status', (event) => {
     const data = event as { status?: string }
     setLiveProgress(null)
+    setLiveLog([])
     if (data.status) {
       if (data.status === 'succeeded') {
         notifySuccess(t('backup.notice.runSucceeded'))
@@ -164,6 +166,13 @@ export function AdminBackupPage() {
       }
     }
     void refreshRuns()
+  })
+
+  useSyncEvent('backup_log', (event) => {
+    const data = event as { log?: string; runId?: number }
+    if (data.log) {
+      setLiveLog(prev => [...prev, data.log!])
+    }
   })
 
   // Restore 进度事件
@@ -396,6 +405,7 @@ export function AdminBackupPage() {
               <BackupRunsPanel
                 runs={runs}
                 liveProgress={liveProgress}
+                liveLog={liveLog}
                 onDownloadConfig={onDownloadConfig}
                 onRestoreRun={(run) => void onRestoreRun(run)}
               />
