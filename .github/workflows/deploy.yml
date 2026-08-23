@@ -67,6 +67,12 @@ jobs:
       - name: Build frontend
         run: cd frontend && pnpm install --no-frozen-lockfile && pnpm build
 
+      - name: Inject version into sw.js
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts)
+          sed -i "s/beecount-web-v2/beecount-web-v2-$VERSION/" frontend/apps/web/dist/sw.js
+          echo "Injected version $VERSION into sw.js"
+
       - name: Rename index.html to app.html
         run: mv frontend/apps/web/dist/index.html frontend/apps/web/dist/app.html
 
