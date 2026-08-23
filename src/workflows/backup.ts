@@ -60,7 +60,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
         logFn(`[SQLite] Export API token available: ${!!this.env.CLOUDFLARE_API_TOKEN}`);
         await step.do(
           'sqlite-export',
-          { retries: { limit: 2, delay: '30 seconds', backoff: 'exponential' } },
+          { retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' } },
           async () => {
             // 在 step 内保存到 R2，避免 step 返回 > 1MB 的数据
             const bytes = await exportD1ToSqlite(
@@ -91,7 +91,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
         try {
           await step.do(
             'backup-pack',
-            { retries: { limit: 2, delay: '30 seconds', backoff: 'exponential' } },
+            { retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' } },
             async () => {
               const stub = this.env.BEECOUNT_DO.get(this.env.BEECOUNT_DO.idFromName(`pack-${runId}`));
               const res = await stub.fetch('http://do/backup-pack', {

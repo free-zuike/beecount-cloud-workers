@@ -160,9 +160,27 @@ export async function exportD1ToSqlite(
       throw new Error(`D1 Export API: no download URL in response: ${JSON.stringify(data).slice(0, 300)}`);
     }
     log(`[SQLite] Export initiated, downloading from signed URL...`);
-    const fileRes = await fetch(downloadUrl, { signal: AbortSignal.timeout(120000) });
-    if (!fileRes.ok) {
-      throw new Error(`D1 Export download failed: ${fileRes.status}`);
+    // 下载阶段网络不稳（"Network connection lost"），内部重试 3 次，
+    // 避免整步失败后 Workflow 级重试（会重新发起 export 浪费 90s+）
+    let fileRes: Response | null = null;
+    let downloadErr: Error | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        fileRes = await fetch(downloadUrl, { signal: AbortSignal.timeout(120000) });
+        if (fileRes.ok) break;
+        downloadErr = new Error(`D1 Export download failed: ${fileRes.status}`);
+        fileRes = null;
+      } catch (e) {
+        downloadErr = e as Error;
+        fileRes = null;
+      }
+      if (attempt < 2) {
+        log(`[SQLite] Download attempt ${attempt + 1} failed (${downloadErr?.message}), retrying in ${(attempt + 1) * 2}s...`);
+        await new Promise(r => setTimeout(r, (attempt + 1) * 2000));
+      }
+    }
+    if (!fileRes) {
+      throw new Error(`D1 Export download failed after retries: ${downloadErr?.message}`);
     }
     const buffer = await fileRes.arrayBuffer();
     const bytes = new Uint8Array(buffer);
