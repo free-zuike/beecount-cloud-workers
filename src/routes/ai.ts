@@ -922,7 +922,9 @@ async function _testSpeech(baseUrl: string, apiKey: string, model: string, timeo
   }
 
   const data = await response.json() as { text?: string };
-  return (data.text || '').trim();
+  // 静音 WAV 转录返回空 text 是正常的（没有语音内容），不代表 API 有问题。
+  // 返回成功消息证明 API 连通。
+  return (data.text || '').trim() || '(silence accepted, API connected)';
 }
 
 // 64×64 红色 JPEG 测试图（对齐原版 test_samples.py）
