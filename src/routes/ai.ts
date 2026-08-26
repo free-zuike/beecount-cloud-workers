@@ -1129,7 +1129,9 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
     let errorCode = 'AI_TEST_UNKNOWN';
     if (errorMsg.includes('401') || errorMsg.includes('403') || errorMsg.includes('auth') || errorMsg.includes('API key')) {
       errorCode = 'AI_TEST_AUTH';
-    } else if (errorMsg.includes('429') || errorMsg.includes('rate') || errorMsg.includes('quota') || errorMsg.includes('余额')) {
+    } else if (errorMsg.includes('余额') || errorMsg.includes('充值') || errorMsg.includes('insufficient') || errorMsg.includes('balance')) {
+      errorCode = 'AI_TEST_INSUFFICIENT_BALANCE';
+    } else if (errorMsg.includes('429') || errorMsg.includes('rate') || errorMsg.includes('quota')) {
       errorCode = 'AI_TEST_RATE_LIMITED';
     } else if (errorMsg.includes('404') || errorMsg.includes('model not found') || errorMsg.includes('not exist')) {
       errorCode = 'AI_TEST_MODEL_NOT_FOUND';

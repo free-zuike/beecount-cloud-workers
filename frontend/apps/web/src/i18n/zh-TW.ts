@@ -902,6 +902,7 @@ const zhTW = {
   'ai.editor.test.error.AI_TEST_TIMEOUT': '請求逾時',
   'ai.editor.test.error.AI_TEST_NETWORK': '網路錯誤',
   'ai.editor.test.error.AI_TEST_RATE_LIMITED': '測試過於頻繁,請 1 分鐘後再試',
+  'ai.editor.test.error.AI_TEST_INSUFFICIENT_BALANCE': 'AI 提供商餘額不足,請儲值',
   'ai.editor.test.error.AI_TEST_MISSING_FIELDS': '請先填寫 Key / 模型',
   'ai.editor.test.error.AI_TEST_UNKNOWN': '未知錯誤,見詳情',
 

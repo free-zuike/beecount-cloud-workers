@@ -901,6 +901,7 @@ const en = {
   'ai.editor.test.error.AI_TEST_TIMEOUT': 'Request timeout',
   'ai.editor.test.error.AI_TEST_NETWORK': 'Network error',
   'ai.editor.test.error.AI_TEST_RATE_LIMITED': 'Too many tests, retry in 1 minute',
+  'ai.editor.test.error.AI_TEST_INSUFFICIENT_BALANCE': 'AI provider balance insufficient, please recharge',
   'ai.editor.test.error.AI_TEST_MISSING_FIELDS': 'Fill in Key / model first',
   'ai.editor.test.error.AI_TEST_UNKNOWN': 'Unknown error, see detail',
 

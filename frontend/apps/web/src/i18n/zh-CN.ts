@@ -473,6 +473,7 @@ const zhCN = {
   'ai.editor.test.error.AI_TEST_TIMEOUT': '请求超时',
   'ai.editor.test.error.AI_TEST_NETWORK': '网络错误',
   'ai.editor.test.error.AI_TEST_RATE_LIMITED': '测试过于频繁,请 1 分钟后再试',
+  'ai.editor.test.error.AI_TEST_INSUFFICIENT_BALANCE': 'AI 提供商余额不足,请充值',
   'ai.editor.test.error.AI_TEST_MISSING_FIELDS': '请先填写 Key / 模型',
   'ai.editor.test.error.AI_TEST_UNKNOWN': '未知错误,见详情',
 
