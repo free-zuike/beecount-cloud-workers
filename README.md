@@ -77,10 +77,30 @@ chmod +x setup.sh
 
 ### 方式二：GitHub Actions 自动部署
 
-1. Fork 仓库
-2. 添加 Secrets：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`
-3. 推送到 main 分支自动部署
-4. 如需备份生成 `db.sqlite3`，需配置 `CLOUDFLARE_API_TOKEN`（D1.Read 权限），否则备份仅生成 `db.json`
+1. **创建 Cloudflare API Token**
+   - 打开 Cloudflare → 右上角头像 → **My Profile** → **API Tokens**
+   - 点击 **Create Token** → **Create Custom Token**
+   - **Token Name**：`beecount-cloud-workers-deploy`（或你喜欢的名字）
+   - **Edit Permissions**：
+     - 搜索 `Workers` → 添加 **Edit**（Worker Scripts 部署权限）
+     - 搜索 `D1` → 添加 **Edit**（D1 数据库创建 + 导出备份所需）
+   - **Zone Resources**：`All zones` 或选择你的域名所属 Zone
+   - **Account Resources**：选择你的账号（必选）
+   - **Continue to summary** → **Create Token**
+   - 复制生成的 Token 值（只显示一次，妥善保存）
+
+2. Fork 仓库到你自己名下
+
+3. 打开 Fork 后的仓库 → **Settings** → **Secrets and Variables** → **Actions** → **New repository secret**
+   - Name：`CLOUDFLARE_API_TOKEN`
+   - Value：粘贴第 1 步复制的 Token
+   - 点 **Add secret**
+
+4. 回到仓库首页，**推送到 main 分支自动部署**
+   - `CLOUDFLARE_ACCOUNT_ID` 和 `D1_DATABASE_ID` 由 CI 通过 Token 自动解析注入，无需手动配置
+   - 部署完成后 GitHub Actions 日志会打印最终域名
+
+> 💡 权限说明：Token 使用 **Workers: Edit + D1: Edit** 权限，覆盖 Worker 部署、D1 数据库创建、D1 Export API 生成 `db.sqlite3` 备份三项操作，Fork 用户开箱即用。
 
 ### 方式三：手动部署
 
