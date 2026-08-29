@@ -157,6 +157,7 @@ export async function upsertDevice(
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
+  REGISTRATION_ENABLED?: string;
 };
 
 const authRouter = new Hono<{ Bindings: Bindings; Variables: { userId: string } }>();
@@ -178,12 +179,13 @@ authRouter.post('/register', zValidator('json', z.object({
     return c.json({ error: 'Too many requests' }, 429);
   }
 
-  // 检查注册是否启用（与原版对齐）
-  const db = c.env.DB;
-  // 检查注册是否启用（与原版对齐：使用环境变量 REGISTRATION_ENABLED）
-  if (process.env.REGISTRATION_ENABLED === 'false') {
+  // 检查注册是否启用（与原版对齐：wrangler.toml [vars] 中 REGISTRATION_ENABLED，默认为 "true"）
+  // Workers 无 process.env，必须读 c.env；字符串比较避免类型陷阱
+  if (c.env.REGISTRATION_ENABLED === 'false') {
     return c.json({ error: 'Registration disabled' }, 403);
   }
+
+  const db = c.env.DB;
 
   const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType, app_version: appVersion, os_version: osVersion, device_model: deviceModel } = c.req.valid('json');
   const email = rawEmail.trim().toLowerCase();

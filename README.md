@@ -115,9 +115,8 @@ npm run deploy
 ## 首次使用
 
 1. 访问 Cloudflare Workers URL
-2. 在 Workers Logs 中查看管理员密码
-3. 登录后修改密码
-4. 设置 `REGISTRATION_ENABLED=false` 环境变量关闭注册（生产环境）
+2. 在初始化页面填写管理员邮箱、密码（至少 6 位）、时区，点击"完成初始化"
+3. 生产环境关闭注册：Cloudflare Dashboard → Workers → Settings → **Variables and Secrets** → 添加变量 `REGISTRATION_ENABLED` = `"false"`（字符串，含双引号）
 
 ## 配置
 

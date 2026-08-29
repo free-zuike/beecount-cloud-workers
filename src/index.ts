@@ -49,6 +49,7 @@ type Bindings = {
   S3_PATH_STYLE?: string;
   S3_CDN_DOMAIN?: string;
   CLOUDFLARE_API_TOKEN?: string;
+  REGISTRATION_ENABLED?: string;
   BACKUP_WORKFLOW?: any;
 };
 
