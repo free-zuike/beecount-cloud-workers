@@ -1,1 +1,0 @@
-This folder contains the built output assets for the worker "beecount-cloud-workers" generated at 2026-08-23T02:33:05.195Z.
