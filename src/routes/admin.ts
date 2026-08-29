@@ -1199,32 +1199,4 @@ adminRouter.post('/data-cleanup/clean', async (c) => {
   return c.json(result);
 });
 
-// ---------------------------------------------------------------------------
-// GET /admin/debug/snapshot/:ledgerExternalId - 调试账本快照
-// ---------------------------------------------------------------------------
-
-adminRouter.get('/debug/snapshot/:ledgerExternalId', async (c) => {
-  const db = c.env.DB;
-  const ledgerExtId = c.req.param('ledgerExternalId');
-  const recentChanges = parseInt(c.req.query('recent_changes') ?? '50', 10);
-
-  const ledger = await db
-    .prepare('SELECT id, external_id, name, user_id FROM ledgers WHERE external_id = ?')
-    .bind(ledgerExtId)
-    .first<{ id: string; external_id: string; name: string; user_id: string }>();
-
-  if (!ledger) return c.json({ error: 'Ledger not found' }, 404);
-
-  const changes = await db
-    .prepare(`SELECT change_id, entity_type, entity_sync_id, action, updated_at
-              FROM sync_changes WHERE ledger_id = ? ORDER BY change_id DESC LIMIT ?`)
-    .bind(ledger.id, recentChanges)
-    .all();
-
-  return c.json({
-    ledger: { id: ledger.external_id, name: ledger.name, user_id: ledger.user_id },
-    recent_changes: changes.results,
-  });
-});
-
 export default adminRouter;
