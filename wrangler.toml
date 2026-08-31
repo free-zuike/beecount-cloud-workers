@@ -30,10 +30,6 @@ database_name = "beecount-cloud"
 name = "BEECOUNT_DO"
 class_name = "BeeCountDO"
 
-[[r2_buckets]]
-binding = "R2"
-bucket_name = "beecount-storage"
-
 [[workflows]]
 name = "backup-workflow"
 binding = "BACKUP_WORKFLOW"
