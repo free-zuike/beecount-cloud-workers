@@ -132,7 +132,8 @@ class S3Service {
     getStorageKey(ledgerId: string, fileId: string, fileName: string, savePath?: string): string {
         const encodedFileName = encodeURIComponent(fileName);
         const basePath = savePath && savePath !== 'custom' ? savePath.replace(/^\/+|\/+$/g, '') : '';
-        return `${basePath ? basePath + '/' : ''}attachments/${ledgerId}/${fileId}/${encodedFileName}`;
+        // R2 格式：attachments/{ledgerId}/{fileId}_{fileName}（与 r2Key 保持一致）
+        return `${basePath ? basePath + '/' : ''}attachments/${ledgerId}/${fileId}_${encodedFileName}`;
     }
 
     async upload(key: string, body: ArrayBuffer, contentType: string): Promise<boolean> {
