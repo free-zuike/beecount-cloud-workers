@@ -45,7 +45,7 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 |--------|------|---------|
 | SQLite 生成 | VACUUM INTO（本地文件系统） | D1 Export API（REST API，不耗 CPU） |
 | 加密 | pyzipper WZ_AES | @zip.js/zip.js AES-256（同一标准） |
-| 附件来源 | 本地文件系统 hardlink | R2 对象存储 |
+| 附件来源 | 本地文件系统 hardlink | S3 兼容对象存储（R2 优先，无 R2 自动回退 S3） |
 | Token 依赖 | 无 | 需 `CLOUDFLARE_API_TOKEN`，否则无 `db.sqlite3` |
 
 ## 功能特性
