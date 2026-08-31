@@ -26,10 +26,6 @@ binding = "DB"
 database_name = "beecount-cloud"
   database_id = "393b596d-31c5-436a-828c-7baab2b113b2"
 
-[[r2_buckets]]
-binding = "R2"
-bucket_name = "beecount-storage"
-
 [[durable_objects.bindings]]
 name = "BEECOUNT_DO"
 class_name = "BeeCountDO"
