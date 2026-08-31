@@ -146,7 +146,7 @@ database_id = "你的数据库ID"
 name = "BEECOUNT_DO"
 class_name = "BeeCountDO"
 
-# R2 对象存储（可选）：无信用卡账户可注释掉以下三行，附件功能将降级
+# R2 对象存储（可选）：无信用卡账户可注释掉以下三行，附件/头像将自动使用 S3 配置存储
 # [[r2_buckets]]
 # binding = "R2"
 # bucket_name = "beecount-storage"
