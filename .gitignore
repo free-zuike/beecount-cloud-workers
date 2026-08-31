@@ -40,3 +40,6 @@ coverage/
 # Backup files downloaded by wrangler r2 object get
 backups/
 beecount/backups/
+
+# Temp wrangler config used during CI for R2 binding
+wrangler.toml.temp
