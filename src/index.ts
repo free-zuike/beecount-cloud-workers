@@ -152,6 +152,7 @@ app.get('/api/v1/version', (c) =>
 app.get('/api/v1/profile/avatar/:userId', async (c) => {
   const userId = c.req.param('userId');
   const db = c.env.DB;
+  const r2 = c.env.R2;
 
   // 速率限制
   const { isRateLimited } = await import('./lib/rate-limit');
