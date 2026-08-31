@@ -177,7 +177,15 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
       },
     });
   }
-  return c.json({ error: 'Storage not configured' }, 503);
+  return downloadFromStorage(db, c.env, key.replace(/^beecount\//, '')).then(async (data) => {
+    if (!data) return c.json({ error: 'Avatar not found' }, 404);
+    return new Response(data, {
+      headers: {
+        'Content-Type': 'image/png',
+        'Cache-Control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
+      },
+    });
+  });
 });
 
 // ---- 请求日志中间件（对齐原版 Python install_request_middleware） ----
