@@ -176,7 +176,7 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
       },
     });
   }
-});
+  return c.json({ error: 'Storage not configured' }, 503);
 });
 
 // ---- 请求日志中间件（对齐原版 Python install_request_middleware） ----
