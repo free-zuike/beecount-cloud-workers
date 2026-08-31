@@ -14,7 +14,7 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 |--------|------|---------|------|
 | 数据库 | PostgreSQL/SQLite | D1 (SQLite) | 备份用 D1 Export API 生成 .sqlite3 文件，与原版 VACUUM INTO 等效 |
 | 布尔存储 | 原生 boolean | INTEGER 0/1 | SQLite 限制 |
-| 附件存储 | 本地文件系统或 S3 | R2 对象存储（可选） | Workers 无本地文件系统；无 R2 账户时附件功能降级为不存储 |
+| 附件存储 | 本地文件系统或 S3 | R2 优先，自动回退所有已配置备份远端（S3/B2/WebDAV/FTP/SFTP） | Workers 无本地文件系统；所有附件/头像统一存储在远端 `beecount/` 子目录下 |
 | 加密备份 | pyzipper (WZ_AES) | @zip.js/zip.js 加密 ZIP | 使用同一 AES-256 标准，备份文件互通 |
 | 密码混淆 | rclone obscure | 无 | 无法运行 rclone CLI |
 | 定时任务 | APScheduler (Python 线程) | Workflows + Cron | Workers 运行时限制 |
@@ -146,10 +146,13 @@ database_id = "你的数据库ID"
 name = "BEECOUNT_DO"
 class_name = "BeeCountDO"
 
-# R2 对象存储（可选）：无信用卡账户可注释掉以下三行，附件/头像将自动使用 S3 配置存储
+# R2 对象存储（可选）：无信用卡账户可注释掉以下三行，附件/头像将自动使用已有的备份远端
 # [[r2_buckets]]
 # binding = "R2"
 # bucket_name = "beecount-storage"
+
+# ⚠️ 若不开 R2 且未配置任何备份远端，附件和头像将不可用（不会报错）
+# 建议：在后台「远端备份」至少配置一个远端（如 Backblaze B2 免费额度），附件和头像即可正常使用
 
 [[workflows]]
 name = "backup-workflow"
