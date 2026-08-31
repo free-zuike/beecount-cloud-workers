@@ -75,6 +75,34 @@ jobs:
           echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
           echo "Resolved account_id: $ACCOUNT_ID"
 
+      - name: Auto-create R2 bucket (if R2 enabled on account)
+        id: r2
+        run: |
+          ACCOUNT_ID="${{ steps.account.outputs.account_id }}"
+          echo "Checking if R2 is available on account..."
+          R2_CHECK=$(curl -s -w "%{http_code}" -o /tmp/r2_check.json \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/r2/buckets")
+          HTTP_CODE=$(echo "$R2_CHECK" | tail -1)
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "R2 is enabled on this account, creating bucket..."
+            CREATE_RESULT=$(curl -s -X POST \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/r2/buckets" \
+              -d '{"name":"beecount-storage"}')
+            if echo "$CREATE_RESULT" | grep -q '"success":true'; then
+              echo "R2 bucket beecount-storage created/already exists"
+              echo "r2_enabled=true" >> $GITHUB_OUTPUT
+            else
+              echo "Failed to create R2 bucket: $CREATE_RESULT"
+              echo "r2_enabled=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "R2 not enabled on this account (HTTP $HTTP_CODE), skipping bucket creation"
+            echo "r2_enabled=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Patch wrangler.toml
         run: |
           DB_ID="${{ steps.d1.outputs.database_id }}"
@@ -86,6 +114,20 @@ jobs:
           # 注入 API token（从 GitHub Secrets 读，不提交到 git）
           sed -i "s|CLOUDFLARE_API_TOKEN = \"ci-injected-at-deploy-time\"|CLOUDFLARE_API_TOKEN = \"${{ secrets.CLOUDFLARE_API_TOKEN }}\"|" wrangler.toml
           grep "database_id\|CLOUDFLARE_API_TOKEN\|CLOUDFLARE_ACCOUNT_ID" wrangler.toml
+
+      - name: Conditionally add R2 bucket binding
+        if: steps.r2.outputs.r2_enabled == 'true'
+        run: |
+          # 如果 wrangler.toml 中没有 r2_buckets 配置，则添加
+          if ! grep -q 'r2_buckets' wrangler.toml; then
+            echo "" >> wrangler.toml
+            echo "[[r2_buckets]]" >> wrangler.toml
+            echo 'binding = "R2"' >> wrangler.toml
+            echo 'bucket_name = "beecount-storage"' >> wrangler.toml
+            echo "R2 bucket binding added to wrangler.toml"
+          else
+            echo "R2 bucket already configured in wrangler.toml"
+          fi
 
       - name: Build frontend
         run: cd frontend && pnpm install --no-frozen-lockfile && pnpm build

@@ -152,7 +152,6 @@ app.get('/api/v1/version', (c) =>
 app.get('/api/v1/profile/avatar/:userId', async (c) => {
   const userId = c.req.param('userId');
   const db = c.env.DB;
-  const r2 = c.env.R2;
 
   // 速率限制
   const { isRateLimited } = await import('./lib/rate-limit');
@@ -166,18 +165,7 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
 
   const key = `avatars/${userId}/${profile.avatar_file_id}`;
 
-  // 优先 R2，其次遍历所有远端
-  if (r2) {
-    const obj = await r2.get(key);
-    if (!obj) return c.json({ error: 'Avatar not found' }, 404);
-    return new Response(obj.body, {
-      headers: {
-        'Content-Type': obj.httpMetadata?.contentType || 'image/png',
-        'Cache-Control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
-      },
-    });
-  }
-
+  // 从所有可用存储下载（R2优先，回退 S3/WebDAV/FTP/SFTP；兼容旧数据无前缀）
   const body = await downloadFromStorage(db, c.env, key);
   if (!body) return c.json({ error: 'Avatar not found' }, 404);
   return new Response(body, {

@@ -3,14 +3,20 @@
  *
  * 统一调用所有已配置的远端（R2/S3/B2/WebDAV/FTP/SFTP）进行文件存取。
  * 优先级：R2（Worker 绑定）> S3/B2 > WebDAV > FTP > SFTP
+ * 所有 key 统一以 beecount/ 为前缀，避免污染远端根目录。
  */
 import { serverLogger } from './logger';
-import { signRequest } from './s3';
 import { uploadToS3, downloadFromS3, deleteS3Object } from './s3';
 import { createFtpClient } from './ftp';
 import { createSftpClient } from './sftp';
 
-const ENCRYPTED_SKIP = 'encrypted skip';
+// 统一前缀，所有存储操作都在 beecount/ 子目录下
+const PREFIX = 'beecount/';
+
+/** 给 key 加上统一前缀（避免空 key 时出问题） */
+function prefixKey(key: string): string {
+  return PREFIX + key.replace(/^\//, '');
+}
 
 // 安全解析 config_summary
 function parseConfig(summary: string): Record<string, any> {
@@ -78,7 +84,7 @@ export async function uploadToStorage(
   // 1. R2（Worker 绑定，最高优先级）
   if (env.R2) {
     try {
-      await env.R2.put(key, body, { httpMetadata: { contentType } });
+      await env.R2.put(prefixKey(key), body, { httpMetadata: { contentType } });
       log(`R2 upload ok: ${key}`);
       return { ok: true, key };
     } catch (e) { log(`R2 upload failed: ${(e as Error).message}`); }
@@ -110,12 +116,18 @@ export async function downloadFromStorage(
 ): Promise<Uint8Array | null> {
   const log = (msg: string) => serverLogger.info('storage-adapter', msg);
 
-  // 1. R2
+  // 1. R2 — 优先新前缀，回退旧路径（兼容历史数据）
   if (env.R2) {
-    const obj = await env.R2.get(key);
+    const obj = await env.R2.get(prefixKey(key));
     if (obj) {
-      log(`R2 download ok: ${key}`);
+      log(`R2 download ok (new prefix): ${key}`);
       return new Uint8Array(await obj.arrayBuffer());
+    }
+    // 回退：尝试不带 beecount/ 前缀的旧路径
+    const oldObj = await env.R2.get(key);
+    if (oldObj) {
+      log(`R2 download ok (legacy): ${key}`);
+      return new Uint8Array(await oldObj.arrayBuffer());
     }
   }
 
@@ -145,7 +157,7 @@ export async function deleteFromStorage(
   const log = (msg: string) => serverLogger.info('storage-adapter', msg);
 
   if (env.R2) {
-    try { await env.R2.delete(key); log(`R2 delete ok: ${key}`); } catch {}
+    try { await env.R2.delete(prefixKey(key)); log(`R2 delete ok: ${key}`); } catch {}
   }
 
   const remotes = filterUploadable(await getAllEnabledRemotes(db));
@@ -164,7 +176,7 @@ async function uploadToRemote(rc: RemoteEntry, key: string, body: Uint8Array, co
   const bt = rc.backend_type;
 
   if (bt === 's3' || bt === 'b2') {
-    const p = toS3UploadParams(rc, key, contentType, body);
+    const p = toS3UploadParams(rc, prefixKey(key), contentType, body);
     if (!p.bucket || !p.accessKey || !p.secretKey) return { ok: false, message: 'S3 config incomplete' };
     const result = await uploadToS3(p.endpoint, p.bucket, p.accessKey, p.secretKey, p.region, p.key, p.body, p.contentType);
     return result.ok ? { ok: true, message: 'ok' } : { ok: false, message: result.message };
@@ -177,7 +189,7 @@ async function uploadToRemote(rc: RemoteEntry, key: string, body: Uint8Array, co
     if (!url || !user) return { ok: false, message: 'WebDAV config incomplete' };
     try {
       const auth = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
-      const fileUrl = `${url}/${key.replace(/^\//, '')}`;
+      const fileUrl = `${url}/${prefixKey(key).replace(/^\//, '')}`;
       const resp = await fetch(fileUrl, { method: 'PUT', headers: { 'Authorization': auth, 'Content-Type': contentType }, body });
       return resp.ok ? { ok: true, message: 'ok' } : { ok: false, message: `HTTP ${resp.status}` };
     } catch (e) { return { ok: false, message: (e as Error).message }; }
@@ -217,7 +229,7 @@ async function downloadFromRemote(rc: RemoteEntry, key: string): Promise<{ ok: b
   const bt = rc.backend_type;
 
   if (bt === 's3' || bt === 'b2') {
-    const p = toS3UploadParams(rc, key, 'application/octet-stream', new Uint8Array(0));
+    const p = toS3UploadParams(rc, prefixKey(key), 'application/octet-stream', new Uint8Array(0));
     if (!p.bucket || !p.accessKey || !p.secretKey) return { ok: false };
     try {
       const body = await downloadFromS3(p.endpoint, p.bucket, p.accessKey, p.secretKey, p.region, p.key);
@@ -232,7 +244,7 @@ async function downloadFromRemote(rc: RemoteEntry, key: string): Promise<{ ok: b
     if (!url) return { ok: false };
     try {
       const auth = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
-      const resp = await fetch(`${url}/${key.replace(/^\//, '')}`, { headers: { 'Authorization': auth } });
+      const resp = await fetch(`${url}/${prefixKey(key).replace(/^\//, '')}`, { headers: { 'Authorization': auth } });
       if (!resp.ok) return { ok: false };
       return { ok: true, body: new Uint8Array(await resp.arrayBuffer()) };
     } catch { return { ok: false }; }
@@ -247,7 +259,7 @@ async function deleteFromRemote(rc: RemoteEntry, key: string): Promise<{ ok: boo
   const bt = rc.backend_type;
 
   if (bt === 's3' || bt === 'b2') {
-    const p = toS3UploadParams(rc, key, 'application/octet-stream', new Uint8Array(0));
+    const p = toS3UploadParams(rc, prefixKey(key), 'application/octet-stream', new Uint8Array(0));
     if (!p.bucket || !p.accessKey || !p.secretKey) return { ok: false };
     try {
       const ok = await deleteS3Object(p.endpoint, p.bucket, p.accessKey, p.secretKey, p.region, p.key);
@@ -262,7 +274,7 @@ async function deleteFromRemote(rc: RemoteEntry, key: string): Promise<{ ok: boo
     if (!url) return { ok: false };
     try {
       const auth = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
-      const resp = await fetch(`${url}/${key.replace(/^\//, '')}`, { method: 'DELETE', headers: { 'Authorization': auth } });
+      const resp = await fetch(`${url}/${prefixKey(key).replace(/^\//, '')}`, { method: 'DELETE', headers: { 'Authorization': auth } });
       return { ok: resp.ok || resp.status === 404 };
     } catch { return { ok: false }; }
   }
@@ -276,7 +288,7 @@ async function deleteFromRemote(rc: RemoteEntry, key: string): Promise<{ ok: boo
       });
       let prefix = (c.savePath && c.savePath !== 'custom') ? c.savePath.replace(/^\/+|\/+$/g, '') + '/' :
                    (c.root_path ? c.root_path.replace(/^\/+|\/+$/g, '') + '/' : '');
-      const ok = await client.delete(prefix + key).catch(() => false);
+      const ok = await client.delete(prefix + prefixKey(key)).catch(() => false);
       return { ok };
     } catch { return { ok: false }; }
   }
@@ -289,7 +301,7 @@ async function deleteFromRemote(rc: RemoteEntry, key: string): Promise<{ ok: boo
       });
       let prefix = (c.savePath && c.savePath !== 'custom') ? c.savePath.replace(/^\/+|\/+$/g, '') + '/' :
                    (c.root_path ? c.root_path.replace(/^\/+|\/+$/g, '') + '/' : '');
-      const ok = await client.delete(prefix + key).catch(() => false);
+      const ok = await client.delete(prefix + prefixKey(key)).catch(() => false);
       return { ok };
     } catch { return { ok: false }; }
   }
