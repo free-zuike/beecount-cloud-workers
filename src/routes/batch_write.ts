@@ -18,8 +18,7 @@ import { Hono } from 'hono';
 import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { getFirstEnabledS3Config } from './sys_config';
-import { signRequest } from '../lib/s3';
+import { uploadToStorage, downloadFromStorage, deleteFromStorage } from '../lib/storage-adapter';
 import { randomUUID } from 'crypto';
 import { insertAuditLog } from '../lib/audit';
 
@@ -111,35 +110,10 @@ async function consumeAiImageAsAttachment(
     .first<{ user_id: string; mime_type: string; size_bytes: number; r2_key: string }>();
   let imageBytes: Uint8Array | null = null;
   if (cacheRow && cacheRow.user_id === userId) {
-    if (env.R2) {
-      const obj = await env.R2.get(cacheRow.r2_key);
-      if (obj) imageBytes = new Uint8Array(await obj.arrayBuffer());
-    } else {
-      // S3 回退：从 S3 读取缓存图片
-      try {
-        const s3Config = await getFirstEnabledS3Config(db, env as any);
-        if (s3Config) {
-          const { url } = await signRequest(s3Config.accessKeyId, s3Config.secretAccessKey, s3Config.region, s3Config.endpoint, s3Config.bucketName, cacheRow.r2_key, 'GET', '', 0);
-          const resp = await fetch(url);
-          if (resp.ok) imageBytes = new Uint8Array(await resp.arrayBuffer());
-        }
-      } catch {}
-    }
+    imageBytes = await downloadFromStorage(db, env, cacheRow.r2_key);
   }
-  // 清理缓存文件（R2 或 S3）
-  if (cacheRow?.r2_key) {
-    if (env.R2) {
-      await env.R2.delete(cacheRow.r2_key).catch(() => {});
-    } else {
-      try {
-        const s3Config = await getFirstEnabledS3Config(db, env as any);
-        if (s3Config) {
-          const { url, headers } = await signRequest(s3Config.accessKeyId, s3Config.secretAccessKey, s3Config.region, s3Config.endpoint, s3Config.bucketName, cacheRow.r2_key, 'DELETE', '', 0);
-          await fetch(url, { method: 'DELETE', headers }).catch(() => {});
-        }
-      } catch {}
-    }
-  }
+  // 清理缓存文件
+  if (cacheRow?.r2_key) await deleteFromStorage(db, env, cacheRow.r2_key);
   if (!imageBytes) {
     // 缓存已过期/异用户/无 R2：删 DB 缓存行后返回 null
     await db.prepare('DELETE FROM ai_image_cache WHERE image_id = ?').bind(attachImageId).run().catch(() => {});
@@ -170,14 +144,8 @@ async function consumeAiImageAsAttachment(
   if (env.R2) {
     await env.R2.put(r2Key, imageBytes, { httpMetadata: { contentType: mime } });
   } else {
-    // S3 回退
-    try {
-      const s3Config = await getFirstEnabledS3Config(db, env as any);
-      if (s3Config) {
-        const { url, headers } = await signRequest(s3Config.accessKeyId, s3Config.secretAccessKey, s3Config.region, s3Config.endpoint, s3Config.bucketName, r2Key, 'PUT', mime, imageBytes.byteLength);
-        await fetch(url, { method: 'PUT', headers: { ...headers, 'Content-Type': mime }, body: imageBytes });
-      }
-    } catch {}
+    const uploadResult = await uploadToStorage(db, env, r2Key, imageBytes, mime);
+    if (!uploadResult.ok) { /* 附件上传失败不阻断主流程 */ }
   }
   // 删缓存 + 插附件同事务原子写入
   await db.batch([

@@ -9,6 +9,7 @@ import { processBackupSchedule } from './services/backup-scheduler';
 import { initLogger, serverLogger } from './lib/logger';
 import { getFirstEnabledS3Config } from './routes/sys_config';
 import { signRequest } from './lib/s3';
+import { downloadFromStorage, deleteFromStorage } from './lib/storage-adapter';
 
 import setupRouter from './routes/setup';
 import authRouter from './routes/auth';
@@ -165,7 +166,7 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
 
   const key = `avatars/${userId}/${profile.avatar_file_id}`;
 
-  // 优先从 R2 读取，其次 S3
+  // 优先 R2，其次遍历所有远端
   if (r2) {
     const obj = await r2.get(key);
     if (!obj) return c.json({ error: 'Avatar not found' }, 404);
@@ -177,16 +178,11 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
     });
   }
 
-  // S3 回退
-  const s3Config = await getFirstEnabledS3Config(db, c.env);
-  if (!s3Config) return c.json({ error: 'Storage not configured' }, 500);
-  const { url, headers } = await signRequest(s3Config.accessKeyId, s3Config.secretAccessKey, s3Config.region, s3Config.endpoint, s3Config.bucketName, key, 'GET', '', 0);
-  const resp = await fetch(url, { headers });
-  if (!resp.ok) return c.json({ error: 'Avatar not found' }, 404);
-  const body = await resp.arrayBuffer();
+  const body = await downloadFromStorage(db, c.env, key);
+  if (!body) return c.json({ error: 'Avatar not found' }, 404);
   return new Response(body, {
     headers: {
-      'Content-Type': resp.headers.get('Content-Type') || 'image/png',
+      'Content-Type': 'image/png',
       'Cache-Control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
     },
   });

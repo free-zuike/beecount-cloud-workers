@@ -5,10 +5,9 @@ import { Hono } from 'hono';
 import { serverLogger } from '../lib/logger';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { hashPassword } from '../auth';
+import { hashPassword, verifyPassword } from '../auth';
 import { DEFAULT_AI_CONFIG } from '../lib/defaults';
-import { getFirstEnabledS3Config } from './sys_config';
-import { signRequest } from '../lib/s3';
+import { uploadToStorage, downloadFromStorage, deleteFromStorage } from '../lib/storage-adapter';
 
 type Bindings = {
   DB: D1Database;
@@ -29,123 +28,115 @@ function nowUtc(): string {
 }
 
 // appearance 做纯 JSON 透传，与原版 Python _dump_appearance_json / _parse_appearance_json 对齐
+const APPEARANCE_KEYS = ['theme_primary_color', 'income_is_red', 'sidebar_collapsed', 'compact_mode'] as const;
 
-const ProfilePatchSchema = z.object({
-  display_name: z.string().nullable().optional(),
-  income_is_red: z.boolean().nullable().optional(),
-  theme_primary_color: z.string().nullable().optional(),
-  appearance: z.record(z.unknown()).nullable().optional(),
-  ai_config: z.record(z.unknown()).nullable().optional(),
-  primary_currency: z.string().nullable().optional(),
-});
-
-// GET /me
 profileRouter.get('/me', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
-  const user = await db.prepare('SELECT email FROM users WHERE id = ?').bind(userId).first<{ email: string }>();
-  const profile = await db.prepare('SELECT * FROM user_profiles WHERE user_id = ?').bind(userId).first() as any;
-
+  const user = await db.prepare(
+    `SELECT id, email, display_name, income_is_red, theme_primary_color, appearance_json
+     FROM users u JOIN user_profiles up ON u.id = up.user_id WHERE u.id = ?`,
+  ).bind(userId).first<{ id: string; email: string; display_name: string | null; income_is_red: boolean | null; theme_primary_color: string | null; appearance_json: string | null }>();
+  if (!user) return c.json({ error: 'User not found' }, 404);
   return c.json({
-    user_id: userId,
-    email: user?.email || '',
-    display_name: profile?.display_name || null,
-    avatar_url: profile?.avatar_file_id ? `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${userId}?v=${profile.avatar_version}` : null,
-    avatar_version: profile?.avatar_version || 0,
-    income_is_red: profile?.income_is_red != null ? Boolean(profile.income_is_red) : null,
-    theme_primary_color: profile?.theme_primary_color,
-    appearance: profile?.appearance_json ? JSON.parse(profile.appearance_json) : null,
-    ai_config: profile?.ai_config_json ? JSON.parse(profile.ai_config_json) : null,
-    primary_currency: profile?.primary_currency || null,
+    id: user.id,
+    email: user.email,
+    display_name: user.display_name,
+    income_is_red: user.income_is_red,
+    theme_primary_color: user.theme_primary_color,
+    appearance_json: user.appearance_json ? JSON.parse(user.appearance_json) : {},
+    avatar_url: `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${userId}`,
   });
 });
 
-// PATCH /me
-profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => {
+profileRouter.patch('/me', zValidator('json', z.object({
+  display_name: z.string().min(1).max(50).optional(),
+  income_is_red: z.boolean().optional(),
+  theme_primary_color: z.string().optional(),
+  appearance_json: z.record(z.string(), z.any()).optional(),
+})), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const body = c.req.valid('json');
-  const serverNow = nowUtc();
-
-  let profile = await db.prepare('SELECT * FROM user_profiles WHERE user_id = ?').bind(userId).first() as any;
-  if (!profile) {
-    await db.prepare('INSERT INTO user_profiles (user_id) VALUES (?)').bind(userId).run();
-    profile = await db.prepare('SELECT * FROM user_profiles WHERE user_id = ?').bind(userId).first() as any;
-  }
-
-  const updates: string[] = [];
-  const values: unknown[] = [];
-
-  if (body.display_name !== undefined) { updates.push('display_name = ?'); values.push(body.display_name); }
-  if (body.income_is_red !== undefined) { updates.push('income_is_red = ?'); values.push(body.income_is_red ? 1 : 0); }
-  if (body.theme_primary_color !== undefined) { updates.push('theme_primary_color = ?'); values.push(body.theme_primary_color); }
-  if (body.appearance !== undefined) { updates.push('appearance_json = ?'); values.push(body.appearance ? JSON.stringify(body.appearance) : null); }
-  if (body.ai_config !== undefined) { updates.push('ai_config_json = ?'); values.push(body.ai_config ? JSON.stringify(body.ai_config) : null); }
-  if (body.primary_currency !== undefined) { updates.push('primary_currency = ?'); values.push(body.primary_currency?.toUpperCase() || null); }
-
-  if (updates.length > 0) {
-    updates.push('updated_at = ?');
-    values.push(serverNow);
+  const fields: string[] = [];
+  const values: unknown[] = [userId];
+  if (body.display_name !== undefined) { fields.push('display_name = ?'); values.push(body.display_name); }
+  if (body.income_is_red !== undefined) { fields.push('income_is_red = ?'); values.push(body.income_is_red); }
+  if (body.theme_primary_color !== undefined) { fields.push('theme_primary_color = ?'); values.push(body.theme_primary_color); }
+  if (body.appearance_json !== undefined) { fields.push('appearance_json = ?'); values.push(JSON.stringify(body.appearance_json)); }
+  if (fields.length > 0) {
+    fields.push('updated_at = ?');
+    values.push(nowUtc());
     values.push(userId);
-    await db.prepare(`UPDATE user_profiles SET ${updates.join(', ')} WHERE user_id = ?`).bind(...values).run();
+    await db.prepare(`UPDATE user_profiles SET ${fields.join(', ')} WHERE user_id = ?`).bind(...values).run();
   }
-
-  const updated = await db.prepare('SELECT * FROM user_profiles WHERE user_id = ?').bind(userId).first() as any;
-  const user = await db.prepare('SELECT email FROM users WHERE id = ?').bind(userId).first<{ email: string }>();
-
-  // 广播 profile_change 给其他端实时同步（与原版对齐：发送完整 payload）
-  if (updates.length > 0) {
-    const profilePayload = {
-      avatar_version: updated?.avatar_version ?? 0,
-      display_name: updated?.display_name ?? null,
-      income_is_red: updated?.income_is_red ?? null,
-      theme_primary_color: updated?.theme_primary_color ?? null,
-      appearance: (() => { try { return updated?.appearance_json ? JSON.parse(updated.appearance_json) : null; } catch { return null; } })(),
-      primary_currency: updated?.primary_currency ?? null,
-    };
-    try {
-      const { getWsManager } = await import('../lib/ws-manager');
-      await getWsManager().broadcastToUser(userId, { type: 'profile_change', ...profilePayload });
-    } catch {}
-    try {
-      const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
-      const doStub = c.env.BEECOUNT_DO.get(doId);
-      await doStub.fetch(new Request('https://dummy/broadcast', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: JSON.stringify({ type: 'profile_change', ...profilePayload }) }),
-      }));
-    } catch {}
-  }
-
+  const profile = await db.prepare(
+    `SELECT id, display_name, income_is_red, theme_primary_color, appearance_json, avatar_version FROM user_profiles WHERE user_id = ?`,
+  ).bind(userId).first();
+  if (!profile) return c.json({ error: 'Profile not found' }, 404);
   return c.json({
-    user_id: userId,
-    email: user?.email || '',
-    display_name: updated?.display_name || null,
-    avatar_url: updated?.avatar_file_id ? `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${userId}?v=${updated.avatar_version}` : null,
-    avatar_version: updated?.avatar_version || 0,
-    income_is_red: updated?.income_is_red != null ? Boolean(updated.income_is_red) : null,
-    theme_primary_color: updated?.theme_primary_color,
-    appearance: updated?.appearance_json ? JSON.parse(updated.appearance_json) : null,
-    ai_config: updated?.ai_config_json ? JSON.parse(updated.ai_config_json) : null,
-    primary_currency: updated?.primary_currency || null,
+    id: userId,
+    display_name: profile.display_name,
+    income_is_red: profile.income_is_red,
+    theme_primary_color: profile.theme_primary_color,
+    appearance_json: profile.appearance_json ? JSON.parse(profile.appearance_json as string) : {},
+    avatar_url: `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${userId}?v=${profile.avatar_version ?? 1}`,
+    avatar_version: profile.avatar_version ?? 1,
   });
 });
 
-// POST /me/change-password
-profileRouter.post('/me/change-password', zValidator('json', z.object({
-  current_password: z.string(),
+profileRouter.put('/me', zValidator('json', z.object({
+  email: z.string().email().optional(),
+  display_name: z.string().min(1).max(50).optional(),
+  income_is_red: z.boolean().optional(),
+  theme_primary_color: z.string().optional(),
+  appearance_json: z.record(z.string(), z.any()).optional(),
+})), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const body = c.req.valid('json');
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  if (body.email !== undefined) { fields.push('email = ?'); values.push(body.email); }
+  if (body.display_name !== undefined) { fields.push('display_name = ?'); values.push(body.display_name); }
+  if (body.income_is_red !== undefined) { fields.push('income_is_red = ?'); values.push(body.income_is_red); }
+  if (body.theme_primary_color !== undefined) { fields.push('theme_primary_color = ?'); values.push(body.theme_primary_color); }
+  if (body.appearance_json !== undefined) { fields.push('appearance_json = ?'); values.push(JSON.stringify(body.appearance_json)); }
+  if (fields.length > 0) {
+    fields.push('updated_at = ?');
+    values.push(nowUtc());
+    values.push(userId);
+    await db.prepare(`UPDATE users SET ${fields.filter((_, i) => i % 2 === 0).join(', ')} WHERE id = ?`).bind(...values).run();
+  }
+  const profile = await db.prepare(
+    `SELECT up.display_name, up.income_is_red, up.theme_primary_color, up.appearance_json, up.avatar_version, u.email
+     FROM user_profiles up JOIN users u ON up.user_id = u.id WHERE up.user_id = ?`,
+  ).bind(userId).first<{ display_name: string | null; income_is_red: boolean | null; theme_primary_color: string | null; appearance_json: string | null; avatar_version: number; email: string }>();
+  if (!profile) return c.json({ error: 'Profile not found' }, 404);
+  return c.json({
+    id: userId,
+    email: profile.email,
+    display_name: profile.display_name,
+    income_is_red: profile.income_is_red,
+    theme_primary_color: profile.theme_primary_color,
+    appearance_json: profile.appearance_json ? JSON.parse(profile.appearance_json as string) : {},
+    avatar_url: `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${userId}?v=${profile.avatar_version ?? 1}`,
+    avatar_version: profile.avatar_version ?? 1,
+  });
+});
+
+profileRouter.post('/change-password', zValidator('json', z.object({
+  current_password: z.string().min(1),
   new_password: z.string().min(6),
 })), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
-  const { current_password, new_password } = c.req.valid('json');
+  const body = c.req.valid('json');
   const user = await db.prepare('SELECT password_hash FROM users WHERE id = ?').bind(userId).first<{ password_hash: string }>();
   if (!user) return c.json({ error: 'User not found' }, 404);
-  const { verifyPassword } = await import('../auth');
-  const valid = await verifyPassword(user.password_hash, current_password);
+  const valid = await verifyPassword(user.password_hash, body.current_password);
   if (!valid) return c.json({ error: 'Invalid current password' }, 401);
-  const hash = await hashPassword(new_password);
+  const hash = await hashPassword(body.new_password);
   await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(hash, userId).run();
   return c.json({ success: true });
 });
@@ -154,11 +145,10 @@ const ALLOWED_MIME: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png':
 const FILE_EXT_MIME: Record<string, string> = { 'jpg': 'jpg', 'jpeg': 'jpg', 'png': 'png', 'webp': 'webp' };
 const MAX_AVATAR_BYTES = 1 * 1024 * 1024;
 
-// POST /avatar - 上传头像
+// POST /avatar - 上传头像（支持 R2 + 所有备份远端）
 profileRouter.post('/avatar', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
-  const r2 = c.env.R2;
   if (!userId) return c.json({ error: 'Unauthorized' }, 401);
 
   try {
@@ -169,11 +159,7 @@ profileRouter.post('/avatar', async (c) => {
     const mimeLower = (file.type || '').toLowerCase();
     const fileName = (file.name || '').toLowerCase();
     const fileExt = fileName.includes('.') ? fileName.split('.').pop() || '' : '';
-    const extFromMime = ALLOWED_MIME[mimeLower];
-    const extFromFile = FILE_EXT_MIME[fileExt];
-    const ext = extFromMime || extFromFile;
-    const actualMime = extFromMime ? mimeLower : extFromFile ? `image/${extFromFile}` : '';
-    serverLogger.info('src.routers.profile', '[Avatar] Upload: name=', file.name, 'type=', file.type, 'ext=', fileExt, 'size=', file.size);
+    const ext = ALLOWED_MIME[mimeLower] || FILE_EXT_MIME[fileExt];
     if (!ext) return c.json({ error: `Profile avatar format invalid: ${mimeLower || fileExt || 'unknown'}` }, 400);
 
     const fileBuffer = await file.arrayBuffer();
@@ -187,28 +173,12 @@ profileRouter.post('/avatar', async (c) => {
     // 删除旧头像
     const oldProfile = await db.prepare('SELECT avatar_file_id FROM user_profiles WHERE user_id = ?').bind(userId).first<{ avatar_file_id: string }>();
     if (oldProfile?.avatar_file_id) {
-      if (r2) {
-        try { await r2.delete(`avatars/${userId}/${oldProfile.avatar_file_id}`); } catch {}
-      } else {
-        const s3Config = await getFirstEnabledS3Config(db, c.env);
-        if (s3Config) {
-          try {
-            const { url, headers } = await signRequest(s3Config.accessKeyId, s3Config.secretAccessKey, s3Config.region, s3Config.endpoint, s3Config.bucketName, `avatars/${userId}/${oldProfile.avatar_file_id}`, 'DELETE', '', 0);
-            await fetch(url, { method: 'DELETE', headers });
-          } catch {}
-        }
-      }
+      await deleteFromStorage(db, c.env, `avatars/${userId}/${oldProfile.avatar_file_id}`);
     }
 
-    // 上传：优先 R2，其次 S3
-    if (r2) {
-      await r2.put(storagePath, fileBuffer, { httpMetadata: { contentType: mimeLower } });
-    } else {
-      const s3Config = await getFirstEnabledS3Config(db, c.env);
-      if (!s3Config) return c.json({ error: 'Avatar storage not configured (no R2 or S3)' }, 503);
-      const { url, headers } = await signRequest(s3Config.accessKeyId, s3Config.secretAccessKey, s3Config.region, s3Config.endpoint, s3Config.bucketName, storagePath, 'PUT', mimeLower, fileBuffer.byteLength);
-      await fetch(url, { method: 'PUT', headers: { ...headers, 'Content-Type': mimeLower }, body: fileBuffer });
-    }
+    // 上传到新位置
+    const uploadResult = await uploadToStorage(db, c.env, storagePath, new Uint8Array(fileBuffer), mimeLower);
+    if (!uploadResult.ok) return c.json({ error: 'Avatar upload failed (no available storage)' }, 503);
 
     const serverNow = nowUtc();
     await db.prepare('UPDATE user_profiles SET avatar_file_id = ?, avatar_version = avatar_version + 1, updated_at = ? WHERE user_id = ?').bind(fileId, serverNow, userId).run();
@@ -216,8 +186,8 @@ profileRouter.post('/avatar', async (c) => {
     const profile = await db.prepare('SELECT avatar_version FROM user_profiles WHERE user_id = ?').bind(userId).first<{ avatar_version: number }>();
     const ver = profile?.avatar_version ?? 1;
 
-    // 广播 profile_change 给其他端实时同步（与原版对齐：发送完整 payload）
-    const profileData = await db.prepare('SELECT display_name, income_is_red, theme_primary_color, appearance_json FROM user_profiles WHERE user_id = ?').bind(userId).first<{ display_name: string | null; income_is_red: boolean | null; theme_primary_color: string | null; appearance_json: string | null }>();
+    // 广播 profile_change
+    const profileData = await db.prepare('SELECT display_name, income_is_red, theme_primary_color, appearance_json FROM user_profiles WHERE user_id = ?').bind(userId).first();
     const avatarPayload = {
       avatar_version: ver,
       display_name: profileData?.display_name ?? null,
