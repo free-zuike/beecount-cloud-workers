@@ -176,11 +176,7 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
       },
     });
   }
-    headers: {
-      'Content-Type': 'image/png',
-      'Cache-Control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
-    },
-  });
+});
 });
 
 // ---- 请求日志中间件（对齐原版 Python install_request_middleware） ----
