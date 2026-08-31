@@ -550,9 +550,13 @@ attachmentsRouter.get('/:id', async (c) => {
         // 尝试多种存储路径格式（兼容不同版本的 storage_path）
         const normalizedPath = row.storage_path.replace(/^attachments\/attachments\//, 'attachments/');
         const possiblePaths = [
-            normalizedPath,
-            row.storage_path,
+            `beecount/${normalizedPath}`,   // 新前缀
+            normalizedPath,                 // 原路径
+            row.storage_path,               // 原始 storage_path
+            `beecount/${row.storage_path}`, // 新前缀 + 原始
+            `beecount/attachments/${row.ledger_external_id}/${row.id}_${row.file_name}`,
             `attachments/${row.ledger_external_id}/${row.id}_${row.file_name}`,
+            `beecount/attachments/${row.id}_${row.file_name}`,
             `attachments/${row.id}_${row.file_name}`,
         ];
         for (const key of possiblePaths) {
