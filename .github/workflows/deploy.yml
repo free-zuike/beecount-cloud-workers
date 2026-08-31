@@ -145,4 +145,11 @@ jobs:
         run: mv frontend/apps/web/dist/index.html frontend/apps/web/dist/app.html
 
       - name: Deploy
-        run: npx wrangler deploy --config wrangler.toml.temp 2>/dev/null || npx wrangler deploy
+        run: |
+          if [ -f wrangler.toml.temp ]; then
+            echo "Using wrangler.toml.temp for deploy (with R2)"
+            npx wrangler deploy --config wrangler.toml.temp
+          else
+            echo "Using wrangler.toml for deploy (no R2)"
+            npx wrangler deploy
+          fi
