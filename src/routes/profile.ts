@@ -34,7 +34,7 @@ profileRouter.get('/me', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const user = await db.prepare(
-    `SELECT id, email, display_name, income_is_red, theme_primary_color, appearance_json
+    `SELECT u.id, u.email, up.display_name, up.income_is_red, up.theme_primary_color, up.appearance_json
      FROM users u JOIN user_profiles up ON u.id = up.user_id WHERE u.id = ?`,
   ).bind(userId).first<{ id: string; email: string; display_name: string | null; income_is_red: boolean | null; theme_primary_color: string | null; appearance_json: string | null }>();
   if (!user) return c.json({ error: 'User not found' }, 404);
