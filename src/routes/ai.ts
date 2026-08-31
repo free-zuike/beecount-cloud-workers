@@ -744,12 +744,22 @@ ${formatCurrencyHint(accounts, ledgerCurrency)}
     return c.json({ error: { code: 'AI_PROVIDER_ERROR', message: errorMsg.slice(0, 200) } }, 502);
   }
 
-  // 7. 缓存 image bytes（R2 + D1 元数据），返回 image_id 供 batch 保存时转附件
+  // 7. 缓存 image bytes（R2 优先，无 R2 则用 S3）
   const imageId = randomUUID();
   const r2Key = `ai-tmp/${userId}/${imageId}`;
   if (c.env.R2) {
     try {
       await c.env.R2.put(r2Key, imageBytes, { httpMetadata: { contentType: mime } });
+    } catch { /* 缓存失败不阻断解析 */ }
+  } else {
+    try {
+      const { getFirstEnabledS3Config } = await import('./sys_config');
+      const { signRequest } = await import('../lib/s3');
+      const s3Config = await getFirstEnabledS3Config(db, c.env);
+      if (s3Config) {
+        const { url, headers } = await signRequest(s3Config.accessKeyId, s3Config.secretAccessKey, s3Config.region, s3Config.endpoint, s3Config.bucketName, r2Key, 'PUT', mime, imageBytes.byteLength);
+        await fetch(url, { method: 'PUT', headers: { ...headers, 'Content-Type': mime }, body: imageBytes });
+      }
     } catch { /* 缓存失败不阻断解析 */ }
   }
   await db.prepare(

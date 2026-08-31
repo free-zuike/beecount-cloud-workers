@@ -7,6 +7,8 @@ import { authMiddleware } from './middleware/auth';
 import { spaMiddleware } from './middleware/spa';
 import { processBackupSchedule } from './services/backup-scheduler';
 import { initLogger, serverLogger } from './lib/logger';
+import { getFirstEnabledS3Config } from './routes/sys_config';
+import { signRequest } from './lib/s3';
 
 import setupRouter from './routes/setup';
 import authRouter from './routes/auth';
@@ -158,17 +160,33 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
     return c.json({ error: 'Rate limit exceeded' }, 429);
   }
 
-  if (!r2) return c.json({ error: 'Storage not configured' }, 500);
-
   const profile = await db.prepare('SELECT avatar_file_id, avatar_version FROM user_profiles WHERE user_id = ?').bind(userId).first<{ avatar_file_id: string; avatar_version: number }>();
   if (!profile?.avatar_file_id) return c.json({ error: 'Avatar not found' }, 404);
 
-  const obj = await r2.get(`avatars/${userId}/${profile.avatar_file_id}`);
-  if (!obj) return c.json({ error: 'Avatar not found' }, 404);
+  const key = `avatars/${userId}/${profile.avatar_file_id}`;
 
-  return new Response(obj.body, {
+  // 优先从 R2 读取，其次 S3
+  if (r2) {
+    const obj = await r2.get(key);
+    if (!obj) return c.json({ error: 'Avatar not found' }, 404);
+    return new Response(obj.body, {
+      headers: {
+        'Content-Type': obj.httpMetadata?.contentType || 'image/png',
+        'Cache-Control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
+      },
+    });
+  }
+
+  // S3 回退
+  const s3Config = await getFirstEnabledS3Config(db, c.env);
+  if (!s3Config) return c.json({ error: 'Storage not configured' }, 500);
+  const { url, headers } = await signRequest(s3Config.accessKeyId, s3Config.secretAccessKey, s3Config.region, s3Config.endpoint, s3Config.bucketName, key, 'GET', '', 0);
+  const resp = await fetch(url, { headers });
+  if (!resp.ok) return c.json({ error: 'Avatar not found' }, 404);
+  const body = await resp.arrayBuffer();
+  return new Response(body, {
     headers: {
-      'Content-Type': obj.httpMetadata?.contentType || 'image/png',
+      'Content-Type': resp.headers.get('Content-Type') || 'image/png',
       'Cache-Control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
     },
   });

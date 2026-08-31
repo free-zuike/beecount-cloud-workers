@@ -7,11 +7,13 @@ import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { hashPassword } from '../auth';
 import { DEFAULT_AI_CONFIG } from '../lib/defaults';
+import { getFirstEnabledS3Config } from './sys_config';
+import { signRequest } from '../lib/s3';
 
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
-  R2: R2Bucket;
+  R2?: R2Bucket;
   BEECOUNT_DO: DurableObjectNamespace;
 };
 
@@ -185,10 +187,28 @@ profileRouter.post('/avatar', async (c) => {
     // 删除旧头像
     const oldProfile = await db.prepare('SELECT avatar_file_id FROM user_profiles WHERE user_id = ?').bind(userId).first<{ avatar_file_id: string }>();
     if (oldProfile?.avatar_file_id) {
-      try { await r2.delete(`avatars/${userId}/${oldProfile.avatar_file_id}`); } catch {}
+      if (r2) {
+        try { await r2.delete(`avatars/${userId}/${oldProfile.avatar_file_id}`); } catch {}
+      } else {
+        const s3Config = await getFirstEnabledS3Config(db, c.env);
+        if (s3Config) {
+          try {
+            const { url, headers } = await signRequest(s3Config.accessKeyId, s3Config.secretAccessKey, s3Config.region, s3Config.endpoint, s3Config.bucketName, `avatars/${userId}/${oldProfile.avatar_file_id}`, 'DELETE', '', 0);
+            await fetch(url, { method: 'DELETE', headers });
+          } catch {}
+        }
+      }
     }
 
-    await r2.put(storagePath, fileBuffer, { httpMetadata: { contentType: mimeLower } });
+    // 上传：优先 R2，其次 S3
+    if (r2) {
+      await r2.put(storagePath, fileBuffer, { httpMetadata: { contentType: mimeLower } });
+    } else {
+      const s3Config = await getFirstEnabledS3Config(db, c.env);
+      if (!s3Config) return c.json({ error: 'Avatar storage not configured (no R2 or S3)' }, 503);
+      const { url, headers } = await signRequest(s3Config.accessKeyId, s3Config.secretAccessKey, s3Config.region, s3Config.endpoint, s3Config.bucketName, storagePath, 'PUT', mimeLower, fileBuffer.byteLength);
+      await fetch(url, { method: 'PUT', headers: { ...headers, 'Content-Type': mimeLower }, body: fileBuffer });
+    }
 
     const serverNow = nowUtc();
     await db.prepare('UPDATE user_profiles SET avatar_file_id = ?, avatar_version = avatar_version + 1, updated_at = ? WHERE user_id = ?').bind(fileId, serverNow, userId).run();
