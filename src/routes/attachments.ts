@@ -549,10 +549,14 @@ attachmentsRouter.get('/:id', async (c) => {
     if (c.env.R2) {
         // 优先用 DB 中的 storage_path（已含 beecount/ 前缀），回退尝试其他格式
         const normalizedPath = row.storage_path.replace(/^attachments\/attachments\//, 'attachments/');
+        // DB 路径格式: beecount/attachments/{ledgerId}/{fileId}/{fileName}
+        // R2 实际路径格式: beecount/attachments/{ledgerId}/{fileId}_{fileName}
+        const r2Key = `beecount/attachments/${row.ledger_external_id}/${row.id}_${row.file_name}`;
         const possiblePaths = [
             row.storage_path,                    // DB 中的完整路径 (beecount/attachments/...)
             normalizedPath,                      // 去双重前缀
             `beecount/${normalizedPath}`,        // 加前缀
+            r2Key,                               // R2 实际格式: {ledgerId}/{fileId}_{fileName}
             `attachments/${row.ledger_external_id}/${row.id}_${row.file_name}`,
             `beecount/attachments/${row.id}_${row.file_name}`,
         ];
