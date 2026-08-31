@@ -547,17 +547,14 @@ attachmentsRouter.get('/:id', async (c) => {
     // 先尝试 R2（附件存储在 R2 bucket）
     serverLogger.info('src.routers.attachments', '[ATTACH] R2 available:', !!c.env.R2, 'storage_path:', row.storage_path);
     if (c.env.R2) {
-        // 尝试多种存储路径格式（兼容不同版本的 storage_path）
+        // 优先用 DB 中的 storage_path（已含 beecount/ 前缀），回退尝试其他格式
         const normalizedPath = row.storage_path.replace(/^attachments\/attachments\//, 'attachments/');
         const possiblePaths = [
-            `beecount/${normalizedPath}`,   // 新前缀
-            normalizedPath,                 // 原路径
-            row.storage_path,               // 原始 storage_path
-            `beecount/${row.storage_path}`, // 新前缀 + 原始
-            `beecount/attachments/${row.ledger_external_id}/${row.id}_${row.file_name}`,
+            row.storage_path,                    // DB 中的完整路径 (beecount/attachments/...)
+            normalizedPath,                      // 去双重前缀
+            `beecount/${normalizedPath}`,        // 加前缀
             `attachments/${row.ledger_external_id}/${row.id}_${row.file_name}`,
             `beecount/attachments/${row.id}_${row.file_name}`,
-            `attachments/${row.id}_${row.file_name}`,
         ];
         for (const key of possiblePaths) {
             if (!key) continue;

@@ -163,7 +163,7 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
   const profile = await db.prepare('SELECT avatar_file_id, avatar_version FROM user_profiles WHERE user_id = ?').bind(userId).first<{ avatar_file_id: string; avatar_version: number }>();
   if (!profile?.avatar_file_id) return c.json({ error: 'Avatar not found' }, 404);
 
-  const key = `avatars/${userId}/${profile.avatar_file_id}`;
+  const key = profile.avatar_file_id;
 
   // 从所有可用存储下载（R2优先，回退 S3/WebDAV/FTP/SFTP；兼容旧数据无前缀）
   const body = await downloadFromStorage(db, c.env, key);
