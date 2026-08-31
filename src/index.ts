@@ -165,10 +165,17 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
 
   const key = profile.avatar_file_id;
 
-  // 从所有可用存储下载（R2优先，回退 S3/WebDAV/FTP/SFTP；兼容旧数据无前缀）
-  const body = await downloadFromStorage(db, c.env, key);
-  if (!body) return c.json({ error: 'Avatar not found' }, 404);
-  return new Response(body, {
+  // 直接从 R2 下载（key 已是完整路径如 beecount/avatars/xxx）
+  if (r2) {
+    const obj = await r2.get(key);
+    if (!obj) return c.json({ error: 'Avatar not found' }, 404);
+    return new Response(obj.body, {
+      headers: {
+        'Content-Type': obj.httpMetadata?.contentType || 'image/png',
+        'Cache-Control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
+      },
+    });
+  }
     headers: {
       'Content-Type': 'image/png',
       'Cache-Control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
