@@ -171,7 +171,9 @@ profileRouter.post('/avatar', async (c) => {
     // 删除旧头像
     const oldProfile = await db.prepare('SELECT avatar_file_id FROM user_profiles WHERE user_id = ?').bind(userId).first<{ avatar_file_id: string }>();
     if (oldProfile?.avatar_file_id) {
-      await deleteFromStorage(db, c.env, `avatars/${userId}/${oldProfile.avatar_file_id}`);
+      // 兼容旧路径格式（可能是纯 fileId 或完整路径）
+      const oldKey = oldProfile.avatar_file_id.startsWith('avatars/') ? oldProfile.avatar_file_id : `avatars/${userId}/${oldProfile.avatar_file_id}`;
+      await deleteFromStorage(db, c.env, oldKey);
     }
 
     // 上传到新位置
@@ -179,7 +181,7 @@ profileRouter.post('/avatar', async (c) => {
     if (!uploadResult.ok) return c.json({ error: 'Avatar upload failed (no available storage)' }, 503);
 
     const serverNow = nowUtc();
-    await db.prepare('UPDATE user_profiles SET avatar_file_id = ?, avatar_version = avatar_version + 1, updated_at = ? WHERE user_id = ?').bind(fileId, serverNow, userId).run();
+    await db.prepare('UPDATE user_profiles SET avatar_file_id = ?, avatar_version = avatar_version + 1, updated_at = ? WHERE user_id = ?').bind(storagePath, serverNow, userId).run();
 
     const profile = await db.prepare('SELECT avatar_version FROM user_profiles WHERE user_id = ?').bind(userId).first<{ avatar_version: number }>();
     const ver = profile?.avatar_version ?? 1;
