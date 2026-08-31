@@ -33,18 +33,16 @@ const APPEARANCE_KEYS = ['theme_primary_color', 'income_is_red', 'sidebar_collap
 profileRouter.get('/me', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
-  const user = await db.prepare(
-    `SELECT u.id, u.email, up.display_name, up.income_is_red, up.theme_primary_color, up.appearance_json
-     FROM users u JOIN user_profiles up ON u.id = up.user_id WHERE u.id = ?`,
-  ).bind(userId).first<{ id: string; email: string; display_name: string | null; income_is_red: boolean | null; theme_primary_color: string | null; appearance_json: string | null }>();
-  if (!user) return c.json({ error: 'User not found' }, 404);
+  const user = await db.prepare('SELECT email FROM users WHERE id = ?').bind(userId).first<{ email: string }>();
+  const profile = await db.prepare('SELECT * FROM user_profiles WHERE user_id = ?').bind(userId).first() as any;
+  if (!user || !profile) return c.json({ error: 'User not found' }, 404);
   return c.json({
-    id: user.id,
+    id: userId,
     email: user.email,
-    display_name: user.display_name,
-    income_is_red: user.income_is_red,
-    theme_primary_color: user.theme_primary_color,
-    appearance_json: user.appearance_json ? JSON.parse(user.appearance_json) : {},
+    display_name: profile.display_name,
+    income_is_red: profile.income_is_red,
+    theme_primary_color: profile.theme_primary_color,
+    appearance_json: profile.appearance_json ? JSON.parse(profile.appearance_json as string) : {},
     avatar_url: `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${userId}`,
   });
 });
