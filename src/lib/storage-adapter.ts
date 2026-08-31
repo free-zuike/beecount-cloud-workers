@@ -116,18 +116,12 @@ export async function downloadFromStorage(
 ): Promise<Uint8Array | null> {
   const log = (msg: string) => serverLogger.info('storage-adapter', msg);
 
-  // 1. R2 — 优先新前缀，回退旧路径（兼容历史数据）
+  // 1. R2
   if (env.R2) {
     const obj = await env.R2.get(prefixKey(key));
     if (obj) {
-      log(`R2 download ok (new prefix): ${key}`);
+      log(`R2 download ok: ${key}`);
       return new Uint8Array(await obj.arrayBuffer());
-    }
-    // 回退：尝试不带 beecount/ 前缀的旧路径
-    const oldObj = await env.R2.get(key);
-    if (oldObj) {
-      log(`R2 download ok (legacy): ${key}`);
-      return new Uint8Array(await oldObj.arrayBuffer());
     }
   }
 
