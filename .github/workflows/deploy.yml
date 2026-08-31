@@ -94,9 +94,6 @@ jobs:
             if echo "$CREATE_RESULT" | grep -q '"success":true'; then
               echo "R2 bucket beecount-storage created/already exists"
               echo "r2_enabled=true" >> $GITHUB_OUTPUT
-            elif echo "$CREATE_RESULT" | grep -q 'already exists'; then
-              echo "R2 bucket already exists"
-              echo "r2_enabled=true" >> $GITHUB_OUTPUT
             else
               echo "Failed to create R2 bucket: $CREATE_RESULT"
               echo "r2_enabled=false" >> $GITHUB_OUTPUT
