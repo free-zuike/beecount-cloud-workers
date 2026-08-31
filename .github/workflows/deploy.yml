@@ -121,13 +121,13 @@ jobs:
       - name: Bind R2 bucket to Worker (if R2 enabled)
         if: steps.r2.outputs.r2_enabled == 'true'
         run: |
+          cp wrangler.toml wrangler.toml.bak
           if ! grep -q 'r2_buckets' wrangler.toml; then
-            cp wrangler.toml wrangler.toml.temp
-            echo "" >> wrangler.toml.temp
-            echo "[[r2_buckets]]" >> wrangler.toml.temp
-            echo 'binding = "R2"' >> wrangler.toml.temp
-            echo 'bucket_name = "beecount-storage"' >> wrangler.toml.temp
-            echo "R2 bucket binding added to wrangler.toml.temp"
+            echo "" >> wrangler.toml
+            echo "[[r2_buckets]]" >> wrangler.toml
+            echo 'binding = "R2"' >> wrangler.toml
+            echo 'bucket_name = "beecount-storage"' >> wrangler.toml
+            echo "R2 bucket binding added to wrangler.toml"
           else
             echo "R2 bucket already in wrangler.toml"
           fi
@@ -145,11 +145,4 @@ jobs:
         run: mv frontend/apps/web/dist/index.html frontend/apps/web/dist/app.html
 
       - name: Deploy
-        run: |
-          if [ -f wrangler.toml.temp ]; then
-            echo "Using wrangler.toml.temp for deploy (with R2)"
-            npx wrangler deploy --config wrangler.toml.temp
-          else
-            echo "Using wrangler.toml for deploy (no R2)"
-            npx wrangler deploy
-          fi
+        run: npx wrangler deploy

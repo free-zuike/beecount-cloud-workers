@@ -41,5 +41,5 @@ coverage/
 backups/
 beecount/backups/
 
-# Temp wrangler config used during CI for R2 binding
-wrangler.toml.temp
+# Temp wrangler configs used during CI
+wrangler.toml.bak
