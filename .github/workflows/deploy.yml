@@ -118,20 +118,17 @@ jobs:
           sed -i "s|CLOUDFLARE_API_TOKEN = \"ci-injected-at-deploy-time\"|CLOUDFLARE_API_TOKEN = \"${{ secrets.CLOUDFLARE_API_TOKEN }}\"|" wrangler.toml
           grep "database_id\|CLOUDFLARE_API_TOKEN\|CLOUDFLARE_ACCOUNT_ID" wrangler.toml
 
-      - name: Bind R2 bucket to Worker (if R2 enabled)
+      - name: Add R2 bucket binding to wrangler.toml (if R2 enabled)
         if: steps.r2.outputs.r2_enabled == 'true'
         run: |
-          ACCOUNT_ID="${{ steps.account.outputs.account_id }}"
-          # 通过 API 绑定 R2 bucket 到 Worker，不修改 wrangler.toml
-          BIND_RESULT=$(curl -s -X PATCH \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/beecount-cloud-workers/settings" \
-            -d '{"r2_bucket_bindings":[{"name":"R2","bucket_name":"beecount-storage"}]}')
-          if echo "$BIND_RESULT" | grep -q '"success":true'; then
-            echo "R2 bucket bound to Worker successfully"
+          if ! grep -q 'r2_buckets' wrangler.toml; then
+            echo "" >> wrangler.toml
+            echo "[[r2_buckets]]" >> wrangler.toml
+            echo 'binding = "R2"' >> wrangler.toml
+            echo 'bucket_name = "beecount-storage"' >> wrangler.toml
+            echo "R2 bucket binding added to wrangler.toml"
           else
-            echo "Failed to bind R2: $BIND_RESULT"
+            echo "R2 bucket already in wrangler.toml"
           fi
 
       - name: Build frontend
