@@ -30,111 +30,120 @@ function nowUtc(): string {
 // appearance 做纯 JSON 透传，与原版 Python _dump_appearance_json / _parse_appearance_json 对齐
 const APPEARANCE_KEYS = ['theme_primary_color', 'income_is_red', 'sidebar_collapsed', 'compact_mode'] as const;
 
+const ProfilePatchSchema = z.object({
+  display_name: z.string().nullable().optional(),
+  income_is_red: z.boolean().nullable().optional(),
+  theme_primary_color: z.string().nullable().optional(),
+  appearance: z.record(z.unknown()).nullable().optional(),
+  ai_config: z.record(z.unknown()).nullable().optional(),
+  primary_currency: z.string().nullable().optional(),
+});
+
 profileRouter.get('/me', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const user = await db.prepare('SELECT email FROM users WHERE id = ?').bind(userId).first<{ email: string }>();
   const profile = await db.prepare('SELECT * FROM user_profiles WHERE user_id = ?').bind(userId).first() as any;
-  if (!user || !profile) return c.json({ error: 'User not found' }, 404);
+
   return c.json({
     user_id: userId,
-    email: user.email,
-    display_name: profile.display_name,
-    income_is_red: Boolean(profile.income_is_red),
-    theme_primary_color: profile.theme_primary_color,
-    appearance_json: profile.appearance_json ? JSON.parse(profile.appearance_json as string) : {},
-    avatar_url: `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${userId}`,
+    email: user?.email || '',
+    display_name: profile?.display_name || null,
+    avatar_url: profile?.avatar_file_id ? `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${userId}?v=${profile.avatar_version}` : null,
+    avatar_version: profile?.avatar_version || 0,
+    income_is_red: profile?.income_is_red != null ? Boolean(profile.income_is_red) : null,
+    theme_primary_color: profile?.theme_primary_color,
+    appearance: profile?.appearance_json ? JSON.parse(profile.appearance_json) : null,
+    ai_config: profile?.ai_config_json ? JSON.parse(profile.ai_config_json) : null,
+    primary_currency: profile?.primary_currency || null,
   });
 });
 
-profileRouter.patch('/me', zValidator('json', z.object({
-  display_name: z.string().min(1).max(50).optional(),
-  income_is_red: z.boolean().optional(),
-  theme_primary_color: z.string().optional(),
-  appearance_json: z.record(z.string(), z.any()).optional(),
-})), async (c) => {
+// PATCH /me
+profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const body = c.req.valid('json');
-  const fields: string[] = [];
-  const values: unknown[] = [];
-  if (body.display_name !== undefined) { fields.push('display_name = ?'); values.push(body.display_name); }
-  if (body.income_is_red !== undefined) { fields.push('income_is_red = ?'); values.push(body.income_is_red); }
-  if (body.theme_primary_color !== undefined) { fields.push('theme_primary_color = ?'); values.push(body.theme_primary_color); }
-  if (body.appearance_json !== undefined) { fields.push('appearance_json = ?'); values.push(JSON.stringify(body.appearance_json)); }
-  if (fields.length > 0) {
-    fields.push('updated_at = ?');
-    values.push(nowUtc());
-    values.push(userId);
-    await db.prepare(`UPDATE user_profiles SET ${fields.join(', ')} WHERE user_id = ?`).bind(...values).run();
+  const serverNow = nowUtc();
+
+  let profile = await db.prepare('SELECT * FROM user_profiles WHERE user_id = ?').bind(userId).first() as any;
+  if (!profile) {
+    await db.prepare('INSERT INTO user_profiles (user_id) VALUES (?)').bind(userId).run();
+    profile = await db.prepare('SELECT * FROM user_profiles WHERE user_id = ?').bind(userId).first() as any;
   }
-  const profile = await db.prepare(
-    `SELECT id, display_name, income_is_red, theme_primary_color, appearance_json, avatar_version FROM user_profiles WHERE user_id = ?`,
-  ).bind(userId).first();
-  if (!profile) return c.json({ error: 'Profile not found' }, 404);
+
+  const updates: string[] = [];
+  const values: unknown[] = [];
+
+  if (body.display_name !== undefined) { updates.push('display_name = ?'); values.push(body.display_name); }
+  if (body.income_is_red !== undefined) { updates.push('income_is_red = ?'); values.push(body.income_is_red ? 1 : 0); }
+  if (body.theme_primary_color !== undefined) { updates.push('theme_primary_color = ?'); values.push(body.theme_primary_color); }
+  if (body.appearance !== undefined) { updates.push('appearance_json = ?'); values.push(body.appearance ? JSON.stringify(body.appearance) : null); }
+  if (body.ai_config !== undefined) { updates.push('ai_config_json = ?'); values.push(body.ai_config ? JSON.stringify(body.ai_config) : null); }
+  if (body.primary_currency !== undefined) { updates.push('primary_currency = ?'); values.push(body.primary_currency?.toUpperCase() || null); }
+
+  if (updates.length > 0) {
+    updates.push('updated_at = ?');
+    values.push(serverNow);
+    values.push(userId);
+    await db.prepare(`UPDATE user_profiles SET ${updates.join(', ')} WHERE user_id = ?`).bind(...values).run();
+  }
+
+  const updated = await db.prepare('SELECT * FROM user_profiles WHERE user_id = ?').bind(userId).first() as any;
+  const user = await db.prepare('SELECT email FROM users WHERE id = ?').bind(userId).first<{ email: string }>();
+
+  // 广播 profile_change 给其他端实时同步（与原版对齐：发送完整 payload）
+  if (updates.length > 0) {
+    const profilePayload = {
+      avatar_version: updated?.avatar_version ?? 0,
+      display_name: updated?.display_name ?? null,
+      income_is_red: updated?.income_is_red ?? null,
+      theme_primary_color: updated?.theme_primary_color ?? null,
+      appearance: (() => { try { return updated?.appearance_json ? JSON.parse(updated.appearance_json) : null; } catch { return null; } })(),
+      primary_currency: updated?.primary_currency ?? null,
+    };
+    try {
+      const { getWsManager } = await import('../lib/ws-manager');
+      await getWsManager().broadcastToUser(userId, { type: 'profile_change', ...profilePayload });
+    } catch {}
+    try {
+      const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
+      const doStub = c.env.BEECOUNT_DO.get(doId);
+      await doStub.fetch(new Request('https://dummy/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: JSON.stringify({ type: 'profile_change', ...profilePayload }) }),
+      }));
+    } catch {}
+  }
+
   return c.json({
     user_id: userId,
-    display_name: profile.display_name,
-    income_is_red: Boolean(profile.income_is_red),
-    theme_primary_color: profile.theme_primary_color,
-    appearance_json: profile.appearance_json ? JSON.parse(profile.appearance_json as string) : {},
-    avatar_url: `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${userId}?v=${profile.avatar_version ?? 1}`,
-    avatar_version: profile.avatar_version ?? 1,
+    email: user?.email || '',
+    display_name: updated?.display_name || null,
+    avatar_url: updated?.avatar_file_id ? `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${userId}?v=${updated.avatar_version}` : null,
+    avatar_version: updated?.avatar_version || 0,
+    income_is_red: updated?.income_is_red != null ? Boolean(updated.income_is_red) : null,
+    theme_primary_color: updated?.theme_primary_color,
+    appearance: updated?.appearance_json ? JSON.parse(updated.appearance_json) : null,
+    ai_config: updated?.ai_config_json ? JSON.parse(updated.ai_config_json) : null,
+    primary_currency: updated?.primary_currency || null,
   });
 });
 
-profileRouter.put('/me', zValidator('json', z.object({
-  email: z.string().email().optional(),
-  display_name: z.string().min(1).max(50).optional(),
-  income_is_red: z.boolean().optional(),
-  theme_primary_color: z.string().optional(),
-  appearance_json: z.record(z.string(), z.any()).optional(),
-})), async (c) => {
-  const userId = c.get('userId');
-  const db = c.env.DB;
-  const body = c.req.valid('json');
-  const fields: string[] = [];
-  const values: unknown[] = [];
-  if (body.email !== undefined) { fields.push('email = ?'); values.push(body.email); }
-  if (body.display_name !== undefined) { fields.push('display_name = ?'); values.push(body.display_name); }
-  if (body.income_is_red !== undefined) { fields.push('income_is_red = ?'); values.push(body.income_is_red); }
-  if (body.theme_primary_color !== undefined) { fields.push('theme_primary_color = ?'); values.push(body.theme_primary_color); }
-  if (body.appearance_json !== undefined) { fields.push('appearance_json = ?'); values.push(JSON.stringify(body.appearance_json)); }
-  if (fields.length > 0) {
-    fields.push('updated_at = ?');
-    values.push(nowUtc());
-    values.push(userId);
-    await db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).bind(...values).run();
-  }
-  const profile = await db.prepare(
-    `SELECT up.display_name, up.income_is_red, up.theme_primary_color, up.appearance_json, up.avatar_version, u.email
-     FROM user_profiles up JOIN users u ON up.user_id = u.id WHERE up.user_id = ?`,
-  ).bind(userId).first<{ display_name: string | null; income_is_red: boolean | null; theme_primary_color: string | null; appearance_json: string | null; avatar_version: number; email: string }>();
-  if (!profile) return c.json({ error: 'Profile not found' }, 404);
-  return c.json({
-    user_id: userId,
-    email: profile.email,
-    display_name: profile.display_name,
-    income_is_red: Boolean(profile.income_is_red),
-    theme_primary_color: profile.theme_primary_color,
-    appearance_json: profile.appearance_json ? JSON.parse(profile.appearance_json as string) : {},
-    avatar_url: `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${userId}?v=${profile.avatar_version ?? 1}`,
-    avatar_version: profile.avatar_version ?? 1,
-  });
-});
-
-profileRouter.post('/change-password', zValidator('json', z.object({
-  current_password: z.string().min(1),
+// POST /me/change-password
+profileRouter.post('/me/change-password', zValidator('json', z.object({
+  current_password: z.string(),
   new_password: z.string().min(6),
 })), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
-  const body = c.req.valid('json');
+  const { current_password, new_password } = c.req.valid('json');
   const user = await db.prepare('SELECT password_hash FROM users WHERE id = ?').bind(userId).first<{ password_hash: string }>();
   if (!user) return c.json({ error: 'User not found' }, 404);
-  const valid = await verifyPassword(user.password_hash, body.current_password);
+  const valid = await verifyPassword(user.password_hash, current_password);
   if (!valid) return c.json({ error: 'Invalid current password' }, 401);
-  const hash = await hashPassword(body.new_password);
+  const hash = await hashPassword(new_password);
   await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(hash, userId).run();
   return c.json({ success: true });
 });
