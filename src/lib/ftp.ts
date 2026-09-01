@@ -210,6 +210,77 @@ class FtpClient {
     }
   }
 
+  async download(remotePath: string): Promise<Uint8Array | null> {
+    let socket: any;
+    let dataSocket: any;
+    try {
+      socket = await this.connect();
+
+      // Read welcome message
+      await this.sendCommand(socket, '');
+
+      // Login
+      await this.sendCommand(socket, `USER ${this.config.username}`);
+      await this.sendCommand(socket, `PASS ${this.config.password}`);
+
+      // Enter binary mode
+      await this.sendCommand(socket, 'TYPE I');
+
+      // Enter passive mode to get data connection
+      const pasvResponse = await this.sendCommand(socket, 'PASV');
+      const pasvMatch = pasvResponse.match(/\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)/);
+      if (!pasvMatch) {
+        throw new Error('Failed to enter passive mode');
+      }
+
+      const host = `${pasvMatch[1]}.${pasvMatch[2]}.${pasvMatch[3]}.${pasvMatch[4]}`;
+      const port = parseInt(pasvMatch[5]) * 256 + parseInt(pasvMatch[6]);
+
+      // Create data connection
+      dataSocket = connect({ hostname: host, port });
+      await dataSocket.opened;
+
+      // Retrieve file
+      const retrResponse = await this.sendCommand(socket, `RETR ${remotePath}`);
+      if (!retrResponse.startsWith('1') && !retrResponse.startsWith('2') && !retrResponse.startsWith('3')) {
+        throw new Error(`RETR failed: ${retrResponse.trim()}`);
+      }
+
+      // Read all data
+      const reader = dataSocket.readable.getReader();
+      const chunks: Uint8Array[] = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      reader.releaseLock();
+      dataSocket.close();
+
+      // Check completion response
+      await this.sendCommand(socket, '');
+
+      // Quit
+      await this.sendCommand(socket, 'QUIT');
+      socket.close();
+
+      if (chunks.length === 0) return null;
+      const total = chunks.reduce((sum, c) => sum + c.byteLength, 0);
+      const out = new Uint8Array(total);
+      let offset = 0;
+      for (const c of chunks) {
+        out.set(c, offset);
+        offset += c.byteLength;
+      }
+      return out;
+    } catch (error) {
+      console.error('[FTP] Download failed:', error);
+      socket?.close();
+      dataSocket?.close();
+      return null;
+    }
+  }
+
   async test(): Promise<{ success: boolean; message: string }> {
     let socket: any;
     try {

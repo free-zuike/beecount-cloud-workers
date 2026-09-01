@@ -197,7 +197,7 @@ async function uploadToRemote(rc: RemoteEntry, key: string, body: Uint8Array, co
       });
       let prefix = (c.savePath && c.savePath !== 'custom') ? c.savePath.replace(/^\/+|\/+$/g, '') + '/' :
                    (c.root_path ? c.root_path.replace(/^\/+|\/+$/g, '') + '/' : '');
-      await client.upload(prefix + key, body);
+      await client.upload(prefix + prefixKey(key), body);
       return { ok: true, message: 'ok' };
     } catch (e) { return { ok: false, message: (e as Error).message }; }
   }
@@ -210,7 +210,7 @@ async function uploadToRemote(rc: RemoteEntry, key: string, body: Uint8Array, co
       });
       let prefix = (c.savePath && c.savePath !== 'custom') ? c.savePath.replace(/^\/+|\/+$/g, '') + '/' :
                    (c.root_path ? c.root_path.replace(/^\/+|\/+$/g, '') + '/' : '');
-      await client.upload(prefix + key, body);
+      await client.upload(prefix + prefixKey(key), body);
       return { ok: true, message: 'ok' };
     } catch (e) { return { ok: false, message: (e as Error).message }; }
   }
@@ -244,7 +244,34 @@ async function downloadFromRemote(rc: RemoteEntry, key: string): Promise<{ ok: b
     } catch { return { ok: false }; }
   }
 
-  // FTP/SFTP 下载暂不支持（附件场景基本不需要）
+  if (bt === 'ftp') {
+    try {
+      const client = createFtpClient({
+        host: c.host || c.hostname || '', port: parseInt(c.port || '21'),
+        username: c.username || '', password: c.password || '',
+      });
+      let prefix = (c.savePath && c.savePath !== 'custom') ? c.savePath.replace(/^\/+|\/+$/g, '') + '/' :
+                   (c.root_path ? c.root_path.replace(/^\/+|\/+$/g, '') + '/' : '');
+      // 兼容旧路径：先试当前 prefixKey 路径，再试无 beecount/ 前缀的旧路径
+      const body = await client.download(prefix + prefixKey(key)) ?? await client.download(prefix + key);
+      return body ? { ok: true, body } : { ok: false };
+    } catch { return { ok: false }; }
+  }
+
+  if (bt === 'sftp') {
+    try {
+      const client = createSftpClient({
+        host: c.host || c.hostname || '', port: parseInt(c.port || '22'),
+        username: c.username || '', password: c.password || '', privateKey: c.private_key || c.privateKey,
+      });
+      let prefix = (c.savePath && c.savePath !== 'custom') ? c.savePath.replace(/^\/+|\/+$/g, '') + '/' :
+                   (c.root_path ? c.root_path.replace(/^\/+|\/+$/g, '') + '/' : '');
+      // 兼容旧路径：先试当前 prefixKey 路径，再试无 beecount/ 前缀的旧路径
+      const body = await client.download(prefix + prefixKey(key)) ?? await client.download(prefix + key);
+      return body ? { ok: true, body } : { ok: false };
+    } catch { return { ok: false }; }
+  }
+
   return { ok: false };
 }
 
@@ -282,7 +309,8 @@ async function deleteFromRemote(rc: RemoteEntry, key: string): Promise<{ ok: boo
       });
       let prefix = (c.savePath && c.savePath !== 'custom') ? c.savePath.replace(/^\/+|\/+$/g, '') + '/' :
                    (c.root_path ? c.root_path.replace(/^\/+|\/+$/g, '') + '/' : '');
-      const ok = await client.delete(prefix + prefixKey(key)).catch(() => false);
+      // 兼容旧路径：先删当前 prefixKey 路径，再删无 beecount/ 前缀的旧路径
+      const ok = (await client.delete(prefix + prefixKey(key)).catch(() => false)) || (await client.delete(prefix + key).catch(() => false));
       return { ok };
     } catch { return { ok: false }; }
   }
@@ -295,7 +323,8 @@ async function deleteFromRemote(rc: RemoteEntry, key: string): Promise<{ ok: boo
       });
       let prefix = (c.savePath && c.savePath !== 'custom') ? c.savePath.replace(/^\/+|\/+$/g, '') + '/' :
                    (c.root_path ? c.root_path.replace(/^\/+|\/+$/g, '') + '/' : '');
-      const ok = await client.delete(prefix + prefixKey(key)).catch(() => false);
+      // 兼容旧路径：先删当前 prefixKey 路径，再删无 beecount/ 前缀的旧路径
+      const ok = (await client.delete(prefix + prefixKey(key)).catch(() => false)) || (await client.delete(prefix + key).catch(() => false));
       return { ok };
     } catch { return { ok: false }; }
   }

@@ -216,6 +216,19 @@ class SftpClient {
     });
   }
 
+  async download(remotePath: string): Promise<Uint8Array | null> {
+    return this.withSftp((sftp) => {
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Download timeout')), 30000);
+        sftp.readFile(remotePath, (err: Error | undefined, result: Buffer) => {
+          clearTimeout(timeout);
+          if (err) return reject(err);
+          resolve(new Uint8Array(result));
+        });
+      });
+    });
+  }
+
   async test(): Promise<{ success: boolean; message: string }> {
     try {
       await this.withSftp((sftp) => {
