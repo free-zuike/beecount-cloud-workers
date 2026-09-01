@@ -150,7 +150,12 @@ app.get('/api/v1/version', (c) =>
 
 // 头像下载公开访问（与原版一致）
 app.get('/api/v1/profile/avatar/:userId', async (c) => {
-  const userId = c.req.param('userId');
+  let userId: string | undefined = c.req.param('userId') || undefined;
+  // 路径无 userId 时（如 /avatar/），尝试从认证上下文回退
+  if (!userId || userId === '') {
+    userId = c.get('userId') as string | undefined;
+  }
+  if (!userId) return c.json({ error: 'User ID required' }, 400);
   const db = c.env.DB;
   const r2 = c.env.R2;
 
