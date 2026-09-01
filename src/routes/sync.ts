@@ -1123,9 +1123,12 @@ syncRouter.get('/pull', async (c) => {
       params.push(ledgerId);
     }
 
-    // 与原版对齐：过滤设备自身变更（依赖 WS 推送获取实时更新）
+    // 与原版对齐：过滤设备自身变更（依赖 WS 推送获取实时更新）。
+    // SQLite 三值逻辑：NULL != ? 结果为 NULL（视为 false），会把
+    // updated_by_device_id IS NULL 的变更（web 端/恢复/导入创建）误过滤掉，
+    // 导致 app 拉不到这些交易。必须显式放行 NULL。
     if (deviceId) {
-      query += ' AND c.updated_by_device_id != ?';
+      query += ' AND (c.updated_by_device_id IS NULL OR c.updated_by_device_id != ?)';
       params.push(deviceId);
     }
     
