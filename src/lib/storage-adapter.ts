@@ -9,6 +9,7 @@ import { serverLogger } from './logger';
 import { uploadToS3, downloadFromS3, deleteS3Object } from './s3';
 import { createFtpClient } from './ftp';
 import { createSftpClient } from './sftp';
+import { uploadToOAuth2Provider, downloadFromOAuth2Provider, deleteOAuth2FileByPath } from './oauth2-storage';
 
 // 统一前缀，所有存储操作都在 beecount/ 子目录下
 const PREFIX = 'beecount/';
@@ -30,11 +31,11 @@ interface RemoteEntry {
   config: Record<string, any>;
 }
 
-/** 获取所有未加密的已配置远端 */
+/** 获取所有已配置远端（附件/头像存储使用）。OAuth 远端（drive/onedrive/dropbox）的 config 以明文 JSON 存，直接读出 */
 export async function getAllEnabledRemotes(db: D1Database): Promise<RemoteEntry[]> {
   const rows = await db.prepare(
-    'SELECT id, backend_type, config_summary FROM backup_remotes WHERE encrypted = 0'
-  ).all<{ id: string; backend_type: string; config_summary: string }>();
+    'SELECT id, backend_type, config_summary FROM backup_remotes WHERE backend_type != ?'
+  ).bind('alias').all<{ id: string; backend_type: string; config_summary: string }>();
   return (rows.results || []).map(r => ({
     id: r.id,
     backend_type: r.backend_type,
@@ -42,9 +43,9 @@ export async function getAllEnabledRemotes(db: D1Database): Promise<RemoteEntry[
   }));
 }
 
-/** 按优先级过滤远端（去掉 OAuth 类） */
+/** 过滤掉无实际存储能力的别名远端 */
 function filterUploadable(remotes: RemoteEntry[]): RemoteEntry[] {
-  return remotes.filter(r => !['drive', 'onedrive', 'dropbox'].includes(r.backend_type));
+  return remotes.filter(r => !['alias'].includes(r.backend_type));
 }
 
 /** 构建 S3 兼容上传参数（兼容 S3/B2 字段名差异） */
@@ -215,6 +216,13 @@ async function uploadToRemote(rc: RemoteEntry, key: string, body: Uint8Array, co
     } catch (e) { return { ok: false, message: (e as Error).message }; }
   }
 
+  if (bt === 'drive' || bt === 'onedrive' || bt === 'dropbox') {
+    try {
+      const ok = await uploadToOAuth2Provider({ ...c, backend_type: bt, folder_path: (c.folder_path || c.save_path && c.save_path !== 'custom' ? c.save_path : '')?.toString(), folder_id: (c.folder_id || '').toString() }, prefixKey(key), body);
+      return ok ? { ok: true, message: 'ok' } : { ok: false, message: `Upload failed via ${bt}` };
+    } catch (e) { return { ok: false, message: (e as Error).message }; }
+  }
+
   return { ok: false, message: `Unsupported backend_type: ${bt}` };
 }
 
@@ -272,6 +280,13 @@ async function downloadFromRemote(rc: RemoteEntry, key: string): Promise<{ ok: b
     } catch { return { ok: false }; }
   }
 
+  if (bt === 'drive' || bt === 'onedrive' || bt === 'dropbox') {
+    try {
+      const body = await downloadFromOAuth2Provider({ ...c, backend_type: bt, folder_path: (c.folder_path || c.save_path && c.save_path !== 'custom' ? c.save_path : '')?.toString(), folder_id: (c.folder_id || '').toString() }, prefixKey(key));
+      return body ? { ok: true, body } : { ok: false };
+    } catch { return { ok: false }; }
+  }
+
   return { ok: false };
 }
 
@@ -325,6 +340,13 @@ async function deleteFromRemote(rc: RemoteEntry, key: string): Promise<{ ok: boo
                    (c.root_path ? c.root_path.replace(/^\/+|\/+$/g, '') + '/' : '');
       // 兼容旧路径：先删当前 prefixKey 路径，再删无 beecount/ 前缀的旧路径
       const ok = (await client.delete(prefix + prefixKey(key)).catch(() => false)) || (await client.delete(prefix + key).catch(() => false));
+      return { ok };
+    } catch { return { ok: false }; }
+  }
+
+  if (bt === 'drive' || bt === 'onedrive' || bt === 'dropbox') {
+    try {
+      const ok = await deleteOAuth2FileByPath({ ...c, backend_type: bt, folder_path: (c.folder_path || c.save_path && c.save_path !== 'custom' ? c.save_path : '')?.toString(), folder_id: (c.folder_id || '').toString() }, prefixKey(key));
       return { ok };
     } catch { return { ok: false }; }
   }

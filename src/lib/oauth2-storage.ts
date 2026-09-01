@@ -339,3 +339,111 @@ export async function deleteOAuth2File(
     default: return false;
   }
 }
+
+// ==================== 附件/头像专用：按路径下载 & 删除 ====================
+
+/** Google Drive：按路径逐级解析出文件 ID（上传时按路径建目录，下载/删除需反查 ID） */
+async function resolveDrivePathToId(
+  config: Record<string, string>,
+  filePath: string,
+): Promise<string | null> {
+  const token = await refreshAccessToken('drive', config.client_id!, config.client_secret!, config.token!);
+  if (!token) return null;
+  const parts = filePath.split('/').filter(Boolean);
+  if (parts.length === 0) return null;
+  let parentId = config.folder_id || 'root';
+  for (const part of parts) {
+    const q = `name='${part.replace(/'/g, "\\'")}' and '${parentId}' in parents and trashed=false`;
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,mimeType)`,
+      { headers: { 'Authorization': `Bearer ${token}` } },
+    );
+    if (!res.ok) return null;
+    const data = await res.json() as { files?: Array<{ id: string; mimeType: string }> };
+    const match = (data.files || []).find(f => f.mimeType !== 'application/vnd.google-apps.folder' || part !== parts[parts.length - 1]);
+    const hit = (data.files || [])[0];
+    if (!hit) return null;
+    parentId = hit.id;
+  }
+  return parentId;
+}
+
+export async function downloadFromOAuth2Provider(
+  config: Record<string, string>,
+  filePath: string,
+): Promise<Uint8Array | null> {
+  try {
+    switch (config.backend_type) {
+      case 'drive': {
+        const fileId = await resolveDrivePathToId(config, filePath);
+        if (!fileId) return null;
+        const token = await refreshAccessToken('drive', config.client_id!, config.client_secret!, config.token!);
+        if (!token) return null;
+        const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (!res.ok) return null;
+        return new Uint8Array(await res.arrayBuffer());
+      }
+      case 'onedrive': {
+        const token = await refreshAccessToken('onedrive', config.client_id!, config.client_secret!, config.token!);
+        if (!token) return null;
+        const path = config.folder_path ? `/${config.folder_path}/${filePath}` : `/${filePath}`;
+        const res = await fetch(
+          `https://graph.microsoft.com/v1.0/me/drive/root:${encodeURI(path)}:/content`,
+          { headers: { 'Authorization': `Bearer ${token}` } },
+        );
+        if (!res.ok) return null;
+        return new Uint8Array(await res.arrayBuffer());
+      }
+      case 'dropbox': {
+        const token = await refreshAccessToken('dropbox', config.client_id!, config.client_secret!, config.token!);
+        if (!token) return null;
+        const path = config.folder_path ? `/${config.folder_path}/${filePath}` : `/${filePath}`;
+        const res = await fetch('https://content.dropboxapi.com/2/files/download', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Dropbox-API-Arg': JSON.stringify({ path }),
+          },
+        });
+        if (!res.ok) return null;
+        return new Uint8Array(await res.arrayBuffer());
+      }
+      default:
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** 按路径删除（附件/头像用）：drive/onedrive 需要先解析 ID，dropbox 直接按路径删 */
+export async function deleteOAuth2FileByPath(
+  config: Record<string, string>,
+  filePath: string,
+): Promise<boolean> {
+  try {
+    switch (config.backend_type) {
+      case 'drive': {
+        const fileId = await resolveDrivePathToId(config, filePath);
+        if (!fileId) return false;
+        return await deleteDriveFile(config, fileId);
+      }
+      case 'onedrive': {
+        const token = await refreshAccessToken('onedrive', config.client_id!, config.client_secret!, config.token!);
+        if (!token) return false;
+        const path = config.folder_path ? `/${config.folder_path}/${filePath}` : `/${filePath}`;
+        const res = await fetch(
+          `https://graph.microsoft.com/v1.0/me/drive/root:${encodeURI(path)}:`,
+          { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } },
+        );
+        return res.ok || res.status === 404;
+      }
+      case 'dropbox':
+        return await deleteDropboxFile(config, `/${config.folder_path ? `${config.folder_path}/${filePath}` : filePath}`);
+      default:
+        return false;
+    }
+  } catch {
+    return false;
+  }
+}
