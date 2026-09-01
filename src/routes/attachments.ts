@@ -21,258 +21,30 @@ import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import { uploadToStorage, downloadFromStorage, deleteFromStorage } from '../lib/storage-adapter';
 
-// 从 sys_config 模块导入获取配置的函数
-import { getFirstEnabledS3Config } from './sys_config';
-import { signRequest } from '../lib/s3';
-
-class S3Service {
-    private db: D1Database;
-    private env: Bindings;
-    private s3ConfigCache: any = null;
-    private s3ConfigCacheTime: number = 0;
-    private CACHE_TTL_MS = 60000; // 缓存 1 分钟
-
-    constructor(db: D1Database, env: Bindings) {
-        this.db = db;
-        this.env = env;
-    }
-
-    // 从数据库或环境变量获取 S3 配置
-    public async getS3Config(): Promise<any> {
-        const now = Date.now();
-        
-        // 检查缓存是否有效
-        if (this.s3ConfigCache && (now - this.s3ConfigCacheTime) < this.CACHE_TTL_MS) {
-            return this.s3ConfigCache;
-        }
-
-        try {
-            // 尝试从数据库获取配置
-            const dbConfig = await getFirstEnabledS3Config(this.db, this.env);
-            if (dbConfig) {
-                this.s3ConfigCache = dbConfig;
-                this.s3ConfigCacheTime = now;
-                serverLogger.info('src.routers.attachments', '[S3] Using config from database:', dbConfig.name);
-                return dbConfig;
-            }
-        } catch (error) {
-            serverLogger.error('src.routers.attachments', '[S3] Error getting config from database:', error);
-        }
-
-        // 尝试从备份配置中读取 S3 配置（用于附件上传）
-        try {
-            const backupRemote = await this.db
-                .prepare(
-                    'SELECT config_summary FROM backup_remotes WHERE backend_type = ? AND encrypted = 0 ORDER BY id DESC LIMIT 1'
-                )
-                .bind('s3')
-                .first<{ config_summary: string }>();
-
-            if (backupRemote && backupRemote.config_summary) {
-                const config = (() => { try { return JSON.parse(backupRemote.config_summary); } catch { return {}; } })();
-                if (config.access_key_id && config.secret_access_key && config.bucket) {
-                    const backupConfig = {
-                        id: 'backup_remote',
-                        name: config.name || 'Backup S3',
-                        type: 's3',
-                        savePath: config.root_path ? config.root_path.replace(/^\/+|\/+$/g, '') : 'custom',
-                        accessKeyId: config.access_key_id,
-                        secretAccessKey: config.secret_access_key,
-                        region: config.region || 'auto',
-                        bucketName: config.bucket.replace(/^\/+|\/+$/g, ''),
-                        endpoint: config.endpoint || 'https://s3.amazonaws.com',
-                        pathStyle: config.path_style !== undefined ? Boolean(config.path_style) : true,
-                        cdnDomain: config.cdn_domain || '',
-                        enabled: true,
-                        fixed: true
-                    };
-                    this.s3ConfigCache = backupConfig;
-                    this.s3ConfigCacheTime = now;
-                    serverLogger.info('src.routers.attachments', '[S3] Using config from backup_remotes');
-                    return backupConfig;
-                }
-            }
-        } catch (err) {
-            serverLogger.error('src.routers.attachments', '[S3] Failed to load config from backup_remotes:', err);
-        }
-
-        // 回退到环境变量配置
-        if (this.env.S3_ACCESS_KEY_ID) {
-            const envConfig = {
-                id: 1,
-                name: 'S3_env',
-                type: 's3',
-                savePath: 'environment variable',
-                accessKeyId: this.env.S3_ACCESS_KEY_ID,
-                secretAccessKey: this.env.S3_SECRET_ACCESS_KEY,
-                region: this.env.S3_REGION || 'us-east-1',
-                bucketName: this.env.S3_BUCKET_NAME,
-                endpoint: this.env.S3_ENDPOINT,
-                pathStyle: true,
-                cdnDomain: '',
-                enabled: true,
-                fixed: true
-            };
-            this.s3ConfigCache = envConfig;
-            this.s3ConfigCacheTime = now;
-            serverLogger.info('src.routers.attachments', '[S3] Using config from environment variables');
-            return envConfig;
-        }
-
-        serverLogger.info('src.routers.attachments', '[S3] No S3 config found');
-        return null;
-    }
-
-    async isConfigured(): Promise<boolean> {
-        const config = await this.getS3Config();
-        return config !== null;
-    }
-
-    getStorageKey(ledgerId: string, fileId: string, fileName: string, savePath?: string): string {
-        const encodedFileName = encodeURIComponent(fileName);
-        const basePath = savePath && savePath !== 'custom' ? savePath.replace(/^\/+|\/+$/g, '') : '';
-        // R2 格式：attachments/{ledgerId}/{fileId}_{fileName}（与 r2Key 保持一致）
-        return `${basePath ? basePath + '/' : ''}attachments/${ledgerId}/${fileId}_${encodedFileName}`;
-    }
-
-    async upload(key: string, body: ArrayBuffer, contentType: string): Promise<boolean> {
-        const config = await this.getS3Config();
-        if (!config) {
-            serverLogger.info('src.routers.attachments', '[S3] Not configured, skipping upload');
-            return false;
-        }
-
-        serverLogger.info('src.routers.attachments', '[S3] Initializing upload with config:');
-        serverLogger.info('src.routers.attachments', '[S3]   Endpoint:', config.endpoint);
-        serverLogger.info('src.routers.attachments', '[S3]   Region:', config.region || 'us-east-1');
-        serverLogger.info('src.routers.attachments', '[S3]   Bucket:', config.bucketName);
-        serverLogger.info('src.routers.attachments', '[S3]   Key:', key);
-
-        try {
-            serverLogger.info('src.routers.attachments', '[S3] Signing request');
-            const { url, headers } = await signRequest(
-                config.accessKeyId,
-                config.secretAccessKey,
-                config.region || 'us-east-1',
-                config.endpoint,
-                config.bucketName,
-                key,
-                'PUT',
-                contentType,
-                body.byteLength
-            );
-
-            serverLogger.info('src.routers.attachments', '[S3] Sending request to:', url);
-            const response = await fetch(url, {
-                method: 'PUT',
-                headers,
-                body
-            });
-
-            serverLogger.info('src.routers.attachments', '[S3] Response status:', response.status, response.statusText);
-            
-            if (!response.ok) {
-                let responseText = '';
-                try {
-                    responseText = await response.text();
-                } catch (e) {
-                    responseText = '(unable to read response body)';
-                }
-                serverLogger.error('src.routers.attachments', '[S3] Upload failed:', response.status, response.statusText, responseText);
-                return false;
-            }
-
-            serverLogger.info('src.routers.attachments', '[S3] Upload successful');
-            return true;
-        } catch (error: any) {
-            serverLogger.error('src.routers.attachments', '[S3] Upload error:', error);
-            return false;
-        }
-    }
-
-    async download(key: string): Promise<Response | null> {
-        const config = await this.getS3Config();
-        if (!config) {
-            return null;
-        }
-
-        try {
-            const { url, headers } = await signRequest(
-                config.accessKeyId,
-                config.secretAccessKey,
-                config.region || 'us-east-1',
-                config.endpoint,
-                config.bucketName,
-                key,
-                'GET',
-                'application/octet-stream',
-                0
-            );
-
-            const response = await fetch(url, {
-                method: 'GET',
-                headers
-            });
-
-            if (!response.ok) {
-                return null;
-            }
-
-            return response;
-        } catch (error) {
-            serverLogger.error('src.routers.attachments', '[S3] Download error:', error);
-            return null;
-        }
-    }
-
-    async delete(key: string): Promise<boolean> {
-        const config = await this.getS3Config();
-        if (!config) {
-            return false;
-        }
-
-        try {
-            const { url, headers } = await signRequest(
-                config.accessKeyId,
-                config.secretAccessKey,
-                config.region || 'us-east-1',
-                config.endpoint,
-                config.bucketName,
-                key,
-                'DELETE',
-                'application/octet-stream',
-                0
-            );
-
-            const response = await fetch(url, {
-                method: 'DELETE',
-                headers
-            });
-
-            return response.ok;
-        } catch (error) {
-            serverLogger.error('src.routers.attachments', '[S3] Delete error:', error);
-            return false;
-        }
-    }
+// 附件统一以 attachments/{ledgerExternalId}/{fileId}_{fileName} 为 key
+// （storage-adapter 内部会自动加 beecount/ 前缀，key 本身不含该前缀）
+// 下载历史数据时可能遇到含 beecount/ 前缀的旧路径，需去掉后传给 adapter
+function stripBeecountPrefix(key: string): string {
+  return key.replace(/^beecount\//, '').replace(/^attachments\/attachments\//, 'attachments/');
 }
 
 type Bindings = {
-    DB: D1Database;
-    JWT_SECRET: string;
-    R2?: R2Bucket;
-    S3_ENDPOINT?: string;
-    S3_REGION?: string;
-    S3_ACCESS_KEY_ID?: string;
-    S3_SECRET_ACCESS_KEY?: string;
-    S3_BUCKET_NAME?: string;
-    S3_PATH_STYLE?: string;
-    S3_CDN_DOMAIN?: string;
+  DB: D1Database;
+  JWT_SECRET: string;
+  R2?: R2Bucket;
+  S3_ENDPOINT?: string;
+  S3_REGION?: string;
+  S3_ACCESS_KEY_ID?: string;
+  S3_SECRET_ACCESS_KEY?: string;
+  S3_BUCKET_NAME?: string;
+  S3_PATH_STYLE?: string;
+  S3_CDN_DOMAIN?: string;
 };
 
 type Variables = {
-    userId: string;
+  userId: string;
 };
 
 const attachmentsRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
@@ -281,8 +53,6 @@ const attachmentsRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>
 const handleUpload = async (c: any) => {
     const userId = c.get('userId');
     const db = c.env.DB;
-
-    const s3 = new S3Service(db, c.env);
 
     try {
         const formData = await c.req.formData();
@@ -363,26 +133,15 @@ const handleUpload = async (c: any) => {
 
         const fileId = randomUUID();
         
-        const s3Config = await s3.getS3Config();
-        const savePath = s3Config?.savePath || 'attachments';
-        const storageKey = s3.getStorageKey(ledger.external_id, fileId, actualFileName, savePath);
-
-        if (await s3.isConfigured()) {
-            serverLogger.info('src.routers.attachments', '[ATTACHMENT] Uploading to S3, key:', storageKey, 'savePath:', savePath);
-            const uploadSuccess = await s3.upload(storageKey, fileBuffer, mimeType);
-            serverLogger.info('src.routers.attachments', '[ATTACHMENT] S3 upload result:', uploadSuccess);
-            if (!uploadSuccess) {
-                return c.json({ error: 'Failed to upload to S3' }, 500);
-            }
-        } else if (c.env.R2) {
-            // 使用 R2 存储附件（与头像共用同一 bucket，不同目录）
-            const r2Key = `attachments/${ledger.external_id}/${fileId}_${actualFileName}`;
-            serverLogger.info('src.routers.attachments', '[ATTACHMENT] Uploading to R2, key:', r2Key);
-            await c.env.R2.put(r2Key, fileBuffer, {
-                httpMetadata: { contentType: mimeType }
-            });
-            serverLogger.info('src.routers.attachments', '[ATTACHMENT] R2 upload successful');
+        // 统一附件 key：attachments/{ledgerExternalId}/{fileId}_{fileName}
+        // storage-adapter 内部会加 beecount/ 前缀并回退到所有备份远端
+        const storageKey = `attachments/${ledger.external_id}/${fileId}_${actualFileName}`;
+        const uploadResult = await uploadToStorage(db, c.env, storageKey, new Uint8Array(fileBuffer), mimeType);
+        if (!uploadResult.ok) {
+            serverLogger.error('src.routers.attachments', '[ATTACHMENT] Upload failed: no available storage', { storageKey });
+            return c.json({ error: 'Failed to upload attachment (no available storage)' }, 503);
         }
+        serverLogger.info('src.routers.attachments', '[ATTACHMENT] Upload ok:', storageKey);
 
         const now = new Date().toISOString();
         await db
@@ -519,8 +278,6 @@ attachmentsRouter.get('/:id', async (c) => {
         return c.json({ error: 'Rate limit exceeded' }, 429);
     }
 
-    const s3 = new S3Service(db, c.env);
-
     const row = await db
         .prepare(
             `SELECT a.id, a.sha256, a.size_bytes, a.mime_type, a.file_name, a.storage_path,
@@ -581,7 +338,24 @@ attachmentsRouter.get('/:id', async (c) => {
             }
         }
     }
-    serverLogger.info('src.routers.attachments', '[ATTACH] R2 not found, returning metadata');
+    // R2 未命中：回退到 storage-adapter（自动遍历所有备份远端 S3/B2/WebDAV/FTP/SFTP）
+    const fallbackKey = stripBeecountPrefix(row.storage_path);
+    serverLogger.info('src.routers.attachments', '[ATTACH] R2 not found, trying backup remotes:', fallbackKey);
+    const data = await downloadFromStorage(db, c.env, fallbackKey);
+    if (data) {
+        const ext = (row.file_name || '').split('.').pop()?.toLowerCase() || '';
+        const mimeGuess = ext === 'png' ? 'image/png' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : ext === 'gif' ? 'image/gif' : (row.mime_type || 'application/octet-stream');
+        return new Response(data.slice().buffer as ArrayBuffer, {
+            headers: {
+                'Content-Type': mimeGuess,
+                'Content-Disposition': `inline; filename="${encodeURIComponent(row.file_name || 'attachment')}"`,
+                'Content-Length': String(data.byteLength),
+                'Cache-Control': 'public, max-age=31536000, immutable',
+                'Access-Control-Allow-Origin': '*',
+            },
+        });
+    }
+    serverLogger.info('src.routers.attachments', '[ATTACH] Not found in R2 or backup remotes, returning metadata');
     return c.json({
         ledger_id: row.ledger_external_id,
         sha256: row.sha256,
@@ -589,7 +363,7 @@ attachmentsRouter.get('/:id', async (c) => {
         mime_type: row.mime_type,
         file_name: row.file_name,
         storage_path: row.storage_path,
-        message: 'File content not available. Configure S3 endpoint for full support.',
+        message: 'File content not available. Configure R2 or a backup remote for full support.',
     });
 });
 
@@ -598,8 +372,6 @@ attachmentsRouter.delete('/:id', async (c) => {
     const userId = c.get('userId');
     const db = c.env.DB;
     const fileId = c.req.param('id');
-
-    const s3 = new S3Service(db, c.env);
 
     const row = await db
         .prepare(
@@ -614,9 +386,8 @@ attachmentsRouter.delete('/:id', async (c) => {
         return c.json({ error: 'Attachment not found' }, 404);
     }
 
-    if (await s3.isConfigured()) {
-        await s3.delete(row.storage_path);
-    }
+    // 从 R2 + 所有备份远端删除
+    await deleteFromStorage(db, c.env, stripBeecountPrefix(row.storage_path));
 
     await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
 
@@ -721,21 +492,11 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
 
         const r2Key = `category-icons/${userId}/${randomUUID()}_${fileName}`;
 
-        // 尝试上传到 R2（优先）或 S3
-        if (c.env.R2) {
-            await c.env.R2.put(r2Key, fileBuffer, {
-                httpMetadata: { contentType: effectiveMimeType }
-            });
-        } else {
-            const config = await getFirstEnabledS3Config(db, c.env);
-            if (config) {
-                const { url, headers } = await signRequest(
-                    config.accessKeyId, config.secretAccessKey, config.region,
-                    config.endpoint, config.bucketName, r2Key, 'PUT',
-                    mimeType, size
-                );
-                await fetch(url, { method: 'PUT', headers, body: fileBuffer });
-            }
+        // 上传到 storage-adapter（R2 优先，回退所有备份远端）
+        const uploadResult = await uploadToStorage(db, c.env, r2Key, new Uint8Array(fileBuffer), effectiveMimeType);
+        if (!uploadResult.ok) {
+            serverLogger.error('src.routers.attachments', '[ATTACH] Category icon upload failed: no available storage');
+            return c.json({ error: 'Upload failed: no available storage' }, 503);
         }
 
         const now = new Date().toISOString();
