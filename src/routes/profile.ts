@@ -57,7 +57,7 @@ profileRouter.patch('/me', zValidator('json', z.object({
   const db = c.env.DB;
   const body = c.req.valid('json');
   const fields: string[] = [];
-  const values: unknown[] = [userId];
+  const values: unknown[] = [];
   if (body.display_name !== undefined) { fields.push('display_name = ?'); values.push(body.display_name); }
   if (body.income_is_red !== undefined) { fields.push('income_is_red = ?'); values.push(body.income_is_red); }
   if (body.theme_primary_color !== undefined) { fields.push('theme_primary_color = ?'); values.push(body.theme_primary_color); }
@@ -104,7 +104,7 @@ profileRouter.put('/me', zValidator('json', z.object({
     fields.push('updated_at = ?');
     values.push(nowUtc());
     values.push(userId);
-    await db.prepare(`UPDATE users SET ${fields.filter((_, i) => i % 2 === 0).join(', ')} WHERE id = ?`).bind(...values).run();
+    await db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).bind(...values).run();
   }
   const profile = await db.prepare(
     `SELECT up.display_name, up.income_is_red, up.theme_primary_color, up.appearance_json, up.avatar_version, u.email
