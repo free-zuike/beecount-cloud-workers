@@ -37,7 +37,7 @@ profileRouter.get('/me', async (c) => {
   const profile = await db.prepare('SELECT * FROM user_profiles WHERE user_id = ?').bind(userId).first() as any;
   if (!user || !profile) return c.json({ error: 'User not found' }, 404);
   return c.json({
-    id: userId,
+    user_id: userId,
     email: user.email,
     display_name: profile.display_name,
     income_is_red: Boolean(profile.income_is_red),
@@ -73,7 +73,7 @@ profileRouter.patch('/me', zValidator('json', z.object({
   ).bind(userId).first();
   if (!profile) return c.json({ error: 'Profile not found' }, 404);
   return c.json({
-    id: userId,
+    user_id: userId,
     display_name: profile.display_name,
     income_is_red: Boolean(profile.income_is_red),
     theme_primary_color: profile.theme_primary_color,
@@ -112,7 +112,7 @@ profileRouter.put('/me', zValidator('json', z.object({
   ).bind(userId).first<{ display_name: string | null; income_is_red: boolean | null; theme_primary_color: string | null; appearance_json: string | null; avatar_version: number; email: string }>();
   if (!profile) return c.json({ error: 'Profile not found' }, 404);
   return c.json({
-    id: userId,
+    user_id: userId,
     email: profile.email,
     display_name: profile.display_name,
     income_is_red: Boolean(profile.income_is_red),
