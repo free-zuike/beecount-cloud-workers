@@ -1199,4 +1199,50 @@ adminRouter.post('/data-cleanup/clean', async (c) => {
   return c.json(result);
 });
 
+// ---------------------------------------------------------------------------
+// GET /admin/r2/attachment-orphans - 列出 R2 中无 DB 引用的附件孤儿（只读）
+// 扫描 R2 的 attachments 前缀对象，与 attachment_files 表的 storage_path 比对，
+// 返回 R2 有但 DB 无引用的孤儿文件清单（key / size / uploaded）。只读，不删除。
+// ---------------------------------------------------------------------------
+
+adminRouter.get('/r2/attachment-orphans', async (c) => {
+  const r2 = c.env.R2;
+  if (!r2) return c.json({ error: 'R2 not configured' }, 400);
+  const db = c.env.DB;
+
+  // 收集 DB 中所有附件 storage_path（去掉 beecount/ 前缀后作为已知 key 集合）
+  const rows = await db
+    .prepare(`SELECT storage_path FROM attachment_files WHERE storage_path IS NOT NULL AND storage_path != ''`)
+    .all<{ storage_path: string }>();
+  const knownKeys = new Set<string>();
+  for (const r of rows.results) {
+    knownKeys.add(r.storage_path.replace(/^beecount\//, ''));
+  }
+
+  // 列出 R2 中 attachments 前缀的对象（含新旧两种前缀；beecount/attachments/ 与
+  // attachments/ 互不重叠，分别列取）
+  const objects: { key: string; size: number; uploaded: string }[] = [];
+  for (const prefix of ['beecount/attachments/', 'attachments/']) {
+    let cursor: string | undefined;
+    do {
+      const listing = await r2.list({ prefix, limit: 1000, cursor });
+      for (const obj of listing.objects) {
+        objects.push({ key: obj.key, size: obj.size, uploaded: obj.uploaded.toISOString() });
+      }
+      cursor = listing.truncated ? listing.objects[listing.objects.length - 1].key : undefined;
+    } while (cursor);
+  }
+
+  // 孤儿 = R2 有但 DB 无引用
+  const orphans = objects.filter(o => !knownKeys.has(o.key.replace(/^beecount\//, '')));
+  const totalSize = orphans.reduce((sum, o) => sum + o.size, 0);
+
+  return c.json({
+    total: orphans.length,
+    total_size: totalSize,
+    scanned: objects.length,
+    orphans: orphans.sort((a, b) => a.key.localeCompare(b.key)),
+  });
+});
+
 export default adminRouter;
