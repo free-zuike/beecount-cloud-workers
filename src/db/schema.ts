@@ -523,10 +523,6 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     // user-global 实体的真正唯一约束：(user_id, sync_id)
     // 原版用独立表 UserAccountProjection，PK=(user_id, sync_id)
     await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS ix_read_account_user_sync ON read_account_projection(user_id, sync_id)').run();
-    // 清理可能存在的重复行（保留 source_change_id 最大的）
-    await db.prepare(`DELETE FROM read_account_projection WHERE rowid NOT IN (
-      SELECT MAX(rowid) FROM read_account_projection GROUP BY user_id, sync_id
-    )`).run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS read_category_projection (
@@ -551,9 +547,6 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     // user-global 唯一约束
     await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS ix_read_category_user_sync ON read_category_projection(user_id, sync_id)').run();
-    await db.prepare(`DELETE FROM read_category_projection WHERE rowid NOT IN (
-      SELECT MAX(rowid) FROM read_category_projection GROUP BY user_id, sync_id
-    )`).run();
 
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_cat_ledger_kind ON read_category_projection(ledger_id, kind)').run();
 
@@ -571,9 +564,6 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     // user-global 唯一约束
     await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS ix_read_tag_user_sync ON read_tag_projection(user_id, sync_id)').run();
-    await db.prepare(`DELETE FROM read_tag_projection WHERE rowid NOT IN (
-      SELECT MAX(rowid) FROM read_tag_projection GROUP BY user_id, sync_id
-    )`).run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS read_budget_projection (
