@@ -402,7 +402,7 @@ async function loadLedgerContext(
 
   // category 是 user-global，按 user_id 拉（跨 ledger 统一）
   const catRows = await db
-    .prepare('SELECT name, parent_name FROM read_category_projection WHERE user_id = ?')
+    .prepare('SELECT name, parent_name FROM user_category_projection WHERE user_id = ?')
     .bind(userId)
     .all<{ name: string | null; parent_name: string | null }>();
   const parentNamesWithChildren = new Set(
@@ -417,7 +417,7 @@ async function loadLedgerContext(
 
   // account 排除隐藏（#240）：隐藏账户不作为新交易记账目标
   const acctRows = await db
-    .prepare('SELECT name, currency, hidden FROM read_account_projection WHERE user_id = ?')
+    .prepare('SELECT name, currency, hidden FROM user_account_projection WHERE user_id = ?')
     .bind(userId)
     .all<{ name: string | null; currency: string | null; hidden: number | null }>();
   const acctSet = new Map<string, string | null>();
@@ -554,9 +554,9 @@ aiRouter.post('/ask', zValidator('json', AiAskSchema), async (c) => {
 
   const [txRows, acctRows, catRows, tagRows] = await Promise.all([
     db.prepare(`SELECT tx_type, amount, happened_at, note, category_name FROM read_tx_projection WHERE ledger_id IN (${placeholders}) ORDER BY happened_at DESC LIMIT 100`).bind(...ledgerIds).all<{ tx_type: string; amount: number; happened_at: string; note: string | null; category_name: string | null }>(),
-    db.prepare(`SELECT name, account_type, currency FROM read_account_projection WHERE ledger_id IN (${placeholders})`).bind(...ledgerIds).all<{ name: string; account_type: string | null; currency: string | null }>(),
-    db.prepare(`SELECT name, kind FROM read_category_projection WHERE ledger_id IN (${placeholders})`).bind(...ledgerIds).all<{ name: string; kind: string | null }>(),
-    db.prepare(`SELECT name, color FROM read_tag_projection WHERE ledger_id IN (${placeholders})`).bind(...ledgerIds).all<{ name: string; color: string | null }>(),
+    db.prepare(`SELECT name, account_type, currency FROM user_account_projection WHERE user_id = ?`).bind(userId).all<{ name: string; account_type: string | null; currency: string | null }>(),
+    db.prepare(`SELECT name, kind FROM user_category_projection WHERE user_id = ?`).bind(userId).all<{ name: string; kind: string | null }>(),
+    db.prepare(`SELECT name, color FROM user_tag_projection WHERE user_id = ?`).bind(userId).all<{ name: string; color: string | null }>(),
   ]);
 
   const contextParts: string[] = ['## 最近交易（最新100条）'];

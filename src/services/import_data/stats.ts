@@ -38,9 +38,9 @@ export async function buildExistingSets(
   const ownerId = ledger.user_id;
   const [txRows, catRows, acctRows, tagRows] = await Promise.all([
     db.prepare('SELECT amount, happened_at FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id).all<{ amount: number; happened_at: string }>(),
-    db.prepare('SELECT name FROM read_category_projection WHERE user_id = ?').bind(ownerId).all<{ name: string }>(),
-    db.prepare('SELECT name FROM read_account_projection WHERE user_id = ?').bind(ownerId).all<{ name: string }>(),
-    db.prepare('SELECT name FROM read_tag_projection WHERE user_id = ?').bind(ownerId).all<{ name: string }>(),
+    db.prepare('SELECT name FROM user_category_projection WHERE user_id = ?').bind(ownerId).all<{ name: string }>(),
+    db.prepare('SELECT name FROM user_account_projection WHERE user_id = ?').bind(ownerId).all<{ name: string }>(),
+    db.prepare('SELECT name FROM user_tag_projection WHERE user_id = ?').bind(ownerId).all<{ name: string }>(),
   ]);
 
   return {

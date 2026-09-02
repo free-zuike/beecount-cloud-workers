@@ -216,8 +216,8 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
     let categorySyncId: string | null = tx.category_id || null;
     if (tx.category_name && !categorySyncId) {
       const cat = await db
-        .prepare('SELECT sync_id FROM read_category_projection WHERE ledger_id = ? AND name = ? AND kind = ? LIMIT 1')
-        .bind(ledger.id, tx.category_name, tx.category_kind || txType)
+        .prepare('SELECT sync_id FROM user_category_projection WHERE user_id = ? AND name = ? AND kind = ? LIMIT 1')
+        .bind(userId, tx.category_name, tx.category_kind || txType)
         .first<{ sync_id: string }>();
       if (cat) categorySyncId = cat.sync_id;
     }
@@ -226,8 +226,8 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
     let accountSyncId: string | null = tx.account_id || null;
     if (tx.account_name && !accountSyncId) {
       const acc = await db
-        .prepare('SELECT sync_id FROM read_account_projection WHERE ledger_id = ? AND name = ? LIMIT 1')
-        .bind(ledger.id, tx.account_name)
+        .prepare('SELECT sync_id FROM user_account_projection WHERE user_id = ? AND name = ? LIMIT 1')
+        .bind(userId, tx.account_name)
         .first<{ sync_id: string }>();
       if (acc) accountSyncId = acc.sync_id;
     }
@@ -438,12 +438,12 @@ batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch', zValidator('json'
     const txType = tx.tx_type || 'expense';
     let categorySyncId: string | null = tx.category_id || null;
     if (tx.category_name && !categorySyncId) {
-      const cat = await db.prepare('SELECT sync_id FROM read_category_projection WHERE ledger_id = ? AND name = ? AND kind = ? LIMIT 1').bind(ledger.id, tx.category_name, tx.category_kind || txType).first<{ sync_id: string }>();
+      const cat = await db.prepare('SELECT sync_id FROM user_category_projection WHERE user_id = ? AND name = ? AND kind = ? LIMIT 1').bind(userId, tx.category_name, tx.category_kind || txType).first<{ sync_id: string }>();
       if (cat) categorySyncId = cat.sync_id;
     }
     let accountSyncId: string | null = tx.account_id || null;
     if (tx.account_name && !accountSyncId) {
-      const acc = await db.prepare('SELECT sync_id FROM read_account_projection WHERE ledger_id = ? AND name = ? LIMIT 1').bind(ledger.id, tx.account_name).first<{ sync_id: string }>();
+      const acc = await db.prepare('SELECT sync_id FROM user_account_projection WHERE user_id = ? AND name = ? LIMIT 1').bind(userId, tx.account_name).first<{ sync_id: string }>();
       if (acc) accountSyncId = acc.sync_id;
     }
 

@@ -140,7 +140,7 @@ function mergeDefaultTag(tags: string[] | null | undefined): string[] {
 }
 
 async function ensureMcpTag(db: D1Database, userId: string, ledgerExternalId: string): Promise<void> {
-  const existing = await db.prepare('SELECT sync_id FROM read_tag_projection WHERE user_id = ? AND name = ?').bind(userId, MCP_DEFAULT_TAG).first<any>();
+  const existing = await db.prepare('SELECT sync_id FROM user_tag_projection WHERE user_id = ? AND name = ?').bind(userId, MCP_DEFAULT_TAG).first<any>();
   if (existing) return;
   const sid = randomUUID();
   await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'web-console', 'ledger')`).bind(userId, '', 'tag', sid, 'upsert', JSON.stringify({ syncId: sid, name: MCP_DEFAULT_TAG, color: MCP_DEFAULT_TAG_COLOR, sortOrder: 0 }), nowUtc(), userId).run();
@@ -194,11 +194,11 @@ async function createTxViaWriteRouter(
   const txType = args.tx_type || 'expense';
   if (!['expense', 'income', 'transfer'].includes(txType)) throw new Error(`Invalid tx_type: ${txType}`);
   if (args.category) {
-    const cat = await db.prepare('SELECT sync_id FROM read_category_projection WHERE user_id = ? AND name = ? AND kind = ?').bind(userId, args.category, txType).first<any>();
+    const cat = await db.prepare('SELECT sync_id FROM user_category_projection WHERE user_id = ? AND name = ? AND kind = ?').bind(userId, args.category, txType).first<any>();
     if (!cat) throw new Error(`Category "${args.category}" not found for type "${txType}"`);
   }
   if (args.account) {
-    const acc = await db.prepare('SELECT sync_id FROM read_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<any>();
+    const acc = await db.prepare('SELECT sync_id FROM user_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<any>();
     if (!acc) throw new Error(`Account "${args.account}" not found`);
   }
   await ensureMcpTag(db, userId, led.external_id);
@@ -212,7 +212,7 @@ async function createTxViaWriteRouter(
   // v30 多币种:非转账才折算(转账币种恒=账户币种,本阶段不支持跨币种转账)。
   // 币种优先级:currency 参数 > 账户币种 > 账本本位币。
   if (txType !== 'transfer') {
-    const accCurrency = args.account ? (await db.prepare('SELECT currency FROM read_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<{ currency: string }>())?.currency : null;
+    const accCurrency = args.account ? (await db.prepare('SELECT currency FROM user_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<{ currency: string }>())?.currency : null;
     const ccyFields = await buildCurrencyFields(db, userId, led.currency || 'CNY', accCurrency, args.currency || null, txAmount);
     Object.assign(body, ccyFields);
   }
@@ -301,11 +301,11 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string }, baseUrl: st
         if (!led) throw new Error('Ledger not found');
         const effectiveTxType = (args.tx_type as string) || tx.tx_type;
         if (args.category) {
-          const cat = await db.prepare('SELECT sync_id FROM read_category_projection WHERE user_id = ? AND name = ? AND kind = ?').bind(userId, args.category, effectiveTxType).first<any>();
+          const cat = await db.prepare('SELECT sync_id FROM user_category_projection WHERE user_id = ? AND name = ? AND kind = ?').bind(userId, args.category, effectiveTxType).first<any>();
           if (!cat) throw new Error(`Category "${args.category}" not found for type "${effectiveTxType}"`);
         }
         if (args.account) {
-          const acc = await db.prepare('SELECT sync_id FROM read_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<any>();
+          const acc = await db.prepare('SELECT sync_id FROM user_account_projection WHERE user_id = ? AND name = ?').bind(userId, args.account).first<any>();
           if (!acc) throw new Error(`Account "${args.account}" not found`);
         }
         const body: any = { base_change_id: 0 };
@@ -340,9 +340,9 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string }, baseUrl: st
         if (!led) { r = null; break; }
         const [tx, cat, acc, tag, bud] = await Promise.all([
           db.prepare('SELECT COUNT(*) as cnt FROM read_tx_projection WHERE ledger_id = ?').bind(led.id).first<{ cnt: number }>(),
-          db.prepare('SELECT COUNT(DISTINCT sync_id) as cnt FROM read_category_projection WHERE user_id = ?').bind(userId).first<{ cnt: number }>(),
-          db.prepare('SELECT COUNT(DISTINCT sync_id) as cnt FROM read_account_projection WHERE user_id = ?').bind(userId).first<{ cnt: number }>(),
-          db.prepare('SELECT COUNT(DISTINCT sync_id) as cnt FROM read_tag_projection WHERE user_id = ?').bind(userId).first<{ cnt: number }>(),
+          db.prepare('SELECT COUNT(DISTINCT sync_id) as cnt FROM user_category_projection WHERE user_id = ?').bind(userId).first<{ cnt: number }>(),
+          db.prepare('SELECT COUNT(DISTINCT sync_id) as cnt FROM user_account_projection WHERE user_id = ?').bind(userId).first<{ cnt: number }>(),
+          db.prepare('SELECT COUNT(DISTINCT sync_id) as cnt FROM user_tag_projection WHERE user_id = ?').bind(userId).first<{ cnt: number }>(),
           db.prepare('SELECT COUNT(*) as cnt FROM read_budget_projection WHERE ledger_id = ?').bind(led.id).first<{ cnt: number }>(),
         ]);
         r = { ledger: led.name, transaction_count: tx?.cnt || 0, category_count: cat?.cnt || 0, account_count: acc?.cnt || 0, tag_count: tag?.cnt || 0, budget_count: bud?.cnt || 0 };
@@ -375,7 +375,7 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string }, baseUrl: st
         break;
       }
       case 'list_categories': {
-        let q = 'SELECT sync_id, name, kind, level, icon, parent_name, sort_order FROM read_category_projection WHERE user_id = ?'; const p: unknown[] = [userId];
+        let q = 'SELECT sync_id, name, kind, level, icon, parent_name, sort_order FROM user_category_projection WHERE user_id = ?'; const p: unknown[] = [userId];
         if (args.kind) { q += ' AND kind = ?'; p.push(args.kind); }
         const rows = await db.prepare(q).bind(...p).all();
         const seen = new Map<string, any>();
@@ -390,7 +390,7 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string }, baseUrl: st
         break;
       }
       case 'list_accounts': {
-        let q = 'SELECT sync_id, name, account_type, currency, initial_balance, bank_name, card_last_four, credit_limit, billing_day, payment_due_day FROM read_account_projection WHERE user_id = ?'; const p: unknown[] = [userId];
+        let q = 'SELECT sync_id, name, account_type, currency, initial_balance, bank_name, card_last_four, credit_limit, billing_day, payment_due_day FROM user_account_projection WHERE user_id = ?'; const p: unknown[] = [userId];
         if (args.account_type) { q += ' AND account_type = ?'; p.push(args.account_type); }
         const rows = await db.prepare(q).bind(...p).all();
         const seen = new Map<string, any>();
@@ -399,7 +399,7 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string }, baseUrl: st
         break;
       }
       case 'list_tags': {
-        const rows = await db.prepare('SELECT sync_id, name, color FROM read_tag_projection WHERE user_id = ?').bind(userId).all();
+        const rows = await db.prepare('SELECT sync_id, name, color FROM user_tag_projection WHERE user_id = ?').bind(userId).all();
         const seen = new Map<string, any>();
         for (const r of (rows.results as any[])) { if (!seen.has(r.sync_id)) seen.set(r.sync_id, r); }
         r = [...seen.values()].sort((a, b) => (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase())).map((x: any) => ({ name: x.name, color: x.color }));
@@ -467,7 +467,7 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string }, baseUrl: st
         const accCcyMap: Record<string, string | null> = {};
         if (accNames.length) {
           const placeholders = accNames.map(() => '?').join(',');
-          const accRows = await db.prepare(`SELECT name, currency FROM read_account_projection WHERE user_id = ? AND name IN (${placeholders})`).bind(userId, ...accNames).all();
+          const accRows = await db.prepare(`SELECT name, currency FROM user_account_projection WHERE user_id = ? AND name IN (${placeholders})`).bind(userId, ...accNames).all();
           for (const a of (accRows.results as any[])) accCcyMap[a.name] = (a.currency || '');
         }
         const batchTxs: any[] = [];

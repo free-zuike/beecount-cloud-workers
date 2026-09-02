@@ -186,9 +186,9 @@ adminRouter.get('/overview', async (c) => {
     db.prepare('SELECT COUNT(*) as cnt FROM users WHERE is_enabled = 1').first<{ cnt: number }>(),
     db.prepare('SELECT COUNT(*) as cnt FROM ledgers').first<{ cnt: number }>(),
     db.prepare('SELECT COUNT(*) as cnt FROM read_tx_projection').first<{ cnt: number }>(),
-    db.prepare('SELECT COUNT(DISTINCT sync_id) as cnt FROM read_account_projection').first<{ cnt: number }>(),
-    db.prepare('SELECT COUNT(DISTINCT sync_id) as cnt FROM read_category_projection').first<{ cnt: number }>(),
-    db.prepare('SELECT COUNT(DISTINCT sync_id) as cnt FROM read_tag_projection').first<{ cnt: number }>(),
+    db.prepare('SELECT COUNT(DISTINCT sync_id) as cnt FROM user_account_projection').first<{ cnt: number }>(),
+    db.prepare('SELECT COUNT(DISTINCT sync_id) as cnt FROM user_category_projection').first<{ cnt: number }>(),
+    db.prepare('SELECT COUNT(DISTINCT sync_id) as cnt FROM user_tag_projection').first<{ cnt: number }>(),
   ]);
 
   const response: AdminOverviewOut = {
@@ -845,16 +845,16 @@ adminRouter.post('/backups/create', zValidator('json', BackupCreateSchema), asyn
     .bind(ledger.id)
     .all();
   const accounts = await db
-    .prepare('SELECT * FROM read_account_projection WHERE ledger_id = ?')
-    .bind(ledger.id)
+    .prepare('SELECT * FROM user_account_projection WHERE user_id = ?')
+    .bind(userId)
     .all();
   const categories = await db
-    .prepare('SELECT * FROM read_category_projection WHERE ledger_id = ?')
-    .bind(ledger.id)
+    .prepare('SELECT * FROM user_category_projection WHERE user_id = ?')
+    .bind(userId)
     .all();
   const tags = await db
-    .prepare('SELECT * FROM read_tag_projection WHERE ledger_id = ?')
-    .bind(ledger.id)
+    .prepare('SELECT * FROM user_tag_projection WHERE user_id = ?')
+    .bind(userId)
     .all();
   const budgets = await db
     .prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?')

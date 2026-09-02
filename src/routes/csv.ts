@@ -152,7 +152,7 @@ csvRouter.get('/workspace/transactions.csv', zValidator('query', ExportQuerySche
   let txQuery = `
     SELECT tx.*, cp.level AS cat_level, cp.parent_name AS cat_parent_name
     FROM read_tx_projection tx
-    LEFT JOIN read_category_projection cp ON cp.user_id = tx.user_id AND cp.sync_id = tx.category_sync_id
+    LEFT JOIN user_category_projection cp ON cp.user_id = tx.user_id AND cp.sync_id = tx.category_sync_id
     WHERE tx.ledger_id IN (${placeholders})
   `;
   const txParams: (string | number)[] = [...ledgerInternalIds];

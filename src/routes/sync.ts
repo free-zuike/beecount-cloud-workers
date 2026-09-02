@@ -90,7 +90,7 @@ async function resolveTagsCsv(db: D1Database, tags: string | null, tagIds: strin
   const nameMap: Record<string, string> = {};
   const uuidParts = parts.filter((p) => UUID_RE.test(p));
   if (uuidParts.length > 0) {
-    const rows = await db.prepare(`SELECT sync_id, name FROM read_tag_projection WHERE sync_id IN (${uuidParts.map(() => '?').join(',')})`).bind(...uuidParts).all<{ sync_id: string; name: string }>();
+    const rows = await db.prepare(`SELECT sync_id, name FROM user_tag_projection WHERE sync_id IN (${uuidParts.map(() => '?').join(',')})`).bind(...uuidParts).all<{ sync_id: string; name: string }>();
     for (const r of rows.results) nameMap[r.sync_id] = r.name;
   }
   const resolved = parts.map((p) => (UUID_RE.test(p) ? (nameMap[p] ?? p) : p));
@@ -968,10 +968,10 @@ syncRouter.get('/debug', async (c) => {
   ).bind(userId).all<{ entity_type: string; scope: string; cnt: number }>();
 
   // 统计 projection 中各表的数量
-  const catProjCount = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM read_category_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
+  const catProjCount = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM user_category_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
   const txProjCount = await db.prepare("SELECT COUNT(*) as cnt FROM read_tx_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
-  const accProjCount = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM read_account_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
-  const tagProjCount = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM read_tag_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
+  const accProjCount = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM user_account_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
+  const tagProjCount = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM user_tag_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
   const budgetProjCount = await db.prepare("SELECT COUNT(DISTINCT sync_id) as cnt FROM read_budget_projection WHERE user_id = ?").bind(userId).first<{ cnt: number }>();
 
   // sync_cursors 状态
@@ -1369,9 +1369,9 @@ syncRouter.get('/full', async (c) => {
 
     const [txs, accounts, categories, tags, budgets] = await Promise.all([
       db.prepare('SELECT * FROM read_tx_projection WHERE ledger_id = ?').bind(effectiveLedgerId).all(),
-      db.prepare('SELECT * FROM read_account_projection WHERE user_id = ?').bind(userId).all(),
-      db.prepare('SELECT * FROM read_category_projection WHERE user_id = ?').bind(userId).all(),
-      db.prepare('SELECT * FROM read_tag_projection WHERE user_id = ?').bind(userId).all(),
+      db.prepare('SELECT * FROM user_account_projection WHERE user_id = ?').bind(userId).all(),
+      db.prepare('SELECT * FROM user_category_projection WHERE user_id = ?').bind(userId).all(),
+      db.prepare('SELECT * FROM user_tag_projection WHERE user_id = ?').bind(userId).all(),
       db.prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?').bind(effectiveLedgerId).all(),
     ]);
     console.log(`[SYNC] sync/full ledger=${ledger.id} ext=${ledger.external_id} effective=${effectiveLedgerId} txs=${txs.results.length} budgets=${budgets.results.length} userId=${userId}`);
@@ -1432,9 +1432,9 @@ async function preloadUserGlobalProjections(
     if (!list.includes(ch.entity_sync_id)) list.push(ch.entity_sync_id);
   }
   for (const [type, syncIds] of byType.entries()) {
-    const table = type === 'category' ? 'read_category_projection'
-      : type === 'account' ? 'read_account_projection'
-      : type === 'tag' ? 'read_tag_projection'
+    const table = type === 'category' ? 'user_category_projection'
+      : type === 'account' ? 'user_account_projection'
+      : type === 'tag' ? 'user_tag_projection'
       : null;
     if (!table) continue;
     const typeMap = new Map<string, any>();
@@ -1471,13 +1471,13 @@ async function applyUserChangeToProjection(
     if (entity_type === 'category') {
       // 删除前收集图标信息（SELECT 在外，batch 内只做 DB 写）
       const catIcon = r2 ? await db.prepare(
-        'SELECT icon_cloud_file_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
+        'SELECT icon_cloud_file_id FROM user_category_projection WHERE sync_id = ? AND user_id = ?'
       ).bind(entity_sync_id, userId).first<{ icon_cloud_file_id: string | null }>() : null;
       const fileId = catIcon?.icon_cloud_file_id;
 
       // 删投影 + 紧凑化历史（同事务原子）
       await db.batch([
-        db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+        db.prepare('DELETE FROM user_category_projection WHERE sync_id = ? AND user_id = ?')
           .bind(entity_sync_id, userId),
         db.prepare(
           `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
@@ -1488,7 +1488,7 @@ async function applyUserChangeToProjection(
       if (fileId) {
         try {
           const stillUsed = await db.prepare(
-            'SELECT COUNT(*) as cnt FROM read_category_projection WHERE icon_cloud_file_id = ? AND user_id = ?'
+            'SELECT COUNT(*) as cnt FROM user_category_projection WHERE icon_cloud_file_id = ? AND user_id = ?'
           ).bind(fileId, userId).first<{ cnt: number }>();
           if (!stillUsed || stillUsed.cnt === 0) {
             const iconRow = await db.prepare(
@@ -1503,7 +1503,7 @@ async function applyUserChangeToProjection(
       }
     } else if (entity_type === 'account') {
       await db.batch([
-        db.prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
+        db.prepare('DELETE FROM user_account_projection WHERE sync_id = ? AND user_id = ?')
           .bind(entity_sync_id, userId),
         db.prepare(
           `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
@@ -1511,7 +1511,7 @@ async function applyUserChangeToProjection(
       ]);
     } else if (entity_type === 'tag') {
       await db.batch([
-        db.prepare('DELETE FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
+        db.prepare('DELETE FROM user_tag_projection WHERE sync_id = ? AND user_id = ?')
           .bind(entity_sync_id, userId),
         db.prepare(
           `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
@@ -1528,7 +1528,7 @@ async function applyUserChangeToProjection(
     // 原版 projection.py:378-386：parentSyncId 缺失时用 parentName + kind + level=1 反查
     if (parentSyncId === null && parentName) {
       const parentRow = await db.prepare(
-        'SELECT sync_id FROM read_category_projection WHERE user_id = ? AND name = ? AND kind = ? AND (level IS NULL OR level = 1) LIMIT 1'
+        'SELECT sync_id FROM user_category_projection WHERE user_id = ? AND name = ? AND kind = ? AND (level IS NULL OR level = 1) LIMIT 1'
       ).bind(userId, parentName, payload.kind ?? null).first<{ sync_id: string }>();
       if (parentRow) parentSyncId = parentRow.sync_id;
     }
@@ -1540,7 +1540,7 @@ async function applyUserChangeToProjection(
 
     // 合并 rename 检查和现有行查询为一次 SELECT
     const existingRow = await db.prepare(
-      'SELECT name, kind, level, sort_order, icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256, parent_name, parent_sync_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
+      'SELECT name, kind, level, sort_order, icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256, parent_name, parent_sync_id FROM user_category_projection WHERE sync_id = ? AND user_id = ?'
     ).bind(entity_sync_id, userId).first<{
       name: string | null; kind: string | null; level: number | null;
       sort_order: number | null; icon: string | null; icon_type: string | null;
@@ -1596,19 +1596,19 @@ async function applyUserChangeToProjection(
       vals.push(entity_sync_id, userId);
       stmts.push(
         db.prepare(
-          `UPDATE read_category_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+          `UPDATE user_category_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
         ).bind(...vals),
       );
     } else {
       stmts.push(
         db.prepare(
-          `INSERT OR REPLACE INTO read_category_projection
-           (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+          `INSERT OR REPLACE INTO user_category_projection
+           (sync_id, user_id, name, kind, level, sort_order,
             icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
             parent_name, parent_sync_id, source_change_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).bind(
-          null, entity_sync_id, userId, merged.name, merged.kind,
+          entity_sync_id, userId, merged.name, merged.kind,
           merged.level, merged.sort_order, merged.icon, merged.icon_type,
           merged.custom_icon_path, merged.icon_cloud_file_id, merged.icon_cloud_sha256,
           merged.parent_name, merged.parent_sync_id, change.change_id ?? 0,
@@ -1629,7 +1629,7 @@ async function applyUserChangeToProjection(
 
     // 合并 rename 检查和现有行查询为一次 SELECT
     const existingRow = await db.prepare(
-      'SELECT name, account_type, currency, initial_balance, note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden FROM read_account_projection WHERE sync_id = ? AND user_id = ?'
+      'SELECT name, account_type, currency, initial_balance, note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden FROM user_account_projection WHERE sync_id = ? AND user_id = ?'
     ).bind(entity_sync_id, userId).first<{
       name: string | null; account_type: string | null; currency: string | null;
       initial_balance: number | null; note: string | null; credit_limit: number | null;
@@ -1685,18 +1685,18 @@ async function applyUserChangeToProjection(
       vals.push(entity_sync_id, userId);
       stmts2.push(
         db.prepare(
-          `UPDATE read_account_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+          `UPDATE user_account_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
         ).bind(...vals),
       );
     } else {
       stmts2.push(
         db.prepare(
-          `INSERT OR REPLACE INTO read_account_projection
-           (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+          `INSERT OR REPLACE INTO user_account_projection
+           (sync_id, user_id, name, account_type, currency, initial_balance,
             note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).bind(
-          null, entity_sync_id, userId, merged.name, merged.account_type,
+          entity_sync_id, userId, merged.name, merged.account_type,
           merged.currency, merged.initial_balance, merged.note,
           merged.credit_limit, merged.billing_day,
           merged.payment_due_day, merged.bank_name,
@@ -1710,7 +1710,7 @@ async function applyUserChangeToProjection(
     // Rename cascade：标签改名时更新 read_tx_projection 的 tags_csv
     const newName = (payload.name as string) ?? null;
     if (newName) {
-      const prevRow = await db.prepare('SELECT name FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
+      const prevRow = await db.prepare('SELECT name FROM user_tag_projection WHERE sync_id = ? AND user_id = ?')
         .bind(entity_sync_id, userId).first<{ name: string | null }>();
       const oldName = prevRow?.name;
       if (oldName && oldName !== newName) {
@@ -1734,7 +1734,7 @@ async function applyUserChangeToProjection(
 
     // merge_with_existing
     const existingRow = await db.prepare(
-      'SELECT name, color FROM read_tag_projection WHERE sync_id = ? AND user_id = ?'
+      'SELECT name, color FROM user_tag_projection WHERE sync_id = ? AND user_id = ?'
     ).bind(entity_sync_id, userId).first<{ name: string | null; color: string | null }>();
 
     const merged = {
@@ -1752,13 +1752,13 @@ async function applyUserChangeToProjection(
       vals.push(change.change_id ?? 0);
       vals.push(entity_sync_id, userId);
       await db.prepare(
-        `UPDATE read_tag_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+        `UPDATE user_tag_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
       ).bind(...vals).run();
     } else {
       await db.prepare(
-        `INSERT OR REPLACE INTO read_tag_projection (ledger_id, sync_id, user_id, name, color, source_change_id)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      ).bind(null, entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
+        `INSERT OR REPLACE INTO user_tag_projection (sync_id, user_id, name, color, source_change_id)
+         VALUES (?, ?, ?, ?, ?)`
+      ).bind(entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
     }
   } else if (entity_type === 'exchange_rate_override') {
     if (change.action === 'delete') {
@@ -1810,9 +1810,6 @@ async function applyChangeToProjection(
   if (change.entity_type === 'ledger_snapshot' && change.action === 'delete') {
     await db.batch([
       db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledgerId),
-      db.prepare('DELETE FROM read_account_projection WHERE ledger_id = ?').bind(ledgerId),
-      db.prepare('DELETE FROM read_category_projection WHERE ledger_id = ?').bind(ledgerId),
-      db.prepare('DELETE FROM read_tag_projection WHERE ledger_id = ?').bind(ledgerId),
       db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').bind(ledgerId),
       db.prepare('DELETE FROM ledgers WHERE id = ?').bind(ledgerId),
     ]);
@@ -2048,14 +2045,14 @@ async function applyChangeToProjection(
     case 'account': {
       if (change.action === 'delete') {
         await db
-          .prepare('DELETE FROM read_account_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
+          .prepare('DELETE FROM user_account_projection WHERE user_id = ? AND sync_id = ?')
+          .bind(userId, change.entity_sync_id)
           .run();
       } else {
         // 只更新 payload 中提供的字段（与原版 exclude_unset 对齐），避免覆盖未传字段为 NULL
         const existing = await db
-          .prepare('SELECT sync_id FROM read_account_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
+          .prepare('SELECT sync_id FROM user_account_projection WHERE user_id = ? AND sync_id = ?')
+          .bind(userId, change.entity_sync_id)
           .first();
         
         const accountFields: Array<{ col: string; val: unknown }> = [];
@@ -2077,9 +2074,9 @@ async function applyChangeToProjection(
             accountFields.push({ col: 'source_change_id', val: change.change_id });
             const sets = accountFields.map(f => `${f.col} = ?`).join(', ');
             const vals = accountFields.map(f => f.val);
-            vals.push(ledgerId, change.entity_sync_id);
+            vals.push(userId, change.entity_sync_id);
             await db
-              .prepare(`UPDATE read_account_projection SET ${sets} WHERE ledger_id = ? AND sync_id = ?`)
+              .prepare(`UPDATE user_account_projection SET ${sets} WHERE user_id = ? AND sync_id = ?`)
               .bind(...vals)
               .run();
           }
@@ -2087,13 +2084,12 @@ async function applyChangeToProjection(
           // INSERT 需要所有字段，用默认值填充
           await db
             .prepare(
-              `INSERT INTO read_account_projection
-               (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+              `INSERT INTO user_account_projection
+               (sync_id, user_id, name, account_type, currency, initial_balance,
                 note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             )
             .bind(
-              ledgerId,
               change.entity_sync_id,
               userId,
               payload.name ?? null,
@@ -2106,7 +2102,7 @@ async function applyChangeToProjection(
               payload.payment_due_day ?? null,
               payload.bank_name ?? null,
               payload.card_last_four ?? null,
-              (payload as any).hidden ?? null,
+              (payload as any).hidden ?? 0,
               change.change_id,
             )
             .run();
@@ -2118,24 +2114,24 @@ async function applyChangeToProjection(
     case 'category': {
       if (change.action === 'delete') {
         await db
-          .prepare('DELETE FROM read_category_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
+          .prepare('DELETE FROM user_category_projection WHERE user_id = ? AND sync_id = ?')
+          .bind(userId, change.entity_sync_id)
           .run();
       } else {
         const existing = await db
-          .prepare('SELECT sync_id FROM read_category_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
+          .prepare('SELECT sync_id FROM user_category_projection WHERE user_id = ? AND sync_id = ?')
+          .bind(userId, change.entity_sync_id)
           .first();
 
         if (existing) {
           await db
             .prepare(
-              `UPDATE read_category_projection SET
+              `UPDATE user_category_projection SET
                name = ?, kind = ?, level = ?, sort_order = ?,
                icon = ?, icon_type = ?, custom_icon_path = ?,
                icon_cloud_file_id = ?, icon_cloud_sha256 = ?,
                parent_name = ?, source_change_id = ?
-               WHERE ledger_id = ? AND sync_id = ?`
+               WHERE user_id = ? AND sync_id = ?`
             )
             .bind(
               payload.name ?? null,
@@ -2149,21 +2145,20 @@ async function applyChangeToProjection(
               payload.icon_cloud_sha256 ?? null,
               payload.parent_name ?? null,
               change.change_id,
-              ledgerId,
+              userId,
               change.entity_sync_id,
             )
             .run();
         } else {
           await db
             .prepare(
-              `INSERT INTO read_category_projection
-               (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+              `INSERT INTO user_category_projection
+               (sync_id, user_id, name, kind, level, sort_order,
                 icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
                 parent_name, source_change_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             )
             .bind(
-              ledgerId,
               change.entity_sync_id,
               userId,
               payload.name ?? null,
@@ -2187,39 +2182,38 @@ async function applyChangeToProjection(
     case 'tag': {
       if (change.action === 'delete') {
         await db
-          .prepare('DELETE FROM read_tag_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
+          .prepare('DELETE FROM user_tag_projection WHERE user_id = ? AND sync_id = ?')
+          .bind(userId, change.entity_sync_id)
           .run();
       } else {
         const existing = await db
-          .prepare('SELECT sync_id FROM read_tag_projection WHERE ledger_id = ? AND sync_id = ?')
-          .bind(ledgerId, change.entity_sync_id)
+          .prepare('SELECT sync_id FROM user_tag_projection WHERE user_id = ? AND sync_id = ?')
+          .bind(userId, change.entity_sync_id)
           .first();
 
         if (existing) {
           await db
             .prepare(
-              `UPDATE read_tag_projection SET
+              `UPDATE user_tag_projection SET
                name = ?, color = ?, source_change_id = ?
-               WHERE ledger_id = ? AND sync_id = ?`
+               WHERE user_id = ? AND sync_id = ?`
             )
             .bind(
               payload.name ?? null,
               payload.color ?? null,
               change.change_id,
-              ledgerId,
+              userId,
               change.entity_sync_id,
             )
             .run();
         } else {
           await db
             .prepare(
-              `INSERT INTO read_tag_projection
-               (ledger_id, sync_id, user_id, name, color, source_change_id)
-               VALUES (?, ?, ?, ?, ?, ?)`
+              `INSERT INTO user_tag_projection
+               (sync_id, user_id, name, color, source_change_id)
+               VALUES (?, ?, ?, ?, ?)`
             )
             .bind(
-              ledgerId,
               change.entity_sync_id,
               userId,
               payload.name ?? null,

@@ -68,14 +68,14 @@ export async function clean(
         }
       } else if (record.type === 'category') {
         if (record.sync_id) {
-          await db.prepare('DELETE FROM read_category_projection WHERE sync_id = ?').bind(record.sync_id).run();
+          await db.prepare('DELETE FROM user_category_projection WHERE sync_id = ?').bind(record.sync_id).run();
           successCount++;
         } else {
           failures.push({ record_key: recordKey, error: 'category record 缺 sync_id' });
         }
       } else if (record.type === 'tag') {
         if (record.sync_id) {
-          await db.prepare('DELETE FROM read_tag_projection WHERE sync_id = ?').bind(record.sync_id).run();
+          await db.prepare('DELETE FROM user_tag_projection WHERE sync_id = ?').bind(record.sync_id).run();
           successCount++;
         } else {
           failures.push({ record_key: recordKey, error: 'tag record 缺 sync_id' });
@@ -89,7 +89,7 @@ export async function clean(
         }
       } else if (record.type === 'account') {
         if (record.sync_id) {
-          await db.prepare('DELETE FROM read_account_projection WHERE sync_id = ?').bind(record.sync_id).run();
+          await db.prepare('DELETE FROM user_account_projection WHERE sync_id = ?').bind(record.sync_id).run();
           successCount++;
         } else {
           failures.push({ record_key: recordKey, error: 'account record 缺 sync_id' });

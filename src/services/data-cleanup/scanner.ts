@@ -32,46 +32,46 @@ async function scanTxMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> 
 }
 
 /**
- * 扫描 read_category_projection 中没有对应 sync_changes 的分类记录
+ * 扫描 user_category_projection 中没有对应 sync_changes 的分类记录
  */
 async function scanCategoryMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> {
   const result = await db.prepare(`
-    SELECT r.sync_id, r.ledger_id, r.user_id, r.name FROM read_category_projection r
+    SELECT r.sync_id, r.user_id, r.name FROM user_category_projection r
     LEFT JOIN sync_changes c ON r.sync_id = c.entity_sync_id AND c.entity_type = 'category'
     WHERE c.change_id IS NULL
     LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ sync_id: string; ledger_id: string; user_id: string; name: string }>();
+  `).bind(MAX_ORPHANS).all<{ sync_id: string; user_id: string; name: string }>();
 
   return result.results.map((row) => ({
     type: 'category' as const,
     user_id: row.user_id,
     sync_id: row.sync_id,
-    ledger_id: row.ledger_id,
+    ledger_id: null, // user-global 不挂账本
     title: `孤立分类投影 ${row.name || row.sync_id.substring(0, 8)}`,
     subtitle: `categorySyncId=${row.sync_id.substring(0, 8)}...`,
-    extra: { ledger_id: row.ledger_id },
+    extra: { ledger_id: null },
   }));
 }
 
 /**
- * 扫描 read_tag_projection 中没有对应 sync_changes 的标签记录
+ * 扫描 user_tag_projection 中没有对应 sync_changes 的标签记录
  */
 async function scanTagMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> {
   const result = await db.prepare(`
-    SELECT r.sync_id, r.ledger_id, r.user_id, r.name FROM read_tag_projection r
+    SELECT r.sync_id, r.user_id, r.name FROM user_tag_projection r
     LEFT JOIN sync_changes c ON r.sync_id = c.entity_sync_id AND c.entity_type = 'tag'
     WHERE c.change_id IS NULL
     LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ sync_id: string; ledger_id: string; user_id: string; name: string }>();
+  `).bind(MAX_ORPHANS).all<{ sync_id: string; user_id: string; name: string }>();
 
   return result.results.map((row) => ({
     type: 'tag' as const,
     user_id: row.user_id,
     sync_id: row.sync_id,
-    ledger_id: row.ledger_id,
+    ledger_id: null, // user-global 不挂账本
     title: `孤立标签投影 ${row.name || row.sync_id.substring(0, 8)}`,
     subtitle: `tagSyncId=${row.sync_id.substring(0, 8)}...`,
-    extra: { ledger_id: row.ledger_id },
+    extra: { ledger_id: null },
   }));
 }
 
@@ -98,24 +98,24 @@ async function scanBudgetMissingSyncChange(db: D1Database): Promise<OrphanRecord
 }
 
 /**
- * 扫描 read_account_projection 中没有对应 sync_changes 的账户记录
+ * 扫描 user_account_projection 中没有对应 sync_changes 的账户记录
  */
 async function scanAccountMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> {
   const result = await db.prepare(`
-    SELECT r.sync_id, r.ledger_id, r.user_id, r.name FROM read_account_projection r
+    SELECT r.sync_id, r.user_id, r.name FROM user_account_projection r
     LEFT JOIN sync_changes c ON r.sync_id = c.entity_sync_id AND c.entity_type = 'account'
     WHERE c.change_id IS NULL
     LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ sync_id: string; ledger_id: string; user_id: string; name: string }>();
+  `).bind(MAX_ORPHANS).all<{ sync_id: string; user_id: string; name: string }>();
 
   return result.results.map((row) => ({
     type: 'account' as const,
     user_id: row.user_id,
     sync_id: row.sync_id,
-    ledger_id: row.ledger_id,
+    ledger_id: null, // user-global 不挂账本
     title: `孤立账户投影 ${row.name || row.sync_id.substring(0, 8)}`,
     subtitle: `accountSyncId=${row.sync_id.substring(0, 8)}...`,
-    extra: { ledger_id: row.ledger_id },
+    extra: { ledger_id: null },
   }));
 }
 
@@ -182,7 +182,7 @@ async function scanAttachmentNoRef(db: D1Database): Promise<OrphanRecord[]> {
     let stillReferenced = txHit && txHit.cnt > 0;
     if (!stillReferenced) {
       const catHit = await db.prepare(
-        `SELECT COUNT(*) as cnt FROM read_category_projection
+        `SELECT COUNT(*) as cnt FROM user_category_projection
          WHERE user_id = ? AND icon_cloud_file_id = ?`
       ).bind(row.user_id, row.id).first<{ cnt: number }>();
       stillReferenced = catHit && catHit.cnt > 0;

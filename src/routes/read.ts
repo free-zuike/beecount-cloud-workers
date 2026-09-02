@@ -825,19 +825,19 @@ readRouter.get('/ledgers/:ledgerExternalId/stats', async (c) => {
         .first<{ cnt: number }>(),
       db
         .prepare(
-          `SELECT COUNT(DISTINCT sync_id) as cnt FROM read_account_projection WHERE user_id = ?`
+          `SELECT COUNT(DISTINCT sync_id) as cnt FROM user_account_projection WHERE user_id = ?`
         )
         .bind(userId)
         .first<{ cnt: number }>(),
       db
         .prepare(
-          `SELECT COUNT(DISTINCT sync_id) as cnt FROM read_category_projection WHERE user_id = ?`
+          `SELECT COUNT(DISTINCT sync_id) as cnt FROM user_category_projection WHERE user_id = ?`
         )
         .bind(userId)
         .first<{ cnt: number }>(),
       db
         .prepare(
-          `SELECT COUNT(DISTINCT sync_id) as cnt FROM read_tag_projection WHERE user_id = ?`
+          `SELECT COUNT(DISTINCT sync_id) as cnt FROM user_tag_projection WHERE user_id = ?`
         )
         .bind(userId)
         .first<{ cnt: number }>(),
@@ -876,7 +876,7 @@ readRouter.get('/ledgers/:ledgerExternalId/stats', async (c) => {
       : Promise.resolve({ cnt: 0 }),
     db
       .prepare(
-        `SELECT COUNT(*) as cnt FROM read_category_projection
+        `SELECT COUNT(*) as cnt FROM user_category_projection
          WHERE user_id = ? AND icon_cloud_file_id IS NOT NULL AND icon_cloud_file_id != ''`
       )
       .bind(userId)
@@ -1158,7 +1158,7 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
     .prepare(
       `SELECT DISTINCT r.sync_id, r.name, r.account_type, r.currency, r.initial_balance,
               r.note, r.credit_limit, r.billing_day, r.payment_due_day, r.bank_name, r.card_last_four, r.hidden
-       FROM read_account_projection r
+       FROM user_account_projection r
        WHERE r.user_id = ?
        ORDER BY LOWER(r.name) ASC`
     )
@@ -1264,7 +1264,7 @@ readRouter.get('/ledgers/:ledgerExternalId/categories', async (c) => {
       `SELECT DISTINCT r.sync_id, r.name, r.kind, r.level, r.sort_order,
               r.icon, r.icon_type, r.custom_icon_path,
               r.icon_cloud_file_id, r.icon_cloud_sha256, r.parent_name
-       FROM read_category_projection r
+       FROM user_category_projection r
        WHERE r.user_id = ?
        ORDER BY r.kind, r.sort_order, LOWER(r.name)`
     )
@@ -1340,7 +1340,7 @@ readRouter.get('/ledgers/:ledgerExternalId/tags', async (c) => {
   const rows = await db
     .prepare(
       `SELECT DISTINCT r.sync_id, r.name, r.color
-       FROM read_tag_projection r
+       FROM user_tag_projection r
        WHERE r.user_id = ?
        ORDER BY LOWER(r.name) ASC`
     )
@@ -1410,7 +1410,7 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets', async (c) => {
   // 构建 category sync_id → name 映射
   const catRows = await db
     .prepare(
-      `SELECT DISTINCT r.sync_id, r.name FROM read_category_projection r
+      `SELECT DISTINCT r.sync_id, r.name FROM user_category_projection r
        WHERE r.user_id = ?`
     )
     .bind(userId)
@@ -1527,8 +1527,8 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
       // 子分类展开：查找所有子分类（用 parent_sync_id 匹配，与原版 _expand_category_to_children 对齐）
       const categorySyncIds: string[] = [b.category_sync_id];
       const children = await db
-        .prepare('SELECT sync_id FROM read_category_projection WHERE ledger_id = ? AND parent_sync_id = ?')
-        .bind(ledger.id, b.category_sync_id)
+        .prepare('SELECT sync_id FROM user_category_projection WHERE user_id = ? AND parent_sync_id = ?')
+        .bind(userId, b.category_sync_id)
         .all<{ sync_id: string }>();
       categorySyncIds.push(...children.results.map(c => c.sync_id));
 

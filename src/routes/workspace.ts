@@ -376,8 +376,8 @@ workspaceRouter.get('/accounts', async (c) => {
     ledgerMeta[l.id] = { external_id: l.external_id, name: l.name };
   });
 
-  let acctQuery = `SELECT * FROM read_account_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`;
-  const acctParams: string[] = [...ledgerInternalIds];
+  let acctQuery = `SELECT * FROM user_account_projection WHERE 1=1`;
+  const acctParams: string[] = [];
 
   // 默认按当前用户过滤，防止看到其他用户的数据
   if (filterUserId) {
@@ -403,7 +403,7 @@ workspaceRouter.get('/accounts', async (c) => {
 
   const items = [];
   for (const row of acctRows.results) {
-    const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
+    const ledExtId = ''; // user-global 不挂账本
     const accountSyncId = row.sync_id as string;
     const initialBalance = (row.initial_balance as number) ?? 0;
 
@@ -430,7 +430,7 @@ workspaceRouter.get('/accounts', async (c) => {
       initial_balance: initialBalance,
       last_change_id: row.source_change_id,
       ledger_id: ledExtId,
-      ledger_name: ledgerMeta[row.ledger_id as string]?.name ?? null,
+      ledger_name: null,
       created_by_user_id: currentUser?.id ?? null,
       created_by_email: currentUser?.email ?? null,
       note: row.note,
@@ -486,8 +486,8 @@ workspaceRouter.get('/categories', async (c) => {
     ledgerMeta[l.id] = { external_id: l.external_id, name: l.name };
   });
 
-  let catQuery = `SELECT * FROM read_category_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`;
-  const catParams: string[] = [...ledgerInternalIds];
+  let catQuery = `SELECT * FROM user_category_projection WHERE 1=1`;
+  const catParams: string[] = [];
 
   if (filterUserId) {
     catQuery += ' AND user_id = ?';
@@ -518,7 +518,7 @@ workspaceRouter.get('/categories', async (c) => {
   const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string }>();
 
   const items = catRows.results.map((row) => {
-    const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
+    const ledExtId = ''; // user-global 不挂账本
 
     return {
       id: row.sync_id,
@@ -534,7 +534,7 @@ workspaceRouter.get('/categories', async (c) => {
       parent_name: row.parent_name,
       last_change_id: row.source_change_id,
       ledger_id: ledExtId,
-      ledger_name: ledgerMeta[row.ledger_id as string]?.name ?? null,
+      ledger_name: null,
       created_by_user_id: currentUser?.id ?? null,
       created_by_email: currentUser?.email ?? null,
       tx_count: txCountMap[row.sync_id as string] ?? 0,
@@ -580,8 +580,8 @@ workspaceRouter.get('/tags', async (c) => {
     ledgerMeta[l.id] = { external_id: l.external_id, name: l.name };
   });
 
-  let tagQuery = `SELECT * FROM read_tag_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`;
-  const tagParams: string[] = [...ledgerInternalIds];
+  let tagQuery = `SELECT * FROM user_tag_projection WHERE 1=1`;
+  const tagParams: string[] = [];
 
   if (filterUserId) {
     tagQuery += ' AND user_id = ?';
@@ -603,7 +603,7 @@ workspaceRouter.get('/tags', async (c) => {
 
   // 预聚合每个 tag 的 tx 统计 — 单次查询代替 N+1（与原版对齐）
   const tagStats: Record<string, { tx_count: number; expense_total: number; income_total: number }> = {};
-  const tagRowsForStats = await db.prepare(`SELECT sync_id, name, ledger_id FROM read_tag_projection WHERE (ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) OR ledger_id IS NULL)`).bind(...ledgerInternalIds).all<{ sync_id: string; name: string; ledger_id: string | null }>();
+  const tagRowsForStats = await db.prepare(`SELECT sync_id, name FROM user_tag_projection WHERE user_id = ?`).bind(userId).all<{ sync_id: string; name: string }>();
   const tagSyncIds = tagRowsForStats.results.map(r => r.sync_id);
 
   if (tagSyncIds.length > 0) {
@@ -647,7 +647,7 @@ workspaceRouter.get('/tags', async (c) => {
   const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string }>();
 
   const items = tagRows.results.map((row) => {
-    const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
+    const ledExtId = ''; // user-global 不挂账本
     const stats = tagStats[row.sync_id as string] ?? { tx_count: 0, expense_total: 0, income_total: 0 };
 
     return {
@@ -656,7 +656,7 @@ workspaceRouter.get('/tags', async (c) => {
       color: row.color,
       last_change_id: row.source_change_id,
       ledger_id: ledExtId,
-      ledger_name: ledgerMeta[row.ledger_id as string]?.name ?? null,
+      ledger_name: null,
       created_by_user_id: currentUser?.id ?? null,
       created_by_email: currentUser?.email ?? null,
       tx_count: stats.tx_count,
@@ -765,7 +765,7 @@ workspaceRouter.get('/budgets', async (c) => {
       spent: spent,
       last_change_id: row.source_change_id,
       ledger_id: ledExtId,
-      ledger_name: ledgerMeta[row.ledger_id as string]?.name ?? null,
+      ledger_name: null,
       created_by_user_id: currentUser?.id ?? null,
       created_by_email: currentUser?.email ?? null,
     };
@@ -1977,7 +1977,7 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
     .prepare(
       `SELECT DISTINCT sync_id, name, kind, level, sort_order, icon, icon_type,
               icon_cloud_file_id, icon_cloud_sha256, parent_name
-       FROM read_category_projection
+       FROM user_category_projection
        WHERE user_id = ? AND sync_id IS NOT NULL AND sync_id != ''
        ORDER BY kind, sort_order, LOWER(name) ASC`
     )
@@ -1988,7 +1988,7 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
     .prepare(
       `SELECT DISTINCT sync_id, name, account_type, currency, initial_balance, note,
               credit_limit, billing_day, payment_due_day, bank_name, card_last_four
-       FROM read_account_projection
+       FROM user_account_projection
        WHERE user_id = ? AND sync_id IS NOT NULL AND sync_id != ''
        ORDER BY LOWER(name) ASC`
     )
@@ -1998,7 +1998,7 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
   const ownerTags = await db
     .prepare(
       `SELECT DISTINCT sync_id, name, color
-       FROM read_tag_projection
+       FROM user_tag_projection
        WHERE user_id = ? AND sync_id IS NOT NULL AND sync_id != ''
        ORDER BY LOWER(name) ASC`
     )
@@ -2160,7 +2160,7 @@ workspaceRouter.get('/net-worth-history', async (c) => {
   // 获取所有账户（含 hidden 和 account_type）
   const targetUserId = filterUserId || userId;
   const accounts = await db
-    .prepare(`SELECT sync_id, initial_balance, currency, account_type, hidden FROM read_account_projection WHERE user_id = ?`)
+    .prepare(`SELECT sync_id, initial_balance, currency, account_type, hidden FROM user_account_projection WHERE user_id = ?`)
     .bind(targetUserId)
     .all<{ sync_id: string; initial_balance: number; currency: string | null; account_type: string | null; hidden: number | null }>();
 

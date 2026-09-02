@@ -126,7 +126,7 @@ async function resolveTagsCsv(db: D1Database, tags: string | string[] | null, ta
   const nameMap: Record<string, string> = {};
   const uuidParts = parts.filter((p) => UUID_RE.test(p));
   if (uuidParts.length > 0) {
-    const rows = await db.prepare(`SELECT sync_id, name FROM read_tag_projection WHERE sync_id IN (${uuidParts.map(() => '?').join(',')})`).bind(...uuidParts).all<{ sync_id: string; name: string }>();
+    const rows = await db.prepare(`SELECT sync_id, name FROM user_tag_projection WHERE sync_id IN (${uuidParts.map(() => '?').join(',')})`).bind(...uuidParts).all<{ sync_id: string; name: string }>();
     for (const r of rows.results) nameMap[r.sync_id] = r.name;
   }
   const resolved = parts.map((p) => (UUID_RE.test(p) ? (nameMap[p] ?? p) : p));
@@ -784,7 +784,7 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     const tagNames = resolvedTagsCsv.split(',').map(t => t.trim()).filter(Boolean);
     if (tagNames.length > 0) {
       const placeholders = tagNames.map(() => '?').join(',');
-      const tagRows = await db.prepare(`SELECT sync_id FROM read_tag_projection WHERE user_id = ? AND name IN (${placeholders})`).bind(userId, ...tagNames).all<{ sync_id: string }>();
+      const tagRows = await db.prepare(`SELECT sync_id FROM user_tag_projection WHERE user_id = ? AND name IN (${placeholders})`).bind(userId, ...tagNames).all<{ sync_id: string }>();
       if (tagRows.results.length > 0) {
         payload.tagIds = tagRows.results.map(r => r.sync_id);
       } else {
@@ -876,12 +876,12 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
   // 只改 hidden 时带上现有 account_type，防止 App 覆写为 null
   let extraType: Record<string, string> = {};
   if (req.hidden !== undefined && req.account_type === undefined) {
-    const existing = await db.prepare('SELECT account_type FROM read_account_projection WHERE sync_id = ? AND user_id = ?').bind(accountSyncId, userId).first<{ account_type: string | null }>();
+    const existing = await db.prepare('SELECT account_type FROM user_account_projection WHERE sync_id = ? AND user_id = ?').bind(accountSyncId, userId).first<{ account_type: string | null }>();
     if (existing?.account_type) extraType = { type: existing.account_type };
   }
 
   // 取完整账户数据写入 payload（与原版 _diff_entity_list 一致，App 需要完整数据）
-  const full = await db.prepare('SELECT * FROM read_account_projection WHERE sync_id = ? AND user_id = ?').bind(accountSyncId, userId).first<Record<string, unknown>>();
+  const full = await db.prepare('SELECT * FROM user_account_projection WHERE sync_id = ? AND user_id = ?').bind(accountSyncId, userId).first<Record<string, unknown>>();
 
   const changePayload = full ? safeJsonStringify({
       syncId: accountSyncId,
@@ -904,7 +904,7 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
 
   // sync_changes + projection 同事务原子写入（db.batch = SQL transaction，任一失败整批回滚）
   const existingAccount = await db
-    .prepare('SELECT sync_id FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
+    .prepare('SELECT sync_id FROM user_account_projection WHERE sync_id = ? AND user_id = ?')
     .bind(accountSyncId, userId)
     .first();
 
@@ -933,17 +933,17 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
 
     projectionStmt = db
       .prepare(
-        `UPDATE read_account_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
+        `UPDATE user_account_projection SET ${sets.join(', ')} WHERE sync_id = ? AND user_id = ?`
       )
       .bind(...vals);
   } else {
     // INSERT 需要所有字段（用默认值填充未提供的字段）
     projectionStmt = db
       .prepare(
-        `INSERT INTO read_account_projection
-         (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+        `INSERT INTO user_account_projection
+         (sync_id, user_id, name, account_type, currency, initial_balance,
           note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
-         VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()))`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()))`
       )
       .bind(accountSyncId, userId, req.name ?? null, req.account_type ?? null,
         req.currency ?? null, req.initial_balance ?? 0, req.note ?? null,
@@ -1008,7 +1008,7 @@ writeRouter.delete('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteBa
        VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
     )
       .bind(userId, 'account', accountSyncId, 'delete', '{}', serverNow, userId),
-    db.prepare('DELETE FROM read_account_projection WHERE sync_id = ? AND user_id = ?')
+    db.prepare('DELETE FROM user_account_projection WHERE sync_id = ? AND user_id = ?')
       .bind(accountSyncId, userId),
   ]);
 
@@ -1052,7 +1052,7 @@ writeRouter.patch('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteTagUpda
   }
 
   // 取完整标签数据写入 payload（与原版 _diff_entity_list 一致）
-  const fullTag = await db.prepare('SELECT * FROM read_tag_projection WHERE sync_id = ? AND user_id = ?').bind(tagSyncId, userId).first<Record<string, unknown>>();
+  const fullTag = await db.prepare('SELECT * FROM user_tag_projection WHERE sync_id = ? AND user_id = ?').bind(tagSyncId, userId).first<Record<string, unknown>>();
 
   // sync_changes + projection 同事务原子写入（db.batch，原逻辑的 try/catch 回删补偿不再需要）
   const batchResults = await db.batch([
@@ -1067,12 +1067,12 @@ writeRouter.patch('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteTagUpda
         color: req.color ?? fullTag.color,
       }) : safeJsonStringify({ syncId: tagSyncId, name: req.name, color: req.color ?? null }), serverNow, userId),
     db.prepare(
-      `INSERT INTO read_tag_projection
-       (ledger_id, sync_id, user_id, name, color, source_change_id)
-       VALUES (?, ?, ?, ?, ?, (SELECT last_insert_rowid()))
-       ON CONFLICT(ledger_id, sync_id) DO UPDATE SET name = ?, color = ?, source_change_id = (SELECT last_insert_rowid())`
+      `INSERT INTO user_tag_projection
+       (sync_id, user_id, name, color, source_change_id)
+       VALUES (?, ?, ?, ?, (SELECT last_insert_rowid()))
+       ON CONFLICT(user_id, sync_id) DO UPDATE SET name = ?, color = ?, source_change_id = (SELECT last_insert_rowid())`
     )
-      .bind(null, tagSyncId, userId, req.name, req.color ?? null, req.name, req.color ?? null),
+      .bind(tagSyncId, userId, req.name, req.color ?? null, req.name, req.color ?? null),
   ]);
 
   const newChangeId = batchResults[0].meta.last_row_id as number;
@@ -1123,7 +1123,7 @@ writeRouter.delete('/ledgers/:ledgerId/tags/:id', zValidator('json', WriteBaseSc
        VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
     )
       .bind(userId, 'tag', tagSyncId, 'delete', '{}', serverNow, userId),
-    db.prepare('DELETE FROM read_tag_projection WHERE sync_id = ? AND user_id = ?')
+    db.prepare('DELETE FROM user_tag_projection WHERE sync_id = ? AND user_id = ?')
       .bind(tagSyncId, userId),
   ]);
 
@@ -1333,13 +1333,13 @@ writeRouter.post('/ledgers/:ledgerId/accounts', zValidator('json', WriteAccountC
     )
       .bind(userId, 'account', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId),
     db.prepare(
-      `INSERT INTO read_account_projection
-       (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance,
+      `INSERT INTO user_account_projection
+       (sync_id, user_id, name, account_type, currency, initial_balance,
         note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()))`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()))`
     )
       .bind(
-        null, syncId, userId, req.name, req.account_type ?? null,
+        syncId, userId, req.name, req.account_type ?? null,
         req.currency ?? null, req.initial_balance ?? 0, req.note ?? null,
         req.credit_limit ?? null, req.billing_day ?? null, req.payment_due_day ?? null,
         req.bank_name ?? null, req.card_last_four ?? null,
@@ -1392,7 +1392,7 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
   
   const existingCategory = await db
     .prepare(
-      `SELECT sync_id, name, kind FROM read_category_projection 
+      `SELECT sync_id, name, kind FROM user_category_projection 
        WHERE user_id = ? AND LOWER(name) = ? AND LOWER(kind) = ? LIMIT 1`
     )
     .bind(userId, normalizedName, normalizedKind)
@@ -1432,11 +1432,11 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
     )
       .bind(userId, 'category', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId),
     db.prepare(
-      `INSERT INTO read_category_projection
-       (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+      `INSERT INTO user_category_projection
+       (sync_id, user_id, name, kind, level, sort_order,
         icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
         parent_name, source_change_id)
-       VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()))`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()))`
     )
       .bind(
         syncId, userId, req.name, req.kind, req.level ?? null,
@@ -1491,7 +1491,7 @@ writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteC
   }
 
   // 取完整分类数据写入 payload（与原版 _diff_entity_list 一致）
-  const fullCat = await db.prepare('SELECT * FROM read_category_projection WHERE sync_id = ? AND user_id = ?').bind(categorySyncId, userId).first<Record<string, unknown>>();
+  const fullCat = await db.prepare('SELECT * FROM user_category_projection WHERE sync_id = ? AND user_id = ?').bind(categorySyncId, userId).first<Record<string, unknown>>();
 
   // sync_changes + projection 同事务原子写入（db.batch，原 try/catch 回删补偿不再需要）
   const fullPayload = fullCat ? safeJsonStringify({
@@ -1515,13 +1515,13 @@ writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteC
 
   // 分类是 user-global 实体(ledger_id=NULL)，用 sync_id + user_id 判断已存在（预查后按分支构建语句）
   const existing = await db
-    .prepare('SELECT sync_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+    .prepare('SELECT sync_id FROM user_category_projection WHERE sync_id = ? AND user_id = ?')
     .bind(categorySyncId, userId).first();
 
   let projectionStmt;
   if (existing) {
     projectionStmt = db.prepare(
-      `UPDATE read_category_projection SET name=?, kind=?, level=?, sort_order=?, icon=?, icon_type=?,
+      `UPDATE user_category_projection SET name=?, kind=?, level=?, sort_order=?, icon=?, icon_type=?,
        custom_icon_path=?, icon_cloud_file_id=?, icon_cloud_sha256=?, parent_name=?, source_change_id=(SELECT last_insert_rowid())
        WHERE sync_id=? AND user_id=?`
     ).bind(req.name, req.kind, req.level ?? null, req.sort_order ?? null, req.icon ?? null,
@@ -1530,11 +1530,11 @@ writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteC
       categorySyncId, userId);
   } else {
     projectionStmt = db.prepare(
-      `INSERT INTO read_category_projection
-       (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+      `INSERT INTO user_category_projection
+       (sync_id, user_id, name, kind, level, sort_order,
         icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
         parent_name, source_change_id)
-       VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()))`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()))`
     ).bind(categorySyncId, userId, req.name, req.kind, req.level ?? null,
       req.sort_order ?? null, req.icon ?? null, req.icon_type ?? null,
       req.custom_icon_path ?? null, req.icon_cloud_file_id ?? null,
@@ -1592,7 +1592,7 @@ writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', Write
 
   // 清理分类图标 R2 文件（先删 projection 行，再检查引用计数）
   const catIcon = await db.prepare(
-    'SELECT icon_cloud_file_id FROM read_category_projection WHERE sync_id = ? AND user_id = ?'
+    'SELECT icon_cloud_file_id FROM user_category_projection WHERE sync_id = ? AND user_id = ?'
   ).bind(categorySyncId, userId).first<{ icon_cloud_file_id: string | null }>();
   const fileIdToDelete = catIcon?.icon_cloud_file_id;
 
@@ -1604,7 +1604,7 @@ writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', Write
        VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'web-console', 'user')`
     )
       .bind(userId, 'category', categorySyncId, 'delete', '{}', serverNow, userId),
-    db.prepare('DELETE FROM read_category_projection WHERE sync_id = ? AND user_id = ?')
+    db.prepare('DELETE FROM user_category_projection WHERE sync_id = ? AND user_id = ?')
       .bind(categorySyncId, userId),
   ]);
 
@@ -1613,7 +1613,7 @@ writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', Write
   // 引用计数：检查图标是否还被其他 category 引用（与原版 gc_orphan_attachments 对齐）
   if (fileIdToDelete && c.env.R2) {
     const stillUsed = await db.prepare(
-      'SELECT COUNT(*) as cnt FROM read_category_projection WHERE icon_cloud_file_id = ? AND user_id = ?'
+      'SELECT COUNT(*) as cnt FROM user_category_projection WHERE icon_cloud_file_id = ? AND user_id = ?'
     ).bind(fileIdToDelete, userId).first<{ cnt: number }>();
     if (!stillUsed || stillUsed.cnt === 0) {
       const iconRow = await db.prepare(
@@ -1680,11 +1680,11 @@ writeRouter.post('/ledgers/:ledgerId/tags', zValidator('json', WriteTagCreateSch
     )
       .bind(userId, 'tag', syncId, 'upsert', safeJsonStringify(payload), serverNow, userId),
     db.prepare(
-      `INSERT INTO read_tag_projection
-       (ledger_id, sync_id, user_id, name, color, source_change_id)
-       VALUES (?, ?, ?, ?, ?, (SELECT last_insert_rowid()))`
+      `INSERT INTO user_tag_projection
+       (sync_id, user_id, name, color, source_change_id)
+       VALUES (?, ?, ?, ?, (SELECT last_insert_rowid()))`
     )
-      .bind(null, syncId, userId, req.name, req.color ?? null),
+      .bind(syncId, userId, req.name, req.color ?? null),
   ]);
 
   const newChangeId = batchResults[0].meta.last_row_id as number;
@@ -1980,7 +1980,7 @@ writeRouter.get('/ledgers/:ledgerId/budgets/usage', async (c) => {
     if (b.budget_type === 'category' && b.category_sync_id) {
       // 查子分类
       const childIds = await db.prepare(
-        'SELECT sync_id FROM read_category_projection WHERE user_id = ? AND parent_name = (SELECT name FROM read_category_projection WHERE sync_id = ? AND user_id = ?)'
+        'SELECT sync_id FROM user_category_projection WHERE user_id = ? AND parent_name = (SELECT name FROM user_category_projection WHERE sync_id = ? AND user_id = ?)'
       ).bind(userId, b.category_sync_id, userId).all<{ sync_id: string }>();
       const ids = [b.category_sync_id, ...childIds.results.map(c => c.sync_id)];
       baseQuery += ` AND category_sync_id IN (${ids.map(() => '?').join(',')})`;
@@ -2110,8 +2110,8 @@ writeRouter.post('/categories/init-defaults', async (c) => {
   }
 
   const existingCategories = await db
-    .prepare('SELECT name, kind FROM read_category_projection WHERE ledger_id = ? AND level = 1')
-    .bind(ledger.id)
+    .prepare('SELECT name, kind FROM user_category_projection WHERE user_id = ? AND level = 1')
+    .bind(userId)
     .all<{ name: string; kind: string }>();
 
   const existingNames = new Set(existingCategories.results.map(c => `${c.kind}:${c.name}`));
@@ -2147,14 +2147,14 @@ writeRouter.post('/categories/init-defaults', async (c) => {
       )
         .bind(userId, 'category', parentSyncId, 'upsert', safeJsonStringify(payload), serverNow, userId),
       db.prepare(
-        `INSERT INTO read_category_projection
-         (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+        `INSERT INTO user_category_projection
+         (sync_id, user_id, name, kind, level, sort_order,
           icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
           parent_name, source_change_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
       )
         .bind(
-          null, parentSyncId, userId, cat.name, cat.kind, 1,
+          parentSyncId, userId, cat.name, cat.kind, 1,
           cat.sort_order, cat.icon, 'emoji', null, null, null, null,
         ),
     ];
@@ -2182,14 +2182,14 @@ writeRouter.post('/categories/init-defaults', async (c) => {
           )
             .bind(userId, 'category', childSyncId, 'upsert', safeJsonStringify(childPayload), serverNow, userId),
           db.prepare(
-            `INSERT INTO read_category_projection
-             (ledger_id, sync_id, user_id, name, kind, level, sort_order,
+            `INSERT INTO user_category_projection
+             (sync_id, user_id, name, kind, level, sort_order,
               icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
               parent_name, source_change_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
           )
             .bind(
-              null, childSyncId, userId, child.name, cat.kind, 2,
+              childSyncId, userId, child.name, cat.kind, 2,
               cat.sort_order * 100 + (cat.children.indexOf(child) + 1),
               child.icon, 'emoji', null, null, null, cat.name,
             ),

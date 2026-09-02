@@ -38,10 +38,10 @@ function nowUtc(): string {
  */
 export async function createSyncChangesForUser(db: D1Database, targetUserId: string): Promise<void> {
   const projectionTables: Array<{ table: string; entityType: string }> = [
-    { table: 'read_category_projection', entityType: 'category' },
-    { table: 'read_tag_projection', entityType: 'tag' },
+    { table: 'user_category_projection', entityType: 'category' },
+    { table: 'user_tag_projection', entityType: 'tag' },
     { table: 'read_budget_projection', entityType: 'budget' },
-    { table: 'read_account_projection', entityType: 'account' },
+    { table: 'user_account_projection', entityType: 'account' },
     { table: 'read_tx_projection', entityType: 'transaction' },
   ];
 
@@ -92,17 +92,17 @@ backupRouter.get('/export', async (c) => {
       .all();
 
     const accounts = await db
-      .prepare('SELECT * FROM read_account_projection WHERE user_id = ?')
+      .prepare('SELECT * FROM user_account_projection WHERE user_id = ?')
       .bind(userId)
       .all();
 
     const categories = await db
-      .prepare('SELECT * FROM read_category_projection WHERE user_id = ?')
+      .prepare('SELECT * FROM user_category_projection WHERE user_id = ?')
       .bind(userId)
       .all();
 
     const tags = await db
-      .prepare('SELECT * FROM read_tag_projection WHERE user_id = ?')
+      .prepare('SELECT * FROM user_tag_projection WHERE user_id = ?')
       .bind(userId)
       .all();
 
@@ -149,7 +149,7 @@ backupRouter.delete('/clear-data', async (c) => {
 
     // 1. 先提取账户数据（保留）
     const accounts = await db
-      .prepare('SELECT * FROM read_account_projection WHERE user_id = ?')
+      .prepare('SELECT * FROM user_account_projection WHERE user_id = ?')
       .bind(userId)
       .all();
 
@@ -180,8 +180,8 @@ backupRouter.delete('/clear-data', async (c) => {
 
     // 4. 直接清理投影表（确保彻底删除）
     await db.prepare('DELETE FROM read_tx_projection WHERE user_id = ?').bind(userId).run();
-    await db.prepare('DELETE FROM read_category_projection WHERE user_id = ?').bind(userId).run();
-    await db.prepare('DELETE FROM read_tag_projection WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM user_category_projection WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM user_tag_projection WHERE user_id = ?').bind(userId).run();
     await db.prepare('DELETE FROM read_budget_projection WHERE user_id = ?').bind(userId).run();
 
     // 5. 清理附件文件（按 user_id 或 ledger_id）
@@ -208,13 +208,12 @@ backupRouter.delete('/clear-data', async (c) => {
       // 恢复账户
       await db
         .prepare(
-          `INSERT OR IGNORE INTO read_account_projection 
-           (ledger_id, sync_id, user_id, name, account_type, currency, initial_balance, 
-            note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, source_change_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT OR IGNORE INTO user_account_projection 
+           (sync_id, user_id, name, account_type, currency, initial_balance, 
+            note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
         )
         .bind(
-          account.ledger_id,
           account.sync_id,
           userId,
           account.name,
@@ -262,7 +261,7 @@ backupRouter.post('/fix-data', async (c) => {
 
   // 诊断：投影表行数
   const projCounts: Record<string, number> = {};
-  for (const t of ['read_budget_projection', 'read_account_projection', 'read_category_projection', 'read_tag_projection', 'read_tx_projection']) {
+  for (const t of ['read_budget_projection', 'user_account_projection', 'user_category_projection', 'user_tag_projection', 'read_tx_projection']) {
     try {
       const r = await db.prepare(`SELECT COUNT(*) as cnt FROM "${t}"`).first<{ cnt: number }>();
       projCounts[t] = r?.cnt ?? 0;
@@ -271,7 +270,7 @@ backupRouter.post('/fix-data', async (c) => {
   fixes['projection_counts'] = projCounts;
 
   // 1. 修复 sync_id 为空的投影记录
-  const tables = ['read_account_projection', 'read_category_projection', 'read_tag_projection', 'read_tx_projection', 'read_budget_projection'];
+  const tables = ['user_account_projection', 'user_category_projection', 'user_tag_projection', 'read_tx_projection', 'read_budget_projection'];
   for (const tableName of tables) {
     try {
       const empty = await db.prepare(`SELECT rowid FROM "${tableName}" WHERE sync_id IS NULL OR sync_id = ''`).all<{ rowid: number }>();
@@ -289,9 +288,9 @@ backupRouter.post('/fix-data', async (c) => {
   // 这样 sync/pull 才能把数据推送给 App
   const projectionTables: Array<{ table: string; entityType: string; ledgerIdCol: string; userCol: string }> = [
     { table: 'read_budget_projection', entityType: 'budget', ledgerIdCol: 'ledger_id', userCol: 'user_id' },
-    { table: 'read_account_projection', entityType: 'account', ledgerIdCol: 'ledger_id', userCol: 'user_id' },
-    { table: 'read_category_projection', entityType: 'category', ledgerIdCol: 'ledger_id', userCol: 'user_id' },
-    { table: 'read_tag_projection', entityType: 'tag', ledgerIdCol: 'ledger_id', userCol: 'user_id' },
+    { table: 'user_account_projection', entityType: 'account', ledgerIdCol: '', userCol: 'user_id' },
+    { table: 'user_category_projection', entityType: 'category', ledgerIdCol: '', userCol: 'user_id' },
+    { table: 'user_tag_projection', entityType: 'tag', ledgerIdCol: '', userCol: 'user_id' },
   ];
 
   for (const pt of projectionTables) {
@@ -303,8 +302,9 @@ backupRouter.post('/fix-data', async (c) => {
       }
 
       // 查找投影表中所有有 sync_id 的记录
+      const ledgerSelect = pt.ledgerIdCol ? `p.${pt.ledgerIdCol} as ledger_id,` : `NULL as ledger_id,`;
       const missing = await db.prepare(`
-        SELECT p.sync_id, p.${pt.userCol} as user_id, p.${pt.ledgerIdCol} as ledger_id, p.source_change_id
+        SELECT p.sync_id, p.${pt.userCol} as user_id, ${ledgerSelect} p.source_change_id
         FROM "${pt.table}" p
         WHERE p.sync_id IS NOT NULL AND p.sync_id != ''
       `).all<{ sync_id: string; user_id: string; ledger_id: string | null; source_change_id: number | null }>();

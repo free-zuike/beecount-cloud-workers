@@ -501,8 +501,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_tx_user_time ON read_tx_projection(user_id, happened_at DESC)').run();
 
     await db.prepare(`
-      CREATE TABLE IF NOT EXISTS read_account_projection (
-        ledger_id TEXT,
+      CREATE TABLE IF NOT EXISTS user_account_projection (
         sync_id TEXT NOT NULL,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         name TEXT,
@@ -515,18 +514,14 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         payment_due_day INTEGER,
         bank_name TEXT,
         card_last_four TEXT,
+        hidden INTEGER NOT NULL DEFAULT 0,
         source_change_id INTEGER DEFAULT 0,
-        PRIMARY KEY (ledger_id, sync_id)
+        PRIMARY KEY (user_id, sync_id)
       )
     `).run();
 
-    // user-global 实体的真正唯一约束：(user_id, sync_id)
-    // 原版用独立表 UserAccountProjection，PK=(user_id, sync_id)
-    await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS ix_read_account_user_sync ON read_account_projection(user_id, sync_id)').run();
-
     await db.prepare(`
-      CREATE TABLE IF NOT EXISTS read_category_projection (
-        ledger_id TEXT,
+      CREATE TABLE IF NOT EXISTS user_category_projection (
         sync_id TEXT NOT NULL,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         name TEXT,
@@ -541,29 +536,71 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         parent_name TEXT,
         parent_sync_id TEXT,
         source_change_id INTEGER DEFAULT 0,
-        PRIMARY KEY (ledger_id, sync_id)
+        PRIMARY KEY (user_id, sync_id)
       )
     `).run();
 
-    // user-global 唯一约束
-    await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS ix_read_category_user_sync ON read_category_projection(user_id, sync_id)').run();
-
-    await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_cat_ledger_kind ON read_category_projection(ledger_id, kind)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS ix_user_cat_kind ON user_category_projection(user_id, kind)').run();
 
     await db.prepare(`
-      CREATE TABLE IF NOT EXISTS read_tag_projection (
-        ledger_id TEXT,
+      CREATE TABLE IF NOT EXISTS user_tag_projection (
         sync_id TEXT NOT NULL,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         name TEXT,
         color TEXT,
         source_change_id INTEGER DEFAULT 0,
-        PRIMARY KEY (ledger_id, sync_id)
+        PRIMARY KEY (user_id, sync_id)
       )
     `).run();
 
-    // user-global 唯一约束
-    await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS ix_read_tag_user_sync ON read_tag_projection(user_id, sync_id)').run();
+    // ---- 迁移：老合并表 read_*_projection → user_*_projection（对齐原版 0010）----
+    // 老库(0010 之前结构)里 projection 挂在 ledger_id 上；新表按 (user_id, sync_id)
+    // 主键去重。同 key 取 source_change_id 最大(全局递增)的版本，杜绝重复行。
+    // 幂等：仅当新表无该行时插入；旧表 migrate 后 drop。
+    const migAccount = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).bind('read_account_projection').first<{ name: string }>();
+    if (migAccount) {
+      await db.prepare(
+        `INSERT OR IGNORE INTO user_account_projection (sync_id, user_id, name, account_type, currency, initial_balance, note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
+         SELECT p.sync_id, p.user_id, p.name, p.account_type, p.currency, p.initial_balance,
+                p.note, p.credit_limit, p.billing_day, p.payment_due_day, p.bank_name, p.card_last_four,
+                COALESCE(p.hidden, 0), p.source_change_id
+         FROM read_account_projection p
+         WHERE NOT EXISTS (
+           SELECT 1 FROM user_account_projection u WHERE u.user_id = p.user_id AND u.sync_id = p.sync_id
+         )`
+      ).run();
+    }
+    const migCategory = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).bind('read_category_projection').first<{ name: string }>();
+    if (migCategory) {
+      await db.prepare(
+        `INSERT OR IGNORE INTO user_category_projection (sync_id, user_id, name, kind, level, sort_order, icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256, parent_name, parent_sync_id, source_change_id)
+         SELECT p.sync_id, p.user_id, p.name, p.kind, p.level, p.sort_order,
+                p.icon, p.icon_type, p.custom_icon_path, p.icon_cloud_file_id, p.icon_cloud_sha256,
+                p.parent_name, p.parent_sync_id, p.source_change_id
+         FROM read_category_projection p
+         WHERE NOT EXISTS (
+           SELECT 1 FROM user_category_projection u WHERE u.user_id = p.user_id AND u.sync_id = p.sync_id
+         )`
+      ).run();
+    }
+    const migTag = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).bind('read_tag_projection').first<{ name: string }>();
+    if (migTag) {
+      await db.prepare(
+        `INSERT OR IGNORE INTO user_tag_projection (sync_id, user_id, name, color, source_change_id)
+         SELECT p.sync_id, p.user_id, p.name, p.color, p.source_change_id
+         FROM read_tag_projection p
+         WHERE NOT EXISTS (
+           SELECT 1 FROM user_tag_projection u WHERE u.user_id = p.user_id AND u.sync_id = p.sync_id
+         )`
+      ).run();
+    }
+    for (const oldTbl of ['read_account_projection', 'read_category_projection', 'read_tag_projection']) {
+      const hasOld = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).bind(oldTbl).first<{ name: string }>();
+      if (hasOld) {
+        // 迁移 INSERT（上方已 await 完成）后旧表数据已全部搬入 user_*，直接删
+        await db.prepare(`DROP TABLE IF EXISTS ${oldTbl}`).run();
+      }
+    }
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS read_budget_projection (
@@ -643,14 +680,14 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_ai_image_cache_user ON ai_image_cache(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_ai_image_cache_created ON ai_image_cache(created_at)').run();
 
-    // 迁移：read_account_projection 添加 hidden 列（用于隐藏/归档账户）
+    // 迁移：user_account_projection 添加 hidden 列（用于隐藏/归档账户）
     try {
-      await db.prepare("ALTER TABLE read_account_projection ADD COLUMN hidden INTEGER DEFAULT 0").run();
+      await db.prepare("ALTER TABLE user_account_projection ADD COLUMN hidden INTEGER DEFAULT 0").run();
     } catch { /* 列已存在则忽略 */ }
 
-    // 迁移：read_category_projection 添加 parent_sync_id 列（用于子分类展开）
+    // 迁移：user_category_projection 添加 parent_sync_id 列（用于子分类展开）
     try {
-      await db.prepare("ALTER TABLE read_category_projection ADD COLUMN parent_sync_id TEXT").run();
+      await db.prepare("ALTER TABLE user_category_projection ADD COLUMN parent_sync_id TEXT").run();
     } catch { /* 列已存在则忽略 */ }
 
     console.log('[INIT] Database tables created/verified successfully');
