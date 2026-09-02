@@ -31,6 +31,11 @@ export interface OrphanRecord {
   extra?: Record<string, unknown>; // cleaner 内部用
 }
 
+/** UI 勾选集合 + 去重用（与原版 OrphanRecord.unique_key 对齐） */
+export function uniqueKey(record: OrphanRecord): string {
+  return `${record.type}:${record.row_id ?? record.sync_id ?? record.file_path ?? ''}`;
+}
+
 export interface ScanReport {
   db_orphans: OrphanRecord[];   // A 类
   file_orphans: OrphanRecord[]; // B 类
