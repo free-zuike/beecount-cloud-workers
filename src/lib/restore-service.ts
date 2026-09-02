@@ -326,22 +326,60 @@ async function importToD1(
 async function uploadAttachments(
   r2: R2Bucket,
   attachments: Map<string, Uint8Array>,
-): Promise<number> {
+): Promise<{ uploaded: number; uploadedKeys: string[] }> {
   let uploaded = 0;
-  
+  const uploadedKeys: string[] = [];
+
   for (const [key, data] of attachments) {
     try {
-      // 统一加 beecount/ 前缀：表行 storage_path 是 beecount/attachments/...，
-      // 若 tar 内已是 beecount/... 则不重复加
+      // 统一加 beecount/ 前缀：与 attachment_files 表行对齐（index.ts 打包同约定）
       const r2Key = key.startsWith('beecount/') ? key : `beecount/${key}`;
       await r2.put(r2Key, data);
       uploaded++;
+      uploadedKeys.push(r2Key);
     } catch (err) {
       console.error(`[Restore] Failed to upload ${key}: ${(err as Error).message}`);
     }
   }
-  
-  return uploaded;
+
+  return { uploaded, uploadedKeys };
+}
+
+/**
+ * 恢复后把 attachment_files.storage_path 改写为与 R2 实际 key 一致。
+ *
+ * 原因：原版备份的 storage_path 是绝对路径（/data/attachments/<user>/<ledger_ext>/<sha[:2]>/<uuid>_<name>），
+ * 直接导入后下载端按 storage_path 拼 R2 key 永远 404（beecount/data/... ≠ beecount/attachments/...）。
+ * 这里按「文件名尾段」关联——原版附件文件名 uuid4.hex 随机唯一，与附件 id 不同，只能按文件名匹配。
+ * worker 自己备份的 storage_path 已是 beecount/ 格式，匹配后不变（幂等）。
+ */
+async function remapAttachmentStoragePaths(
+  db: D1Database,
+  uploadedKeys: string[],
+): Promise<number> {
+  if (uploadedKeys.length === 0) return 0;
+  const rows = await db.prepare(
+    `SELECT id, storage_path FROM attachment_files WHERE storage_path IS NOT NULL AND storage_path != ''`
+  ).all<{ id: string; storage_path: string }>();
+
+  // 文件名尾段 → 实际 R2 key（同一个文件名可能在多个 key 中出现，取最后一个）
+  const keyByFileName = new Map<string, string>();
+  for (const key of uploadedKeys) {
+    const fileName = key.split('/').pop();
+    if (fileName) keyByFileName.set(fileName, key);
+  }
+
+  let updated = 0;
+  for (const row of rows.results) {
+    const fileName = row.storage_path.split('/').pop();
+    if (!fileName) continue;
+    const targetKey = keyByFileName.get(fileName);
+    if (!targetKey || targetKey === row.storage_path) continue;
+    await db.prepare('UPDATE attachment_files SET storage_path = ? WHERE id = ?')
+      .bind(targetKey, row.id).run();
+    updated++;
+  }
+  return updated;
 }
 
 /**
@@ -396,7 +434,9 @@ export async function performRestore(
     const errMsg = errors.length > 0 ? ` (${errors.length} errors: ${errors.slice(0, 3).join('; ')})` : '';
     onProgress?.({ phase: 'importing', bytesTransferred: totalBytes, bytesTotal: totalBytes });
 
-    const attachmentsUploaded = await uploadAttachments(r2, attachments);
+    const { uploaded: attachmentsUploaded, uploadedKeys } = await uploadAttachments(r2, attachments);
+    // 对齐附件表行：把 storage_path 改写为实际上传的 R2 key（原版绝对路径 → beecount/ 格式）
+    const remapped = await remapAttachmentStoragePaths(db, uploadedKeys);
 
     // 重新启用外键约束
     await db.prepare('PRAGMA foreign_keys = ON').run();
@@ -407,7 +447,7 @@ export async function performRestore(
 
     return {
       success: true,
-      message: `Restored ${tablesImported} tables, ${rowsImported} rows, ${attachmentsUploaded} attachments${errMsg}`,
+      message: `Restored ${tablesImported} tables, ${rowsImported} rows, ${attachmentsUploaded} attachments, ${remapped} storage_path remapped${errMsg}`,
       tablesImported,
       rowsImported,
       attachmentsUploaded,

@@ -214,7 +214,10 @@ async function exportTable(db: D1Database, tableName: string): Promise<unknown[]
  */
 async function fetchR2Attachments(r2: R2Bucket): Promise<Map<string, Uint8Array>> {
   const attachments = new Map<string, Uint8Array>();
-  const prefixes = ['attachments/', 'avatars/', 'category-icons/'];
+  // 兼容新旧两套前缀：历史无前缀（attachments/...，早期版本）+ 现行 beecount/ 前缀（beecount/attachments/...）
+  // 生产 R2 附件行 storage_path 是 beecount/attachments/...（index.ts 打包时也按此约定），
+  // 只扫 attachments/ 会漏掉带前缀的对象 → 备份附件收不全。
+  const prefixes = ['attachments/', 'beecount/attachments/', 'avatars/', 'beecount/avatars/', 'category-icons/', 'beecount/category-icons/'];
 
   console.log(`[Backup] Fetching R2 files with prefixes: ${prefixes.join(', ')}`);
 
