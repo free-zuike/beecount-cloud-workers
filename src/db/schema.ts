@@ -565,9 +565,11 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
                 p.note, p.credit_limit, p.billing_day, p.payment_due_day, p.bank_name, p.card_last_four,
                 COALESCE(p.hidden, 0), p.source_change_id
          FROM read_account_projection p
-         WHERE NOT EXISTS (
-           SELECT 1 FROM user_account_projection u WHERE u.user_id = p.user_id AND u.sync_id = p.sync_id
-         )`
+         INNER JOIN (
+           SELECT user_id, sync_id, MAX(source_change_id) AS max_src
+           FROM read_account_projection GROUP BY user_id, sync_id
+         ) latest
+         ON latest.user_id = p.user_id AND latest.sync_id = p.sync_id AND latest.max_src = p.source_change_id`
       ).run();
     }
     const migCategory = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).bind('read_category_projection').first<{ name: string }>();
@@ -578,9 +580,11 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
                 p.icon, p.icon_type, p.custom_icon_path, p.icon_cloud_file_id, p.icon_cloud_sha256,
                 p.parent_name, p.parent_sync_id, p.source_change_id
          FROM read_category_projection p
-         WHERE NOT EXISTS (
-           SELECT 1 FROM user_category_projection u WHERE u.user_id = p.user_id AND u.sync_id = p.sync_id
-         )`
+         INNER JOIN (
+           SELECT user_id, sync_id, MAX(source_change_id) AS max_src
+           FROM read_category_projection GROUP BY user_id, sync_id
+         ) latest
+         ON latest.user_id = p.user_id AND latest.sync_id = p.sync_id AND latest.max_src = p.source_change_id`
       ).run();
     }
     const migTag = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).bind('read_tag_projection').first<{ name: string }>();
@@ -589,9 +593,11 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         `INSERT OR IGNORE INTO user_tag_projection (sync_id, user_id, name, color, source_change_id)
          SELECT p.sync_id, p.user_id, p.name, p.color, p.source_change_id
          FROM read_tag_projection p
-         WHERE NOT EXISTS (
-           SELECT 1 FROM user_tag_projection u WHERE u.user_id = p.user_id AND u.sync_id = p.sync_id
-         )`
+         INNER JOIN (
+           SELECT user_id, sync_id, MAX(source_change_id) AS max_src
+           FROM read_tag_projection GROUP BY user_id, sync_id
+         ) latest
+         ON latest.user_id = p.user_id AND latest.sync_id = p.sync_id AND latest.max_src = p.source_change_id`
       ).run();
     }
     for (const oldTbl of ['read_account_projection', 'read_category_projection', 'read_tag_projection']) {
