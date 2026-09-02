@@ -47,9 +47,9 @@ REGISTRATION_ENABLED = "true"
 # 以下两项在 CI 部署时通过 sed 动态注入（不提交到 git），Fork 用户无需手动配置
 CLOUDFLARE_ACCOUNT_ID = "ci-injected-at-deploy-time"
 D1_DATABASE_ID = "393b596d-31c5-436a-828c-7baab2b113b2"
-CLOUDFLARE_API_TOKEN = "ci-injected-at-deploy-time"
-# JWT_SECRET 通过 Cloudflare Dashboard → Workers → Settings → Variables and Secrets 设置
-# 或 CLI: npx wrangler secret put JWT_SECRET
+# JWT_SECRET 与 CLOUDFLARE_API_TOKEN 通过 Cloudflare Secret 管理（严禁放 [vars] 明文）：
+# - JWT_SECRET:            Dashboard → Workers → Settings → Variables and Secrets，或 npx wrangler secret put JWT_SECRET
+# - CLOUDFLARE_API_TOKEN:  CI 自动注入（deploy.yml 中 wrangler secret put），不在此处定义
 
 [observability]
 enabled = true
