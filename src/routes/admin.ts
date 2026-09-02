@@ -1575,7 +1575,15 @@ adminRouter.get('/accounts/integrity', async (c) => {
   ).all<{ ledger_id: string; sync_id: string; user_id: string; account_sync_id: string | null; from_account_sync_id: string | null; to_account_sync_id: string | null }>();
 
   const missingRefs = new Map<string, { field: string; ledger_id: string; tx_sync_id: string; user_id: string }>();
+  // 诊断：统计三类账户字段的 NULL/空串/非空 分布（定位 scan 与 integrity 矛盾）
+  const diagNulls = { account_sync_id: { null: 0, empty: 0, nonempty: 0 }, from_account_sync_id: { null: 0, empty: 0, nonempty: 0 }, to_account_sync_id: { null: 0, empty: 0, nonempty: 0 } };
   for (const row of txRows.results) {
+    for (const field of ['account_sync_id', 'from_account_sync_id', 'to_account_sync_id'] as const) {
+      const v = row[field];
+      if (v == null) diagNulls[field].null++;
+      else if (v === '') diagNulls[field].empty++;
+      else diagNulls[field].nonempty++;
+    }
     for (const field of ['account_sync_id', 'from_account_sync_id', 'to_account_sync_id'] as const) {
       const accId = row[field];
       if (accId) {
@@ -1630,6 +1638,7 @@ adminRouter.get('/accounts/integrity', async (c) => {
       tx_rows_scanned: txRows.results.length,
       unique_refs: missingRefs.size,
       account_projection_rows: projRows.results.length,
+      account_field_distribution: diagNulls,
     },
     total_tx_refs_missing: missing.length,
     unique_missing_accounts: uniqueAccounts.size,
