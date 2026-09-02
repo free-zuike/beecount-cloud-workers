@@ -1,167 +1,206 @@
 /**
  * 数据清理服务 - 扫描器
  *
- * 与原版 BeeCount-Cloud Python 的 src/services/data_cleanup/scanner.py 对齐。
- * 扫描数据库中的孤立数据（没有对应 sync_changes 的 projection 记录等）。
+ * 与原版 BeeCount-Cloud Python 的 src/services/data_cleanup/scanner.py 彻底对齐。
+ * 扫描数据库中的孤立数据（实体引用已删的断链）。
+ *
+ * 关键差异：原版用 SQLAlchemy NOT EXISTS 相关子查询，关联条件 (user_id, sync_id)
+ * 命中 user_*_projection 复合主键索引 —— 高效；worker 旧实现用 LEFT JOIN + 无索引
+ * 导致笛卡尔扫描打爆 D1 行读取，已废弃。这里全部用 NOT EXISTS。
  */
 
 import type { OrphanRecord, ScanReport } from './types';
 
 const MAX_ORPHANS = 100;
 
-/**
- * 扫描 read_tx_projection 中没有对应 sync_changes 的交易记录
- */
-async function scanTxMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> {
-  const result = await db.prepare(`
-    SELECT p.sync_id, p.ledger_id, p.user_id FROM read_tx_projection p
-    WHERE NOT EXISTS (
-      SELECT 1 FROM sync_changes c
-      WHERE c.entity_sync_id = p.sync_id AND c.entity_type = 'transaction'
-    )
-    LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ sync_id: string; ledger_id: string; user_id: string }>();
-
-  return result.results.map((row) => ({
-    type: 'transaction' as const,
-    user_id: row.user_id,
-    sync_id: row.sync_id,
-    ledger_id: row.ledger_id,
-    title: `孤立交易投影 ${row.sync_id.substring(0, 8)}...`,
-    subtitle: `ledger_id=${row.ledger_id.substring(0, 8)}...`,
-    extra: { ledger_id: row.ledger_id },
-  }));
-}
+// ---------------------------------------------------------------------------
+// A 类：DB 引用断链（实体引用已删） — 与原版 scanner.py A 类对齐
+// ---------------------------------------------------------------------------
 
 /**
- * 扫描 user_category_projection 中没有对应 sync_changes 的分类记录
+ * A1 — read_tx_projection.category_sync_id 在 user_category_projection 不存在。
+ * user-global 维度：同 user_id 范围内 category sync_id 集合反查。
  */
-async function scanCategoryMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> {
+async function scanTxMissingCategory(db: D1Database): Promise<OrphanRecord[]> {
   const result = await db.prepare(`
-    SELECT r.sync_id, r.user_id, r.name FROM user_category_projection r
-    WHERE NOT EXISTS (
-      SELECT 1 FROM sync_changes c
-      WHERE c.entity_sync_id = r.sync_id AND c.entity_type = 'category'
-    )
-    LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ sync_id: string; user_id: string; name: string }>();
-
-  return result.results.map((row) => ({
-    type: 'category' as const,
-    user_id: row.user_id,
-    sync_id: row.sync_id,
-    ledger_id: null, // user-global 不挂账本
-    title: `孤立分类投影 ${row.name || row.sync_id.substring(0, 8)}`,
-    subtitle: `categorySyncId=${row.sync_id.substring(0, 8)}...`,
-    extra: { ledger_id: null },
-  }));
-}
-
-/**
- * 扫描 user_tag_projection 中没有对应 sync_changes 的标签记录
- */
-async function scanTagMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> {
-  const result = await db.prepare(`
-    SELECT r.sync_id, r.user_id, r.name FROM user_tag_projection r
-    WHERE NOT EXISTS (
-      SELECT 1 FROM sync_changes c
-      WHERE c.entity_sync_id = r.sync_id AND c.entity_type = 'tag'
-    )
-    LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ sync_id: string; user_id: string; name: string }>();
-
-  return result.results.map((row) => ({
-    type: 'tag' as const,
-    user_id: row.user_id,
-    sync_id: row.sync_id,
-    ledger_id: null, // user-global 不挂账本
-    title: `孤立标签投影 ${row.name || row.sync_id.substring(0, 8)}`,
-    subtitle: `tagSyncId=${row.sync_id.substring(0, 8)}...`,
-    extra: { ledger_id: null },
-  }));
-}
-
-/**
- * 扫描 read_budget_projection 中没有对应 sync_changes 的预算记录
- */
-async function scanBudgetMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> {
-  const result = await db.prepare(`
-    SELECT r.sync_id, r.ledger_id, r.user_id, r.budget_type FROM read_budget_projection r
-    WHERE NOT EXISTS (
-      SELECT 1 FROM sync_changes c
-      WHERE c.entity_sync_id = r.sync_id AND c.entity_type = 'budget'
-    )
-    LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ sync_id: string; ledger_id: string; user_id: string; budget_type: string }>();
-
-  return result.results.map((row) => ({
-    type: 'budget' as const,
-    user_id: row.user_id,
-    sync_id: row.sync_id,
-    ledger_id: row.ledger_id,
-    title: `孤立预算投影 ${row.budget_type} ${row.sync_id.substring(0, 8)}`,
-    subtitle: `budgetType=${row.budget_type}, ledgerId=${row.ledger_id.substring(0, 8)}...`,
-    extra: { ledger_id: row.ledger_id },
-  }));
-}
-
-/**
- * 扫描 user_account_projection 中没有对应 sync_changes 的账户记录
- */
-async function scanAccountMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> {
-  const result = await db.prepare(`
-    SELECT r.sync_id, r.user_id, r.name FROM user_account_projection r
-    WHERE NOT EXISTS (
-      SELECT 1 FROM sync_changes c
-      WHERE c.entity_sync_id = r.sync_id AND c.entity_type = 'account'
-    )
-    LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ sync_id: string; user_id: string; name: string }>();
-
-  return result.results.map((row) => ({
-    type: 'account' as const,
-    user_id: row.user_id,
-    sync_id: row.sync_id,
-    ledger_id: null, // user-global 不挂账本
-    title: `孤立账户投影 ${row.name || row.sync_id.substring(0, 8)}`,
-    subtitle: `accountSyncId=${row.sync_id.substring(0, 8)}...`,
-    extra: { ledger_id: null },
-  }));
-}
-
-/**
- * 扫描 sync_changes 中引用了不存在实体的记录
- */
-async function scanSyncChangeMissingEntity(db: D1Database): Promise<OrphanRecord[]> {
-  // 查找 upsert sync_changes 引用了不存在的投影行（真正的孤儿）。
-  // 排除 action='delete' 的 tombstone —— tombstone 本来就指向已删除的投影行，不是孤儿。
-  const result = await db.prepare(`
-    SELECT sc.change_id, sc.entity_sync_id, sc.entity_type, sc.ledger_id, sc.user_id
-    FROM sync_changes sc
-    WHERE sc.entity_type = 'transaction' AND sc.action != 'delete'
+    SELECT p.user_id, p.ledger_id, p.sync_id, p.amount, p.category_sync_id
+    FROM read_tx_projection p
+    WHERE p.category_sync_id IS NOT NULL
       AND NOT EXISTS (
-        SELECT 1 FROM read_tx_projection p
-        WHERE p.sync_id = sc.entity_sync_id
+        SELECT 1 FROM user_category_projection c
+        WHERE c.user_id = p.user_id AND c.sync_id = p.category_sync_id
       )
     LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ change_id: number; entity_sync_id: string; entity_type: string; ledger_id: string; user_id: string }>();
+  `).bind(MAX_ORPHANS).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; category_sync_id: string }>();
 
   return result.results.map((row) => ({
-    type: 'sync_orphan' as const,
+    type: 'tx_missing_category' as const,
     user_id: row.user_id,
-    sync_id: row.entity_sync_id,
-    row_id: String(row.change_id),
-    ledger_id: row.ledger_id,
-    title: `孤立sync_change #${row.change_id}`,
-    subtitle: `entity=${row.entity_type}, syncId=${row.entity_sync_id.substring(0, 8)}...`,
-    extra: { ledger_id: row.ledger_id, change_id: row.change_id },
+    row_id: `${row.ledger_id}:${row.sync_id}`,
+    sync_id: row.sync_id,
+    title: `交易 ${row.sync_id.slice(0, 8)} (¥${row.amount.toFixed(2)})`,
+    subtitle: `分类已删 categorySyncId=${row.category_sync_id.slice(0, 8)}…`,
+    extra: { ledger_id: row.ledger_id, sync_id: row.sync_id },
   }));
 }
 
 /**
- * 扫描 AttachmentFile 行没被任何 tx (attachments_json) 或 category
- * (icon_cloud_file_id) 引用 — 对齐原版 _scan_attachment_no_ref (B1)。
- * 上传附件后未保存交易 / AI 草稿放弃 等场景会产生这类孤儿。
+ * A2 — read_tx_projection.account_sync_id 在 user_account_projection 不存在。
+ */
+async function scanTxMissingAccount(db: D1Database): Promise<OrphanRecord[]> {
+  const result = await db.prepare(`
+    SELECT p.user_id, p.ledger_id, p.sync_id, p.amount, p.account_sync_id
+    FROM read_tx_projection p
+    WHERE p.account_sync_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM user_account_projection a
+        WHERE a.user_id = p.user_id AND a.sync_id = p.account_sync_id
+      )
+    LIMIT ?
+  `).bind(MAX_ORPHANS).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; account_sync_id: string }>();
+
+  return result.results.map((row) => ({
+    type: 'tx_missing_account' as const,
+    user_id: row.user_id,
+    row_id: `${row.ledger_id}:${row.sync_id}`,
+    sync_id: row.sync_id,
+    title: `交易 ${row.sync_id.slice(0, 8)} (¥${row.amount.toFixed(2)})`,
+    subtitle: `账户已删 accountSyncId=${row.account_sync_id.slice(0, 8)}…`,
+    extra: { ledger_id: row.ledger_id, sync_id: row.sync_id, field: 'account_sync_id' },
+  }));
+}
+
+/**
+ * A3a — 转账 tx.from_account_sync_id 已删。
+ */
+async function scanTxMissingFromAccount(db: D1Database): Promise<OrphanRecord[]> {
+  const result = await db.prepare(`
+    SELECT p.user_id, p.ledger_id, p.sync_id, p.amount, p.from_account_sync_id
+    FROM read_tx_projection p
+    WHERE p.from_account_sync_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM user_account_projection a
+        WHERE a.user_id = p.user_id AND a.sync_id = p.from_account_sync_id
+      )
+    LIMIT ?
+  `).bind(MAX_ORPHANS).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; from_account_sync_id: string }>();
+
+  return result.results.map((row) => ({
+    type: 'tx_missing_from_account' as const,
+    user_id: row.user_id,
+    row_id: `${row.ledger_id}:${row.sync_id}`,
+    sync_id: row.sync_id,
+    title: `转账 ${row.sync_id.slice(0, 8)} (¥${row.amount.toFixed(2)})`,
+    subtitle: `转出账户已删 fromAccountSyncId=${row.from_account_sync_id.slice(0, 8)}…`,
+    extra: { ledger_id: row.ledger_id, sync_id: row.sync_id, field: 'from_account_sync_id' },
+  }));
+}
+
+/**
+ * A3b — 转账 tx.to_account_sync_id 已删。
+ */
+async function scanTxMissingToAccount(db: D1Database): Promise<OrphanRecord[]> {
+  const result = await db.prepare(`
+    SELECT p.user_id, p.ledger_id, p.sync_id, p.amount, p.to_account_sync_id
+    FROM read_tx_projection p
+    WHERE p.to_account_sync_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM user_account_projection a
+        WHERE a.user_id = p.user_id AND a.sync_id = p.to_account_sync_id
+      )
+    LIMIT ?
+  `).bind(MAX_ORPHANS).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; to_account_sync_id: string }>();
+
+  return result.results.map((row) => ({
+    type: 'tx_missing_to_account' as const,
+    user_id: row.user_id,
+    row_id: `${row.ledger_id}:${row.sync_id}`,
+    sync_id: row.sync_id,
+    title: `转账 ${row.sync_id.slice(0, 8)} (¥${row.amount.toFixed(2)})`,
+    subtitle: `转入账户已删 toAccountSyncId=${row.to_account_sync_id.slice(0, 8)}…`,
+    extra: { ledger_id: row.ledger_id, sync_id: row.sync_id, field: 'to_account_sync_id' },
+  }));
+}
+
+/**
+ * A4 — read_budget_projection.category_sync_id 已删。
+ */
+async function scanBudgetMissingCategory(db: D1Database): Promise<OrphanRecord[]> {
+  const result = await db.prepare(`
+    SELECT p.user_id, p.ledger_id, p.sync_id, p.amount, p.budget_type, p.category_sync_id
+    FROM read_budget_projection p
+    WHERE p.category_sync_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM user_category_projection c
+        WHERE c.user_id = p.user_id AND c.sync_id = p.category_sync_id
+      )
+    LIMIT ?
+  `).bind(MAX_ORPHANS).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; budget_type: string; category_sync_id: string }>();
+
+  return result.results.map((row) => ({
+    type: 'budget_missing_category' as const,
+    user_id: row.user_id,
+    row_id: `${row.ledger_id}:${row.sync_id}`,
+    sync_id: row.sync_id,
+    title: `预算 ${row.sync_id.slice(0, 8)} (¥${(row.amount || 0).toFixed(0)})`,
+    subtitle: `分类已删 categorySyncId=${row.category_sync_id.slice(0, 8)}…`,
+    extra: { ledger_id: row.ledger_id, sync_id: row.sync_id },
+  }));
+}
+
+/**
+ * A5/C1 — sync_changes 引用的实体已不存在（非 delete action）。
+ * entity_type → 对应投影表（user-global 用 user_id+sync_id；tx/budget 用 user_id+sync_id）。
+ * delete 不算孤儿（本来就是删除标记）。
+ */
+async function scanSyncChangeMissingEntity(db: D1Database): Promise<OrphanRecord[]> {
+  const result = await db.prepare(`
+    SELECT sc.change_id, sc.user_id, sc.entity_type, sc.entity_sync_id, sc.action
+    FROM sync_changes sc
+    WHERE sc.action != 'delete'
+      AND (
+        (sc.entity_type = 'transaction' AND NOT EXISTS (
+          SELECT 1 FROM read_tx_projection p
+          WHERE p.user_id = sc.user_id AND p.sync_id = sc.entity_sync_id
+        ))
+        OR (sc.entity_type = 'account' AND NOT EXISTS (
+          SELECT 1 FROM user_account_projection a
+          WHERE a.user_id = sc.user_id AND a.sync_id = sc.entity_sync_id
+        ))
+        OR (sc.entity_type = 'category' AND NOT EXISTS (
+          SELECT 1 FROM user_category_projection c
+          WHERE c.user_id = sc.user_id AND c.sync_id = sc.entity_sync_id
+        ))
+        OR (sc.entity_type = 'tag' AND NOT EXISTS (
+          SELECT 1 FROM user_tag_projection t
+          WHERE t.user_id = sc.user_id AND t.sync_id = sc.entity_sync_id
+        ))
+        OR (sc.entity_type = 'budget' AND NOT EXISTS (
+          SELECT 1 FROM read_budget_projection b
+          WHERE b.user_id = sc.user_id AND b.sync_id = sc.entity_sync_id
+        ))
+      )
+    LIMIT ?
+  `).bind(MAX_ORPHANS).all<{ change_id: number; user_id: string; entity_type: string; entity_sync_id: string; action: string }>();
+
+  return result.results.map((row) => ({
+    type: 'sync_change_missing_entity' as const,
+    user_id: row.user_id,
+    row_id: String(row.change_id),
+    sync_id: row.entity_sync_id,
+    title: `SyncChange #${row.change_id}`,
+    subtitle: `${row.entity_type} · ${row.action} · 实体已删 ${row.entity_sync_id.slice(0, 8)}…`,
+    extra: { change_id: row.change_id, entity_type: row.entity_type },
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// B 类：附件 / 文件 — 与原版 scanner.py B 类对齐（worker 用 R2，无本地磁盘）
+// ---------------------------------------------------------------------------
+
+/**
+ * B1 — AttachmentFile 行没被任何 tx (attachments_json) 或 category
+ * (icon_cloud_file_id) 引用 — 对齐原版 _scan_attachment_no_ref。
  */
 async function scanAttachmentNoRef(db: D1Database): Promise<OrphanRecord[]> {
   const rows = await db.prepare(
@@ -218,30 +257,165 @@ async function scanAttachmentNoRef(db: D1Database): Promise<OrphanRecord[]> {
 }
 
 /**
- * 扫描所有类型的孤立数据，返回完整的扫描报告。
- * 与原版 scan_all() 对齐。
+ * B2 — AttachmentFile.storage_path 指向的 R2 对象不存在 — 对齐原版
+ * _scan_attachment_file_missing（本地磁盘 → R2 适配）。
  */
-export async function scanAll(db: D1Database): Promise<ScanReport> {
+async function scanAttachmentFileMissing(db: D1Database, r2?: R2Bucket): Promise<OrphanRecord[]> {
+  const rows = await db.prepare(
+    `SELECT id, user_id, file_name, storage_path, size_bytes
+     FROM attachment_files
+     LIMIT ?`
+  ).bind(MAX_ORPHANS).all<{
+    id: string;
+    user_id: string;
+    file_name: string | null;
+    storage_path: string;
+    size_bytes: number | null;
+  }>();
+
+  const orphans: OrphanRecord[] = [];
+  for (const row of rows.results) {
+    if (!row.storage_path) continue;
+    let exists = false;
+    if (r2) {
+      try {
+        const obj = await r2.head(row.storage_path);
+        exists = !!obj;
+      } catch { exists = false; }
+    }
+    // r2 未配置时无法判定（跳过，避免误报）
+    if (r2 && exists) continue;
+
+    if (!r2) {
+      // 无 R2 绑定时做 DB-only 检查：storage_path 存在即可（无法验物理文件）
+      continue;
+    }
+    orphans.push({
+      type: 'attachment_file_missing' as const,
+      user_id: row.user_id,
+      row_id: row.id,
+      title: row.file_name || row.id.slice(0, 12),
+      subtitle: 'R2 对象丢失,DB 行残留',
+      file_path: row.storage_path,
+      size_bytes: row.size_bytes ?? 0,
+    });
+  }
+  return orphans;
+}
+
+/**
+ * B3 — R2 有对象但 attachment_files 无行 — 对齐原版 _scan_disk_file_no_row
+ * （本地磁盘 → R2 适配）。scan 全部对象，比对 storage_path 全集。
+ */
+async function scanDiskFileNoRow(db: D1Database, r2?: R2Bucket): Promise<OrphanRecord[]> {
+  if (!r2) return [];
+  const dbPaths = new Set<string>();
+  const rows = await db.prepare(
+    `SELECT storage_path FROM attachment_files WHERE storage_path IS NOT NULL AND storage_path != ''`
+  ).all<{ storage_path: string }>();
+  for (const r of rows.results) dbPaths.add(r.storage_path.replace(/^beecount\//, ''));
+
+  const orphans: OrphanRecord[] = [];
+  for (const prefix of ['beecount/attachments/', 'attachments/']) {
+    let cursor: string | undefined;
+    do {
+      let listing;
+      try {
+        listing = await r2.list({ prefix, limit: 1000, cursor });
+      } catch {
+        break;
+      }
+      for (const obj of listing.objects) {
+        const key = obj.key.replace(/^beecount\//, '');
+        if (dbPaths.has(key)) continue;
+        orphans.push({
+          type: 'disk_file_no_row' as const,
+          title: obj.key.split('/').pop() || obj.key,
+          subtitle: `R2 对象无 DB 行 · ${obj.key}`,
+          file_path: obj.key,
+          size_bytes: obj.size,
+        });
+      }
+      cursor = listing.truncated && listing.objects.length > 0
+        ? listing.objects[listing.objects.length - 1].key
+        : undefined;
+    } while (cursor);
+  }
+  return orphans;
+}
+
+/**
+ * B4 — read_tx_projection.attachments_json 引用的 cloudFileId 在
+ * attachment_files 不存在 — 对齐原版 _scan_tx_ref_broken_attachment。
+ */
+async function scanTxRefBrokenAttachment(db: D1Database): Promise<OrphanRecord[]> {
+  const allFileIds = new Set<string>();
+  const idRows = await db.prepare('SELECT id FROM attachment_files').all<{ id: string }>();
+  for (const r of idRows.results) allFileIds.add(r.id);
+
+  const rows = await db.prepare(
+    `SELECT ledger_id, sync_id, user_id, attachments_json
+     FROM read_tx_projection
+     WHERE attachments_json IS NOT NULL
+     LIMIT ?`
+  ).bind(MAX_ORPHANS).all<{ ledger_id: string; sync_id: string; user_id: string; attachments_json: string }>();
+
+  const orphans: OrphanRecord[] = [];
+  for (const row of rows.results) {
+    if (!row.attachments_json) continue;
+    let atts: unknown;
+    try {
+      atts = JSON.parse(row.attachments_json);
+    } catch { continue; }
+    if (!Array.isArray(atts)) continue;
+    const broken: string[] = [];
+    for (const att of atts) {
+      if (!att || typeof att !== 'object') continue;
+      const fid = (att as Record<string, unknown>).cloudFileId;
+      if (typeof fid === 'string' && fid && !allFileIds.has(fid)) broken.push(fid);
+    }
+    if (broken.length === 0) continue;
+    orphans.push({
+      type: 'tx_ref_broken_attachment' as const,
+      user_id: row.user_id,
+      row_id: `${row.ledger_id}:${row.sync_id}`,
+      sync_id: row.sync_id,
+      title: `交易 ${row.sync_id.slice(0, 8)} 引用 ${broken.length} 个失效附件`,
+      subtitle: `cloudFileId 不在 attachment_files 表:${broken[0].slice(0, 12)}…`,
+      extra: { ledger_id: row.ledger_id, sync_id: row.sync_id, broken_file_ids: broken },
+    });
+  }
+  return orphans;
+}
+
+// ---------------------------------------------------------------------------
+// scanAll — 与原版 scan_all() 对齐，聚合返回
+// ---------------------------------------------------------------------------
+
+export async function scanAll(db: D1Database, r2?: R2Bucket): Promise<ScanReport> {
   const dbOrphans: OrphanRecord[] = [];
   const fileOrphans: OrphanRecord[] = [];
   const syncOrphans: OrphanRecord[] = [];
 
-  // DB 孤立数据
-  const txMissingCategory = await scanTxMissingSyncChange(db);
-  const accountMissing = await scanAccountMissingSyncChange(db);
-  const categoryMissing = await scanCategoryMissingSyncChange(db);
-  const tagMissing = await scanTagMissingSyncChange(db);
-  const budgetMissing = await scanBudgetMissingSyncChange(db);
+  // A 类：DB 引用断链
+  dbOrphans.push(
+    ...(await scanTxMissingCategory(db)),
+    ...(await scanTxMissingAccount(db)),
+    ...(await scanTxMissingFromAccount(db)),
+    ...(await scanTxMissingToAccount(db)),
+    ...(await scanBudgetMissingCategory(db)),
+  );
 
-  syncOrphans.push(...txMissingCategory, ...accountMissing, ...categoryMissing, ...tagMissing, ...budgetMissing);
+  // C 类：sync_changes 引用实体不存在
+  syncOrphans.push(...(await scanSyncChangeMissingEntity(db)));
 
-  // 同步变更孤立数据
-  const syncChangeOrphans = await scanSyncChangeMissingEntity(db);
-  syncOrphans.push(...syncChangeOrphans);
-
-  // 文件类孤立数据：附件行无任何引用（对齐原版 B1）
-  const attachmentNoRef = await scanAttachmentNoRef(db);
-  fileOrphans.push(...attachmentNoRef);
+  // B 类：附件 / 文件
+  fileOrphans.push(
+    ...(await scanAttachmentNoRef(db)),
+    ...(await scanAttachmentFileMissing(db, r2)),
+    ...(await scanDiskFileNoRow(db, r2)),
+    ...(await scanTxRefBrokenAttachment(db)),
+  );
 
   let totalSizeBytes = 0;
   for (const orphan of fileOrphans) {

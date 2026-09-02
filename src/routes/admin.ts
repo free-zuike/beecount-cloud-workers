@@ -1183,7 +1183,7 @@ adminRouter.get('/integrity/scan', async (c) => {
 adminRouter.get('/data-cleanup/scan', async (c) => {
   const db = c.env.DB;
   const { scanAll } = await import('../services/data-cleanup/scanner');
-  const report = await scanAll(db);
+  const report = await scanAll(db, c.env.R2);
   return c.json(report);
 });
 
