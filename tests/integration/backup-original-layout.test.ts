@@ -101,7 +101,7 @@ describe('Backup - worker tar uses original attachment layout', () => {
     const entries = parseTar(gunzipped);
     const attEntry = entries.find(e => e.name.includes('att-1_photo.jpg'));
     expect(attEntry).toBeDefined();
-    // 附件路径应是原版结构 attachments/<user>/<ledger_ext>/<sha[:2]>/<id>_<name>
+    // 附件路径应是原版 tar 内相对结构 attachments/<user>/<ledger>/<sha[:2]>/<id>_<name>
     expect(attEntry!.name).toBe('attachments/u1/led-1/ab/att-1_photo.jpg');
 
     // db.json 里 attachment_files.storage_path 被改写为原版绝对路径

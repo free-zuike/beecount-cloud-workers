@@ -12,8 +12,10 @@ import { createEncryptedZip } from '../lib/zip-lib';
 import { exportD1ToSqlite, DEFAULT_EXCLUDED_TABLES } from '../lib/sqlite-writer';
 
 /**
- * 用 sql.js 改写 db.sqlite3 的 attachment_files.storage_path 为原版绝对路径。
- * 这样 worker 备份恢复到原版后，原版按 Path(storage_path) 能读到附件文件。
+ * 用 sql.js 改写 db.sqlite3 的 attachment_files.storage_path 为原版固定绝对路径
+ * /data/attachments/<user>/<ledger>/<sha[:2]>/<fileId>_<name>（对齐原版 Docker 部署
+ * ATTACHMENT_STORAGE_DIR=/data/attachments）。tar 附件用相对路径 attachments/...，
+ * 解压后 rsync 到 /data 即命中。
  */
 async function rewriteSqliteAttachmentPaths(
   sqliteBytes: Uint8Array,
@@ -297,9 +299,11 @@ async function fetchR2Attachments(
     const userPart = row.user_id;
     const shaDir = (row.sha256 ?? '').slice(0, 2) || 'na';
     const fileName = row.file_name || row.id;
-    // 原版路径（tar 内相对结构）
+    // 原版路径：tar 内相对结构 attachments/<user>/<ledger>/<sha[:2]>/<fileId>_<name>
+    // + db 里 storage_path 用原版固定绝对路径 /data/attachments/...（原版 Docker 部署
+    //   ATTACHMENT_STORAGE_DIR=/data/attachments 固定，下载按 Path(storage_path) 直读）。
+    // 用户解压 tar 后把 attachments/ rsync 到 /data，附件落在 /data/attachments/... 即命中。
     const originalRel = `attachments/${userPart}/${ledgerExt}/${shaDir}/${row.id}_${fileName}`;
-    // 原版绝对路径（对齐默认 attachment_storage_dir=./data/attachments）
     const originalAbs = `/data/attachments/${userPart}/${ledgerExt}/${shaDir}/${row.id}_${fileName}`;
 
     originalAttachments.set(originalRel, data);
