@@ -20,16 +20,18 @@ describe('data-cleanup e2e', () => {
     `);
 
     class S {
-      constructor(stmt) { this.stmt = stmt; this.args = []; }
-      bind(...a) { this.args = a; return this; }
-      async run() { const r = this.stmt.run(...this.args); return { success: true, meta: { changes: r.changes, last_row_id: r.lastInsertRowid }, results: [] }; }
-      async first() { return this.stmt.get(...this.args) ?? null; }
-      async all() { return { results: this.stmt.all(...this.args) }; }
+      stmt: ReturnType<DatabaseSync['prepare']>;
+      args: unknown[];
+      constructor(stmt: ReturnType<DatabaseSync['prepare']>) { this.stmt = stmt; this.args = []; }
+      bind(...a: unknown[]) { this.args = a; return this; }
+      async run() { const r = this.stmt.run(...this.args as never[]); return { success: true, meta: { changes: r.changes, last_row_id: r.lastInsertRowid }, results: [] }; }
+      async first() { return this.stmt.get(...this.args as never[]) ?? null; }
+      async all() { return { results: this.stmt.all(...this.args as never[]) }; }
     }
     const d1 = {
-      prepare(sql) { return new S(db.prepare(sql)); },
-      async batch(s) { const o = []; for (const x of s) o.push(await x.run()); return o; },
-    };
+      prepare(sql: string) { return new S(db.prepare(sql)); },
+      async batch(s: Array<{ run(): Promise<unknown> }>) { const o = []; for (const x of s) o.push(await x.run()); return o; },
+    } as unknown as D1Database;
 
     db.prepare("INSERT INTO users (id,email,password_hash) VALUES ('u1','a@b.com','x')").run();
     db.prepare("INSERT INTO ledgers (id,user_id,external_id,name) VALUES ('L1','u1','led-1','L1')").run();
@@ -62,18 +64,18 @@ describe('data-cleanup e2e', () => {
     expect(cleanResult.success_count).toBe(allRecords.length);
 
     // 3. 清理效果断言
-    const tx2 = db.prepare(`SELECT * FROM read_tx_projection WHERE sync_id='tx2'`).get();
+    const tx2 = db.prepare(`SELECT * FROM read_tx_projection WHERE sync_id='tx2'`).get() as Record<string, unknown>;
     expect(tx2.category_sync_id).toBeNull();
     expect(tx2.account_sync_id).toBeNull();
     expect(tx2.from_account_sync_id).toBeNull();
     expect(tx2.to_account_sync_id).toBe('acc1'); // 正常引用未误清
-    const b1 = db.prepare(`SELECT * FROM read_budget_projection WHERE sync_id='b1'`).get();
+    const b1 = db.prepare(`SELECT * FROM read_budget_projection WHERE sync_id='b1'`).get() as Record<string, unknown>;
     expect(b1.category_sync_id).toBeNull();
-    expect(db.prepare(`SELECT COUNT(*) c FROM sync_changes`).get().c).toBe(0);
-    expect(db.prepare(`SELECT COUNT(*) c FROM attachment_files WHERE id='f1'`).get().c).toBe(0);
-    const tx4 = db.prepare(`SELECT attachments_json FROM read_tx_projection WHERE sync_id='tx4'`).get();
-    expect(JSON.parse(tx4.attachments_json || '[]')).toEqual([]);
-    const tx1 = db.prepare(`SELECT * FROM read_tx_projection WHERE sync_id='tx1'`).get();
+    expect((db.prepare(`SELECT COUNT(*) c FROM sync_changes`).get() as Record<string, unknown>).c).toBe(0);
+    expect((db.prepare(`SELECT COUNT(*) c FROM attachment_files WHERE id='f1'`).get() as Record<string, unknown>).c).toBe(0);
+    const tx4 = db.prepare(`SELECT attachments_json FROM read_tx_projection WHERE sync_id='tx4'`).get() as Record<string, unknown>;
+    expect(JSON.parse(String(tx4.attachments_json ?? '[]'))).toEqual([]);
+    const tx1 = db.prepare(`SELECT * FROM read_tx_projection WHERE sync_id='tx1'`).get() as Record<string, unknown>;
     expect(tx1.category_sync_id).toBe('cat1'); // 正常 tx1 未误改
     expect(tx1.account_sync_id).toBe('acc1');
   });

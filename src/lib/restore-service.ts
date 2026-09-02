@@ -316,6 +316,12 @@ async function importToD1(
 
 /**
  * 上传附件到 R2
+ *
+ * 对齐原版：附件落库的 storage_path（attachment_files.storage_path，形如
+ * beecount/attachments/...）必须与 R2 实际 key 一致，下载时才能按表行命中。
+ * 备份 tar 内的附件 key 是无前缀的相对路径（attachments/...），上传时补上
+ * beecount/ 前缀，与 attachment_files 表行对齐（index.ts 打包时按 R2 真实
+ * key 打包，见 createTarGzStream 的附件收集——两者必须同一约定）。
  */
 async function uploadAttachments(
   r2: R2Bucket,
@@ -325,7 +331,10 @@ async function uploadAttachments(
   
   for (const [key, data] of attachments) {
     try {
-      await r2.put(key, data);
+      // 统一加 beecount/ 前缀：表行 storage_path 是 beecount/attachments/...，
+      // 若 tar 内已是 beecount/... 则不重复加
+      const r2Key = key.startsWith('beecount/') ? key : `beecount/${key}`;
+      await r2.put(r2Key, data);
       uploaded++;
     } catch (err) {
       console.error(`[Restore] Failed to upload ${key}: ${(err as Error).message}`);

@@ -1442,7 +1442,7 @@ async function preloadUserGlobalProjections(
       const chunkIds = syncIds.slice(i, i + 30);
       const placeholders = chunkIds.map(() => '?').join(',');
       const rows = await db.prepare(
-        `SELECT * FROM ${table} WHERE user_id = ? AND sync_id IN (${placeholders}) AND ledger_id IS NULL`
+        `SELECT * FROM ${table} WHERE user_id = ? AND sync_id IN (${placeholders})`
       ).bind(userId, ...chunkIds).all<any>();
       for (const r of rows.results) typeMap.set(r.sync_id, r);
     }
