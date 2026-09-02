@@ -1626,6 +1626,11 @@ adminRouter.get('/accounts/integrity', async (c) => {
   const uniqueAccounts = new Set(missing.map(m => `${m.user_id}:${m.account_sync_id}`));
 
   return c.json({
+    diagnostic: {
+      tx_rows_scanned: txRows.results.length,
+      unique_refs: missingRefs.size,
+      account_projection_rows: projRows.results.length,
+    },
     total_tx_refs_missing: missing.length,
     unique_missing_accounts: uniqueAccounts.size,
     by_reason: {
