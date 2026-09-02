@@ -25,7 +25,7 @@ async function scanTxMissingCategory(db: D1Database): Promise<OrphanRecord[]> {
   const result = await db.prepare(`
     SELECT p.user_id, p.ledger_id, p.sync_id, p.amount, p.category_sync_id
     FROM read_tx_projection p
-    WHERE p.category_sync_id IS NOT NULL
+    WHERE p.category_sync_id IS NOT NULL AND p.category_sync_id != ''
       AND NOT EXISTS (
         SELECT 1 FROM user_category_projection c
         WHERE c.user_id = p.user_id AND c.sync_id = p.category_sync_id
@@ -51,7 +51,7 @@ async function scanTxMissingAccount(db: D1Database): Promise<OrphanRecord[]> {
   const result = await db.prepare(`
     SELECT p.user_id, p.ledger_id, p.sync_id, p.amount, p.account_sync_id
     FROM read_tx_projection p
-    WHERE p.account_sync_id IS NOT NULL
+    WHERE p.account_sync_id IS NOT NULL AND p.account_sync_id != ''
       AND NOT EXISTS (
         SELECT 1 FROM user_account_projection a
         WHERE a.user_id = p.user_id AND a.sync_id = p.account_sync_id
@@ -77,7 +77,7 @@ async function scanTxMissingFromAccount(db: D1Database): Promise<OrphanRecord[]>
   const result = await db.prepare(`
     SELECT p.user_id, p.ledger_id, p.sync_id, p.amount, p.from_account_sync_id
     FROM read_tx_projection p
-    WHERE p.from_account_sync_id IS NOT NULL
+    WHERE p.from_account_sync_id IS NOT NULL AND p.from_account_sync_id != ''
       AND NOT EXISTS (
         SELECT 1 FROM user_account_projection a
         WHERE a.user_id = p.user_id AND a.sync_id = p.from_account_sync_id
@@ -103,7 +103,7 @@ async function scanTxMissingToAccount(db: D1Database): Promise<OrphanRecord[]> {
   const result = await db.prepare(`
     SELECT p.user_id, p.ledger_id, p.sync_id, p.amount, p.to_account_sync_id
     FROM read_tx_projection p
-    WHERE p.to_account_sync_id IS NOT NULL
+    WHERE p.to_account_sync_id IS NOT NULL AND p.to_account_sync_id != ''
       AND NOT EXISTS (
         SELECT 1 FROM user_account_projection a
         WHERE a.user_id = p.user_id AND a.sync_id = p.to_account_sync_id
@@ -129,7 +129,7 @@ async function scanBudgetMissingCategory(db: D1Database): Promise<OrphanRecord[]
   const result = await db.prepare(`
     SELECT p.user_id, p.ledger_id, p.sync_id, p.amount, p.budget_type, p.category_sync_id
     FROM read_budget_projection p
-    WHERE p.category_sync_id IS NOT NULL
+    WHERE p.category_sync_id IS NOT NULL AND p.category_sync_id != ''
       AND NOT EXISTS (
         SELECT 1 FROM user_category_projection c
         WHERE c.user_id = p.user_id AND c.sync_id = p.category_sync_id
