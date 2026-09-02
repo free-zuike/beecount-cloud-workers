@@ -1373,4 +1373,101 @@ adminRouter.get('/attachments/integrity', async (c) => {
   return c.json(result);
 });
 
+// ---------------------------------------------------------------------------
+// POST /admin/attachments/backfill - 补登缺失的 attachment_files 行（幂等）
+// 扫描 read_tx_projection.attachments_json 引用的 cloudFileId，
+// 对 attachment_files 无行的：从 R2 找到对应对象，读内容算 sha256 + size，
+// 插入 attachment_files 行（id=cloudFileId, storage_path=R2 key）。
+// 只补"缺行但 R2 有文件"的附件；完全无文件的不处理（那是真失效，走清理）。
+// ---------------------------------------------------------------------------
+
+adminRouter.post('/attachments/backfill', async (c) => {
+  const r2 = c.env.R2;
+  const db = c.env.DB;
+  if (!r2) return c.json({ error: 'R2 not configured' }, 400);
+
+  // 1. 现有 attachment_files 行 id 集合
+  const idRows = await db.prepare('SELECT id FROM attachment_files').all<{ id: string }>();
+  const existingIds = new Set(idRows.results.map(r => r.id));
+
+  // 2. 收集所有交易引用的 cloudFileId（含缺失的）
+  const txRows = await db.prepare(
+    `SELECT ledger_id, sync_id, user_id, attachments_json FROM read_tx_projection WHERE attachments_json IS NOT NULL AND attachments_json != ''`
+  ).all<{ ledger_id: string; sync_id: string; user_id: string; attachments_json: string }>();
+
+  const missingRefs = new Map<string, { ledger_id: string; user_id: string }>();
+  for (const row of txRows.results) {
+    try {
+      const atts = JSON.parse(row.attachments_json);
+      if (!Array.isArray(atts)) continue;
+      for (const att of atts) {
+        if (!att || typeof att !== 'object') continue;
+        const fid = (att as Record<string, unknown>).cloudFileId;
+        if (typeof fid === 'string' && fid && !existingIds.has(fid) && !missingRefs.has(fid)) {
+          missingRefs.set(fid, { ledger_id: row.ledger_id, user_id: row.user_id });
+        }
+      }
+    } catch {}
+  }
+
+  // 3. 列出 R2 attachments 对象，按 fileId 前缀索引
+  const objByPrefix = new Map<string, { key: string; size: number }[]>();
+  for (const prefix of ['beecount/attachments/', 'attachments/']) {
+    let cursor: string | undefined;
+    do {
+      const listing = await r2.list({ prefix, limit: 1000, cursor });
+      for (const obj of listing.objects) {
+        const m = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.exec(obj.key.split('/').pop() || '');
+        if (m) {
+          const arr = objByPrefix.get(m[1]) || [];
+          arr.push({ key: obj.key, size: obj.size });
+          objByPrefix.set(m[1], arr);
+        }
+      }
+      cursor = listing.truncated && listing.objects.length > 0
+        ? listing.objects[listing.objects.length - 1].key
+        : undefined;
+    } while (cursor);
+  }
+
+  // 4. 逐缺失附件补登
+  const backfilled: Array<Record<string, unknown>> = [];
+  const failed: Array<{ file_id: string; reason: string }> = [];
+
+  for (const [fileId, ref] of missingRefs) {
+    const objects = objByPrefix.get(fileId) || [];
+    // 优先选不带 _scaled_/_shared_ 的"主文件"，否则取第一个对象
+    const main = objects.find(o => !/_scaled_\d+\.jpg$/.test(o.key) && !/_shared_\d+\.jpg$/.test(o.key)) || objects[0];
+    if (!main) {
+      failed.push({ file_id: fileId, reason: 'R2 无此文件' });
+      continue;
+    }
+    try {
+      // 读对象内容算 sha256（最终展示文件自身的 sha，满足 NOT NULL 且真实）
+      const obj = await r2.get(main.key);
+      if (!obj) {
+        failed.push({ file_id: fileId, reason: 'R2 get 失败' });
+        continue;
+      }
+      const buf = await obj.arrayBuffer();
+      const digest = await crypto.subtle.digest('SHA-256', buf);
+      const shaHex = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+      const fileName = main.key.split('/').pop() || fileId;
+      const size = main.size || buf.byteLength;
+      const mime = /\.png$/i.test(fileName) ? 'image/png' : /\.webp$/i.test(fileName) ? 'image/webp' : /\.gif$/i.test(fileName) ? 'image/gif' : /\.jpe?g$/i.test(fileName) ? 'image/jpeg' : 'application/octet-stream';
+
+      await db.prepare(
+        `INSERT OR IGNORE INTO attachment_files (id, ledger_id, user_id, sha256, size_bytes, mime_type, file_name, storage_path, attachment_kind, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'transaction', ?)`
+      ).bind(fileId, ref.ledger_id, ref.user_id, shaHex, size, mime, fileName, main.key, new Date().toISOString()).run();
+
+      backfilled.push({ file_id: fileId, storage_path: main.key, size, sha256: shaHex.slice(0, 12) + '…', ledger_id: ref.ledger_id, user_id: ref.user_id });
+    } catch (err) {
+      failed.push({ file_id: fileId, reason: (err as Error).message });
+    }
+  }
+
+  return c.json({ backfilled, failed, backfilled_count: backfilled.length, failed_count: failed.length });
+});
+
 export default adminRouter;
