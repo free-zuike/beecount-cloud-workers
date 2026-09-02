@@ -10,6 +10,36 @@ import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
 import { createEncryptedZip } from '../lib/zip-lib';
 import { exportD1ToSqlite, DEFAULT_EXCLUDED_TABLES } from '../lib/sqlite-writer';
+
+/**
+ * 用 sql.js 改写 db.sqlite3 的 attachment_files.storage_path 为原版绝对路径。
+ * 这样 worker 备份恢复到原版后，原版按 Path(storage_path) 能读到附件文件。
+ */
+async function rewriteSqliteAttachmentPaths(
+  sqliteBytes: Uint8Array,
+  storagePathRewrite: Map<string, string>,
+): Promise<Uint8Array> {
+  if (storagePathRewrite.size === 0) return sqliteBytes;
+  try {
+    const initSqlJs = (await import('sql.js/dist/sql-asm.js')).default;
+    if (typeof self !== 'undefined' && !(self as any).location) {
+      (self as any).location = { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:', host: 'localhost', hostname: 'localhost', port: '80', pathname: '/', search: '', hash: '' };
+    }
+    const SQL = await initSqlJs();
+    const db = new SQL.Database(sqliteBytes);
+    try {
+      for (const [id, newPath] of storagePathRewrite) {
+        db.run(`UPDATE attachment_files SET storage_path = ? WHERE id = ?`, [newPath, id]);
+      }
+      return db.export();
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    console.error(`[Backup] rewriteSqliteAttachmentPaths failed (keeping original sqlite): ${(err as Error).message}`);
+    return sqliteBytes;
+  }
+}
 import { APP_VERSION } from '../version';
 import { computeRetentionDeletes, filterBackupFiles } from './backup-retention';
 import { uploadToOAuth2Provider, listOAuth2Files, deleteOAuth2File, refreshAccessToken } from '../lib/oauth2-storage';
@@ -209,51 +239,75 @@ async function exportTable(db: D1Database, tableName: string): Promise<unknown[]
 }
 
 /**
- * �?R2 获取所有附件文�?
- * 返回 { name: Uint8Array } 映射，name �?tar 中的路径
+ * 收集 R2 附件并按原版路径结构重映射。
+ *
+ * 原版附件路径：<attachment_storage_dir>/<user_id>/<ledger_external_id>/<sha256[:2]>/<uuid4.hex>_<name>
+ * （tar 内相对路径：attachments/<user_id>/<ledger_ext>/<sha256[:2]>/<fileId>_<name>）
+ *
+ * worker 的 R2 key 是 beecount/attachments/<ledger_ext>/<fileId>_<name>（无 user/sha 成分），
+ * 无法从 key 反推原版路径 —— 必须查 attachment_files + ledgers 表关联。
+ *
+ * 返回：
+ *  - originalAttachments: Map<原版相对路径, bytes>（tar 内附件路径）
+ *  - storagePathRewrite: Map<attachment_files.id, 原版绝对路径>（供改写 db 里的 storage_path）
  */
-async function fetchR2Attachments(r2: R2Bucket): Promise<Map<string, Uint8Array>> {
-  const attachments = new Map<string, Uint8Array>();
-  // 兼容新旧两套前缀：历史无前缀（attachments/...，早期版本）+ 现行 beecount/ 前缀（beecount/attachments/...）
-  // 生产 R2 附件行 storage_path 是 beecount/attachments/...（index.ts 打包时也按此约定），
-  // 只扫 attachments/ 会漏掉带前缀的对象 → 备份附件收不全。
-  const prefixes = ['attachments/', 'beecount/attachments/', 'avatars/', 'beecount/avatars/', 'category-icons/', 'beecount/category-icons/'];
+async function fetchR2Attachments(
+  db: D1Database,
+  r2: R2Bucket,
+  userId: string,
+): Promise<{ originalAttachments: Map<string, Uint8Array>; storagePathRewrite: Map<string, string> }> {
+  const originalAttachments = new Map<string, Uint8Array>();
+  const storagePathRewrite = new Map<string, string>();
 
-  console.log(`[Backup] Fetching R2 files with prefixes: ${prefixes.join(', ')}`);
+  // 附件行 + 关联账本 external_id（原版路径需要 ledger_external_id）
+  const rows = await db.prepare(
+    `SELECT a.id, a.user_id, a.ledger_id, a.sha256, a.file_name, a.storage_path, l.external_id
+     FROM attachment_files a LEFT JOIN ledgers l ON a.ledger_id = l.id
+     WHERE a.user_id = ? AND a.attachment_kind = 'transaction'`
+  ).bind(userId).all<{
+    id: string; user_id: string; ledger_id: string | null; sha256: string | null;
+    file_name: string | null; storage_path: string | null; external_id: string | null;
+  }>();
 
-  let totalFiles = 0;
-  let totalSize = 0;
-  const fileKeys: string[] = [];
+  // 兼容新旧前缀的存储路径集合
+  const possibleKeys = (sp: string) => {
+    const keys = new Set<string>([sp]);
+    if (sp.startsWith('beecount/')) keys.add(sp.slice('beecount/'.length));
+    else keys.add(`beecount/${sp}`);
+    return [...keys];
+  };
 
-  for (const prefix of prefixes) {
-    let cursor: string | undefined;
-    do {
-      const listed = await r2.list({ prefix, cursor, limit: 1000 });
-      cursor = listed.truncated ? listed.cursor : undefined;
-
-      for (const obj of listed.objects) {
-        fileKeys.push(obj.key);
-        totalSize += obj.size;
-      }
-    } while (cursor);
-  }
-
-  // 并行下载附件（6 并发，对齐 D1/R2 连接限制）
-  await parallelMap(fileKeys, async (key) => {
-    try {
-      const data = await r2.get(key);
-      if (data) {
-        const arrayBuffer = await data.arrayBuffer();
-        attachments.set(key, new Uint8Array(arrayBuffer));
-        totalFiles++;
-      }
-    } catch (err) {
-      console.error(`[Backup] Failed to fetch ${key}: ${(err as Error).message}`);
+  await parallelMap(rows.results, async (row) => {
+    if (!row.storage_path) return;
+    // 从 R2 取文件（尝试带/不带 beecount/ 前缀）
+    let data: Uint8Array | null = null;
+    for (const key of possibleKeys(row.storage_path)) {
+      try {
+        const obj = await r2.get(key);
+        if (obj) {
+          const buf = await obj.arrayBuffer();
+          data = new Uint8Array(buf);
+          break;
+        }
+      } catch {}
     }
+    if (!data) return;
+
+    const ledgerExt = row.external_id ?? row.ledger_id ?? 'unknown';
+    const userPart = row.user_id;
+    const shaDir = (row.sha256 ?? '').slice(0, 2) || 'na';
+    const fileName = row.file_name || row.id;
+    // 原版路径（tar 内相对结构）
+    const originalRel = `attachments/${userPart}/${ledgerExt}/${shaDir}/${row.id}_${fileName}`;
+    // 原版绝对路径（对齐默认 attachment_storage_dir=./data/attachments）
+    const originalAbs = `/data/attachments/${userPart}/${ledgerExt}/${shaDir}/${row.id}_${fileName}`;
+
+    originalAttachments.set(originalRel, data);
+    storagePathRewrite.set(row.id, originalAbs);
   }, 6);
 
-  console.log(`[Backup] Fetched: ${totalFiles} files, ${totalSize} bytes`);
-  return attachments;
+  console.log(`[Backup] R2 attachments remapped to original layout: ${originalAttachments.size} files`);
+  return { originalAttachments, storagePathRewrite };
 }
 
 /**
@@ -346,26 +400,44 @@ export async function generateBackupBytes(
 
 
 
-  // 3. R2 附件
-  let attachments = new Map<string, Uint8Array>();
+  // 3. R2 附件（按原版路径结构重映射）
+  let originalAttachments = new Map<string, Uint8Array>();
+  let storagePathRewrite = new Map<string, string>();
   if (r2) {
     try {
-      attachments = await withRetry(() => fetchR2Attachments(r2), 2, 2000, 'fetch R2 attachments');
-      logWrap(`[Backup] R2 attachments: ${attachments.size} files`);
-    } catch {}
+      const res = await withRetry(() => fetchR2Attachments(db, r2, userId), 2, 2000, 'fetch R2 attachments');
+      originalAttachments = res.originalAttachments;
+      storagePathRewrite = res.storagePathRewrite;
+      logWrap(`[Backup] R2 attachments: ${originalAttachments.size} files (original layout)`);
+    } catch (err) {
+      logWrap(`[Backup] fetch R2 attachments failed: ${(err as Error).message}`);
+    }
   }
 
   // 4. 构建文件条目（供 tar.gz / ZIP 使用；原版解包后根目录直接是这些文件）
   const now = new Date().toISOString();
   const entries: { name: string; data: Uint8Array }[] = [];
   entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: APP_VERSION, createdAt: now, scheduleId: schedule?.scheduleId ?? null, scheduleName: schedule?.scheduleName ?? null, userId, includeAttachments: true }, null, 2)) });
-  if (sqliteBytes) entries.push({ name: 'db.sqlite3', data: sqliteBytes });
+  if (sqliteBytes) {
+    // 改写 db.sqlite3 的 attachment_files.storage_path 为原版绝对路径，供原版恢复后按表读
+    sqliteBytes = await rewriteSqliteAttachmentPaths(sqliteBytes, storagePathRewrite);
+    entries.push({ name: 'db.sqlite3', data: sqliteBytes });
+  }
   if (jwtSecret) entries.push({ name: '.jwt_secret', data: new TextEncoder().encode(jwtSecret) });
+  // db.json 同样改写 attachment_files.storage_path
+  if (tables['attachment_files'] && storagePathRewrite.size > 0) {
+    tables['attachment_files'] = (tables['attachment_files'] as Array<Record<string, unknown>>).map(row => {
+      const id = String(row.id ?? '');
+      const newPath = storagePathRewrite.get(id);
+      if (newPath) return { ...row, storage_path: newPath };
+      return row;
+    });
+  }
   entries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: now, version: '1.0', schema_version: 1, user_id: userId, tables }, null, 2)) });
-  for (const [key, value] of attachments) entries.push({ name: key, data: value });
+  for (const [key, value] of originalAttachments) entries.push({ name: key, data: value });
 
   let backupBytes = await withRetry(() => createTarGz(entries), 2, 1000, 'create tar.gz');
-  logWrap(`[Backup] tar.gz created: ${backupBytes.length} bytes, ${Object.keys(tables).length} tables, attachments ${attachments.size}`);
+  logWrap(`[Backup] tar.gz created: ${backupBytes.length} bytes, ${Object.keys(tables).length} tables, attachments ${originalAttachments.size}`);
 
   return { backupBytes, entries, encrypted: false, backupSize: backupBytes.length, logLines };
 }

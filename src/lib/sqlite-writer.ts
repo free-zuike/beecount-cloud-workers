@@ -202,8 +202,7 @@ export async function readSqliteToTables(
   data: Uint8Array,
   skipTables: string[] = DEFAULT_EXCLUDED_TABLES,
   logFn?: (msg: string) => void,
-): Promise<{ tables: Record<string, unknown[]>; skippedTables: string[] }> {
-  const log = logFn || (() => {});
+): Promise<{ tables: Record<string, unknown[]>; skippedTables: string[] }> {  const log = logFn || (() => {});
   const initSqlJs = (await import('sql.js/dist/sql-asm.js')).default;
   if (typeof self !== 'undefined' && !(self as any).location) {
     (self as any).location = { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:', host: 'localhost', hostname: 'localhost', port: '80', pathname: '/', search: '', hash: '' };
