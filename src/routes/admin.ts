@@ -1470,4 +1470,91 @@ adminRouter.post('/attachments/backfill', async (c) => {
   return c.json({ backfilled, failed, backfilled_count: backfilled.length, failed_count: failed.length });
 });
 
+// ---------------------------------------------------------------------------
+// POST /admin/r2/attachment-orphans/cleanup - 删除真正无引用的 R2 附件孤儿
+// 删除前三重确认，避免误删有效附件：
+//   1. 不在 attachment_files.storage_path（精确匹配）
+//   2. 文件名中的 cloudFileId(UUID) 不被任何交易 attachments_json 引用
+//   3. 文件名中的 sha 前缀不被任何交易 fileName=sha_<sha>.jpg 引用
+// 只删 attachments/ 前缀（不动 avatars/、category-icons/）。返回删除清单。
+// ---------------------------------------------------------------------------
+
+adminRouter.post('/r2/attachment-orphans/cleanup', async (c) => {
+  const r2 = c.env.R2;
+  const db = c.env.DB;
+  if (!r2) return c.json({ error: 'R2 not configured' }, 400);
+
+  // 1. attachment_files.storage_path 全集（去 beecount/ 前缀）
+  const rows = await db.prepare(`SELECT storage_path FROM attachment_files WHERE storage_path IS NOT NULL AND storage_path != ''`).all<{ storage_path: string }>();
+  const dbPaths = new Set(rows.results.map(r => r.storage_path.replace(/^beecount\//, '')));
+
+  // 2. 交易引用的 cloudFileId + sha 前缀
+  const referencedIds = new Set<string>();
+  const referencedShas = new Set<string>();
+  const txRows = await db.prepare(`SELECT attachments_json FROM read_tx_projection WHERE attachments_json IS NOT NULL AND attachments_json != ''`).all<{ attachments_json: string }>();
+  for (const r of txRows.results) {
+    try {
+      const atts = JSON.parse(r.attachments_json);
+      if (!Array.isArray(atts)) continue;
+      for (const att of atts) {
+        if (!att || typeof att !== 'object') continue;
+        const fid = (att as Record<string, unknown>).cloudFileId;
+        if (typeof fid === 'string' && fid) referencedIds.add(fid);
+        const fn = (att as Record<string, unknown>).fileName ?? (att as Record<string, unknown>).file_name;
+        if (typeof fn === 'string') {
+          const m = /^sha_([0-9a-f]+)\.jpg$/i.exec(fn);
+          if (m) referencedShas.add(m[1]);
+        }
+      }
+    } catch {}
+  }
+
+  // 3. 列出 R2 attachments 对象，判定孤儿
+  const orphans: { key: string; size: number; reason: string }[] = [];
+  for (const prefix of ['beecount/attachments/', 'attachments/']) {
+    let cursor: string | undefined;
+    do {
+      const listing = await r2.list({ prefix, limit: 1000, cursor });
+      for (const obj of listing.objects) {
+        const base = obj.key.replace(/^beecount\//, '');
+        if (dbPaths.has(base)) continue; // 1. 表有行
+        const fileName = base.split('/').pop() || base;
+        // 2. cloudFileId 前缀
+        const uuid = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.exec(fileName);
+        if (uuid && referencedIds.has(uuid[1])) continue;
+        // 3. sha 前缀
+        const sha = /^sha_([0-9a-f]+)/.exec(fileName);
+        if (sha && referencedShas.has(sha[1])) continue;
+        orphans.push({ key: obj.key, size: obj.size, reason: 'no_db_row_no_ref' });
+      }
+      cursor = listing.truncated && listing.objects.length > 0
+        ? listing.objects[listing.objects.length - 1].key
+        : undefined;
+    } while (cursor);
+  }
+
+  // 4. 删除（best-effort，逐个）
+  const deleted: string[] = [];
+  const failed: string[] = [];
+  let freedBytes = 0;
+  for (const o of orphans) {
+    try {
+      await r2.delete(o.key);
+      deleted.push(o.key);
+      freedBytes += o.size;
+    } catch {
+      failed.push(o.key);
+    }
+  }
+
+  return c.json({
+    deleted_count: deleted.length,
+    failed_count: failed.length,
+    freed_bytes: freedBytes,
+    freed_human: `${(freedBytes / 1024 / 1024).toFixed(2)} MB`,
+    failed,
+    deleted_samples: deleted.slice(0, 10),
+  });
+});
+
 export default adminRouter;
