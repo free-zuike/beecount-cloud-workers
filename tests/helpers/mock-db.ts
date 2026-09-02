@@ -50,7 +50,8 @@ class InMemoryDB {
   }
 
   private handleInsert(sql: string, params: unknown[]): MockResult {
-    const tableMatch = sql.match(/INSERT\s+(?:OR\s+IGNORE\s+)?(?:INTO\s+)?(\w+)/i);
+    // 支持 INSERT / INSERT OR IGNORE / INSERT OR REPLACE / INSERT INTO
+    const tableMatch = sql.match(/INSERT\s+(?:OR\s+(?:IGNORE|REPLACE)\s+)?(?:INTO\s+)?(\w+)/i);
     if (!tableMatch) return { success: false, meta: { last_row_id: 0, changes: 0 }, results: [] };
 
     const tableName = tableMatch[1];
@@ -65,6 +66,7 @@ class InMemoryDB {
 
     const isOnConflict = sql.toUpperCase().includes('ON CONFLICT');
     const isIgnore = sql.toUpperCase().includes('OR IGNORE');
+    const isReplace = sql.toUpperCase().includes('OR REPLACE');
 
     const paramIdx = { current: 0 };
     const row: Row = {};
@@ -89,6 +91,15 @@ class InMemoryDB {
       const pkCol = columns[0];
       if (table.some(r => r[pkCol] === row[pkCol])) {
         return { success: true, meta: { last_row_id: 0, changes: 0 }, results: [] };
+      }
+    }
+
+    if (isReplace) {
+      // SQLite INSERT OR REPLACE：同 PK 时先删旧行再插新行
+      const pkCol = columns[0];
+      const existing = table.findIndex(r => r[pkCol] === row[pkCol]);
+      if (existing >= 0) {
+        table.splice(existing, 1);
       }
     }
 
@@ -182,7 +193,7 @@ class InMemoryDB {
   }
 
   private handleSelect(sql: string, params: unknown[]): MockResult {
-    const selectMatch = sql.match(/SELECT\s+(.+?)\s+FROM\s+(\w+)/i);
+    const selectMatch = sql.match(/SELECT\s+([\s\S]+?)\s+FROM\s+(\w+)/i);
     if (!selectMatch) return { success: true, meta: { last_row_id: 0, changes: 0 }, results: [] };
 
     const selectExpr = selectMatch[1].trim();
@@ -257,8 +268,22 @@ class InMemoryDB {
       results = workingRows.map(row => {
         if (cols.includes('*')) return { ...row };
         const projected: Row = {};
-        for (const col of cols) {
-          projected[col] = row[col];
+        // 逐个解析 select 项：字面量 AS alias 直接赋值，列引用取行值
+        const items = selectExpr.split(',').map(s => s.trim());
+        for (const item of items) {
+          const parts = item.split(/\s+AS\s+/i);
+          if (parts.length > 1) {
+            const raw = parts[0].trim();
+            const alias = parts[1].trim();
+            if (/^'[^']*'$/.test(raw)) {
+              projected[alias] = raw.replace(/^'|'$/g, '');
+            } else {
+              projected[alias] = row[raw.split('.').pop()!.replace(/^'|'$/g, '')];
+            }
+          } else {
+            const col = item.split('.').pop()!.replace(/^'|'$/g, '');
+            projected[col] = row[col];
+          }
         }
         return projected;
       });
@@ -308,7 +333,12 @@ class InMemoryDB {
     if (expr.trim() === '*') return ['*'];
     return expr.split(',').map(c => {
       const parts = c.trim().split(/\s+AS\s+/i);
-      return parts[0].trim().split('.').pop()!;
+      const raw = parts[0].trim();
+      // 字面量 AS alias（如 'owner' as role）→ 用 alias 名
+      if (parts.length > 1 && /^'[^']*'$/.test(raw)) {
+        return parts[1].trim();
+      }
+      return raw.split('.').pop()!.replace(/^'|'$/g, '');
     });
   }
 
@@ -337,38 +367,75 @@ class InMemoryDB {
   }
 
   private matchesWhere(row: Row, where: string, params: unknown[], paramIdx: { current: number }): boolean {
-    const conditions = this.splitWhereConditions(where);
-    for (const condition of conditions) {
-      if (!this.evaluateCondition(row, condition.trim(), params, paramIdx)) {
-        return false;
-      }
-    }
-    return true;
+    return this.evalBoolExpr(row, where, params, paramIdx);
   }
 
-  private splitWhereConditions(where: string): string[] {
-    const conditions: string[] = [];
-    let current = '';
-    let inParen = 0;
-    let inQuote = false;
+  /**
+   * 递归下降布尔表达式求值器：正确处理 AND / OR / 括号 优先级。
+   * pull 查询形如 ((A AND B AND C) OR (D AND E AND F))，旧实现只支持顶层 OR，
+   * 遇到 OR 分支内嵌 AND 会忽略后半段 → 误判。这里按真 SQL 语义解析。
+   * 叶子谓词（比较/IN/IS NULL/LIKE）交给 evaluateCondition。
+   */
+  private evalBoolExpr(row: Row, expr: string, params: unknown[], paramIdx: { current: number }): boolean {
+    let pos = 0;
+    const len = expr.length;
 
-    for (let i = 0; i < where.length; i++) {
-      const ch = where[i];
-      if (ch === "'" && (i === 0 || where[i - 1] !== '\\')) inQuote = !inQuote;
-      if (!inQuote) {
-        if (ch === '(') inParen++;
-        if (ch === ')') inParen--;
-        if (inParen === 0 && i + 4 <= where.length && where.substring(i, i + 4).toUpperCase() === ' AND') {
-          conditions.push(current);
-          current = '';
-          i += 3;
-          continue;
-        }
+    const skipWs = () => { while (pos < len && /\s/.test(expr[pos])) pos++; };
+    const parseOr = (): boolean => {
+      let left = parseAnd();
+      while (true) {
+        skipWs();
+        if (expr.slice(pos, pos + 2).toUpperCase() !== 'OR' || /\w/.test(expr[pos - 1] || '')) break;
+        // 确保是独立 OR 关键字（前面是空格/括号）
+        if (pos > 0 && !/\s|\)/.test(expr[pos - 1])) break;
+        pos += 2;
+        const right = parseAnd();
+        left = left || right;
       }
-      current += ch;
-    }
-    if (current.trim()) conditions.push(current);
-    return conditions;
+      return left;
+    };
+    const parseAnd = (): boolean => {
+      let left = parseUnary();
+      while (true) {
+        skipWs();
+        if (expr.slice(pos, pos + 3).toUpperCase() !== 'AND' || /\w/.test(expr[pos - 1] || '')) break;
+        if (pos > 0 && !/\s|\)/.test(expr[pos - 1])) break;
+        pos += 3;
+        const right = parseUnary();
+        left = left && right;
+      }
+      return left;
+    };
+    const parseUnary = (): boolean => {
+      skipWs();
+      if (expr[pos] === '(') {
+        pos++;
+        const inner = parseOr();
+        skipWs();
+        if (expr[pos] === ')') pos++;
+        return inner;
+      }
+      // 单谓词：从当前位置取到下一个顶层 AND/OR/右括号
+      const start = pos;
+      let depth = 0;
+      while (pos < len) {
+        const ch = expr[pos];
+        if (ch === '(') depth++;
+        else if (ch === ')') { if (depth === 0) break; depth--; }
+        else if (depth === 0 && (expr.slice(pos, pos + 3).toUpperCase() === 'AND' || expr.slice(pos, pos + 2).toUpperCase() === 'OR')) {
+          // 判断是否为独立关键字（非列名的一部分如 'ORDER'）
+          const word = expr.slice(pos, pos + 3).toUpperCase();
+          const isOp = (word === 'AND' && !/\w/.test(expr[pos - 1] || '') && !/\w/.test(expr[pos + 3] || ''))
+            || (word === 'OR ' && !/\w/.test(expr[pos - 1] || '') && !/\w/.test(expr[pos + 2] || ''));
+          if (isOp) break;
+        }
+        pos++;
+      }
+      const predicate = expr.slice(start, pos).trim();
+      return this.evaluateCondition(row, predicate, params, paramIdx);
+    };
+
+    return parseOr();
   }
 
   private resolveColValue(row: Row, expr: string): unknown {
@@ -472,7 +539,8 @@ class InMemoryDB {
       }
     }
 
-    return true;
+    // 无法识别的谓词（如 datetime('now') 表达式、未支持的函数）→ 保守不匹配
+    return false;
   }
 
   private applyOrderBy(rows: Row[], orderByStr: string): Row[] {

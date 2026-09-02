@@ -37,7 +37,7 @@ describe('CRUD - Transactions', () => {
     expect(body.ledger_id).toBe(ledgerId);
   });
 
-  it.skip('should update a transaction', async () => {
+  it('should update a transaction', async () => {
     // Skipped: mock DB UPDATE with complex WHERE clause needs improvement
     const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/transactions`, {
       method: 'POST',
@@ -123,7 +123,7 @@ describe('CRUD - Accounts', () => {
     expect(body.entity_id).toBeDefined();
   });
 
-  it.skip('should update an account', async () => {
+  it('should update an account', async () => {
     const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/accounts`, {
       method: 'POST',
       headers: {
@@ -490,7 +490,7 @@ describe('CRUD - Projection verification', () => {
     expect(tx.note).toBe('投影验证');
   });
 
-  it.skip('should have account in read projection after creation', async () => {
+  it('should have account in read projection after creation', async () => {
     // Skipped: mock DB projection refresh needs improvement
     const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/accounts`, {
       method: 'POST',

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createTestEnv, registerTestUser, loginTestUser, getAuthToken, createTestLedger, TEST_JWT_SECRET } from '../helpers/test-env';
+import { createTestEnv, registerTestUser, loginTestUser, getAuthToken, createTestLedger, TEST_JWT_SECRET, TEST_DEVICE_ID } from '../helpers/test-env';
 import { createAccessToken, createRefreshToken, validateAccessToken } from '../../src/auth';
 
 let env: Awaited<ReturnType<typeof createTestEnv>>;
@@ -59,30 +59,55 @@ describe('Auth - Register', () => {
     expect(body[0].ledger_id || body[0].external_id).toBe(ledgerId);
   });
 
-  it.skip('should create default categories after creating a ledger', async () => {
-    // Skipped: write/ledgers endpoint depends on mock DB projection refresh
+  it('should create default categories after creating a ledger', async () => {
+    // 注意：worker 与原版对齐——创建账本不自动建默认分类（分类由 App 推送）。
+    // 本测试验证"推送分类 → 读取分类"链路。
     await registerTestUser(env.app, 'cats@example.com');
     const token = await getAuthToken(env.app, 'cats@example.com');
 
-    // Create a ledger first (this triggers default category creation)
+    // Create a ledger first
     const createRes = await env.app.request('/api/v1/write/ledgers', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ name: 'Test Ledger', currency: 'CNY' }),
+      body: JSON.stringify({ ledger_name: 'Test Ledger', currency: 'CNY' }),
     });
     expect(createRes.status).toBe(200);
     const createBody = await createRes.json() as any;
     const ledgerId = createBody.ledger_id;
 
+    // 推送一个分类（user-global）；用注册时创建的设备
+    const catSyncId = crypto.randomUUID();
+    const pushRes = await env.app.request('/api/v1/sync/push', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-Device-ID': TEST_DEVICE_ID,
+      },
+      body: JSON.stringify({
+        device_id: TEST_DEVICE_ID,
+        changes: [{
+          entity_type: 'category',
+          entity_sync_id: catSyncId,
+          action: 'upsert',
+          payload: { name: '餐饮', kind: 'expense', level: 1, sort_order: 1 },
+          updated_at: new Date().toISOString(),
+        }],
+      }),
+    });
+    expect(pushRes.status).toBe(200);
+
+    // 读取分类（应含推送的分类）
     const readRes = await env.app.request(`/api/v1/read/ledgers/${ledgerId}/categories`, {
       headers: { Authorization: `Bearer ${token}` },
     });
+    expect(readRes.status).toBe(200);
     const readBody = await readRes.json() as any;
     expect(Array.isArray(readBody)).toBe(true);
-    expect(readBody.length).toBeGreaterThan(0);
+    expect(readBody.some((c: any) => c.id === catSyncId)).toBe(true);
   });
 });
 
@@ -140,7 +165,7 @@ describe('Auth - Token access', () => {
 });
 
 describe('Auth - Refresh token', () => {
-  it.skip('should refresh token successfully', async () => {
+  it('should refresh token successfully', async () => {
     await registerTestUser(env.app, 'refresh@example.com');
     const { body: loginBody } = await loginTestUser(env.app, 'refresh@example.com');
 
