@@ -81,6 +81,14 @@ function safeJsonStringify(obj: unknown): string {
   return JSON.stringify(obj);
 }
 
+/** 空串/undefined/null 统一归一为 null —— 对齐原版：无值字段是 NULL 而非空字符串 */
+function nullOr(v: unknown): unknown {
+  const s = v as string | null | undefined;
+  if (s == null) return null;
+  if (typeof v === 'string' && s.trim() === '') return null;
+  return v;
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function resolveTagsCsv(db: D1Database, tags: string | null, tagIds: string[] | null): Promise<string | null> {
@@ -1962,16 +1970,16 @@ async function applyChangeToProjection(
           tx_type: (payload as any).type ?? payload.tx_type ?? payload.txType ?? existingTx?.tx_type ?? 'expense',
           amount: (payload as any).amount ?? existingTx?.amount ?? 0,
           happened_at: (payload as any).happenedAt ?? payload.happened_at ?? existingTx?.happened_at ?? nowUtc(),
-          note: (payload as any).note ?? existingTx?.note ?? null,
-          category_sync_id: (payload as any).categoryId ?? existingTx?.category_sync_id ?? null,
-          category_name: (payload as any).categoryName ?? existingTx?.category_name ?? null,
-          category_kind: (payload as any).categoryKind ?? existingTx?.category_kind ?? null,
-          account_sync_id: (payload as any).accountId ?? existingTx?.account_sync_id ?? null,
-          account_name: (payload as any).accountName ?? existingTx?.account_name ?? null,
-          from_account_sync_id: (payload as any).fromAccountId ?? existingTx?.from_account_sync_id ?? null,
-          from_account_name: (payload as any).fromAccountName ?? existingTx?.from_account_name ?? null,
-          to_account_sync_id: (payload as any).toAccountId ?? existingTx?.to_account_sync_id ?? null,
-          to_account_name: (payload as any).toAccountName ?? existingTx?.to_account_name ?? null,
+          note: nullOr((payload as any).note ?? existingTx?.note),
+          category_sync_id: nullOr((payload as any).categoryId ?? existingTx?.category_sync_id),
+          category_name: nullOr((payload as any).categoryName ?? existingTx?.category_name),
+          category_kind: nullOr((payload as any).categoryKind ?? existingTx?.category_kind),
+          account_sync_id: nullOr((payload as any).accountId ?? existingTx?.account_sync_id),
+          account_name: nullOr((payload as any).accountName ?? existingTx?.account_name),
+          from_account_sync_id: nullOr((payload as any).fromAccountId ?? existingTx?.from_account_sync_id),
+          from_account_name: nullOr((payload as any).fromAccountName ?? existingTx?.from_account_name),
+          to_account_sync_id: nullOr((payload as any).toAccountId ?? existingTx?.to_account_sync_id),
+          to_account_name: nullOr((payload as any).toAccountName ?? existingTx?.to_account_name),
           tags_csv: resolvedTagsCsv ?? (existingTx?.tags_csv as string) ?? null,
           tag_sync_ids_json: (payload as any).tagIds ? safeJsonStringify((payload as any).tagIds) : (existingTx?.tag_sync_ids_json as string) ?? null,
           attachments_json: (payload as any).attachments ? safeJsonStringify((payload as any).attachments) : (existingTx?.attachments_json as string) ?? null,
@@ -2243,7 +2251,7 @@ async function applyChangeToProjection(
 
         const merged = {
           budget_type: (payload as any).type ?? existing?.budget_type ?? 'total',
-          category_sync_id: (payload as any).categoryId ?? existing?.category_sync_id ?? null,
+          category_sync_id: nullOr((payload as any).categoryId ?? existing?.category_sync_id),
           amount: (payload as any).amount ?? existing?.amount ?? 0,
           period: (payload as any).period ?? existing?.period ?? 'monthly',
           start_day: (payload as any).startDay ?? existing?.start_day ?? 1,

@@ -33,6 +33,14 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { insertAuditLog } from '../lib/audit';
 
+/** 空串/undefined/null 统一归一为 null —— 对齐原版：无值字段是 NULL 而非空字符串 */
+function nullOr(v: unknown): unknown {
+  const s = v as string | null | undefined;
+  if (s == null) return null;
+  if (typeof v === 'string' && s.trim() === '') return null;
+  return v;
+}
+
 // ===========================
 // WS 广播 helper（与原版 broadcast_to_ledger 对齐）
 // ===========================
@@ -1253,10 +1261,10 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
     )
       .bind(
         newPayload.type, newPayload.amount, newPayload.happenedAt, newPayload.note,
-        newPayload.categoryId ?? null, newPayload.categoryName ?? null, newPayload.categoryKind ?? null,
-        newPayload.accountId ?? null, newPayload.accountName ?? null,
-        newPayload.fromAccountId ?? null, newPayload.fromAccountName ?? null,
-        newPayload.toAccountId ?? null, newPayload.toAccountName ?? null,
+        nullOr(newPayload.categoryId), nullOr(newPayload.categoryName), nullOr(newPayload.categoryKind),
+        nullOr(newPayload.accountId), nullOr(newPayload.accountName),
+        nullOr(newPayload.fromAccountId), nullOr(newPayload.fromAccountName),
+        nullOr(newPayload.toAccountId), nullOr(newPayload.toAccountName),
         newPayload.tags ?? null, newPayload.tagIds ? safeJsonStringify(newPayload.tagIds) : null,
         newPayload.attachments ? safeJsonStringify(newPayload.attachments) : null,
         newPayload.currencyCode ?? null, newPayload.nativeAmount ?? null,
