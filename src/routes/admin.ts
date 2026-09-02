@@ -1245,4 +1245,132 @@ adminRouter.get('/r2/attachment-orphans', async (c) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// GET /admin/attachments/integrity - 附件完整性检查（只读）
+// 对每个被交易引用的附件 cloudFileId，核对：
+//   A. attachment_files 表行是否存在
+//   B. R2 原图（表行 storage_path / 约定 key）是否存在
+//   C. R2 缩略图/分享图（_scaled_/_shared_）是否存在
+// 输出分类统计，帮助判断：原图丢失 / 仅缺表行 / 表行+原图都在 / 真孤儿。
+// 只读，不删除不修改。
+// ---------------------------------------------------------------------------
+
+adminRouter.get('/attachments/integrity', async (c) => {
+  const r2 = c.env.R2;
+  const db = c.env.DB;
+  if (!r2) return c.json({ error: 'R2 not configured' }, 400);
+
+  // 1. 收集所有 attachment_files 行（id → 元数据）
+  const attRows = await db.prepare(
+    `SELECT id, ledger_id, user_id, file_name, storage_path, sha256, size_bytes FROM attachment_files`
+  ).all<{ id: string; ledger_id: string | null; user_id: string; file_name: string | null; storage_path: string; sha256: string | null; size_bytes: number | null }>();
+  const attById = new Map<string, typeof attRows.results[number]>();
+  for (const r of attRows.results) attById.set(r.id, r);
+
+  // 2. 收集所有交易引用的 cloudFileId
+  const txRows = await db.prepare(
+    `SELECT ledger_id, sync_id, user_id, attachments_json FROM read_tx_projection WHERE attachments_json IS NOT NULL AND attachments_json != ''`
+  ).all<{ ledger_id: string; sync_id: string; user_id: string; attachments_json: string }>();
+
+  const referenced = new Map<string, { file_id: string; ledger_id: string; sync_id: string; user_id: string }>();
+  for (const row of txRows.results) {
+    try {
+      const atts = JSON.parse(row.attachments_json);
+      if (!Array.isArray(atts)) continue;
+      for (const att of atts) {
+        if (!att || typeof att !== 'object') continue;
+        const fid = (att as Record<string, unknown>).cloudFileId;
+        if (typeof fid === 'string' && fid && !referenced.has(fid)) {
+          referenced.set(fid, { file_id: fid, ledger_id: row.ledger_id, sync_id: row.sync_id, user_id: row.user_id });
+        }
+      }
+    } catch {}
+  }
+
+  // 3. 列出 R2 attachments 前缀对象（原图 + 缩略图）
+  const r2Keys: string[] = [];
+  for (const prefix of ['beecount/attachments/', 'attachments/']) {
+    let cursor: string | undefined;
+    do {
+      const listing = await r2.list({ prefix, limit: 1000, cursor });
+      for (const obj of listing.objects) r2Keys.push(obj.key);
+      cursor = listing.truncated && listing.objects.length > 0
+        ? listing.objects[listing.objects.length - 1].key
+        : undefined;
+    } while (cursor);
+  }
+  // 精确 key（去前缀）集合 + 按 fileId/sha 前缀索引缩略图
+  const exactKeys = new Set(r2Keys.map(k => k.replace(/^beecount\//, '')));
+  const thumbnailByPrefix = new Map<string, string[]>();
+  for (const key of r2Keys) {
+    const base = key.replace(/^beecount\//, '');
+    const m = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.exec(base.split('/').pop() || '');
+    if (m) {
+      const arr = thumbnailByPrefix.get(m[1]) || [];
+      arr.push(key);
+      thumbnailByPrefix.set(m[1], arr);
+    }
+  }
+
+  // 4. 逐附件分类
+  const result = {
+    scanned_attachments: referenced.size,
+    attachment_rows: attRows.results.length,
+    r2_objects: r2Keys.length,
+    by_status: {} as Record<string, number>,
+    missing_original_samples: [] as Array<Record<string, unknown>>,
+    missing_all_samples: [] as Array<Record<string, unknown>>,
+    ok_samples: [] as Array<Record<string, unknown>>,
+  };
+
+  for (const [fileId, ref] of referenced) {
+    const row = attById.get(fileId);
+    // 原图存在判定：表行 storage_path 精确命中，或按约定 key 命中
+    let originalExists = false;
+    if (row) {
+      const sp = row.storage_path.replace(/^beecount\//, '');
+      if (exactKeys.has(sp)) originalExists = true;
+      else {
+        // 兼容：{ledgerId}/{fileId}_{fileName} 约定 key
+        const ledgerExt = row.ledger_id ?? '';
+        const fname = row.file_name ?? '';
+        const alt1 = `attachments/${ledgerExt}/${fileId}_${fname}`;
+        const alt2 = `attachments/${fileId}_${fname}`;
+        if (exactKeys.has(alt1) || exactKeys.has(alt2)) originalExists = true;
+      }
+    }
+    const thumbs = thumbnailByPrefix.get(fileId) || [];
+
+    let status: string;
+    if (!row) {
+      status = originalExists ? 'missing_row_but_original_exists' : (thumbs.length > 0 ? 'missing_row_only_thumbnail' : 'missing_row_no_file');
+    } else if (!originalExists) {
+      status = 'row_exists_but_original_missing';
+    } else {
+      status = 'ok';
+    }
+    result.by_status[status] = (result.by_status[status] || 0) + 1;
+
+    const sample = {
+      file_id: fileId,
+      ledger_id: ref.ledger_id,
+      sync_id: ref.sync_id,
+      user_id: ref.user_id,
+      has_row: !!row,
+      original_exists: originalExists,
+      thumbnails: thumbs,
+      storage_path: row?.storage_path ?? null,
+    };
+    if (status.startsWith('missing_row_but_original') || status === 'row_exists_but_original_missing') {
+      if (result.missing_original_samples.length < 20) result.missing_original_samples.push(sample);
+    } else if (status.startsWith('missing_row_no_file')) {
+      if (result.missing_all_samples.length < 20) result.missing_all_samples.push(sample);
+    } else if (status === 'ok') {
+      if (result.ok_samples.length < 5) result.ok_samples.push(sample);
+    }
+  }
+
+  return c.json(result);
+});
+
 export default adminRouter;
