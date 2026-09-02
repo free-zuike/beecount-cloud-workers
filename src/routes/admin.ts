@@ -1557,4 +1557,85 @@ adminRouter.post('/r2/attachment-orphans/cleanup', async (c) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// GET /admin/accounts/integrity - 交易缺账户诊断（只读）
+// A2/A3 报"交易引用的账户在 user_account_projection 不存在"。本端点区分：
+//   - 账户有 delete sync_changes 记录 → 账户确实被删过（真孤儿，可清）
+//   - 账户无任何/只有 upsert 记录 → 账户从未删，是投影/同步缺失（数据问题，不可清）
+// 依据原版 _delete_user_account：删除时 compact upsert 历史、保留 delete 事件。
+// ---------------------------------------------------------------------------
+
+adminRouter.get('/accounts/integrity', async (c) => {
+  const db = c.env.DB;
+
+  // 1. 收集所有交易引用的账户 sync_id（account/from/to）
+  const refs = new Map<string, { field: string; ledger_id: string; sync_id: string; user_id: string }>();
+  const txRows = await db.prepare(
+    `SELECT ledger_id, sync_id, user_id, account_sync_id, from_account_sync_id, to_account_sync_id FROM read_tx_projection`
+  ).all<{ ledger_id: string; sync_id: string; user_id: string; account_sync_id: string | null; from_account_sync_id: string | null; to_account_sync_id: string | null }>();
+
+  const missingRefs = new Map<string, { field: string; ledger_id: string; tx_sync_id: string; user_id: string }>();
+  for (const row of txRows.results) {
+    for (const field of ['account_sync_id', 'from_account_sync_id', 'to_account_sync_id'] as const) {
+      const accId = row[field];
+      if (accId) {
+        const key = `${row.user_id}:${accId}`;
+        if (!missingRefs.has(key)) {
+          missingRefs.set(key, { field, ledger_id: row.ledger_id, tx_sync_id: row.sync_id, user_id: row.user_id });
+        }
+      }
+    }
+  }
+
+  // 2. 查这些账户在 user_account_projection 是否存在
+  const existing = new Set<string>();
+  const projRows = await db.prepare('SELECT user_id, sync_id FROM user_account_projection').all<{ user_id: string; sync_id: string }>();
+  for (const r of projRows.results) existing.add(`${r.user_id}:${r.sync_id}`);
+
+  const missing: Array<{ user_id: string; account_sync_id: string; field: string; tx_sync_id: string; has_delete_sync_change: boolean; has_upsert_sync_change: boolean; has_any_sync_change: boolean }> = [];
+
+  for (const [key, ref] of missingRefs) {
+    if (existing.has(key)) continue; // 账户存在，正常
+    const [userId, accId] = key.split(':');
+    // 查该账户的 sync_changes 历史
+    const sc = await db.prepare(
+      `SELECT action, COUNT(*) as cnt FROM sync_changes WHERE user_id = ? AND entity_type = 'account' AND entity_sync_id = ? GROUP BY action`
+    ).bind(userId, accId).all<{ action: string; cnt: number }>();
+    let hasDelete = false, hasUpsert = false;
+    for (const r of sc.results) {
+      if (r.action === 'delete') hasDelete = true;
+      else hasUpsert = true;
+    }
+    missing.push({
+      user_id: userId,
+      account_sync_id: accId,
+      field: ref.field,
+      tx_sync_id: ref.tx_sync_id,
+      has_delete_sync_change: hasDelete,
+      has_upsert_sync_change: hasUpsert,
+      has_any_sync_change: sc.results.length > 0,
+    });
+  }
+
+  // 3. 分类
+  const withDelete = missing.filter(m => m.has_delete_sync_change);
+  const noDeleteNoUpsert = missing.filter(m => !m.has_any_sync_change);
+  const onlyUpsert = missing.filter(m => !m.has_delete_sync_change && m.has_upsert_sync_change);
+
+  // 去重账户数（按 user:account）
+  const uniqueAccounts = new Set(missing.map(m => `${m.user_id}:${m.account_sync_id}`));
+
+  return c.json({
+    total_tx_refs_missing: missing.length,
+    unique_missing_accounts: uniqueAccounts.size,
+    by_reason: {
+      deleted_account_true_orphan: withDelete.length,       // 有 delete → 真删过，可清
+      no_sync_change_at_all: noDeleteNoUpsert.length,        // 无任何记录 → 数据缺失
+      only_upsert_no_delete: onlyUpsert.length,              // 只有 upsert → 数据缺失
+    },
+    samples_deleted: withDelete.slice(0, 5).map(m => ({ account_sync_id: m.account_sync_id, field: m.field, tx_sync_id: m.tx_sync_id })),
+    samples_data_missing: [...noDeleteNoUpsert, ...onlyUpsert].slice(0, 5).map(m => ({ account_sync_id: m.account_sync_id, field: m.field, tx_sync_id: m.tx_sync_id })),
+  });
+});
+
 export default adminRouter;
