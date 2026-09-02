@@ -253,6 +253,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_user_cursor ON sync_changes(user_id, change_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_ledger_cursor ON sync_changes(ledger_id, change_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_entity_latest ON sync_changes(ledger_id, entity_type, entity_sync_id, change_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_entity_sync ON sync_changes(entity_type, entity_sync_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_user_id ON sync_changes(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_ledger_id ON sync_changes(ledger_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_entity_type ON sync_changes(entity_type)').run();

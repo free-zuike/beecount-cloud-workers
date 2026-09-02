@@ -15,8 +15,10 @@ const MAX_ORPHANS = 100;
 async function scanTxMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> {
   const result = await db.prepare(`
     SELECT p.sync_id, p.ledger_id, p.user_id FROM read_tx_projection p
-    LEFT JOIN sync_changes c ON p.sync_id = c.entity_sync_id AND c.entity_type = 'transaction'
-    WHERE c.change_id IS NULL
+    WHERE NOT EXISTS (
+      SELECT 1 FROM sync_changes c
+      WHERE c.entity_sync_id = p.sync_id AND c.entity_type = 'transaction'
+    )
     LIMIT ?
   `).bind(MAX_ORPHANS).all<{ sync_id: string; ledger_id: string; user_id: string }>();
 
@@ -37,8 +39,10 @@ async function scanTxMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> 
 async function scanCategoryMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> {
   const result = await db.prepare(`
     SELECT r.sync_id, r.user_id, r.name FROM user_category_projection r
-    LEFT JOIN sync_changes c ON r.sync_id = c.entity_sync_id AND c.entity_type = 'category'
-    WHERE c.change_id IS NULL
+    WHERE NOT EXISTS (
+      SELECT 1 FROM sync_changes c
+      WHERE c.entity_sync_id = r.sync_id AND c.entity_type = 'category'
+    )
     LIMIT ?
   `).bind(MAX_ORPHANS).all<{ sync_id: string; user_id: string; name: string }>();
 
@@ -59,8 +63,10 @@ async function scanCategoryMissingSyncChange(db: D1Database): Promise<OrphanReco
 async function scanTagMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> {
   const result = await db.prepare(`
     SELECT r.sync_id, r.user_id, r.name FROM user_tag_projection r
-    LEFT JOIN sync_changes c ON r.sync_id = c.entity_sync_id AND c.entity_type = 'tag'
-    WHERE c.change_id IS NULL
+    WHERE NOT EXISTS (
+      SELECT 1 FROM sync_changes c
+      WHERE c.entity_sync_id = r.sync_id AND c.entity_type = 'tag'
+    )
     LIMIT ?
   `).bind(MAX_ORPHANS).all<{ sync_id: string; user_id: string; name: string }>();
 
@@ -81,8 +87,10 @@ async function scanTagMissingSyncChange(db: D1Database): Promise<OrphanRecord[]>
 async function scanBudgetMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> {
   const result = await db.prepare(`
     SELECT r.sync_id, r.ledger_id, r.user_id, r.budget_type FROM read_budget_projection r
-    LEFT JOIN sync_changes c ON r.sync_id = c.entity_sync_id AND c.entity_type = 'budget'
-    WHERE c.change_id IS NULL
+    WHERE NOT EXISTS (
+      SELECT 1 FROM sync_changes c
+      WHERE c.entity_sync_id = r.sync_id AND c.entity_type = 'budget'
+    )
     LIMIT ?
   `).bind(MAX_ORPHANS).all<{ sync_id: string; ledger_id: string; user_id: string; budget_type: string }>();
 
@@ -103,8 +111,10 @@ async function scanBudgetMissingSyncChange(db: D1Database): Promise<OrphanRecord
 async function scanAccountMissingSyncChange(db: D1Database): Promise<OrphanRecord[]> {
   const result = await db.prepare(`
     SELECT r.sync_id, r.user_id, r.name FROM user_account_projection r
-    LEFT JOIN sync_changes c ON r.sync_id = c.entity_sync_id AND c.entity_type = 'account'
-    WHERE c.change_id IS NULL
+    WHERE NOT EXISTS (
+      SELECT 1 FROM sync_changes c
+      WHERE c.entity_sync_id = r.sync_id AND c.entity_type = 'account'
+    )
     LIMIT ?
   `).bind(MAX_ORPHANS).all<{ sync_id: string; user_id: string; name: string }>();
 
@@ -128,8 +138,11 @@ async function scanSyncChangeMissingEntity(db: D1Database): Promise<OrphanRecord
   const result = await db.prepare(`
     SELECT sc.change_id, sc.entity_sync_id, sc.entity_type, sc.ledger_id, sc.user_id
     FROM sync_changes sc
-    LEFT JOIN read_tx_projection p ON sc.entity_sync_id = p.sync_id AND sc.entity_type = 'transaction'
-    WHERE sc.entity_type = 'transaction' AND sc.action != 'delete' AND p.sync_id IS NULL
+    WHERE sc.entity_type = 'transaction' AND sc.action != 'delete'
+      AND NOT EXISTS (
+        SELECT 1 FROM read_tx_projection p
+        WHERE p.sync_id = sc.entity_sync_id
+      )
     LIMIT ?
   `).bind(MAX_ORPHANS).all<{ change_id: number; entity_sync_id: string; entity_type: string; ledger_id: string; user_id: string }>();
 
