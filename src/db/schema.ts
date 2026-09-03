@@ -1,6 +1,33 @@
+/**
+ * schema 结构版本（对齐原版 Alembic 思路：版本匹配即跳过全部 DDL）。
+ * 每次变更下方 DDL（新建表/加列/索引/迁移）时必须递增，
+ * 否则已初始化的库不会重放 DDL。
+ */
+const SCHEMA_VERSION = 1;
+
 export async function initializeDatabase(db: D1Database): Promise<void> {
   try {
     console.log('[INIT] Checking and creating database tables...');
+
+    // 版本已匹配 → 跳过全部 DDL（原版 alembic upgrade head 只跑一次；
+    // worker 冷启动不再重复执行 40+ 条 CREATE/ALTER，省 D1 行读取）。
+    try {
+      const meta = await db.prepare(
+        `SELECT value FROM app_metadata WHERE key = 'schema_version'`
+      ).first<{ value: string }>();
+      if (meta?.value === String(SCHEMA_VERSION)) {
+        console.log('[INIT] Schema already at version', SCHEMA_VERSION, '— skipped');
+        return;
+      }
+    } catch { /* app_metadata 表尚未创建（首次初始化），继续走完整 DDL */ }
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS app_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS users (
@@ -696,6 +723,12 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     try {
       await db.prepare("ALTER TABLE user_category_projection ADD COLUMN parent_sync_id TEXT").run();
     } catch { /* 列已存在则忽略 */ }
+
+    // 全部 DDL 完成后记录版本，后续冷启动直接短路
+    await db.prepare(
+      `INSERT OR REPLACE INTO app_metadata (key, value, updated_at)
+       VALUES ('schema_version', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+    ).bind(String(SCHEMA_VERSION)).run();
 
     console.log('[INIT] Database tables created/verified successfully');
 
