@@ -14,9 +14,11 @@ import { uploadToOAuth2Provider, downloadFromOAuth2Provider, deleteOAuth2FileByP
 // 统一前缀，所有存储操作都在 beecount/ 子目录下
 const PREFIX = 'beecount/';
 
-/** 给 key 加上统一前缀（避免空 key 时出问题） */
+/** 给 key 加上统一前缀（避免空 key 时出问题；幂等——key 已带 beecount/ 则不重复加） */
 function prefixKey(key: string): string {
-  return PREFIX + key.replace(/^\//, '');
+  const k = key.replace(/^\//, '');
+  if (k.startsWith(PREFIX)) return k;
+  return PREFIX + k;
 }
 
 // 安全解析 config_summary

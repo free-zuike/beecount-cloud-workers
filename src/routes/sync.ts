@@ -22,6 +22,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { insertAuditLog } from '../lib/audit';
+import { deleteFromStorage } from '../lib/storage-adapter';
 
 const CODE_VERSION = 'v1.3-projection-fix';
 
@@ -1502,8 +1503,9 @@ async function applyUserChangeToProjection(
             const iconRow = await db.prepare(
               "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'category_icon'"
             ).bind(fileId).first<{ storage_path: string }>();
-            if (iconRow?.storage_path && r2) {
-              try { await r2.delete(iconRow.storage_path); } catch {}
+            if (iconRow?.storage_path) {
+              // 统一删除入口：覆盖 R2 + WebDAV/S3/B2/FTP/SFTP 所有远端 + 前缀/旧路径兼容
+              await deleteFromStorage(db, { R2: r2 }, iconRow.storage_path.replace(/^beecount\//, ''));
             }
             await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
           }
@@ -1921,8 +1923,9 @@ async function applyChangeToProjection(
           ).bind(ledgerId, patNoSpace, patWithSpace, ...(shaPat ? [shaPat] : [])).first<{ cnt: number }>();
           if (stillReferenced && stillReferenced.cnt > 0) continue;
 
-          if (r2 && attFile.storage_path) {
-            try { await r2.delete(attFile.storage_path); } catch {}
+          if (attFile.storage_path) {
+            // 统一删除入口：覆盖 R2 + WebDAV/S3/B2/FTP/SFTP 所有远端 + 前缀/旧路径兼容
+            await deleteFromStorage(db, { R2: r2 }, attFile.storage_path.replace(/^beecount\//, ''));
           }
           await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
         }
@@ -1941,8 +1944,9 @@ async function applyChangeToProjection(
           ).bind(ledgerId, `"cloudFileId":"${attFile.id}"`, `"cloudFileId": "${attFile.id}"`, shaPat).first<{ cnt: number }>();
           // 注意：这里同时检查了 cloudFileId（web 端）和 shaPat（Flutter 端）
           if (stillReferenced && stillReferenced.cnt > 0) continue;
-          if (r2 && attFile.storage_path) {
-            try { await r2.delete(attFile.storage_path); } catch {}
+          if (attFile.storage_path) {
+            // 统一删除入口：覆盖 R2 + WebDAV/S3/B2/FTP/SFTP 所有远端 + 前缀/旧路径兼容
+            await deleteFromStorage(db, { R2: r2 }, attFile.storage_path.replace(/^beecount\//, ''));
           }
           await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(attFile.id).run();
         }

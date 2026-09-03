@@ -32,6 +32,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { insertAuditLog } from '../lib/audit';
+import { deleteFromStorage } from '../lib/storage-adapter';
 
 /** 空串/undefined/null 统一归一为 null —— 对齐原版：无值字段是 NULL 而非空字符串 */
 function nullOr(v: unknown): unknown {
@@ -629,9 +630,9 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
 
       if (stillReferenced && stillReferenced.cnt > 0) continue;
 
-      // 无其他引用，安全删除
-      if (c.env.R2 && att.storage_path) {
-        try { await c.env.R2.delete(att.storage_path); } catch {}
+      // 无其他引用，安全删除（统一入口：覆盖 R2 + WebDAV/S3/B2/FTP/SFTP 所有远端）
+      if (att.storage_path) {
+        try { await deleteFromStorage(db, c.env, att.storage_path.replace(/^beecount\//, '')); } catch {}
       }
       await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fid).run();
     }
@@ -677,13 +678,13 @@ writeRouter.delete('/ledgers/:ledgerId', async (c) => {
     return c.json({ error: 'Ledger not found' }, 404);
   }
 
-  // 先收集附件并 best-effort 清理 R2 文件（R2 无法事务化，对齐原版 commit 后 file_ops）
+  // 先收集附件并 best-effort 清理存储文件（统一入口：R2 + WebDAV/S3/B2/FTP/SFTP，对齐原版 commit 后 file_ops）
   const attachments = await db
     .prepare('SELECT id, storage_path FROM attachment_files WHERE ledger_id = ?')
     .bind(ledger.id).all<{ id: string; storage_path: string }>();
   for (const att of (attachments.results || [])) {
-    if (r2 && att.storage_path) {
-      try { await r2.delete(att.storage_path); } catch {}
+    if (att.storage_path) {
+      try { await deleteFromStorage(db, { R2: r2 }, att.storage_path.replace(/^beecount\//, '')); } catch {}
     }
   }
 
@@ -1628,7 +1629,8 @@ writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', Write
         "SELECT storage_path FROM attachment_files WHERE id = ? AND attachment_kind = 'category_icon'"
       ).bind(fileIdToDelete).first<{ storage_path: string }>();
       if (iconRow?.storage_path) {
-        try { await c.env.R2.delete(iconRow.storage_path); } catch {}
+        // 统一删除入口：覆盖 R2 + WebDAV/S3/B2/FTP/SFTP 所有远端
+        try { await deleteFromStorage(db, c.env, iconRow.storage_path.replace(/^beecount\//, '')); } catch {}
       }
       await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileIdToDelete).run();
     }
