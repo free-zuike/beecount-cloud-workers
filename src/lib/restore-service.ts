@@ -334,7 +334,14 @@ async function uploadAttachments(
     try {
       // 统一加 beecount/ 前缀：与 attachment_files 表行对齐（index.ts 打包同约定）
       const r2Key = key.startsWith('beecount/') ? key : `beecount/${key}`;
-      await r2.put(r2Key, data);
+      // 按扩展名推断 contentType（避免 R2 全存成 application/octet-stream）
+      const ext = key.split('.').pop()?.toLowerCase() || '';
+      const contentType = ext === 'png' ? 'image/png'
+        : ext === 'webp' ? 'image/webp'
+        : ext === 'gif' ? 'image/gif'
+        : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+        : 'application/octet-stream';
+      await r2.put(r2Key, data, { httpMetadata: { contentType } });
       uploaded++;
       uploadedKeys.push(r2Key);
     } catch (err) {
