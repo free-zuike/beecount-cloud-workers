@@ -776,11 +776,6 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
     serverLogger.info('src.routers.sync', '[SYNC] /sync/push result - accepted:', accepted, 'rejected:', rejected, 'conflicts:', conflictCount, 'server_cursor:', maxCursor, 'projection_errors:', projectionErrors.length);
     serverLogger.info('src.routers.sync', `[SYNC] ===== ${CODE_VERSION} SUCCESS =====`);
 
-    // 统计最终状态
-    const totalChanges = await db.prepare('SELECT COUNT(*) as cnt FROM sync_changes WHERE user_id = ?').bind(userId).first<{ cnt: number }>();
-    const categoryCount = await db.prepare("SELECT COUNT(*) as cnt FROM sync_changes WHERE user_id = ? AND entity_type = 'category'").bind(userId).first<{ cnt: number }>();
-    serverLogger.info('src.routers.sync', '[SYNC] DB totals - all_changes:', totalChanges?.cnt, 'categories:', categoryCount?.cnt);
-
     await insertAuditLog({
       db, userId, action: 'sync_push', entityType: 'sync',
       details: { accepted, rejected, conflict_count: conflictCount, device_id: deviceId },
