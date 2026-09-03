@@ -278,10 +278,19 @@ async function scanAttachmentFileMissing(db: D1Database, r2?: R2Bucket): Promise
     if (!row.storage_path) continue;
     let exists = false;
     if (r2) {
-      try {
-        const obj = await r2.head(row.storage_path);
-        exists = !!obj;
-      } catch { exists = false; }
+      // 兼容两种存储格式：DB 可能存 attachments/...（无前缀，上传路径）
+      // 或 beecount/attachments/...（带前缀，恢复/补登路径）。R2 实际 key 由
+      // storage-adapter 统一加 beecount/ 前缀。两种变体都尝试，避免误报。
+      const variants = [
+        row.storage_path,
+        row.storage_path.startsWith('beecount/') ? row.storage_path.slice('beecount/'.length) : `beecount/${row.storage_path}`,
+      ];
+      for (const key of variants) {
+        try {
+          const obj = await r2.head(key);
+          if (obj) { exists = true; break; }
+        } catch { /* try next variant */ }
+      }
     }
     // r2 未配置时无法判定（跳过，避免误报）
     if (r2 && exists) continue;
