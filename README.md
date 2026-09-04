@@ -196,6 +196,25 @@ binding = "ASSETS"
 }
 ```
 
+#### AI 文档问答（RAG）
+
+Web 端 `⌘K` 的 AI 助手会基于 BeeCount 官方文档回答使用问题（附来源链接）。部署者需额外配置 **server 侧 embedding key**（把用户问题转成向量去文档库检索；免费额度足够，参考 [SiliconFlow](https://siliconflow.cn)）：
+
+```bash
+# 部署后执行（敏感配置走 Secret，禁止放 wrangler.toml [vars]）
+npx wrangler secret put EMBEDDING_API_KEY
+```
+
+| 配置项 | 默认值 | 说明 |
+|---|---|---|
+| `EMBEDDING_API_KEY` | （空） | **必需**：不配则 AI 问答返回 503、健康页索引卡片显示"不可用"；不影响记账/同步/备份 |
+| `EMBEDDING_MODEL` | `BAAI/bge-m3` | 必须与索引构建用模型一致，否则检索结果无意义 |
+| `EMBEDDING_BASE_URL` | `https://api.siliconflow.cn/v1` | OpenAI 兼容 `/embeddings` 端点 |
+| `RAG_INDEX_SOURCE_URL` | `https://raw.githubusercontent.com/TNT-Likely/BeeCount-Website/main/data` | 官方文档索引源 |
+| `RAG_INDEX_REFRESH_INTERVAL_SECONDS` | `21600`（6h） | cron 自动刷新间隔 |
+
+部署后手动拉取一次索引：Web 后台「设置 → 健康」→ **AI 文档索引**卡片 → **立即更新**；或 `POST /api/v1/admin/rag/refresh`。
+
 ## API 端点
 
 ### 认证
