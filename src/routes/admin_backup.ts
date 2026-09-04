@@ -209,19 +209,22 @@ async function resolveScheduleRemoteIds(db: D1Database, scheduleId: number | str
 }
 
 /** 全量覆盖 schedule 的 remote 关联（对齐原版：先删旧映射再加新）。
- * 兼容旧实现：同步写回 remote_ids JSON 列（存放整型 id 列表）。 */
+ * 兼容旧实现：同步写回 remote_ids JSON 列（存放整型 id 列表）。
+ * 前端可能传混型 remote_ids（如 [1, "1"]），统一转字符串并去重，
+ * 否则插入 backup_schedule_remotes（PK=schedule_id+remote_id）会主键冲突 500。 */
 async function replaceScheduleRemotes(
   db: D1Database,
   scheduleId: number | string,
   remoteIds: Array<string | number>,
 ) {
+  const normalized = Array.from(new Set(remoteIds.map((rid) => String(rid))));
   return db.batch([
     db.prepare('DELETE FROM backup_schedule_remotes WHERE schedule_id = ?').bind(String(scheduleId)),
-    ...remoteIds.map((rid, idx) =>
+    ...normalized.map((rid, idx) =>
       db.prepare('INSERT INTO backup_schedule_remotes (schedule_id, remote_id, sort_order) VALUES (?, ?, ?)')
-        .bind(String(scheduleId), String(rid), idx)),
+        .bind(String(scheduleId), rid, idx)),
     db.prepare('UPDATE backup_schedules SET remote_ids = ? WHERE id = ?')
-      .bind(remoteIds.length ? JSON.stringify(remoteIds) : null, String(scheduleId)),
+      .bind(normalized.length ? JSON.stringify(normalized) : null, String(scheduleId)),
   ]);
 }
 
