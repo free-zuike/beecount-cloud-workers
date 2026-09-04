@@ -112,10 +112,15 @@ async function downloadAndExtractBackup(
   const metaEntry = entries.find(e => e.name === 'meta.json');
   const meta = metaEntry ? JSON.parse(new TextDecoder().decode(metaEntry.data)) : {};
 
-  // 提取附件
+  // 提取附件（兼容两种备份布局：无前缀 attachments/avatars/category-icons 旧格式，
+  // 与 beecount/ 前缀新格式——DO 打包直接以 R2 key 作 tar entry 名）
   const attachments = new Map<string, Uint8Array>();
   for (const entry of entries) {
-    if (entry.name.startsWith('attachments/') || entry.name.startsWith('avatars/')) {
+    const n = entry.name;
+    if (
+      n.startsWith('attachments/') || n.startsWith('avatars/') || n.startsWith('category-icons/') ||
+      n.startsWith('beecount/attachments/') || n.startsWith('beecount/avatars/') || n.startsWith('beecount/category-icons/')
+    ) {
       attachments.set(entry.name, entry.data);
     }
   }

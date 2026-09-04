@@ -192,21 +192,28 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
         logFn(`no sqliteR2Key (no CLOUDFLARE_API_TOKEN) — using db.json only`);
       }
 
-      // 生成数据条目（不含附件，r2=undefined 跳过附件下载）
+      // 生成数据条目（不含附件——附件由下方 r2.list 按真实 key 收集，避免重复下载）
       const generated = await generateBackupBytes(
         db, body.userId, body.ledgerId, undefined, logFn,
         { scheduleId: body.scheduleId ?? null, scheduleName: body.scheduleName ?? null },
-        sqlite, body.jwtSecret ?? null,
+        sqlite, body.jwtSecret ?? null, true,
       );
 
       // 列出所有附件 key（逐个下载写入，不全加载到内存）
+      // 兼容两种存储布局：beecount/ 前缀（uploadToStorage 统一前缀，2026-08-31 后）
+      // 与无前缀旧路径（前缀化前的历史数据）。去重避免同对象列两次。
       const attachmentKeys: string[] = [];
-      for (const prefix of ['attachments/', 'avatars/', 'category-icons/']) {
+      const seenKeys = new Set<string>();
+      for (const prefix of ['beecount/attachments/', 'beecount/avatars/', 'beecount/category-icons/', 'attachments/', 'avatars/', 'category-icons/']) {
         let cursor: string | undefined;
         do {
           const listed = await r2.list({ prefix, cursor, limit: 1000 });
           cursor = listed.truncated ? listed.cursor : undefined;
-          for (const obj of listed.objects) attachmentKeys.push(obj.key);
+          for (const obj of listed.objects) {
+            if (seenKeys.has(obj.key)) continue;
+            seenKeys.add(obj.key);
+            attachmentKeys.push(obj.key);
+          }
         } while (cursor);
       }
       logFn(`found ${attachmentKeys.length} attachments, total ${generated.entries.length} base entries`);

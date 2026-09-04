@@ -346,6 +346,7 @@ export async function generateBackupBytes(
   schedule?: { scheduleId: number | null; scheduleName: string | null },
   preSqliteBytes?: Uint8Array | null,
   jwtSecret?: string | null,
+  skipAttachments?: boolean,
 ): Promise<GeneratedBackup> {
   const log = logFn || console.log;
   const logLines: string[] = [];
@@ -388,9 +389,11 @@ export async function generateBackupBytes(
   // 3. 附件（R2 + 所有备份远端，按原版路径结构重映射）
   //    上传端 uploadToStorage 会写到 R2 或回退到任一备份远端，所以无论是否配置
   //    R2 都要尝试收集（downloadFromStorage 内部自动遍历 R2 + 全部远端）。
+  //    skipAttachments=true：调用方（DO backup-pack）已自行按 R2 key 收集附件，
+  //    这里跳过避免重复下载（Workflow 路径）。
   let originalAttachments = new Map<string, Uint8Array>();
   let storagePathRewrite = new Map<string, string>();
-  {
+  if (!skipAttachments) {
     try {
       const res = await withRetry(() => fetchR2Attachments(db, r2, userId), 2, 2000, 'fetch attachments');
       originalAttachments = res.originalAttachments;
