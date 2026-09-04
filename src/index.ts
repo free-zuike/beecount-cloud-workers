@@ -171,25 +171,23 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
 
   const key = profile.avatar_file_id;
 
-  // 直接从 R2 下载（key 已是完整路径如 beecount/avatars/xxx）
-  if (r2) {
-    const obj = await r2.get(key);
-    if (!obj) return c.json({ error: 'Avatar not found' }, 404);
-    return new Response(obj.body, {
-      headers: {
-        'Content-Type': obj.httpMetadata?.contentType || 'image/png',
-        'Cache-Control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
-      },
-    });
-  }
-  return downloadFromStorage(db, c.env, key.replace(/^beecount\//, '')).then(async (data) => {
-    if (!data) return c.json({ error: 'Avatar not found' }, 404);
-    return new Response(data, {
-      headers: {
-        'Content-Type': 'image/png',
-        'Cache-Control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
-      },
-    });
+  // 统一走 downloadFromStorage（R2 优先 + 自动 beecount/ 前缀 + 所有备份远端回退），
+  // 与上传端 uploadToStorage(prefixKey) 的 key 语义一致；兼容 avatar_file_id 为
+  // 纯文件名（原版恢复导入）或已带前缀（beecount/avatars/...）的存量。
+  const data = await downloadFromStorage(db, c.env, key.replace(/^beecount\//, ''));
+  if (!data) return c.json({ error: 'Avatar not found' }, 404);
+  // 按扩展名 / 魔数给定 MIME（原版恢复的头像文件名带 .jpg/.png，直接能猜）
+  const ext = (key.split('.').pop() || '').toLowerCase();
+  const imgType = ext === 'png' ? 'image/png'
+    : ext === 'webp' ? 'image/webp'
+    : ext === 'gif' ? 'image/gif'
+    : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+    : 'image/png';
+  return new Response(data, {
+    headers: {
+      'Content-Type': imgType,
+      'Cache-Control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
+    },
   });
 });
 

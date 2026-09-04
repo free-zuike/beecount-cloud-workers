@@ -21,8 +21,9 @@ import { downloadFromStorage } from '../lib/storage-adapter';
 async function rewriteSqliteAttachmentPaths(
   sqliteBytes: Uint8Array,
   storagePathRewrite: Map<string, string>,
+  avatarFileIdRewrite?: Map<string, string>,
 ): Promise<Uint8Array> {
-  if (storagePathRewrite.size === 0) return sqliteBytes;
+  if (storagePathRewrite.size === 0 && (!avatarFileIdRewrite || avatarFileIdRewrite.size === 0)) return sqliteBytes;
   try {
     const initSqlJs = (await import('sql.js/dist/sql-asm.js')).default;
     if (typeof self !== 'undefined' && !(self as any).location) {
@@ -33,6 +34,13 @@ async function rewriteSqliteAttachmentPaths(
     try {
       for (const [id, newPath] of storagePathRewrite) {
         db.run(`UPDATE attachment_files SET storage_path = ? WHERE id = ?`, [newPath, id]);
+      }
+      // 头像：原版 user_profiles.avatar_file_id 存纯文件名 avatar_<uuid>.<ext>，
+      // worker 存完整路径 avatars/<userId>/<uuid> —— 改写为原版格式，恢复后命中
+      if (avatarFileIdRewrite) {
+        for (const [uid, newName] of avatarFileIdRewrite) {
+          db.run(`UPDATE user_profiles SET avatar_file_id = ? WHERE user_id = ?`, [newName, uid]);
+        }
       }
       return db.export();
     } finally {
@@ -256,20 +264,21 @@ async function fetchR2Attachments(
   db: D1Database,
   r2: R2Bucket | undefined,
   userId: string,
-): Promise<{ originalAttachments: Map<string, Uint8Array>; storagePathRewrite: Map<string, string> }> {
+): Promise<{ originalAttachments: Map<string, Uint8Array>; storagePathRewrite: Map<string, string>; avatarFileIdRewrite: Map<string, string> }> {
   const originalAttachments = new Map<string, Uint8Array>();
   const storagePathRewrite = new Map<string, string>();
+  const avatarFileIdRewrite = new Map<string, string>();
 
   // 附件行 + 关联账本 external_id（原版路径需要 ledger_external_id）
-  // 覆盖全部 kind：transaction 交易附件 + category_icon 分类图标 + avatar 头像
+  // 覆盖全部 kind：transaction 交易附件 + category_icon 分类图标
   // （原版备份把整个 attachment_storage_dir 打包，包含所有类型）
   const rows = await db.prepare(
-    `SELECT a.id, a.user_id, a.ledger_id, a.sha256, a.file_name, a.storage_path, l.external_id
+    `SELECT a.id, a.user_id, a.ledger_id, a.sha256, a.file_name, a.storage_path, a.attachment_kind, l.external_id
      FROM attachment_files a LEFT JOIN ledgers l ON a.ledger_id = l.id
      WHERE a.user_id = ?`
   ).bind(userId).all<{
     id: string; user_id: string; ledger_id: string | null; sha256: string | null;
-    file_name: string | null; storage_path: string | null; external_id: string | null;
+    file_name: string | null; storage_path: string | null; attachment_kind: string | null; external_id: string | null;
   }>();
 
   await parallelMap(rows.results, async (row) => {
@@ -278,39 +287,53 @@ async function fetchR2Attachments(
     const data = await downloadFromStorage(db, { R2: r2 }, row.storage_path);
     if (!data) return;
 
-    const ledgerExt = row.external_id ?? row.ledger_id ?? 'unknown';
     const userPart = row.user_id;
     const shaDir = (row.sha256 ?? '').slice(0, 2) || 'na';
     const fileName = row.file_name || row.id;
-    // 原版路径：tar 内相对结构 attachments/<user>/<ledger>/<sha[:2]>/<fileId>_<name>
-    // + db 里 storage_path 用原版固定绝对路径 /data/attachments/...（原版 Docker 部署
-    //   ATTACHMENT_STORAGE_DIR=/data/attachments 固定，下载按 Path(storage_path) 直读）。
+
+    // 按 kind 分流（对齐原版目录结构）：
+    //  - transaction 交易附件 → attachments/<user>/<ledger_ext>/<sha[:2]>/<fileId>_<name>
+    //  - category_icon 分类图标 → attachments/<user>/category-icons/<sha[:2]>/<fileId>_<name>
+    //    （原版 attachments.py:234-237：root/user_id/category-icons/sha256[:2]/，无 ledger 维度）
+    // db 里 storage_path 用原版固定绝对路径 /data/attachments/...（原版 Docker 部署
+    // ATTACHMENT_STORAGE_DIR=/data/attachments 固定，下载按 Path(storage_path) 直读）。
     // 用户解压 tar 后把 attachments/ rsync 到 /data，附件落在 /data/attachments/... 即命中。
-    const originalRel = `attachments/${userPart}/${ledgerExt}/${shaDir}/${row.id}_${fileName}`;
-    const originalAbs = `/data/attachments/${userPart}/${ledgerExt}/${shaDir}/${row.id}_${fileName}`;
+    const isIcon = row.attachment_kind === 'category_icon';
+    const subDir = isIcon ? 'category-icons' : (row.external_id ?? row.ledger_id ?? 'unknown');
+    const originalRel = `attachments/${userPart}/${subDir}/${shaDir}/${row.id}_${fileName}`;
+    const originalAbs = `/data/attachments/${userPart}/${subDir}/${shaDir}/${row.id}_${fileName}`;
 
     originalAttachments.set(originalRel, data);
     storagePathRewrite.set(row.id, originalAbs);
   }, 6);
 
-  // 头像：存在 user_profiles.avatar_file_id。原版路径 profile-avatars/<user>/avatar_<uuid>.<ext>
+  // 头像：存在 user_profiles.avatar_file_id。原版路径 profile-avatars/<user>/avatar_<uuid4.hex>.<ext>
+  // tar 内完整路径是 attachments/profile-avatars/<user>/avatar_<uuid4.hex>.<ext>
+  // （attachment_storage_dir 整棵打包成 attachments/，profile-avatars 是它的子目录）。
   // 且原版恢复靠扩展名猜 MIME（_guess_mime_type 用 path.suffix）——所以这里必须补上扩展名，
   // 否则恢复到原版后头像全变 application/octet-stream。
   // worker 存量头像可能存为 avatars/<userId>/<uuid>（无后缀），下载后按字节魔数推断类型。
   // best-effort：user_profiles 表缺失（老库/测试 mock）或头像下载失败不阻断附件收集。
   try {
     const profile = await db.prepare(
-      'SELECT avatar_file_id FROM user_profiles WHERE user_id = ? AND avatar_file_id IS NOT NULL AND avatar_file_id != ?'
-    ).bind(userId, '').first<{ avatar_file_id: string }>();
+      'SELECT avatar_file_id, avatar_version FROM user_profiles WHERE user_id = ? AND avatar_file_id IS NOT NULL AND avatar_file_id != ?'
+    ).bind(userId, '').first<{ avatar_file_id: string; avatar_version: number }>();
     if (profile?.avatar_file_id) {
       const sp = profile.avatar_file_id;
       const data = await downloadFromStorage(db, { R2: r2 }, sp);
       if (data) {
         const ext = detectImageExt(data);
-        const baseName = sp.split('/').pop() || 'avatar';
-        // 保留文件名主体，补扩展名：<uuid> → avatar_<uuid>.jpg（不重复加后缀）
-        const stem = baseName.includes('.') ? baseName : `${baseName}${ext ? `.${ext}` : ''}`;
-        originalAttachments.set(`profile-avatars/${userId}/${stem}`, data);
+        const normalizedKey = sp.includes('/') ? sp : `avatars/${userId}/${sp}`;
+        const baseName = normalizedKey.split('/').pop() || 'avatar';
+        // 原版文件名：avatar_<uuid4.hex>.<ext>。保留文件名主体，套 avatar_ 前缀 + 补扩展名：
+        // <uuid> → avatar_<uuid>.jpg（有后缀则保留，不再重复）
+        const rawStem = baseName.replace(/^avatar_/, '');
+        const stemWithExt = rawStem.includes('.') ? rawStem : `${rawStem}${ext ? `.${ext}` : ''}`;
+        const originalName = `avatar_${stemWithExt}`;
+        originalAttachments.set(`attachments/profile-avatars/${userId}/${originalName}`, data);
+        // 记录 avatar_file_id 改写（由 worker 的完整路径 → 原版纯文件名），恢复后原版
+        // _avatar_root()/<user_id>/<avatar_file_id> 即可命中
+        avatarFileIdRewrite.set(userId, originalName);
       }
     }
   } catch (err) {
@@ -318,7 +341,7 @@ async function fetchR2Attachments(
   }
 
   console.log(`[Backup] attachments remapped to original layout: ${originalAttachments.size} files`);
-  return { originalAttachments, storagePathRewrite };
+  return { originalAttachments, storagePathRewrite, avatarFileIdRewrite };
 }
 
 /** 按字节魔数推断图片扩展名（jpg/png/webp/gif），用于原版恢复时猜 MIME */
@@ -430,11 +453,13 @@ export async function generateBackupBytes(
   //    这里跳过避免重复下载（Workflow 路径）。
   let originalAttachments = new Map<string, Uint8Array>();
   let storagePathRewrite = new Map<string, string>();
+  let avatarFileIdRewrite = new Map<string, string>();
   if (!skipAttachments) {
     try {
       const res = await withRetry(() => fetchR2Attachments(db, r2, userId), 2, 2000, 'fetch attachments');
       originalAttachments = res.originalAttachments;
       storagePathRewrite = res.storagePathRewrite;
+      avatarFileIdRewrite = res.avatarFileIdRewrite;
       logWrap(`[Backup] R2 attachments: ${originalAttachments.size} files (original layout)`);
     } catch (err) {
       logWrap(`[Backup] fetch attachments failed: ${(err as Error).message}`);
@@ -446,17 +471,26 @@ export async function generateBackupBytes(
   const entries: { name: string; data: Uint8Array }[] = [];
   entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: APP_VERSION, createdAt: now, scheduleId: schedule?.scheduleId ?? null, scheduleName: schedule?.scheduleName ?? null, userId, includeAttachments: true }, null, 2)) });
   if (sqliteBytes) {
-    // 改写 db.sqlite3 的 attachment_files.storage_path 为原版绝对路径，供原版恢复后按表读
-    sqliteBytes = await rewriteSqliteAttachmentPaths(sqliteBytes, storagePathRewrite);
+    // 改写 db.sqlite3 的 attachment_files.storage_path + user_profiles.avatar_file_id
+    // 为原版格式（绝对路径 / 纯文件名），供原版恢复后按表读
+    sqliteBytes = await rewriteSqliteAttachmentPaths(sqliteBytes, storagePathRewrite, avatarFileIdRewrite);
     entries.push({ name: 'db.sqlite3', data: sqliteBytes });
   }
   if (jwtSecret) entries.push({ name: '.jwt_secret', data: new TextEncoder().encode(jwtSecret) });
-  // db.json 同样改写 attachment_files.storage_path
+  // db.json 同样改写 attachment_files.storage_path + user_profiles.avatar_file_id
   if (tables['attachment_files'] && storagePathRewrite.size > 0) {
     tables['attachment_files'] = (tables['attachment_files'] as Array<Record<string, unknown>>).map(row => {
       const id = String(row.id ?? '');
       const newPath = storagePathRewrite.get(id);
       if (newPath) return { ...row, storage_path: newPath };
+      return row;
+    });
+  }
+  if (tables['user_profiles'] && avatarFileIdRewrite.size > 0) {
+    tables['user_profiles'] = (tables['user_profiles'] as Array<Record<string, unknown>>).map(row => {
+      const uid = String(row.user_id ?? '');
+      const newName = avatarFileIdRewrite.get(uid);
+      if (newName) return { ...row, avatar_file_id: newName };
       return row;
     });
   }

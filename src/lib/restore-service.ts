@@ -340,15 +340,31 @@ async function uploadAttachments(
 
   for (const [key, data] of attachments) {
     try {
-      // 统一加 beecount/ 前缀：与 attachment_files 表行对齐（index.ts 打包同约定）
-      const r2Key = key.startsWith('beecount/') ? key : `beecount/${key}`;
-      // 按扩展名推断 contentType（避免 R2 全存成 application/octet-stream）
-      const ext = key.split('.').pop()?.toLowerCase() || '';
-      const contentType = ext === 'png' ? 'image/png'
-        : ext === 'webp' ? 'image/webp'
-        : ext === 'gif' ? 'image/gif'
-        : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
-        : 'application/octet-stream';
+      // 头像特殊处理：原版备份入口是 attachments/profile-avatars/<userId>/avatar_<uuid>.<ext>
+      // 上传为 worker 期望的 beecount/avatars/<userId>/<uuid>（下载端 avatar_file_id 直接用）
+      const avatarMatch = /^(?:beecount\/)?attachments\/profile-avatars\/([^/]+)\/(.+)$/.exec(key);
+      let r2Key: string;
+      let contentType: string;
+      if (avatarMatch) {
+        const [, uid, origName] = avatarMatch;
+        const fileId = origName.replace(/^avatar_/, ''); // avatar_<uuid>.<ext> → <uuid>.<ext>
+        r2Key = `beecount/avatars/${uid}/${fileId}`;
+        const ext = fileId.split('.').pop()?.toLowerCase() || '';
+        contentType = ext === 'png' ? 'image/png'
+          : ext === 'webp' ? 'image/webp'
+          : ext === 'gif' ? 'image/gif'
+          : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+          : 'image/png';
+      } else {
+        // 附件：统一加 beecount/ 前缀，与 attachment_files 表行对齐
+        r2Key = key.startsWith('beecount/') ? key : `beecount/${key}`;
+        const ext = key.split('.').pop()?.toLowerCase() || '';
+        contentType = ext === 'png' ? 'image/png'
+          : ext === 'webp' ? 'image/webp'
+          : ext === 'gif' ? 'image/gif'
+          : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+          : 'application/octet-stream';
+      }
       await r2.put(r2Key, data, { httpMetadata: { contentType } });
       uploaded++;
       uploadedKeys.push(r2Key);
@@ -392,6 +408,46 @@ async function remapAttachmentStoragePaths(
     if (!targetKey || targetKey === row.storage_path) continue;
     await db.prepare('UPDATE attachment_files SET storage_path = ? WHERE id = ?')
       .bind(targetKey, row.id).run();
+    updated++;
+  }
+  return updated;
+}
+
+/**
+ * 恢复后改写 user_profiles.avatar_file_id 为 worker 的 R2 key 格式。
+ *
+ * 原因：原版备份里 avatar_file_id 是纯文件名（avatar_<uuid4.hex>.<ext>），worker
+ * 下载端（/api/v1/profile/avatar）直接把它当 storage key 用（avatars/<userId>/<uuid>）。
+ * 恢复时头像已上传为 beecount/avatars/<userId>/<uuid>，必须把 avatar_file_id 改成
+ * 一致的 R2 key，否则恢复后头像引用断裂（404）。
+ */
+async function remapAvatarFileIds(
+  db: D1Database,
+  uploadedKeys: string[],
+): Promise<number> {
+  if (uploadedKeys.length === 0) return 0;
+  // worker 头像 key 形如 avatars/<userId>/<fileId> 或 beecount/avatars/<userId>/<fileId>
+  const avatarKeys = uploadedKeys.filter(k => k.includes('/avatars/'));
+  if (avatarKeys.length === 0) return 0;
+
+  const rows = await db.prepare(
+    `SELECT user_id, avatar_file_id FROM user_profiles WHERE avatar_file_id IS NOT NULL AND avatar_file_id != ?`
+  ).bind('').all<{ user_id: string; avatar_file_id: string }>();
+
+  let updated = 0;
+  for (const row of rows.results) {
+    // 原版 avatar_file_id 是 `avatar_<hex>.<ext>`（纯文件名）；worker 存的是完整 key。
+    // 若已是 worker 格式（含 '/' 的完整路径）则跳过。
+    if (row.avatar_file_id.includes('/')) continue;
+    // 匹配上传的该用户头像 key：取文件名尾段比对 + 用户匹配
+    const fileName = row.avatar_file_id;
+    const targetKey = avatarKeys.find(k =>
+      k.endsWith(`/${fileName}`) || k.endsWith(`/${row.user_id}/${fileName}`)
+    );
+    if (!targetKey) continue;
+    if (targetKey === row.avatar_file_id) continue;
+    await db.prepare('UPDATE user_profiles SET avatar_file_id = ? WHERE user_id = ?')
+      .bind(targetKey, row.user_id).run();
     updated++;
   }
   return updated;
@@ -452,6 +508,8 @@ export async function performRestore(
     const { uploaded: attachmentsUploaded, uploadedKeys } = await uploadAttachments(r2, attachments);
     // 对齐附件表行：把 storage_path 改写为实际上传的 R2 key（原版绝对路径 → beecount/ 格式）
     const remapped = await remapAttachmentStoragePaths(db, uploadedKeys);
+    // 对齐头像：原版 avatar_file_id 是纯文件名，改写成 worker 的 R2 key 格式
+    const remappedAvatars = await remapAvatarFileIds(db, uploadedKeys);
 
     // 重新启用外键约束
     await db.prepare('PRAGMA foreign_keys = ON').run();
@@ -462,7 +520,7 @@ export async function performRestore(
 
     return {
       success: true,
-      message: `Restored ${tablesImported} tables, ${rowsImported} rows, ${attachmentsUploaded} attachments, ${remapped} storage_path remapped${errMsg}`,
+      message: `Restored ${tablesImported} tables, ${rowsImported} rows, ${attachmentsUploaded} attachments, ${remapped} storage_path remapped, ${remappedAvatars} avatars remapped${errMsg}`,
       tablesImported,
       rowsImported,
       attachmentsUploaded,
