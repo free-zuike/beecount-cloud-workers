@@ -54,6 +54,11 @@ type Bindings = {
   CLOUDFLARE_API_TOKEN?: string;
   REGISTRATION_ENABLED?: string;
   BACKUP_WORKFLOW?: any;
+  RAG_INDEX_SOURCE_URL?: string;
+  RAG_INDEX_REFRESH_INTERVAL_SECONDS?: string;
+  EMBEDDING_MODEL?: string;
+  EMBEDDING_BASE_URL?: string;
+  EMBEDDING_API_KEY?: string;
 };
 
 type Variables = {
@@ -413,6 +418,29 @@ export default {
       console.log('[CRON] Scheduled event completed');
     } catch (error) {
       console.error('[CRON] Error in scheduled event:', error);
+    }
+
+    // RAG 文档索引周期刷新（对齐原版启动后台循环；R2 记录上次刷新时间做节流）
+    try {
+      if (env.RAG_INDEX_SOURCE_URL) {
+        const { getRagService } = await import('./services/rag-refresh');
+        const intervalSec = Number(env.RAG_INDEX_REFRESH_INTERVAL_SECONDS) || 21600;
+        const markerKey = 'beecount/rag-index/last-refresh-ts';
+        let lastTs = 0;
+        if (env.R2) {
+          const marker = await env.R2.get(markerKey);
+          if (marker) lastTs = Number(await marker.text()) || 0;
+        }
+        if (Date.now() - lastTs >= intervalSec * 1000) {
+          const service = getRagService(env);
+          await service.init();
+          await service.refresh();
+          if (env.R2) await env.R2.put(markerKey, String(Date.now()));
+          console.log('[CRON] RAG index refresh done');
+        }
+      }
+    } catch (error) {
+      console.error('[CRON] RAG refresh error:', error);
     }
   }
 };

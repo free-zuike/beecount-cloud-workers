@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { hashPassword, verifyPassword } from '../auth';
 import { insertAuditLog } from '../lib/audit';
+import { getRagService } from '../services/rag-refresh';
 
 // ===========================
 // 辅助函数
@@ -89,6 +90,10 @@ type Bindings = {
   JWT_SECRET: string;
   R2?: R2Bucket;
   BEECOUNT_DO: DurableObjectNamespace;
+  RAG_INDEX_SOURCE_URL?: string;
+  EMBEDDING_MODEL?: string;
+  EMBEDDING_BASE_URL?: string;
+  EMBEDDING_API_KEY?: string;
 };
 
 type Variables = {
@@ -1174,6 +1179,26 @@ adminRouter.get('/integrity/scan', async (c) => {
       issues: [],
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// GET /admin/rag/status - RAG 文档索引状态（对齐原版 admin.py rag_status）
+// POST /admin/rag/refresh - 手动刷新 RAG 索引（对齐原版 refresh_rag_index）
+// ---------------------------------------------------------------------------
+
+adminRouter.get('/rag/status', async (c) => {
+  const checkLatest = c.req.query('check_latest') === 'true';
+  const service = getRagService(c.env);
+  await service.init();
+  const status = checkLatest ? await service.checkLatest() : service.statusValue();
+  return c.json(status);
+});
+
+adminRouter.post('/rag/refresh', async (c) => {
+  const service = getRagService(c.env);
+  await service.init();
+  const status = await service.refresh();
+  return c.json(status);
 });
 
 // ---------------------------------------------------------------------------

@@ -36,6 +36,9 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { createHmac, randomUUID } from 'crypto';
+import { EmbeddingNotConfiguredError, embedQuery, getRagService } from '../services/rag-refresh';
+import type { RetrievedChunk } from '../services/rag-index';
+import { serverLogger } from '../lib/logger';
 
 function nowUtc(): string {
   return new Date().toISOString();
@@ -446,12 +449,8 @@ function formatCurrencyHint(accounts: Array<[string, string | null]>, ledgerCurr
 // ===========================
 
 const AiAskSchema = z.object({
-  question: z.string().min(1).max(4000),
-  ledger_id: z.string().optional(),
-  chat_history: z.array(z.object({
-    role: z.enum(['user', 'assistant']),
-    content: z.string(),
-  })).optional(),
+  query: z.string().min(1).max(4000),
+  locale: z.string().regex(/^(zh|zh-CN|zh-TW|en)$/).default('zh'),
 });
 
 // 对齐原版：parse-tx-image 收 multipart FormData，parse-tx-text 收 JSON
@@ -496,6 +495,10 @@ type Bindings = {
   S3_SECRET_ACCESS_KEY?: string;
   S3_BUCKET_NAME?: string;
   R2?: R2Bucket;
+  RAG_INDEX_SOURCE_URL?: string;
+  EMBEDDING_MODEL?: string;
+  EMBEDDING_BASE_URL?: string;
+  EMBEDDING_API_KEY?: string;
 };
 
 type Variables = {
@@ -505,22 +508,78 @@ type Variables = {
 const aiRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // ---------------------------------------------------------------------------
-// POST /ai/ask - 文档 Q&A（SSE 流式返回）
+// GET /ai/docs-index/status - 文档索引状态（用户可读，对齐原版 ask.py）
 // ---------------------------------------------------------------------------
 
-/**
- * 对账本数据提问，AI 生成回答（流式）
- *
- * 功能说明：
- * - 基于账本的交易/账户/分类数据回答问题
- * - 支持对话历史（多轮对话）
- * - 返回 SSE 流
- */
+aiRouter.get('/docs-index/status', async (c) => {
+  const checkLatest = c.req.query('check_latest') === 'true';
+  const service = getRagService(c.env);
+  await service.init();
+  const status = checkLatest ? await service.checkLatest() : service.statusValue();
+  return c.json(status);
+});
+
+// ---------------------------------------------------------------------------
+// POST /ai/ask - 文档 Q&A（SSE 流式返回，对齐原版 ask.py）
+// 流程：解析 chat provider → 索引可用性 → embed 用户问题 → top-K 检索 →
+//       拼 prompt → 流式 chat → SSE chunk/sources/done
+// ---------------------------------------------------------------------------
+
+const _SYSTEM_ZH = `你是 BeeCount(蜜蜂记账)的助手,只基于下面提供的「相关文档」回答用户的问题。
+
+规则:
+1. **必须用中文回答**,即使相关文档是英文也要翻译成中文输出。
+2. 文档里没明确说的,直接回答「文档里没找到相关说明」,不要编造、不要发挥。
+3. 答案要简洁直接 — 步骤类问题给编号步骤;概念类问题用一两句话解释。
+4. 不要在答案末尾列引用来源(系统会自动贴)。
+5. 不要在中文输出里夹杂英文短语,除非是专有名词(如 PIN / 2FA)。
+6. 如果用户问跟 BeeCount / 记账无关,就说「这个问题不在我能回答的范围内」。`;
+
+const _SYSTEM_EN = `You are the assistant for BeeCount, a personal finance app. Answer ONLY based on the
+"Relevant Docs" provided below.
+
+Rules:
+1. **You MUST answer in English**, even if the relevant docs are in Chinese — translate
+   them to English in your reply.
+2. If the docs don't clearly say something, answer "Sorry, the docs don't cover this"
+   instead of making things up.
+3. Be concise. Step-by-step for how-to questions; one or two sentences for concept questions.
+4. Don't list source references at the end (the system appends them automatically).
+5. Don't mix Chinese characters into English output unless quoting a UI label that exists
+   only in Chinese.
+6. If the user asks something unrelated to BeeCount / personal finance, reply "That's outside
+   what I can answer".`;
+
+function buildAskMessages(query: string, chunks: RetrievedChunk[], lang: string): Array<{ role: string; content: string }> {
+  const system = lang.startsWith('zh') ? _SYSTEM_ZH : _SYSTEM_EN;
+  const parts: string[] = [];
+  chunks.forEach((c, i) => {
+    let header = `### [${i + 1}] ${c.chunk.doc_title}`;
+    if (c.chunk.section) header += ` — ${c.chunk.section}`;
+    parts.push(`${header}\n${c.chunk.content.trim()}`);
+  });
+  const docsBlock = parts.length > 0
+    ? parts.join('\n\n')
+    : (lang.startsWith('zh') ? '(没找到相关文档)' : '(no relevant docs found)');
+  const userContent = lang.startsWith('zh')
+    ? `## 相关文档\n\n${docsBlock}\n\n## 用户问题\n\n${query}`
+    : `## Relevant Docs\n\n${docsBlock}\n\n## User Question\n\n${query}`;
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: userContent },
+  ];
+}
+
+function sseEvent(eventType: string, data: unknown): string {
+  return `data: ${JSON.stringify({ type: eventType, ...(typeof data === 'object' && data !== null ? data : { value: data }) })}\n\n`;
+}
+
 aiRouter.post('/ask', zValidator('json', AiAskSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const req = c.req.valid('json');
 
+  // 1. 解析 chat provider — 没配直接返 400（前端显 fallback），不进 stream
   const profile = await db
     .prepare('SELECT ai_config_json FROM user_profiles WHERE user_id = ?')
     .bind(userId)
@@ -531,74 +590,49 @@ aiRouter.post('/ask', zValidator('json', AiAskSchema), async (c) => {
 
   if (!provider || !provider.textModel) {
     return c.json({
-      error: 'AI provider not configured. Please configure AI provider in settings.',
+      error_code: 'AI_NO_CHAT_PROVIDER',
+      message: 'AI provider not configured. Please configure AI provider in settings.',
     }, 400);
   }
 
-  let ledgerQuery = 'SELECT id FROM ledgers WHERE user_id = ?';
-  const ledgerParams: string[] = [userId];
-
-  if (req.ledger_id) {
-    ledgerQuery += ' AND external_id = ?';
-    ledgerParams.push(req.ledger_id);
+  // 2. 索引可用性检查 — 不可用直接 503，不进 stream
+  const service = getRagService(c.env);
+  await service.init();
+  const docsIdx = service.getIndex(req.locale);
+  if (!docsIdx || docsIdx.is_empty) {
+    return c.json({
+      error_code: 'AI_DOCS_INDEX_EMPTY',
+      message: `docs index for lang=${req.locale!} not loaded; run admin refresh first`,
+    }, 503);
   }
 
-  const ledgers = await db.prepare(ledgerQuery).bind(...ledgerParams).all<{ id: string }>();
-
-  if (ledgers.results.length === 0) {
-    return c.json({ error: 'No ledger found' }, 400);
-  }
-
-  const ledgerIds = ledgers.results.map((l) => l.id);
-  const placeholders = ledgerIds.map(() => '?').join(',');
-
-  const [txRows, acctRows, catRows, tagRows] = await Promise.all([
-    db.prepare(`SELECT tx_type, amount, happened_at, note, category_name FROM read_tx_projection WHERE ledger_id IN (${placeholders}) ORDER BY happened_at DESC LIMIT 100`).bind(...ledgerIds).all<{ tx_type: string; amount: number; happened_at: string; note: string | null; category_name: string | null }>(),
-    db.prepare(`SELECT name, account_type, currency FROM user_account_projection WHERE user_id = ?`).bind(userId).all<{ name: string; account_type: string | null; currency: string | null }>(),
-    db.prepare(`SELECT name, kind FROM user_category_projection WHERE user_id = ?`).bind(userId).all<{ name: string; kind: string | null }>(),
-    db.prepare(`SELECT name, color FROM user_tag_projection WHERE user_id = ?`).bind(userId).all<{ name: string; color: string | null }>(),
-  ]);
-
-  const contextParts: string[] = ['## 最近交易（最新100条）'];
-  for (const tx of txRows.results) {
-    contextParts.push(`- [${tx.happened_at.slice(0, 10)}] ${tx.tx_type}: ${tx.amount} | ${tx.category_name ?? '无分类'} | ${tx.note ?? ''}`);
-  }
-  contextParts.push('\n## 账户');
-  for (const a of acctRows.results) {
-    contextParts.push(`- ${a.name} (${a.account_type ?? 'unknown'})`);
-  }
-  contextParts.push('\n## 分类');
-  for (const cat of catRows.results) {
-    contextParts.push(`- ${cat.name} (${cat.kind ?? 'unknown'})`);
-  }
-  contextParts.push('\n## 标签');
-  for (const t of tagRows.results) {
-    contextParts.push(`- ${t.name} ${t.color ? `(${t.color})` : ''}`);
-  }
-
-  const context = contextParts.join('\n');
-
-  const systemPrompt = `你是一个专业的记账助手。请根据用户的账本数据回答问题。
-
-账本数据：
-${context}
-
-规则：
-- 只基于提供的数据回答，不要编造
-- 金额单位与账本一致（通常是人民币元）
-- 如果数据不足，说明无法回答
-- 用中文回答`;
-
-  const messages: Array<{ role: string; content: string }> = [
-    { role: 'system', content: systemPrompt },
-  ];
-
-  if (req.chat_history) {
-    for (const h of req.chat_history) {
-      messages.push({ role: h.role, content: h.content });
+  // 3. embed 用户问题（server-side key）
+  let qvec: number[];
+  try {
+    qvec = await embedQuery(c.env, req.query);
+  } catch (err) {
+    if (err instanceof EmbeddingNotConfiguredError) {
+      return c.json({
+        error_code: 'AI_EMBEDDING_UNAVAILABLE',
+        message: err.message,
+      }, 503);
     }
+    throw err;
   }
-  messages.push({ role: 'user', content: req.question });
+
+  // 4. 检索 top-K
+  const retrieved = service.retrieve(req.locale, qvec, 4);
+
+  // 5. 拼 prompt + stream chat
+  const messages = buildAskMessages(req.query, retrieved, req.locale);
+  const sources = retrieved.map((r) => ({
+    doc_path: r.chunk.doc_path,
+    doc_title: r.chunk.doc_title,
+    section: r.chunk.section,
+    url: r.chunk.url,
+  }));
+
+  serverLogger.info('src.routers.ai', '[AI] /ai/ask user:', userId, 'lang:', req.locale, 'query:', req.query.slice(0, 50), 'top_k:', retrieved.length, 'provider:', provider.id);
 
   const encoder = new TextEncoder();
 
@@ -611,14 +645,14 @@ ${context}
           provider.textModel!,
           messages
         )) {
-          const data = JSON.stringify({ content: chunk });
-          controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+          controller.enqueue(encoder.encode(sseEvent('chunk', { text: chunk })));
         }
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
+        controller.enqueue(encoder.encode(sseEvent('sources', { items: sources })));
+        controller.enqueue(encoder.encode(sseEvent('done', {})));
         controller.close();
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: errorMsg, done: true })}\n\n`));
+        controller.enqueue(encoder.encode(sseEvent('error', { error_code: 'AI_PROVIDER_ERROR', message: errorMsg.slice(0, 200) })));
         controller.close();
       }
     },
