@@ -48,6 +48,41 @@ BeeCount Cloud 的 Cloudflare Workers 实现 — 原版 [BeeCount-Cloud](https:/
 | 附件来源 | 本地文件系统 hardlink | S3 兼容对象存储（R2 优先，无 R2 自动回退 S3） |
 | Token 依赖 | 无 | 需 `CLOUDFLARE_API_TOKEN`，否则无 `db.sqlite3` |
 
+### OAuth2 远端授权（Google Drive / OneDrive / Dropbox）
+
+这三个远端是 OAuth2 授权模式，配置时除 `client_id / client_secret` 外，还需要一个 `OAuth Token (JSON)`。OAuth 协议要求**首次授权必须由用户在浏览器中登录并点"允许"**（访问私人文件的安全要求，无法跳过），之后 token 过期由服务端自动刷新，只需授权一次。
+
+**通用流程**（backend_type 选 `drive` 时 provider 填 `drive`，`onedrive` → `onedrive`，`dropbox` → `dropbox`）：
+
+1. **创建应用拿到 Client ID / Client Secret**（见下表各提供商入口）
+2. **配 Redirect URI**：在提供商应用设置里添加
+
+   ```
+   https://<你的workers域名>/api/v1/admin/backup/remotes/oauth2/callback
+   ```
+
+3. **浏览器打开授权链接**（构造方式见"授权链接模板"，替换 client_id）→ 登录并点允许
+4. 页面跳回回调地址，**显示授权码 code**
+5. **用 code 换 token**（服务器端点已实现，无需 rclone）：
+
+   ```bash
+   curl -X POST https://<你的workers域名>/api/v1/admin/backup/remotes/oauth2/token \
+     -H "Content-Type: application/json" \
+     -d '{"code":"<回调页显示的code>","provider":"drive|onedrive|dropbox","client_id":"<你的ClientID>","client_secret":"<你的ClientSecret>"}'
+   ```
+
+   返回 JSON 中的 `token` 对象（含 `access_token` / `refresh_token`）即第三个字段 **OAuth Token (JSON)**，整体填入。
+
+#### 各提供商授权链接模板
+
+| 提供商 | Client ID/Secret 入口 | 授权链接 |
+|---|---|---|
+| **Google Drive** | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → OAuth 2.0 客户端（Client ID 选 Web） | `https://accounts.google.com/o/oauth2/v2/auth?client_id=<CI>&redirect_uri=<回调>&response_type=code&scope=https://www.googleapis.com/auth/drive.file&access_type=offline&prompt=consent` |
+| **OneDrive** | [Azure 应用注册](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps) → 认证 → 添加"移动/桌面或 Web"平台 | `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=<CI>&redirect_uri=<回调>&response_type=code&scope=offline_access Files.ReadWrite` |
+| **Dropbox** | [Dropbox App 控制台](https://www.dropbox.com/developers/apps) → Scoped access（权限勾 `files.content.write/read`） | `https://www.dropbox.com/oauth2/authorize?client_id=<CI>&response_type=code&redirect_uri=<回调>&token_access_type=offline` |
+
+> ⚠️ 三个都**必须带 offline/token_access_type=offline 参数**，否则换不到 `refresh_token`，授权过期后会失败。code 有效期很短（分钟级），拿到后尽快换 token。
+
 ## 功能特性
 
 - 🚀 **全球边缘部署** — 部署到全球 200+ 边缘节点
