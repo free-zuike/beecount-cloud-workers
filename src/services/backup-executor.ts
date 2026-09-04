@@ -261,10 +261,12 @@ async function fetchR2Attachments(
   const storagePathRewrite = new Map<string, string>();
 
   // 附件行 + 关联账本 external_id（原版路径需要 ledger_external_id）
+  // 覆盖全部 kind：transaction 交易附件 + category_icon 分类图标 + avatar 头像
+  // （原版备份把整个 attachment_storage_dir 打包，包含所有类型）
   const rows = await db.prepare(
     `SELECT a.id, a.user_id, a.ledger_id, a.sha256, a.file_name, a.storage_path, l.external_id
      FROM attachment_files a LEFT JOIN ledgers l ON a.ledger_id = l.id
-     WHERE a.user_id = ? AND a.attachment_kind = 'transaction'`
+     WHERE a.user_id = ?`
   ).bind(userId).all<{
     id: string; user_id: string; ledger_id: string | null; sha256: string | null;
     file_name: string | null; storage_path: string | null; external_id: string | null;
@@ -291,8 +293,43 @@ async function fetchR2Attachments(
     storagePathRewrite.set(row.id, originalAbs);
   }, 6);
 
-  console.log(`[Backup] R2 attachments remapped to original layout: ${originalAttachments.size} files`);
+  // 头像：存在 user_profiles.avatar_file_id。原版路径 profile-avatars/<user>/avatar_<uuid>.<ext>
+  // 且原版恢复靠扩展名猜 MIME（_guess_mime_type 用 path.suffix）——所以这里必须补上扩展名，
+  // 否则恢复到原版后头像全变 application/octet-stream。
+  // worker 存量头像可能存为 avatars/<userId>/<uuid>（无后缀），下载后按字节魔数推断类型。
+  // best-effort：user_profiles 表缺失（老库/测试 mock）或头像下载失败不阻断附件收集。
+  try {
+    const profile = await db.prepare(
+      'SELECT avatar_file_id FROM user_profiles WHERE user_id = ? AND avatar_file_id IS NOT NULL AND avatar_file_id != ?'
+    ).bind(userId, '').first<{ avatar_file_id: string }>();
+    if (profile?.avatar_file_id) {
+      const sp = profile.avatar_file_id;
+      const data = await downloadFromStorage(db, { R2: r2 }, sp);
+      if (data) {
+        const ext = detectImageExt(data);
+        const baseName = sp.split('/').pop() || 'avatar';
+        // 保留文件名主体，补扩展名：<uuid> → avatar_<uuid>.jpg（不重复加后缀）
+        const stem = baseName.includes('.') ? baseName : `${baseName}${ext ? `.${ext}` : ''}`;
+        originalAttachments.set(`profile-avatars/${userId}/${stem}`, data);
+      }
+    }
+  } catch (err) {
+    console.warn(`[Backup] avatar collect skipped: ${(err as Error).message}`);
+  }
+
+  console.log(`[Backup] attachments remapped to original layout: ${originalAttachments.size} files`);
   return { originalAttachments, storagePathRewrite };
+}
+
+/** 按字节魔数推断图片扩展名（jpg/png/webp/gif），用于原版恢复时猜 MIME */
+function detectImageExt(data: Uint8Array): string {
+  if (data.length < 4) return '';
+  const b = (i: number) => data[i];
+  if (b(0) === 0xff && b(1) === 0xd8 && b(2) === 0xff) return 'jpg';
+  if (b(0) === 0x89 && b(1) === 0x50 && b(2) === 0x4e && b(3) === 0x47) return 'png';
+  if (b(0) === 0x52 && b(1) === 0x49 && b(2) === 0x46 && b(3) === 0x46) return 'webp'; // RIFF....WEBP
+  if (b(0) === 0x47 && b(1) === 0x49 && b(2) === 0x46) return 'gif';
+  return '';
 }
 
 /**

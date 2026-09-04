@@ -192,36 +192,21 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
         logFn(`no sqliteR2Key (no CLOUDFLARE_API_TOKEN) — using db.json only`);
       }
 
-      // 生成数据条目（不含附件——附件由下方 r2.list 按真实 key 收集，避免重复下载）
+      // 生成完整备份条目（含附件）——generateBackupBytes 内部 fetchR2Attachments
+      // 会把 R2 key 重映射为原版相对路径（attachments/<user>/<ledger>/<sha>/<id>_<name>
+      // + profile-avatars/<user>/avatar_<uuid>.<ext>，头像已按魔数补扩展名），
+      // tar 内附件路径与原版完全一致，可直接互恢复。不再用裸 R2 key 命名。
       const generated = await generateBackupBytes(
-        db, body.userId, body.ledgerId, undefined, logFn,
+        db, body.userId, body.ledgerId, r2, logFn,
         { scheduleId: body.scheduleId ?? null, scheduleName: body.scheduleName ?? null },
-        sqlite, body.jwtSecret ?? null, true,
+        sqlite, body.jwtSecret ?? null,
       );
+      logFn(`generated entries: ${generated.entries.length} (incl. remapped attachments)`);
 
-      // 列出所有附件 key（逐个下载写入，不全加载到内存）
-      // 兼容两种存储布局：beecount/ 前缀（uploadToStorage 统一前缀，2026-08-31 后）
-      // 与无前缀旧路径（前缀化前的历史数据）。去重避免同对象列两次。
-      const attachmentKeys: string[] = [];
-      const seenKeys = new Set<string>();
-      for (const prefix of ['beecount/attachments/', 'beecount/avatars/', 'beecount/category-icons/', 'attachments/', 'avatars/', 'category-icons/']) {
-        let cursor: string | undefined;
-        do {
-          const listed = await r2.list({ prefix, cursor, limit: 1000 });
-          cursor = listed.truncated ? listed.cursor : undefined;
-          for (const obj of listed.objects) {
-            if (seenKeys.has(obj.key)) continue;
-            seenKeys.add(obj.key);
-            attachmentKeys.push(obj.key);
-          }
-        } while (cursor);
-      }
-      logFn(`found ${attachmentKeys.length} attachments, total ${generated.entries.length} base entries`);
-
-      // 拆分基础条目
+      // 拆分基础条目 vs 附件（附件 entry 名已是原版相对路径）
       const baseEntries = generated.entries;
   const isAttachment = (name: string) =>
-    name.startsWith('attachments/') || name.startsWith('avatars/') || name.startsWith('category-icons/');
+    name.startsWith('attachments/') || name.startsWith('profile-avatars/');
 
   // sqlite 版基础条目：meta.json + db.sqlite3 + .jwt_secret
   const sqliteBase = baseEntries.filter(e =>
@@ -231,22 +216,17 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
   const jsonBase = baseEntries.filter(e =>
     e.name === 'meta.json' || e.name === 'db.json' || e.name === '.jwt_secret'
   );
+  const attachmentEntries = baseEntries.filter(e => isAttachment(e.name));
+  logFn(`sqlite base ${sqliteBase.length}, json base ${jsonBase.length}, attachments ${attachmentEntries.length}`);
 
-  // 流式生成器：基础条目 + 附件逐个下载
+  // 生成器：基础条目 + 原版布局附件（两个文件各自独立可恢复）
   const sqliteGen = async function* (): AsyncGenerator<{ name: string; data: Uint8Array }> {
     for (const e of sqliteBase) yield e;
-    for (const key of attachmentKeys) {
-      const obj = await r2.get(key);
-      if (obj) yield { name: key, data: new Uint8Array(await obj.arrayBuffer()) };
-    }
+    for (const e of attachmentEntries) yield e;
   };
-  // json 版：始终含附件（流式下载不全加载内存，两个文件各自独立可恢复）
   const jsonGen = async function* (): AsyncGenerator<{ name: string; data: Uint8Array }> {
     for (const e of jsonBase) yield e;
-    for (const key of attachmentKeys) {
-      const obj = await r2.get(key);
-      if (obj) yield { name: key, data: new Uint8Array(await obj.arrayBuffer()) };
-    }
+    for (const e of attachmentEntries) yield e;
   };
 
       const baseKey = body.outR2Key;
