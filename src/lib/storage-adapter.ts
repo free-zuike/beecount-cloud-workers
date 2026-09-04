@@ -186,7 +186,10 @@ async function uploadToRemote(rc: RemoteEntry, key: string, body: Uint8Array, co
     if (!url || !user) return { ok: false, message: 'WebDAV config incomplete' };
     try {
       const auth = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
-      const fileUrl = `${url}/${prefixKey(key).replace(/^\//, '')}`;
+      // savePath/root_path 前缀对齐 FTP/SFTP（统一：savePath 在所有远端都生效）
+      const prefix = (c.savePath && c.savePath !== 'custom') ? c.savePath.replace(/^\/+|\/+$/g, '') + '/' :
+                     (c.root_path ? c.root_path.replace(/^\/+|\/+$/g, '') + '/' : '');
+      const fileUrl = `${url}/${prefix}${prefixKey(key).replace(/^\//, '')}`;
       const resp = await fetch(fileUrl, { method: 'PUT', headers: { 'Authorization': auth, 'Content-Type': contentType }, body });
       return resp.ok ? { ok: true, message: 'ok' } : { ok: false, message: `HTTP ${resp.status}` };
     } catch (e) { return { ok: false, message: (e as Error).message }; }
@@ -248,7 +251,18 @@ async function downloadFromRemote(rc: RemoteEntry, key: string): Promise<{ ok: b
     if (!url) return { ok: false };
     try {
       const auth = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
-      const resp = await fetch(`${url}/${prefixKey(key).replace(/^\//, '')}`, { headers: { 'Authorization': auth } });
+      // savePath/root_path 前缀对齐 FTP/SFTP；并回退旧路径（早期上传未带 savePath 前缀）
+      const prefix = (c.savePath && c.savePath !== 'custom') ? c.savePath.replace(/^\/+|\/+$/g, '') + '/' :
+                     (c.root_path ? c.root_path.replace(/^\/+|\/+$/g, '') + '/' : '');
+      const prefixed = `${url}/${prefix}${prefixKey(key).replace(/^\//, '')}`;
+      const legacy = `${url}/${prefixKey(key).replace(/^\//, '')}`;
+      const resp = await fetch(prefixed, { headers: { 'Authorization': auth } });
+      const target = resp.ok ? prefixed : legacy;
+      if (!resp.ok && target === legacy) {
+        const legacyResp = await fetch(legacy, { headers: { 'Authorization': auth } });
+        if (!legacyResp.ok) return { ok: false };
+        return { ok: true, body: new Uint8Array(await legacyResp.arrayBuffer()) };
+      }
       if (!resp.ok) return { ok: false };
       return { ok: true, body: new Uint8Array(await resp.arrayBuffer()) };
     } catch { return { ok: false }; }
@@ -312,8 +326,15 @@ async function deleteFromRemote(rc: RemoteEntry, key: string): Promise<{ ok: boo
     if (!url) return { ok: false };
     try {
       const auth = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
-      const resp = await fetch(`${url}/${prefixKey(key).replace(/^\//, '')}`, { method: 'DELETE', headers: { 'Authorization': auth } });
-      return { ok: resp.ok || resp.status === 404 };
+      // savePath/root_path 前缀对齐 FTP/SFTP；并回退旧路径（早期上传未带 savePath 前缀）
+      const prefix = (c.savePath && c.savePath !== 'custom') ? c.savePath.replace(/^\/+|\/+$/g, '') + '/' :
+                     (c.root_path ? c.root_path.replace(/^\/+|\/+$/g, '') + '/' : '');
+      const prefixed = `${url}/${prefix}${prefixKey(key).replace(/^\//, '')}`;
+      const legacy = `${url}/${prefixKey(key).replace(/^\//, '')}`;
+      const first = await fetch(prefixed, { method: 'DELETE', headers: { 'Authorization': auth } });
+      if (first.ok || first.status === 404) return { ok: first.ok || first.status === 404 };
+      const second = await fetch(legacy, { method: 'DELETE', headers: { 'Authorization': auth } });
+      return { ok: second.ok || second.status === 404 };
     } catch { return { ok: false }; }
   }
 
