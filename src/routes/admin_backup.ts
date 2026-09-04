@@ -629,7 +629,7 @@ backupRouter.get('/remotes', async (c) => {
       }
 
       return {
-        id: String(row.id),
+        id: Number(row.id),
         name: row.name,
         backend_type: row.backend_type,
         config: maskedConfig,
@@ -678,7 +678,7 @@ backupRouter.get('/remotes', async (c) => {
         }
 
         return {
-          id: String(row.id),
+          id: Number(row.id),
           name: row.name,
           backend_type: row.backend_type,
           config_summary: maskedConfig,
@@ -731,7 +731,7 @@ backupRouter.post('/remotes', apiValidator('json', RemoteCreateSchema), async (c
   const remoteId = result.meta.last_row_id as number;
 
   return c.json({
-    id: String(remoteId),
+    id: Number(remoteId),
     name: req.name,
     backend_type: req.backend_type,
     config: req.config,
@@ -891,7 +891,7 @@ backupRouter.get('/remotes/:id/reveal', async (c) => {
   });
 
   return c.json({
-    id: String(remote.id),
+    id: Number(remote.id),
     name: remote.name,
     backend_type: remote.backend_type,
     config: safeParseConfig(remote.config_summary),
@@ -1322,7 +1322,7 @@ backupRouter.get('/schedules', async (c) => {
       } catch {}
     }
     return {
-      id: String(row.id),
+      id: Number(row.id),
       name: row.name,
       cron_expr: row.cron_expr,
       retention_days: row.retention_days ?? 30,
