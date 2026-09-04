@@ -1306,13 +1306,19 @@ backupRouter.get('/schedules', async (c) => {
 
   const schedules = rows.results.map((row) => {
     // M2M 优先，回退 remote_ids JSON 列（旧数据兼容）
+    // 统一转 number：D1 M2M 表 remote_id 是 INTEGER（返回 number），但 JSON 列可能
+    // 存字符串（"1"）——前端用严格相等（includes）判断选中，类型不一致会导致编辑
+    // 时目标远端不回显。此处归一化，前端无需感知类型。
     const m2mIds = m2mBySchedule.get(String(row.id));
-    let parsedRemoteIds: (string | number)[] = [];
+    let parsedRemoteIds: number[] = [];
     if (m2mIds) {
-      parsedRemoteIds = m2mIds;
+      parsedRemoteIds = m2mIds.map(Number).filter((n) => !Number.isNaN(n));
     } else if (row.remote_ids) {
       try {
-        parsedRemoteIds = JSON.parse(row.remote_ids);
+        const parsed = JSON.parse(row.remote_ids);
+        if (Array.isArray(parsed)) {
+          parsedRemoteIds = parsed.map(Number).filter((n) => !Number.isNaN(n));
+        }
       } catch {}
     }
     return {
@@ -1435,7 +1441,7 @@ backupRouter.post('/schedules', apiValidator('json', ScheduleCreateSchema), asyn
     next_run_at: nextRunAt,
     last_run_at: null,
     last_run_status: null,
-    remote_ids: req.remote_ids,
+    remote_ids: (req.remote_ids || []).map(Number).filter((n) => !Number.isNaN(n)),
     created_at: serverNow,
   }, 201);
 });
