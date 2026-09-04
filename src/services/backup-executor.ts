@@ -10,6 +10,7 @@ import { createSftpClient } from '../lib/sftp';
 import { createTarGz } from '../lib/tar';
 import { createEncryptedZip } from '../lib/zip-lib';
 import { exportD1ToSqlite, DEFAULT_EXCLUDED_TABLES } from '../lib/sqlite-writer';
+import { downloadFromStorage } from '../lib/storage-adapter';
 
 /**
  * 用 sql.js 改写 db.sqlite3 的 attachment_files.storage_path 为原版固定绝对路径
@@ -241,13 +242,11 @@ async function exportTable(db: D1Database, tableName: string): Promise<unknown[]
 }
 
 /**
- * 收集 R2 附件并按原版路径结构重映射。
+ * 收集附件（R2 + 所有备份远端）并按原版路径结构重映射。
  *
- * 原版附件路径：<attachment_storage_dir>/<user_id>/<ledger_external_id>/<sha256[:2]>/<uuid4.hex>_<name>
- * （tar 内相对路径：attachments/<user_id>/<ledger_ext>/<sha256[:2]>/<fileId>_<name>）
- *
- * worker 的 R2 key 是 beecount/attachments/<ledger_ext>/<fileId>_<name>（无 user/sha 成分），
- * 无法从 key 反推原版路径 —— 必须查 attachment_files + ledgers 表关联。
+ * 上传端 uploadToStorage 会把附件写到 R2（若配置）并回退到所有已配置的
+ * 备份远端（WebDAV/S3/B2/FTP/SFTP 等）—— 所以备份必须用 downloadFromStorage
+ * 遍历全部存储，而不能只查 R2（否则 WebDAV 等远端上的附件会全部丢失）。
  *
  * 返回：
  *  - originalAttachments: Map<原版相对路径, bytes>（tar 内附件路径）
@@ -255,7 +254,7 @@ async function exportTable(db: D1Database, tableName: string): Promise<unknown[]
  */
 async function fetchR2Attachments(
   db: D1Database,
-  r2: R2Bucket,
+  r2: R2Bucket | undefined,
   userId: string,
 ): Promise<{ originalAttachments: Map<string, Uint8Array>; storagePathRewrite: Map<string, string> }> {
   const originalAttachments = new Map<string, Uint8Array>();
@@ -271,28 +270,10 @@ async function fetchR2Attachments(
     file_name: string | null; storage_path: string | null; external_id: string | null;
   }>();
 
-  // 兼容新旧前缀的存储路径集合
-  const possibleKeys = (sp: string) => {
-    const keys = new Set<string>([sp]);
-    if (sp.startsWith('beecount/')) keys.add(sp.slice('beecount/'.length));
-    else keys.add(`beecount/${sp}`);
-    return [...keys];
-  };
-
   await parallelMap(rows.results, async (row) => {
     if (!row.storage_path) return;
-    // 从 R2 取文件（尝试带/不带 beecount/ 前缀）
-    let data: Uint8Array | null = null;
-    for (const key of possibleKeys(row.storage_path)) {
-      try {
-        const obj = await r2.get(key);
-        if (obj) {
-          const buf = await obj.arrayBuffer();
-          data = new Uint8Array(buf);
-          break;
-        }
-      } catch {}
-    }
+    // 从任一可用存储取文件（R2 优先，再遍历所有备份远端；与下载端 downloadFromStorage 一致）
+    const data = await downloadFromStorage(db, { R2: r2 }, row.storage_path);
     if (!data) return;
 
     const ledgerExt = row.external_id ?? row.ledger_id ?? 'unknown';
@@ -404,17 +385,19 @@ export async function generateBackupBytes(
 
 
 
-  // 3. R2 附件（按原版路径结构重映射）
+  // 3. 附件（R2 + 所有备份远端，按原版路径结构重映射）
+  //    上传端 uploadToStorage 会写到 R2 或回退到任一备份远端，所以无论是否配置
+  //    R2 都要尝试收集（downloadFromStorage 内部自动遍历 R2 + 全部远端）。
   let originalAttachments = new Map<string, Uint8Array>();
   let storagePathRewrite = new Map<string, string>();
-  if (r2) {
+  {
     try {
-      const res = await withRetry(() => fetchR2Attachments(db, r2, userId), 2, 2000, 'fetch R2 attachments');
+      const res = await withRetry(() => fetchR2Attachments(db, r2, userId), 2, 2000, 'fetch attachments');
       originalAttachments = res.originalAttachments;
       storagePathRewrite = res.storagePathRewrite;
       logWrap(`[Backup] R2 attachments: ${originalAttachments.size} files (original layout)`);
     } catch (err) {
-      logWrap(`[Backup] fetch R2 attachments failed: ${(err as Error).message}`);
+      logWrap(`[Backup] fetch attachments failed: ${(err as Error).message}`);
     }
   }
 
@@ -659,7 +642,9 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const y = localTime.getFullYear(); const mo = String(localTime.getMonth()+1).padStart(2,'0'); const d = String(localTime.getDate()).padStart(2,'0'); const h = String(localTime.getHours()).padStart(2,'0'); const mi = String(localTime.getMinutes()).padStart(2,'0'); const s = String(localTime.getSeconds()).padStart(2,'0');
     const ts = `${y}${mo}${d}-${h}${mi}${s}`;
-    const key = `${prefix}backups/${userId}/${ts}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
+    // 文件夹按日期分（YYYYMMDD），文件名保留完整时间戳避免同日覆盖
+    const folder = `${y}${mo}${d}`;
+    const key = `${prefix}backups/${userId}/${folder}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
 
     const result = await uploadToS3(endpoint, bucket, accessKey, secretKey, region, key, backupBytes, 'application/gzip');
     return result.ok ? { ok: true, message: 'Upload successful', key } : { ok: false, message: result.message };
@@ -669,11 +654,13 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const y = localTime.getFullYear(); const mo = String(localTime.getMonth()+1).padStart(2,'0'); const d = String(localTime.getDate()).padStart(2,'0'); const h = String(localTime.getHours()).padStart(2,'0'); const mi = String(localTime.getMinutes()).padStart(2,'0'); const s = String(localTime.getSeconds()).padStart(2,'0');
     const ts = `${y}${mo}${d}-${h}${mi}${s}`;
+    // 文件夹按日期分（YYYYMMDD），文件名保留完整时间戳避免同日覆盖
+    const folder = `${y}${mo}${d}`;
     let prefix = '';
     if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
     else prefix = 'beecount/';
-    const key = `${prefix}backups/${userId}/${ts}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${folder}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
     const webdavUser = remoteConfig.username || remoteConfig.user;
     const webdavPass = remoteConfig.password || remoteConfig.pass;
     const result = await uploadToWebDav(remoteConfig.url!, webdavUser!, webdavPass!, key, backupBytes);
@@ -685,7 +672,9 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const y = localTime.getFullYear(); const mo = String(localTime.getMonth()+1).padStart(2,'0'); const d = String(localTime.getDate()).padStart(2,'0'); const h = String(localTime.getHours()).padStart(2,'0'); const mi = String(localTime.getMinutes()).padStart(2,'0'); const s = String(localTime.getSeconds()).padStart(2,'0');
     const ts = `${y}${mo}${d}-${h}${mi}${s}`;
-    const key = `beecount/backups/${userId}/${ts}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
+    // 文件夹按日期分（YYYYMMDD），文件名保留完整时间戳避免同日覆盖
+    const folder = `${y}${mo}${d}`;
+    const key = `beecount/backups/${userId}/${folder}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
     await bucket.put(key, backupBytes, { httpMetadata: { contentType: 'application/gzip' } });
     return { ok: true, message: 'R2 upload successful', key };
   }
@@ -697,11 +686,13 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const y = localTime.getFullYear(); const mo = String(localTime.getMonth()+1).padStart(2,'0'); const d = String(localTime.getDate()).padStart(2,'0'); const h = String(localTime.getHours()).padStart(2,'0'); const mi = String(localTime.getMinutes()).padStart(2,'0'); const s = String(localTime.getSeconds()).padStart(2,'0');
     const ts = `${y}${mo}${d}-${h}${mi}${s}`;
+    // 文件夹按日期分（YYYYMMDD），文件名保留完整时间戳避免同日覆盖
+    const folder = `${y}${mo}${d}`;
     let prefix = '';
     if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
     else prefix = 'beecount/';
-    const key = `${prefix}backups/${userId}/${ts}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${folder}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
     const result = await uploadToOAuth2Provider(remoteConfig, key, backupBytes);
     return result ? { ok: true, message: 'Upload successful', key } : { ok: false, message: 'Upload failed' };
   }
@@ -719,11 +710,13 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const y = localTime.getFullYear(); const mo = String(localTime.getMonth()+1).padStart(2,'0'); const d = String(localTime.getDate()).padStart(2,'0'); const h = String(localTime.getHours()).padStart(2,'0'); const mi = String(localTime.getMinutes()).padStart(2,'0'); const s = String(localTime.getSeconds()).padStart(2,'0');
     const ts = `${y}${mo}${d}-${h}${mi}${s}`;
+    // 文件夹按日期分（YYYYMMDD），文件名保留完整时间戳避免同日覆盖
+    const folder = `${y}${mo}${d}`;
     let prefix = '';
     if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
     else prefix = 'beecount/';
-    const key = `${prefix}backups/${userId}/${ts}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${folder}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
 
     try {
       const { createFtpClient } = await import('../lib/ftp');
@@ -749,11 +742,13 @@ export async function uploadBackupToRemote(
     const localTime = new Date(Date.now() + 8 * 3600000);
     const y = localTime.getFullYear(); const mo = String(localTime.getMonth()+1).padStart(2,'0'); const d = String(localTime.getDate()).padStart(2,'0'); const h = String(localTime.getHours()).padStart(2,'0'); const mi = String(localTime.getMinutes()).padStart(2,'0'); const s = String(localTime.getSeconds()).padStart(2,'0');
     const ts = `${y}${mo}${d}-${h}${mi}${s}`;
+    // 文件夹按日期分（YYYYMMDD），文件名保留完整时间戳避免同日覆盖
+    const folder = `${y}${mo}${d}`;
     let prefix = '';
     if (remoteConfig.savePath && remoteConfig.savePath !== 'custom') prefix = remoteConfig.savePath.trim().replace(/^\/+|\/+$/g, '') + '/';
     else if (remoteConfig.root_path) prefix = remoteConfig.root_path.trim().replace(/^\/+|\/+$/g, '') + '/';
     else prefix = 'beecount/';
-    const key = `${prefix}backups/${userId}/${ts}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
+    const key = `${prefix}backups/${userId}/${folder}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
 
     try {
       const { createSftpClient } = await import('../lib/sftp');
