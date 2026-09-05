@@ -4,7 +4,8 @@ import { validateAccessToken } from '../auth';
 export const authMiddleware = async (c: any, next: Next) => {
   const path = c.req.path;
   // auth 路由、MCP 路由、setup 路由和头像下载公开端点自己处理认证，跳过中间件
-  if (path.startsWith('/api/v1/auth') || path.startsWith('/api/v1/mcp') || path.startsWith('/api/v1/setup') || path.startsWith('/api/v1/profile/avatar')) {
+  // oauth2 回调/token 是公共端点（OAuth 提供商直接回调 / 用户换 token，无法先登录）
+  if (path.startsWith('/api/v1/auth') || path.startsWith('/api/v1/mcp') || path.startsWith('/api/v1/setup') || path.startsWith('/api/v1/profile/avatar') || path.includes('/remotes/oauth2/')) {
     return next();
   }
 

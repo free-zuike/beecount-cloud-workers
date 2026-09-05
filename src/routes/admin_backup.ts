@@ -428,6 +428,12 @@ backupRouter.get('/test', (c) => {
 // ---------------------------------------------------------------------------
 
 backupRouter.use('/*', async (c, next) => {
+  // OAuth2 回调/token 是公共端点（授权码换 token），无登录态，跳过管理员校验
+  const reqPath = c.req.path;
+  if (reqPath.includes('/remotes/oauth2/')) {
+    return next();
+  }
+
   const userId = c.get('userId');
   const db = c.env.DB;
 
