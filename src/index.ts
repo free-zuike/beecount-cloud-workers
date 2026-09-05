@@ -219,9 +219,39 @@ app.get('/api/v1/admin/backup/remotes/oauth2/callback', async (c) => {
   // 跳转到回调页面，用前端 POST 换取 token
   return c.html(`<!DOCTYPE html><html><body>
     <h2>授权成功</h2>
-    <p>授权码: <code style="word-break:break-all">${code}</code></p>
-    <p>使用以下命令换取 token（单行，PowerShell 可直接粘贴）:</p>
-    <pre>curl.exe --ssl-no-revoke --retry 3 --retry-all-errors -X POST "https://beecount.qzz.io/api/v1/admin/backup/remotes/oauth2/token" -H "Content-Type: application/json" -d '{"code":"${code}","provider":"${provider}","client_id":"你的client_id","client_secret":"你的client_secret"}'</pre>
+    <p>授权码: <code style="word-break:break-all" id="oauth-code">${code}</code></p>
+    <p style="color:#c00">授权码有效期只有几分钟，请立刻在下方填入 Client ID / Client Secret 并点击"换取 Token"。</p>
+    <form id="oauth-form">
+      <p>Client ID: <input id="oauth-cid" size="60" style="font-family:monospace"></p>
+      <p>Client Secret: <input id="oauth-csec" size="60" style="font-family:monospace"></p>
+      <p><button type="submit">换取 Token</button></p>
+    </form>
+    <pre id="oauth-out" style="white-space:pre-wrap;word-break:break-all;border:1px solid #ccc;padding:8px"></pre>
+    <script>
+      const code = document.getElementById('oauth-code').textContent;
+      const provider = ${JSON.stringify(provider)};
+      document.getElementById('oauth-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const out = document.getElementById('oauth-out');
+        out.textContent = '换取中...';
+        try {
+          const r = await fetch('/api/v1/admin/backup/remotes/oauth2/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              code,
+              provider,
+              client_id: document.getElementById('oauth-cid').value.trim(),
+              client_secret: document.getElementById('oauth-csec').value.trim(),
+            }),
+          });
+          const j = await r.json();
+          out.textContent = r.ok ? JSON.stringify(j, null, 2) : ('失败: ' + JSON.stringify(j));
+        } catch (err) {
+          out.textContent = '请求错误: ' + err.message;
+        }
+      });
+    </script>
   </body></html>`);
 });
 app.post('/api/v1/admin/backup/remotes/oauth2/token', async (c) => {
