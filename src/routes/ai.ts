@@ -620,8 +620,8 @@ aiRouter.post('/ask', zValidator('json', AiAskSchema), async (c) => {
     throw err;
   }
 
-  // 4. 检索 top-K
-  const retrieved = service.retrieve(req.locale, qvec, 4);
+  // 4. 混合检索 top-K（对齐原版 hybrid_search：向量 + FTS5 关键词 RRF 融合）
+  const retrieved = service.retrieve(req.locale, req.query, qvec, 4);
 
   // 5. 拼 prompt + stream chat
   const messages = buildAskMessages(req.query, retrieved, req.locale);

@@ -27,6 +27,27 @@ export interface DocsIndexMeta {
   chunk_count: number;
 }
 
+/** RRF 融合常数（对齐原版 _RRF_OFFSET）。 */
+const RRF_OFFSET = 60;
+/** FTS5 trigram 最短长度（对齐原版 _MIN_TRIGRAM_QUERY_CHARS）。 */
+const MIN_TRIGRAM_QUERY_CHARS = 3;
+/** BM25 三列权重：content / doc_title / section（对齐原版 bm25(x, 1.0, 5.0, 4.0)）。 */
+const BM25_COL_WEIGHTS = [1.0, 5.0, 4.0];
+
+/**
+ * FTS5 trigram tokenizer 的纯 JS 复刻：任意连续 3 字符即一个 token，
+ * 大小写不敏感（默认 case_sensitive 0）。返回 token → 频次。
+ */
+function buildTrigramFreq(text: string): Map<string, number> {
+  const folded = text.toLowerCase();
+  const freq = new Map<string, number>();
+  for (let i = 0; i + MIN_TRIGRAM_QUERY_CHARS <= folded.length; i++) {
+    const tri = folded.slice(i, i + MIN_TRIGRAM_QUERY_CHARS);
+    freq.set(tri, (freq.get(tri) ?? 0) + 1);
+  }
+  return freq;
+}
+
 export class DocsIndex {
   readonly lang: string;
   chunks: DocChunk[] = [];
@@ -35,6 +56,18 @@ export class DocsIndex {
   dim = 0;
   embeddingModel: string | null = null;
   buildTime: string | null = null;
+
+  /** chunk.id → chunks 数组位置（对齐原版 _chunk_positions）。 */
+  private chunkPositions = new Map<number, number>();
+  /** 每 chunk 三列（content/doc_title/section）的 trigram 频次。 */
+  private docTrigramFreq = new Map<number, Array<Map<string, number>>>();
+  /** 每 chunk 三列的 trigram 数（BM25 的 dl）。 */
+  private docLen = new Map<number, number[]>();
+  /** trigram → 出现该 trigram 的文档数（BM25 的 df）。 */
+  private df = new Map<string, number>();
+  /** 三列平均 trigram 数（BM25 的 avgdl）。 */
+  private avgdl = [0, 0, 0];
+  private n = 0;
 
   private constructor(lang: string) {
     this.lang = lang;
@@ -95,6 +128,13 @@ export class DocsIndex {
             section: section ?? '',
             url: url ?? '',
           });
+          // FTS5 trigram 检索统计（sql.js 无 FTS5 模块，纯 JS 复刻 chunks_fts 表）
+          const chunkId = Number(id);
+          this.chunkPositions.set(chunkId, this.chunks.length - 1);
+          const columnTexts = [content ?? '', title ?? '', section ?? ''];
+          const freqs = columnTexts.map(buildTrigramFreq);
+          this.docTrigramFreq.set(chunkId, freqs);
+          this.docLen.set(chunkId, freqs.map((m) => { let s = 0; for (const c of m.values()) s += c; return s; }));
           // sql.js BLOB → Uint8Array；float32 little-endian
           const bytesArr = vecBytes instanceof Uint8Array ? vecBytes : new Uint8Array(vecBytes as ArrayBuffer);
           vectors.push(new Float32Array(bytesArr.buffer, bytesArr.byteOffset, bytesArr.byteLength / 4));
@@ -116,6 +156,25 @@ export class DocsIndex {
         this.matrix = m;
         this.dim = dim || this.dim;
       }
+
+      // BM25 全局统计：df（跨列去重）与三列 avgdl
+      this.n = this.chunks.length;
+      const seenInDoc = new Set<string>();
+      for (const freqs of this.docTrigramFreq.values()) {
+        seenInDoc.clear();
+        for (const freq of freqs) {
+          for (const tri of freq.keys()) {
+            if (seenInDoc.has(tri)) continue;
+            seenInDoc.add(tri);
+            this.df.set(tri, (this.df.get(tri) ?? 0) + 1);
+          }
+        }
+      }
+      const colTotal = [0, 0, 0];
+      for (const lens of this.docLen.values()) {
+        for (let col = 0; col < 3; col++) colTotal[col] += lens[col];
+      }
+      this.avgdl = this.n > 0 ? colTotal.map((s) => s / this.n) : [0, 0, 0];
     } finally {
       db.close();
     }
@@ -159,6 +218,99 @@ export class DocsIndex {
       .slice(0, actualK);
 
     return idx.map(({ s, i }) => ({ chunk: this.chunks[i], score: s }));
+  }
+
+  /**
+   * 向量 + 关键词混合检索（RRF 融合）——对齐原版 hybrid_search。
+   * 索引无 FTS5 表或关键词不可用时自动回退纯向量检索。
+   */
+  hybridSearch(query: string, queryVector: Iterable<number>, k = 4, vectorK = 12, keywordK = 12): RetrievedChunk[] {
+    if (this.is_empty || k <= 0) return [];
+
+    const vectorResults = this.search(queryVector, Math.max(vectorK, 0));
+    const keywordIds = this.keywordChunkIds(query, Math.max(keywordK, 0));
+
+    const fused = new Map<number, number>();
+    vectorResults.forEach((result, rank) => {
+      const base = 1 / (RRF_OFFSET + rank + 1);
+      fused.set(result.chunk.id, (fused.get(result.chunk.id) ?? 0) + base);
+    });
+    keywordIds.forEach((chunkId, rank) => {
+      const base = 1 / (RRF_OFFSET + rank + 1);
+      fused.set(chunkId, (fused.get(chunkId) ?? 0) + base);
+    });
+
+    const rankedIds = [...fused.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+      .slice(0, k);
+    return rankedIds.map(([chunkId, score]) => ({
+      chunk: this.chunks[this.chunkPositions.get(chunkId)!],
+      score,
+    }));
+  }
+
+  /**
+   * FTS5 trigram 关键词候选，BM25 排序——对齐原版 _keyword_chunk_ids。
+   * 查询切为中文整段 + 英文/数字词 → trigram OR → BM25(top 列权重 1.0/5.0/4.0)。
+   */
+  private keywordChunkIds(query: string, limit: number): number[] {
+    const normalizedQuery = query.trim();
+    if (limit <= 0 || normalizedQuery.length < MIN_TRIGRAM_QUERY_CHARS) return [];
+
+    const chineseText = normalizedQuery.replace(/[^\u4e00-\u9fff]/g, '');
+    const tokens = [
+      ...(chineseText ? [chineseText] : []),
+      ...(normalizedQuery.match(/[A-Za-z0-9_]+/g) ?? []).map((t) => t.toLowerCase()),
+    ];
+    const trigrams = new Set<string>();
+    for (const token of tokens) {
+      for (let offset = 0; offset + MIN_TRIGRAM_QUERY_CHARS <= token.length; offset++) {
+        trigrams.add(token.slice(offset, offset + MIN_TRIGRAM_QUERY_CHARS));
+      }
+    }
+    if (trigrams.size === 0) return [];
+
+    const scored: Array<[number, number]> = [];
+    for (const chunk of this.chunks) {
+      const freqs = this.docTrigramFreq.get(chunk.id);
+      const lens = this.docLen.get(chunk.id);
+      if (!freqs || !lens) continue;
+      // 任一查询 trigram 命中任一列才进入打分（等价 FTS5 MATCH OR）
+      let hit = false;
+      for (const tri of trigrams) {
+        if (freqs[0].has(tri) || freqs[1].has(tri) || freqs[2].has(tri)) {
+          hit = true;
+          break;
+        }
+      }
+      if (!hit) continue;
+      scored.push([chunk.id, this.bm25Score(freqs, lens, trigrams)]);
+    }
+    scored.sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+    return scored.slice(0, limit).map(([id]) => id);
+  }
+
+  /** SQLite FTS5 bm25() 的纯 JS 复刻（k1=1.2, b=0.75，按列权重）。 */
+  private bm25Score(
+    freqs: Array<Map<string, number>>,
+    lens: number[],
+    trigrams: Set<string>,
+  ): number {
+    const k1 = 1.2;
+    const b = 0.75;
+    let score = 0;
+    for (const tri of trigrams) {
+      const docCount = this.df.get(tri) ?? 0;
+      if (docCount === 0) continue;
+      const idf = Math.log(1 + (this.n - docCount + 0.5) / (docCount + 0.5));
+      for (let col = 0; col < 3; col++) {
+        const tf = freqs[col].get(tri) ?? 0;
+        if (tf === 0) continue;
+        const denom = tf + k1 * (1 - b + b * (lens[col] / this.avgdl[col]));
+        score += BM25_COL_WEIGHTS[col] * ((idf * tf * (k1 + 1)) / denom);
+      }
+    }
+    return score;
   }
 }
 

@@ -132,11 +132,11 @@ export class DocsRefreshService {
     return this.indexes[key];
   }
 
-  /** 检索 top-K（返回的 chunk 与 score 给 ask 拼 prompt）。 */
-  retrieve(lang: string | null | undefined, queryVector: number[], k = 4): RetrievedChunk[] {
+  /** 混合检索 top-K（向量 + FTS5 关键词 RRF 融合；旧索引自动回退纯向量）。 */
+  retrieve(lang: string | null | undefined, query: string, queryVector: number[], k = 4): RetrievedChunk[] {
     const idx = this.getIndex(lang);
     if (!idx) return [];
-    return idx.search(queryVector, k);
+    return idx.hybridSearch(query, queryVector, k);
   }
 
   async checkLatest(): Promise<RagIndexStatus> {
