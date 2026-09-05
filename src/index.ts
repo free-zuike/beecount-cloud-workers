@@ -309,9 +309,8 @@ app.onError((err, c) => {
   return c.json({
     error: {
       code: 'INTERNAL_ERROR',
-      message: err.message,
+      message: 'Internal Server Error',
       request_id: requestId,
-      stack: (err.stack ?? '').split('\n').slice(0, 6),
     },
     detail: 'Internal Server Error',
   }, 500);
