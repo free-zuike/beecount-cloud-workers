@@ -220,23 +220,29 @@ app.get('/api/v1/admin/backup/remotes/oauth2/callback', async (c) => {
   return c.html(`<!DOCTYPE html><html><body>
     <h2>授权成功</h2>
     <p>授权码: <code style="word-break:break-all">${code}</code></p>
-    <p>使用以下命令换取 token:</p>
-    <pre>curl -X POST https://beecount.qzz.io/api/v1/admin/backup/remotes/oauth2/token \\
-  -H "Content-Type: application/json" \\
-  -d '{"code":"${code}","provider":"${provider}","client_id":"你的client_id","client_secret":"你的client_secret"}'</pre>
+    <p>使用以下命令换取 token（单行，PowerShell 可直接粘贴）:</p>
+    <pre>curl.exe -X POST "https://beecount.qzz.io/api/v1/admin/backup/remotes/oauth2/token" -H "Content-Type: application/json" -d '{"code":"${code}","provider":"${provider}","client_id":"你的client_id","client_secret":"你的client_secret"}'</pre>
   </body></html>`);
 });
 app.post('/api/v1/admin/backup/remotes/oauth2/token', async (c) => {
-  const { code, provider, client_id, client_secret } = await c.req.json();
+  let body: Record<string, string>;
+  try {
+    body = await c.req.json();
+  } catch (_) {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+  const { code, provider, client_id, client_secret } = body;
   if (!code || !client_id || !client_secret) return c.json({ error: 'Missing required fields' }, 400);
   const tokenEndpoints: Record<string, string> = { drive: 'https://oauth2.googleapis.com/token', onedrive: 'https://login.microsoftonline.com/common/oauth2/v2.0/token', dropbox: 'https://api.dropbox.com/oauth2/token' };
   const tokenUrl = tokenEndpoints[provider || 'drive'];
   if (!tokenUrl) return c.json({ error: `Unsupported provider: ${provider}` }, 400);
   try {
+    const params = new URLSearchParams({ code, client_id, client_secret, redirect_uri: 'https://beecount.qzz.io/api/v1/admin/backup/remotes/oauth2/callback', grant_type: 'authorization_code' });
+    if (provider === 'onedrive') params.set('scope', 'offline_access Files.ReadWrite');
     const resp = await fetch(tokenUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, client_id, client_secret, redirect_uri: 'https://beecount.qzz.io/api/v1/admin/backup/remotes/oauth2/callback', grant_type: 'authorization_code' }),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
     });
     const tokenData = await resp.json();
     if (!resp.ok) return c.json({ error: 'Token exchange failed', details: tokenData }, 400);
