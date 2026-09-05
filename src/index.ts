@@ -221,7 +221,7 @@ app.get('/api/v1/admin/backup/remotes/oauth2/callback', async (c) => {
     <h2>授权成功</h2>
     <p>授权码: <code style="word-break:break-all">${code}</code></p>
     <p>使用以下命令换取 token（单行，PowerShell 可直接粘贴）:</p>
-    <pre>curl.exe -X POST "https://beecount.qzz.io/api/v1/admin/backup/remotes/oauth2/token" -H "Content-Type: application/json" -d '{"code":"${code}","provider":"${provider}","client_id":"你的client_id","client_secret":"你的client_secret"}'</pre>
+    <pre>curl.exe --ssl-no-revoke --retry 3 --retry-all-errors -X POST "https://beecount.qzz.io/api/v1/admin/backup/remotes/oauth2/token" -H "Content-Type: application/json" -d '{"code":"${code}","provider":"${provider}","client_id":"你的client_id","client_secret":"你的client_secret"}'</pre>
   </body></html>`);
 });
 app.post('/api/v1/admin/backup/remotes/oauth2/token', async (c) => {
