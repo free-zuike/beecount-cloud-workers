@@ -214,7 +214,7 @@ app.use('*', async (c, next) => {
 // ---- OAuth2 回调（不需要认证，被 OAuth 提供商直接调用） ----
 app.get('/api/v1/admin/backup/remotes/oauth2/callback', async (c) => {
   const code = c.req.query('code');
-  const provider = c.req.query('provider') || 'drive';
+  const provider = c.req.query('provider') || c.req.query('state') || 'drive';
   if (!code) return c.text('Missing authorization code', 400);
   // 跳转到回调页面，用前端 POST 换取 token
   return c.html(`<!DOCTYPE html><html><body>
