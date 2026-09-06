@@ -425,7 +425,8 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string }, baseUrl: st
         const q = args.q as string; if (!q?.trim()) { r = []; break; }
         const limit = Math.max(1, Math.min((args.limit as number) || 20, 100));
         const like = `%${q}%`;
-        const rows = await db.prepare('SELECT * FROM read_tx_projection WHERE user_id = ? AND note LIKE ? ORDER BY happened_at DESC LIMIT ?').bind(userId, like, limit).all();
+        // 对齐原版 search 工具：备注 / 分类名 / 账户名 三字段模糊搜（read_tools.py）
+        const rows = await db.prepare('SELECT * FROM read_tx_projection WHERE user_id = ? AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ?) ORDER BY happened_at DESC LIMIT ?').bind(userId, like, like, like, limit).all();
         r = (rows.results as any[]).map(x => ({ sync_id: x.sync_id, tx_type: x.tx_type, amount: Number(x.amount || 0), happened_at: x.happened_at, note: x.note, category_name: x.category_name, account_name: x.account_name, from_account_name: x.from_account_name, to_account_name: x.to_account_name, tags: x.tags_csv || '' }));
         break;
       }

@@ -11,8 +11,6 @@
 
 import type { OrphanRecord, ScanReport } from './types';
 
-const MAX_ORPHANS = 100;
-
 // ---------------------------------------------------------------------------
 // A 类：DB 引用断链（实体引用已删） — 与原版 scanner.py A 类对齐
 // ---------------------------------------------------------------------------
@@ -30,8 +28,7 @@ async function scanTxMissingCategory(db: D1Database): Promise<OrphanRecord[]> {
         SELECT 1 FROM user_category_projection c
         WHERE c.user_id = p.user_id AND c.sync_id = p.category_sync_id
       )
-    LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; category_sync_id: string }>();
+    `).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; category_sync_id: string }>();
 
   return result.results.map((row) => ({
     type: 'tx_missing_category' as const,
@@ -56,8 +53,7 @@ async function scanTxMissingAccount(db: D1Database): Promise<OrphanRecord[]> {
         SELECT 1 FROM user_account_projection a
         WHERE a.user_id = p.user_id AND a.sync_id = p.account_sync_id
       )
-    LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; account_sync_id: string }>();
+    `).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; account_sync_id: string }>();
 
   return result.results.map((row) => ({
     type: 'tx_missing_account' as const,
@@ -82,8 +78,7 @@ async function scanTxMissingFromAccount(db: D1Database): Promise<OrphanRecord[]>
         SELECT 1 FROM user_account_projection a
         WHERE a.user_id = p.user_id AND a.sync_id = p.from_account_sync_id
       )
-    LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; from_account_sync_id: string }>();
+    `).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; from_account_sync_id: string }>();
 
   return result.results.map((row) => ({
     type: 'tx_missing_from_account' as const,
@@ -108,8 +103,7 @@ async function scanTxMissingToAccount(db: D1Database): Promise<OrphanRecord[]> {
         SELECT 1 FROM user_account_projection a
         WHERE a.user_id = p.user_id AND a.sync_id = p.to_account_sync_id
       )
-    LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; to_account_sync_id: string }>();
+    `).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; to_account_sync_id: string }>();
 
   return result.results.map((row) => ({
     type: 'tx_missing_to_account' as const,
@@ -134,8 +128,7 @@ async function scanBudgetMissingCategory(db: D1Database): Promise<OrphanRecord[]
         SELECT 1 FROM user_category_projection c
         WHERE c.user_id = p.user_id AND c.sync_id = p.category_sync_id
       )
-    LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; budget_type: string; category_sync_id: string }>();
+    `).all<{ user_id: string; ledger_id: string; sync_id: string; amount: number; budget_type: string; category_sync_id: string }>();
 
   return result.results.map((row) => ({
     type: 'budget_missing_category' as const,
@@ -180,8 +173,7 @@ async function scanSyncChangeMissingEntity(db: D1Database): Promise<OrphanRecord
           WHERE b.user_id = sc.user_id AND b.sync_id = sc.entity_sync_id
         ))
       )
-    LIMIT ?
-  `).bind(MAX_ORPHANS).all<{ change_id: number; user_id: string; entity_type: string; entity_sync_id: string; action: string }>();
+    `).all<{ change_id: number; user_id: string; entity_type: string; entity_sync_id: string; action: string }>();
 
   return result.results.map((row) => ({
     type: 'sync_change_missing_entity' as const,
@@ -206,8 +198,7 @@ async function scanAttachmentNoRef(db: D1Database): Promise<OrphanRecord[]> {
   const rows = await db.prepare(
     `SELECT id, user_id, size_bytes, file_name, storage_path, attachment_kind, sha256
      FROM attachment_files
-     LIMIT ?`
-  ).bind(MAX_ORPHANS).all<{
+     `).all<{
     id: string;
     user_id: string;
     size_bytes: number | null;
@@ -264,8 +255,7 @@ async function scanAttachmentFileMissing(db: D1Database, r2?: R2Bucket): Promise
   const rows = await db.prepare(
     `SELECT id, user_id, file_name, storage_path, size_bytes
      FROM attachment_files
-     LIMIT ?`
-  ).bind(MAX_ORPHANS).all<{
+     `).all<{
     id: string;
     user_id: string;
     file_name: string | null;
@@ -366,8 +356,7 @@ async function scanTxRefBrokenAttachment(db: D1Database): Promise<OrphanRecord[]
     `SELECT ledger_id, sync_id, user_id, attachments_json
      FROM read_tx_projection
      WHERE attachments_json IS NOT NULL
-     LIMIT ?`
-  ).bind(MAX_ORPHANS).all<{ ledger_id: string; sync_id: string; user_id: string; attachments_json: string }>();
+     `).all<{ ledger_id: string; sync_id: string; user_id: string; attachments_json: string }>();
 
   const orphans: OrphanRecord[] = [];
   for (const row of rows.results) {

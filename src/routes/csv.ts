@@ -91,6 +91,7 @@ const ExportQuerySchema = z.object({
   tag_sync_id: z.string().optional(),
   category_sync_id: z.string().optional(),
   account_sync_id: z.string().optional(),
+  tx_sync_id: z.string().optional(),
   amount_min: z.coerce.number().optional(),
   amount_max: z.coerce.number().optional(),
   date_from: z.string().optional(),
@@ -182,6 +183,11 @@ csvRouter.get('/workspace/transactions.csv', zValidator('query', ExportQuerySche
   if (q.account_sync_id) {
     txQuery += ' AND (tx.account_sync_id = ? OR tx.from_account_sync_id = ? OR tx.to_account_sync_id = ?)';
     txParams.push(q.account_sync_id, q.account_sync_id, q.account_sync_id);
+  }
+  if (q.tx_sync_id) {
+    // 对齐原版 export_workspace_transactions_csv：按 tx 自身 syncId 精确过滤
+    txQuery += ' AND tx.sync_id = ?';
+    txParams.push(q.tx_sync_id);
   }
   if (q.amount_min !== undefined) {
     txQuery += ' AND tx.amount >= ?';
