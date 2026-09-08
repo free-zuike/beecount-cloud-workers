@@ -60,10 +60,9 @@ async function broadcastProgress(
 }
 
 /**
- * 解析时区偏移 — 优先使用 schedule 自身的偏移，否则从 system_settings 读取
+ * 解析时区偏移 — 调度不再存时区（对齐原版），统一从 system_settings 读取
  */
-async function resolveTimezoneOffset(db: D1Database, scheduleOffset: number | null | undefined): Promise<number> {
-  if (scheduleOffset) return scheduleOffset;
+async function resolveTimezoneOffset(db: D1Database): Promise<number> {
   try {
     const sysSetting = await db
       .prepare('SELECT timezone_offset FROM system_settings WHERE id = ?')
@@ -114,10 +113,10 @@ export async function processBackupSchedule(
   }
 
   try {
-    const timezoneOffset = await resolveTimezoneOffset(db, schedule.timezone_offset);
+    const timezoneOffset = await resolveTimezoneOffset(db);
 
     if (!schedule['next_run_at']) {
-      const nextRun = calculateNextRun(schedule['cron_expr'], await resolveTimezoneOffset(db, schedule['timezone_offset']));
+      const nextRun = calculateNextRun(schedule['cron_expr'], await resolveTimezoneOffset(db));
       await db.prepare('UPDATE backup_schedules SET next_run_at = ? WHERE id = ?')
         .bind(nextRun, schedule['id']).run();
       console.log(`[CRON] Set initial next_run_at for schedule ${schedule['id']}: ${nextRun}`);
@@ -153,23 +152,18 @@ export async function processBackupSchedule(
     let remoteConfigs: Array<{ remoteId: string; config: Record<string, string> }> = [];
     let shouldEncrypt = false;
 
-    // remote_ids 优先从 M2M 表读（对齐原版），回退 remote_ids JSON 列
+    // remote_ids 从 M2M 表读（对齐原版）
     let remoteIds: Array<string | number> = [];
     try {
       const m2m = await db.prepare('SELECT remote_id FROM backup_schedule_remotes WHERE schedule_id = ? ORDER BY sort_order ASC')
         .bind(schedule.id).all<{ remote_id: number }>();
-      if (m2m.results.length > 0) {
-        remoteIds = m2m.results.map(r => r.remote_id);
-      } else if (schedule.remote_ids) {
-        const parsed = JSON.parse(schedule.remote_ids);
-        remoteIds = Array.isArray(parsed) ? parsed : [];
-      }
+      remoteIds = m2m.results.map(r => r.remote_id);
     } catch (e) {
       console.log(`[CRON] Failed to resolve remote ids for schedule ${schedule.id}:`, e);
     }
     for (const rid of remoteIds) {
-      const remote = await db.prepare('SELECT id, backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?')
-        .bind(String(rid)).first<{ id: string; backend_type: string; config_summary: string; encrypted: number }>();
+      const remote = await db.prepare('SELECT id, backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ? AND user_id = ?')
+        .bind(String(rid), schedule.user_id).first<{ id: string; backend_type: string; config_summary: string; encrypted: number }>();
       if (remote) {
         const parsedConfig = (() => { try { return JSON.parse(remote.config_summary || '{}'); } catch { return {}; } })();
         if (remote.backend_type === 'r2' && r2) parsedConfig._r2Bucket = r2;
@@ -184,8 +178,8 @@ export async function processBackupSchedule(
     // 插入备份记录
     let runId: number | null = null;
     try {
-      const runInsertResult = await db.prepare('INSERT INTO backup_runs (schedule_id, user_id, ledger_id, remote_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(schedule.id, schedule.user_id, ledger.id, remoteId, 'running', startedAt).run();
+      const runInsertResult = await db.prepare('INSERT INTO backup_runs (schedule_id, user_id, status, started_at) VALUES (?, ?, \'running\', ?)')
+        .bind(schedule.id, schedule.user_id, startedAt).run();
       // D1 可能不返回 lastRowId，尝试从 meta 获取
       runId = (runInsertResult as any).lastRowId || (runInsertResult as any).meta?.last_row_id;
       if (!runId) {
@@ -232,7 +226,7 @@ export async function processBackupSchedule(
         const finishedAt = new Date().toISOString();
         const logText = logLines.join('\n').slice(0, 1024 * 1024);
         const updateSql = backupResult.success
-          ? 'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, log_text = ? WHERE id = ?'
+          ? 'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, log_text = ? WHERE id = ?'
           : 'UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ?, log_text = ? WHERE id = ?';
         const updateParams = backupResult.success
           ? ['succeeded', finishedAt, backupResult.backupSize || null, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null, logText, runId]

@@ -592,12 +592,11 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           };
           conflictAuditStmts.push(
             db.prepare(
-              `INSERT INTO audit_logs (user_id, ledger_id, action, entity_type, entity_id, details_json, level, logger)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+              `INSERT INTO audit_logs (user_id, ledger_id, action, metadata_json)
+               VALUES (?, ?, 'sync_push', ?)`
             ).bind(
               userId, isUserGlobal ? null : (ledgerRowId ?? null),
-              'sync_push', 'sync_conflict', null,
-              safeJsonStringify(auditDetails), 'INFO', null,
+              safeJsonStringify({ entityType: 'sync_conflict', entityId: null, details: auditDetails, level: 'INFO', logger: null }),
             ),
           );
           continue;
@@ -932,12 +931,11 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
     // 诊断：500 异常摘要落库（失败不阻塞响应），便于直接查 D1 定位
     try {
       await db.prepare(
-        `INSERT INTO audit_logs (user_id, action, details_json, level, logger, created_at)
-         VALUES (?, 'sync_push_error', ?, 'ERROR', 'sync.diag', ?)`
+        `INSERT INTO audit_logs (user_id, action, metadata_json)
+         VALUES (?, 'sync_push_error', ?)`
       ).bind(
         userId,
-        JSON.stringify({ message: errMessage, stack: errStack.slice(0, 2000), ts: new Date().toISOString() }),
-        new Date().toISOString(),
+        JSON.stringify({ level: 'ERROR', logger: 'sync.diag', details: { message: errMessage, stack: errStack.slice(0, 2000), ts: new Date().toISOString() } }),
       ).run();
     } catch (diagErr) {
       serverLogger.error('src.routers.sync', '[SYNC] sync.diag insert failed:', diagErr);

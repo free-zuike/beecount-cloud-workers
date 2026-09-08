@@ -21,6 +21,7 @@ function resetAutoIncrement() {
 
 class InMemoryDB {
   public tables: Map<string, Row[]> = new Map();
+  public schemas: Map<string, Set<string>> = new Map();
 
   getTable(name: string): Row[] {
     if (!this.tables.has(name)) {
@@ -29,13 +30,34 @@ class InMemoryDB {
     return this.tables.get(name)!;
   }
 
+  private registerSchema(name: string, ddl: string) {
+    const cols = new Set<string>();
+    const openIdx = ddl.indexOf('(');
+    const closeIdx = ddl.lastIndexOf(')');
+    if (openIdx >= 0 && closeIdx > openIdx) {
+      for (const line of ddl.slice(openIdx + 1, closeIdx).split('\n')) {
+        const m = line.match(/^\s*([a-z_]\w*)\s+(TEXT|INTEGER|REAL|NUMERIC|BLOB|BOOLEAN|DATETIME|VARCHAR|CHAR)\b/i);
+        if (m) cols.add(m[1]);
+      }
+    }
+    this.schemas.set(name, cols);
+  }
+
   execute(sql: string, bindParams: unknown[] = []): MockResult {
     const trimmed = sql.trim();
     const upper = trimmed.toUpperCase();
 
     if (upper.startsWith('CREATE TABLE')) {
       const match = trimmed.match(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(\w+)/i);
-      if (match) this.getTable(match[1]);
+      if (match) {
+        const name = match[1];
+        const ifNotExists = /CREATE TABLE\s+IF NOT EXISTS/i.test(trimmed);
+        const existed = this.tables.has(name);
+        this.getTable(name);
+        // 仅当表是本次新建（或非 IF NOT EXISTS 的显式建表）时登记结构，
+        // 保证迁移测试里先建的旧结构表不被 initializeDatabase 的新结构覆盖
+        if (!existed || !ifNotExists) this.registerSchema(name, trimmed);
+      }
       return { success: true, meta: { last_row_id: 0, changes: 0 }, results: [] };
     }
     if (upper.startsWith('CREATE INDEX')) {
@@ -43,7 +65,22 @@ class InMemoryDB {
     }
     if (upper.startsWith('DROP TABLE')) {
       const match = trimmed.match(/DROP TABLE\s+(?:IF EXISTS\s+)?(\w+)/i);
-      if (match) this.tables.delete(match[1]);
+      if (match) {
+        this.tables.delete(match[1]);
+        this.schemas.delete(match[1]);
+      }
+      return { success: true, meta: { last_row_id: 0, changes: 0 }, results: [] };
+    }
+    const renameMatch = trimmed.match(/^ALTER TABLE\s+(\w+)\s+RENAME TO\s+(\w+)/i);
+    if (renameMatch) {
+      if (this.tables.has(renameMatch[1])) {
+        this.tables.set(renameMatch[2], this.tables.get(renameMatch[1])!);
+        this.tables.delete(renameMatch[1]);
+      }
+      if (this.schemas.has(renameMatch[1])) {
+        this.schemas.set(renameMatch[2], this.schemas.get(renameMatch[1])!);
+        this.schemas.delete(renameMatch[1]);
+      }
       return { success: true, meta: { last_row_id: 0, changes: 0 }, results: [] };
     }
     if (upper.startsWith('INSERT')) return this.handleInsert(trimmed, bindParams);
@@ -147,33 +184,103 @@ class InMemoryDB {
     const colsMatch = sql.match(/\(([^)]+)\)\s+SELECT/i);
     if (!colsMatch) return { success: false, meta: { last_row_id: 0, changes: 0 }, results: [] };
     const columns = colsMatch[1].split(',').map(c => c.trim());
-    const fromMatch = sql.match(/FROM\s+(\w+)/i);
-    if (!fromMatch) return { success: false, meta: { last_row_id: 0, changes: 0 }, results: [] };
-    const srcTable = this.getTable(fromMatch[1]);
-    const selectExpr = sql.slice(sql.toUpperCase().indexOf('SELECT') + 6, sql.toUpperCase().indexOf('FROM')).trim();
+
+    // 找外层 FROM（括号深度 0，避免命中子查询里的 FROM）
+    const selStart = sql.toUpperCase().indexOf('SELECT') + 6;
+    let depth = 0;
+    let fromIdx = -1;
+    for (let i = selStart; i < sql.length; i++) {
+      const ch = sql[i];
+      if (ch === '(') depth++;
+      else if (ch === ')') depth--;
+      else if (depth === 0 && sql.slice(i, i + 5).toUpperCase() === 'FROM ') { fromIdx = i; break; }
+    }
+    if (fromIdx === -1) return { success: false, meta: { last_row_id: 0, changes: 0 }, results: [] };
+    const afterFrom = sql.slice(fromIdx + 5);
+    const srcName = afterFrom.match(/(\w+)/)?.[1] ?? '';
+    const outerAlias = afterFrom.match(/\w+\s+(\w+)/)?.[1] ?? null;
+    const srcTableRaw = this.getTable(srcName);
+    const selectExpr = sql.slice(selStart, fromIdx).trim();
     const selCols = selectExpr.split(',').map(c => c.trim());
     const isIgnore = sql.toUpperCase().includes('OR IGNORE');
+
+    // WHERE 里的外层别名替换为字面量后过滤源行（如 run.backup_path → 'beecount/...'）；
+    // NOT EXISTS 子查询在 mock 里去重语义由 INSERT OR IGNORE 承担，先剥离
+    let srcTable = srcTableRaw;
+    // 外层 WHERE 必须从外层 FROM 之后找（SELECT 列表里的子查询 WHERE 不算）
+    let whereIdx = -1;
+    let d2 = 0;
+    for (let i = fromIdx; i < sql.length; i++) {
+      const ch = sql[i];
+      if (ch === '(') d2++;
+      else if (ch === ')') d2--;
+      else if (d2 === 0 && /^WHERE\b/i.test(sql.slice(i))) { whereIdx = i; break; }
+    }
+    const outerWhere = whereIdx >= 0 ? sql.slice(whereIdx + 5).trim() : null;
+    if (outerWhere && outerAlias) {
+      const where = outerWhere.replace(/\s+AND\s+NOT EXISTS[\s\S]*?\)\s*$/is, '').trim();
+      if (where) {
+        const subst = (r: Row) => where.replace(new RegExp(`\\b${outerAlias}\\.(\\w+)`, 'g'), (_, c) => `'${String(r[c] ?? '')}'`);
+        srcTable = srcTableRaw.filter(r => this.evalBoolExpr(r, subst(r), [], { current: 0 }));
+      }
+    }
 
     let changes = 0;
     for (const srcRow of srcTable) {
       const row: Row = {};
       selCols.forEach((expr, i) => {
         const col = columns[i];
-        const t = expr.trim();
-        if (/^-?\d+(\.\d+)?$/.test(t)) row[col] = parseFloat(t);
-        else if (t.toUpperCase() === 'NULL') row[col] = null;
-        else if (/^'.*'$/.test(t)) row[col] = t.slice(1, -1);
-        else row[col] = srcRow[t.split('.').pop()!.replace(/^'|'$/g, '')];
+        row[col] = this.resolveSelectExpr(expr, srcRow, outerAlias);
       });
       if (isIgnore) {
-        // 迁移 INSERT OR IGNORE 的 PK 是 (user_id, sync_id)；sync_id 才是实体唯一键
-        const dedupeCol = columns.includes('sync_id') ? 'sync_id' : columns[0];
-        if (table.some(r => r[dedupeCol] === row[dedupeCol])) continue;
+        // 迁移 INSERT OR IGNORE：按复合唯一键去重（如 (ledger_id,user_id)），取前两列组合
+        const dedupeCols = [columns[0], columns[1]].filter(Boolean);
+        if (table.some(r => dedupeCols.every(c => r[c] === row[c]))) continue;
       }
       table.push(row);
       changes++;
     }
     return { success: true, meta: { last_row_id: 0, changes }, results: [] };
+  }
+
+  private resolveSelectExpr(expr: string, srcRow: Row, outerAlias: string | null = null): unknown {
+    const t = expr.trim();
+    // 字符串拼接 'run-' || run.id
+    if (t.includes('||')) {
+      return t.split('||').map(p => String(this.resolveSelectExpr(p.trim(), srcRow, outerAlias) ?? '')).join('');
+    }
+    if (/^-?\d+(\.\d+)?$/.test(t)) return parseFloat(t);
+    if (t.toUpperCase() === 'NULL') return null;
+    if (/^'.*'$/.test(t)) return t.slice(1, -1);
+    // 标量子查询 (SELECT ... FROM ...)：外层别名替换为字面量（相关子查询）
+    if (t.startsWith('(') && t.toUpperCase().includes('SELECT')) {
+      let inner = t.slice(1, -1).trim();
+      if (outerAlias) {
+        inner = inner.replace(new RegExp(`\\b${outerAlias}\\.(\\w+)`, 'g'), (_, c) => `'${String(srcRow[c] ?? '')}'`);
+      }
+      const sub = this.handleSelect(inner, []);
+      return sub.results[0] ? Object.values(sub.results[0])[0] : null;
+    }
+    // COALESCE(a, b, ...)（参数按括号深度切分，子查询里的逗号不算）
+    const coalesceMatch = t.match(/^COALESCE\((.*)\)$/is);
+    if (coalesceMatch) {
+      const body = coalesceMatch[1];
+      const args: string[] = [];
+      let d = 0, cur = '';
+      for (const ch of body) {
+        if (ch === '(') d++;
+        else if (ch === ')') d--;
+        if (ch === ',' && d === 0) { args.push(cur); cur = ''; continue; }
+        cur += ch;
+      }
+      args.push(cur);
+      for (const a of args) {
+        const v = this.resolveSelectExpr(a.trim(), srcRow, outerAlias);
+        if (v !== null && v !== undefined && v !== '') return v;
+      }
+      return null;
+    }
+    return srcRow[t.split('.').pop()!.replace(/^'|'$/g, '')];
   }
 
   private handleUpdate(sql: string, params: unknown[]): MockResult {
@@ -270,6 +377,17 @@ class InMemoryDB {
         seen.add(key);
         return true;
       });
+    }
+
+    // 列存在性校验（模拟 SQLite "no such column"）：有注册结构时按表结构校验；
+    // 无结构（getTable 自动建的表）宽松放行。只校验纯列列表，避免误伤 MAX()/COUNT()。
+    if (workingRows.length > 0 && /^[\w.]+(?:\s*,\s*[\w.]+)*$/.test(selectExpr)) {
+      const bareCols = this.parseSelectColumns(selectExpr);
+      const schema = this.schemas.get(tableName);
+      if (schema) {
+        const invalid = bareCols.filter(c => c !== '*' && !schema.has(c));
+        if (invalid.length) throw new Error(`no such column: ${invalid.join(', ')} (table ${tableName})`);
+      }
     }
 
     const orderMatch = sql.match(/ORDER\s+BY\s+(.+?)(?:\s+LIMIT|\s+OFFSET|$)/i);
@@ -493,6 +611,8 @@ class InMemoryDB {
       const val = row[inner];
       return val != null ? String(val).toLowerCase() : null;
     }
+    // 字符串字面量（如 'beecount/...' IS NOT NULL 的左侧）→ 返回字面值
+    if (trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1);
     return row[trimmed.split('.').pop()!];
   }
 

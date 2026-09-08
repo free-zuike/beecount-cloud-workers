@@ -23,20 +23,24 @@ interface AuditLogParams {
 export async function insertAuditLog(params: AuditLogParams): Promise<void> {
   const { db, userId, ledgerId, action, entityType, entityId, details, logBuffer, level, logger } = params;
   try {
+    // 对齐原版 audit_logs（user_id, ledger_id, action, metadata_json）：
+    // entityType/entityId/details/level/logger 等扩展信息并入 metadata_json
     await db
       .prepare(
-        `INSERT INTO audit_logs (user_id, ledger_id, action, entity_type, entity_id, details_json, level, logger)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO audit_logs (user_id, ledger_id, action, metadata_json)
+         VALUES (?, ?, ?, ?)`
       )
       .bind(
         userId,
         ledgerId ?? null,
         action,
-        entityType ?? null,
-        entityId ?? null,
-        details ? JSON.stringify(details) : null,
-        level ?? 'INFO',
-        logger ?? null,
+        JSON.stringify({
+          entityType: entityType ?? null,
+          entityId: entityId ?? null,
+          details: details ?? null,
+          level: level ?? 'INFO',
+          logger: logger ?? null,
+        }),
       )
       .run();
 

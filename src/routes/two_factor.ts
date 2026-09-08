@@ -159,7 +159,6 @@ const TwoFAVerifySchema = z.object({
   app_version: z.string().optional(),
   os_version: z.string().optional(),
   device_model: z.string().optional(),
-  client_type: z.string().optional().default('app'),
 });
 
 const TwoFADisableSchema = z.object({
@@ -337,7 +336,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   const authHeader = c.req.header('Authorization');
   const challenge_token = body.challenge_token
     || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined);
-  const { code, method, device_id, device_name, platform, client_type: clientType, app_version, os_version, device_model } = body;
+  const { code, method, device_id, device_name, platform, app_version, os_version, device_model } = body;
   const serverNow = nowUtc();
 
   if (!challenge_token) {
@@ -415,9 +414,8 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
   }
 
   // 生成真正的签名 JWT access token
-  const isApp = clientType !== 'web';
-  const tokenScopes = isApp ? ['app_write'] : ['web_read', 'web_write', 'ops_write'];
-  const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
+  const tokenScopes = ['app_write'];
+  const accessToken = await createAccessToken(user.id, jwtSecret, tokenScopes);
 
   // 使用与 login 相同的 upsertDevice 逻辑，避免重复创建设备记录
   const resolvedDeviceId = await upsertDevice(
@@ -427,16 +425,16 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
 
   // 创建 refresh token + 清理旧 token 同事务原子写入（对齐原版单 commit）
   const refreshExpiresIn = 30 * 24 * 60 * 60;
-  const refreshTokenValue = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes, refreshExpiresIn, 'refresh');
+  const refreshTokenValue = await createAccessToken(user.id, jwtSecret, tokenScopes, refreshExpiresIn, 'refresh');
   const refreshTokenHash = Array.from(new Uint8Array(await sha256(new TextEncoder().encode(refreshTokenValue)))).map(b => b.toString(16).padStart(2, '0')).join('');
   const refreshExpiresAt = new Date(Date.now() + refreshExpiresIn * 1000);
   const refreshTokenId = randomUUID();
 
   await db.batch([
     db.prepare(
-      `INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at, client_type)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(refreshTokenId, user.id, resolvedDeviceId, refreshTokenHash, refreshExpiresAt.toISOString(), isApp ? 'app' : 'web'),
+      `INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(refreshTokenId, user.id, resolvedDeviceId, refreshTokenHash, refreshExpiresAt.toISOString()),
     db.prepare(
       "DELETE FROM refresh_tokens WHERE user_id = ? AND device_id = ? AND (revoked_at IS NOT NULL OR expires_at < datetime('now'))"
     ).bind(user.id, resolvedDeviceId),

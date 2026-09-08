@@ -19,31 +19,18 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const UPSTREAM_REF = 'upstream/main';
 
 // ---- 已知差异白名单（有意为之的服务端扩展）----
-// oursOnlyTables: 我们独有的表（上游没有）
-// columnAdditions: 我们比上游多的列
-// columnMissing: 我们比上游少的列（warn 级）
+// 表结构与原版 Alembic 最终结构已全量对齐（SCHEMA v3），无列级差异；
+// 仅保留 5 张我们独有的表（上游没有、功能必需）。
 const KNOWN = {
   oursOnlyTables: new Set([
     'app_metadata',      // schema 版本跟踪（Workers 冷启动跳过 DDL）
     'system_settings',   // setup 向导 + 服务器时区（上游用环境变量）
     'settings',          // key-value 配置（S3 上传配置等）
-    'backup_restores',   // 恢复任务（上游无恢复表）
     'ai_image_cache',    // 截图记账缓存（D1+R2 持久化，上游无）
+    'backup_restores',   // 恢复任务（上游无恢复功能）
   ]),
-  columnAdditions: {
-    audit_logs: ['entity_type', 'entity_id', 'details_json', 'level', 'logger'],
-    ledgers: ['role', 'is_shared', 'invite_code', 'invite_expires_at'],
-    ledger_invites: ['id'],
-    backup_snapshots: ['kind', 'file_name', 'content_type', 'checksum', 'size'],
-    backup_schedules: ['remote_ids', 'timezone_offset'],
-    backup_runs: ['ledger_id', 'remote_id', 'backup_path'],
-    ledger_members: ['id'],                 // 我们自增主键 + UNIQUE(ledger_id,user_id)；上游复合主键
-    refresh_tokens: ['client_type'],        // 标记 App/Web 来源，上游无
-  },
-  columnMissing: {
-    ledger_members: ['invited_by'],   // 上游记录谁邀请的成员，我们未实现该列
-    backup_remotes: ['user_id'],      // 上游按用户隔离远端；我们是单管理员全局（有意）
-  },
+  columnAdditions: {},
+  columnMissing: {},
 };
 
 // ---------- 上游 alembic 解析 ----------

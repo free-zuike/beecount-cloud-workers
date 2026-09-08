@@ -183,8 +183,7 @@ function nowUtc(): string {
 }
 
 /**
- * 解析 schedule 的 remote_ids：优先读 backup_schedule_remotes M2M（对齐原版），
- * 无 M2M 记录时回退解析 remote_ids JSON 列（旧数据兼容）。
+ * 解析 schedule 的 remote_ids：读 backup_schedule_remotes M2M（对齐原版）。
  */
 async function resolveScheduleRemoteIds(db: D1Database, scheduleId: number | string): Promise<Array<string | number>> {
   const schedIdStr = String(scheduleId);
@@ -192,24 +191,10 @@ async function resolveScheduleRemoteIds(db: D1Database, scheduleId: number | str
     .prepare('SELECT remote_id FROM backup_schedule_remotes WHERE schedule_id = ? ORDER BY sort_order ASC')
     .bind(schedIdStr)
     .all<{ remote_id: number }>();
-  if (m2m.results.length > 0) {
-    return m2m.results.map(r => r.remote_id);
-  }
-  const sched = await db
-    .prepare('SELECT remote_ids FROM backup_schedules WHERE id = ?')
-    .bind(schedIdStr)
-    .first<{ remote_ids: string }>();
-  if (!sched?.remote_ids) return [];
-  try {
-    const parsed = JSON.parse(sched.remote_ids);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  return m2m.results.map(r => r.remote_id);
 }
 
 /** 全量覆盖 schedule 的 remote 关联（对齐原版：先删旧映射再加新）。
- * 兼容旧实现：同步写回 remote_ids JSON 列（存放整型 id 列表）。
  * 前端可能传混型 remote_ids（如 [1, "1"]），统一转字符串并去重，
  * 否则插入 backup_schedule_remotes（PK=schedule_id+remote_id）会主键冲突 500。 */
 async function replaceScheduleRemotes(
@@ -223,8 +208,6 @@ async function replaceScheduleRemotes(
     ...normalized.map((rid, idx) =>
       db.prepare('INSERT INTO backup_schedule_remotes (schedule_id, remote_id, sort_order) VALUES (?, ?, ?)')
         .bind(String(scheduleId), rid, idx)),
-    db.prepare('UPDATE backup_schedules SET remote_ids = ? WHERE id = ?')
-      .bind(normalized.length ? JSON.stringify(normalized) : null, String(scheduleId)),
   ]);
 }
 
@@ -459,10 +442,12 @@ backupRouter.use('/*', async (c, next) => {
  */
 backupRouter.get('/rclone-config', async (c) => {
   const db = c.env.DB;
+  const userId = c.get('userId');
   
   try {
     const remotes = await db
-      .prepare('SELECT id, name, backend_type, config_summary FROM backup_remotes')
+      .prepare('SELECT id, name, backend_type, config_summary FROM backup_remotes WHERE user_id = ?')
+      .bind(userId)
       .all<{ id: number; name: string; backend_type: string; config_summary: string }>();
     
     let configContent = '# BeeCount Cloud rclone configuration\n';
@@ -540,6 +525,7 @@ backupRouter.get('/rclone-config', async (c) => {
 
 backupRouter.get('/diagnose-s3', async (c) => {
   const db = c.env.DB;
+  const userId = c.get('userId');
   
   const result: any = {
     timestamp: new Date().toISOString(),
@@ -567,8 +553,8 @@ backupRouter.get('/diagnose-s3', async (c) => {
   
   try {
     const remoteCount = await db.prepare(
-      'SELECT COUNT(*) as count FROM backup_remotes'
-    ).first<{ count: number }>();
+      'SELECT COUNT(*) as count FROM backup_remotes WHERE user_id = ?'
+    ).bind(userId).first<{ count: number }>();
     
     result.backup_remotes.count = remoteCount?.count || 0;
     
@@ -597,6 +583,7 @@ backupRouter.get('/diagnose-s3', async (c) => {
  */
 backupRouter.get('/remotes', async (c) => {
   const db = c.env.DB;
+  const userId = c.get('userId');
 
   try {
     const rows = await db
@@ -605,8 +592,10 @@ backupRouter.get('/remotes', async (c) => {
                last_test_at, last_test_ok, last_test_error, 
                created_at, updated_at
          FROM backup_remotes
+         WHERE user_id = ?
          ORDER BY created_at DESC`
       )
+      .bind(userId)
       .all<{
         id: string;
         name: string;
@@ -657,8 +646,10 @@ backupRouter.get('/remotes', async (c) => {
         .prepare(
           `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
            FROM backup_remotes
+           WHERE user_id = ?
            ORDER BY created_at DESC`
         )
+        .bind(userId)
         .all<{
           id: string;
           name: string;
@@ -710,6 +701,7 @@ backupRouter.get('/remotes', async (c) => {
  */
 backupRouter.post('/remotes', apiValidator('json', RemoteCreateSchema), async (c) => {
   const db = c.env.DB;
+  const userId = c.get('userId');
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
@@ -721,10 +713,11 @@ backupRouter.post('/remotes', apiValidator('json', RemoteCreateSchema), async (c
 
   const result = await db
     .prepare(
-      `INSERT INTO backup_remotes (name, backend_type, config_summary, encrypted, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO backup_remotes (user_id, name, backend_type, config_summary, encrypted, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
+      userId,
       req.name,
       req.backend_type,
       configJson,
@@ -752,16 +745,17 @@ backupRouter.post('/remotes', apiValidator('json', RemoteCreateSchema), async (c
  */
 backupRouter.patch('/remotes/:id', apiValidator('json', RemoteUpdateSchema), async (c) => {
   const db = c.env.DB;
+  const userId = c.get('userId');
   const remoteId = c.req.param('id');
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
   const existing = await db
-    .prepare('SELECT id FROM backup_remotes WHERE id = ?')
-    .bind(remoteId)
+    .prepare('SELECT id FROM backup_remotes WHERE id = ? AND user_id = ?')
+    .bind(remoteId, userId)
     .first();
 
-  const remote = await db.prepare(`SELECT id, name, backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?`).bind(remoteId).first<{ id: number; name: string; backend_type: string; config_summary: string; encrypted: number }>();
+  const remote = await db.prepare(`SELECT id, name, backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ? AND user_id = ?`).bind(remoteId, userId).first<{ id: number; name: string; backend_type: string; config_summary: string; encrypted: number }>();
   if (!remote) return c.json({ error: 'Remote not found' }, 404);
 
   // 清理旧记录中可能的错误字段（�?R2 类型的多�?bucket�?
@@ -799,19 +793,19 @@ backupRouter.patch('/remotes/:id', apiValidator('json', RemoteUpdateSchema), asy
     params.push(req.encrypted ? 1 : 0);
   }
 
-  params.push(remoteId);
+  params.push(remoteId, userId);
 
   await db
-    .prepare(`UPDATE backup_remotes SET ${updates.join(', ')} WHERE id = ?`)
+    .prepare(`UPDATE backup_remotes SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`)
     .bind(...params)
     .run();
 
   const updated = await db
     .prepare(
       `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
-       FROM backup_remotes WHERE id = ?`
+       FROM backup_remotes WHERE id = ? AND user_id = ?`
     )
-    .bind(remoteId)
+    .bind(remoteId, userId)
     .first<{
       id: string;
       name: string;
@@ -838,11 +832,12 @@ backupRouter.patch('/remotes/:id', apiValidator('json', RemoteUpdateSchema), asy
  */
 backupRouter.delete('/remotes/:id', async (c) => {
   const db = c.env.DB;
+  const userId = c.get('userId');
   const remoteId = c.req.param('id');
 
   const existing = await db
-    .prepare('SELECT id FROM backup_remotes WHERE id = ?')
-    .bind(remoteId)
+    .prepare('SELECT id FROM backup_remotes WHERE id = ? AND user_id = ?')
+    .bind(remoteId, userId)
     .first();
 
   if (!existing) {
@@ -851,14 +846,14 @@ backupRouter.delete('/remotes/:id', async (c) => {
 
   // 检查是否绑定定时任务（与原版对齐：绑定中的远端不可删除�?
   const boundSchedules = await db
-    .prepare(`SELECT id FROM backup_schedules WHERE remote_ids LIKE ?`)
-    .bind(`%"${remoteId}"%`)
+    .prepare('SELECT schedule_id FROM backup_schedule_remotes WHERE remote_id = ? LIMIT 1')
+    .bind(remoteId)
     .first();
   if (boundSchedules) {
     return c.json({ error: 'Remote is bound to one or more schedules. Remove from schedules first.' }, 409);
   }
 
-  await db.prepare('DELETE FROM backup_remotes WHERE id = ?').bind(remoteId).run();
+  await db.prepare('DELETE FROM backup_remotes WHERE id = ? AND user_id = ?').bind(remoteId, userId).run();
 
   return c.json({ success: true });
 });
@@ -868,14 +863,15 @@ backupRouter.delete('/remotes/:id', async (c) => {
  */
 backupRouter.get('/remotes/:id/reveal', async (c) => {
   const db = c.env.DB;
+  const userId = c.get('userId');
   const remoteId = c.req.param('id');
 
   const remote = await db
     .prepare(
       `SELECT id, name, backend_type, config_summary, encrypted, created_at, updated_at
-       FROM backup_remotes WHERE id = ?`
+       FROM backup_remotes WHERE id = ? AND user_id = ?`
     )
-    .bind(remoteId)
+    .bind(remoteId, userId)
     .first<{
       id: string;
       name: string;
@@ -890,12 +886,10 @@ backupRouter.get('/remotes/:id/reveal', async (c) => {
     return c.json({ error: 'Remote not found' }, 404);
   }
 
-  const userId = c.get('userId');
   await insertAuditLog({
     db, userId, action: 'backup_remote_reveal', entityType: 'backup_remote',
     details: { remote_id: remoteId, remote_name: remote.name, backend_type: remote.backend_type },
   });
-
   return c.json({
     id: Number(remote.id),
     name: remote.name,
@@ -912,14 +906,15 @@ backupRouter.get('/remotes/:id/reveal', async (c) => {
  */
 backupRouter.post('/remotes/:id/test', async (c) => {
   const db = c.env.DB;
+  const userId = c.get('userId');
   const remoteId = c.req.param('id');
 
   const remote = await db
     .prepare(
       `SELECT id, name, backend_type, config_summary
-       FROM backup_remotes WHERE id = ?`
+       FROM backup_remotes WHERE id = ? AND user_id = ?`
     )
-    .bind(remoteId)
+    .bind(remoteId, userId)
     .first<{
       id: string;
       name: string;
@@ -1248,9 +1243,9 @@ backupRouter.get('/schedules', async (c) => {
     // 先尝试查询带所有新字段的版�?
     rows = await db
       .prepare(
-        `SELECT s.id, s.name, s.cron_expr, s.remote_ids,
+        `SELECT s.id, s.name, s.cron_expr,
                 s.retention_days, s.include_attachments, s.enabled, s.created_at, s.updated_at,
-                s.next_run_at, s.last_run_at, s.last_run_status, s.timezone_offset
+                s.next_run_at, s.last_run_at, s.last_run_status
          FROM backup_schedules s
          ORDER BY s.created_at DESC`
       )
@@ -1259,7 +1254,6 @@ backupRouter.get('/schedules', async (c) => {
         name: string;
         user_id: string;
         cron_expr: string;
-        remote_ids: string;
         retention_days: number | null;
         include_attachments: number;
         enabled: number;
@@ -1268,14 +1262,13 @@ backupRouter.get('/schedules', async (c) => {
         next_run_at: string | null;
         last_run_at: string | null;
         last_run_status: string | null;
-        timezone_offset?: number;
       }>();
   } catch (error) {
     // 如果失败，回退到查询旧字段版本
     serverLogger.info('src.routers.admin', '[Backup] Falling back to query without timezone_offset');
     rows = await db
       .prepare(
-        `SELECT s.id, s.name, s.cron_expr, s.remote_ids,
+        `SELECT s.id, s.name, s.cron_expr,
                 s.retention_days, s.include_attachments, s.enabled, s.created_at, s.updated_at
          FROM backup_schedules s
          ORDER BY s.created_at DESC`
@@ -1285,7 +1278,6 @@ backupRouter.get('/schedules', async (c) => {
         name: string;
         user_id: string;
         cron_expr: string;
-        remote_ids: string;
         retention_days: number | null;
         include_attachments: number;
         enabled: number;
@@ -1311,22 +1303,9 @@ backupRouter.get('/schedules', async (c) => {
   }
 
   const schedules = rows.results.map((row) => {
-    // M2M 优先，回退 remote_ids JSON 列（旧数据兼容）
-    // 统一转 number：D1 M2M 表 remote_id 是 INTEGER（返回 number），但 JSON 列可能
-    // 存字符串（"1"）——前端用严格相等（includes）判断选中，类型不一致会导致编辑
-    // 时目标远端不回显。此处归一化，前端无需感知类型。
+    // remote_ids 统一从 M2M 表读（对齐原版）；统一转 number 便于前端严格相等判断
     const m2mIds = m2mBySchedule.get(String(row.id));
-    let parsedRemoteIds: number[] = [];
-    if (m2mIds) {
-      parsedRemoteIds = m2mIds.map(Number).filter((n) => !Number.isNaN(n));
-    } else if (row.remote_ids) {
-      try {
-        const parsed = JSON.parse(row.remote_ids);
-        if (Array.isArray(parsed)) {
-          parsedRemoteIds = parsed.map(Number).filter((n) => !Number.isNaN(n));
-        }
-      } catch {}
-    }
+    const parsedRemoteIds: number[] = m2mIds ? m2mIds.map(Number).filter((n) => !Number.isNaN(n)) : [];
     return {
       id: Number(row.id),
       name: row.name,
@@ -1334,7 +1313,7 @@ backupRouter.get('/schedules', async (c) => {
       retention_days: row.retention_days ?? 30,
       include_attachments: Boolean(row.include_attachments),
       enabled: Boolean(row.enabled),
-      timezone_offset: (row as any).timezone_offset ?? 0,
+      timezone_offset: 0, // 调度不再存时区，统一走 system_settings
       next_run_at: (row as any).next_run_at,
       last_run_at: (row as any).last_run_at,
       last_run_status: (row as any).last_run_status,
@@ -1377,57 +1356,28 @@ backupRouter.post('/schedules', apiValidator('json', ScheduleCreateSchema), asyn
     return c.json({ error: cronCheck.error }, 400);
   }
 
-  // 计算首次运行时间（使用时区偏移）
+  // 计算首次运行时间（使用系统时区）
   const nextRunAt = calculateNextRun(req.cron_expr, timezoneOffset ?? 0);
 
-  const remoteIdsJson = req.remote_ids && req.remote_ids.length > 0 ? JSON.stringify(req.remote_ids) : null;
-
-  // 先尝试插入带 timezone_offset 的版�?
-  let insertResult;
-  try {
-    insertResult = await db
-      .prepare(
-        `INSERT INTO backup_schedules
-         (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, timezone_offset, next_run_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .bind(
-        req.name,
-        userId,
-        req.cron_expr,
-        req.retention_days ?? 30,
-        req.include_attachments !== false ? 1 : 0,
-        req.enabled !== false ? 1 : 0,
-        remoteIdsJson,
-        timezoneOffset ?? 0,
-        nextRunAt,
-        serverNow,
-        serverNow
-      )
-      .run();
-  } catch (error) {
-    // 如果失败，尝试不�?timezone_offset 的版�?
-    serverLogger.info('src.routers.admin', '[Backup] Creating schedule without timezone_offset:', error);
-    insertResult = await db
-      .prepare(
-        `INSERT INTO backup_schedules
-         (name, user_id, cron_expr, retention_days, include_attachments, enabled, remote_ids, next_run_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .bind(
-        req.name,
-        userId,
-        req.cron_expr,
-        req.retention_days ?? 30,
-        req.include_attachments !== false ? 1 : 0,
-        req.enabled !== false ? 1 : 0,
-        remoteIdsJson,
-        nextRunAt,
-        serverNow,
-        serverNow
-      )
-      .run();
-  }
+  // 插入调度（对齐原版：remote 关联走 backup_schedule_remotes M2M）
+  const insertResult = await db
+    .prepare(
+      `INSERT INTO backup_schedules
+       (name, user_id, cron_expr, retention_days, include_attachments, enabled, next_run_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      req.name,
+      userId,
+      req.cron_expr,
+      req.retention_days ?? 30,
+      req.include_attachments !== false ? 1 : 0,
+      req.enabled !== false ? 1 : 0,
+      nextRunAt,
+      serverNow,
+      serverNow
+    )
+    .run();
 
   const scheduleId = (insertResult as any).lastRowId;
 
@@ -1443,7 +1393,7 @@ backupRouter.post('/schedules', apiValidator('json', ScheduleCreateSchema), asyn
     retention_days: req.retention_days ?? 30,
     include_attachments: req.include_attachments ?? true,
     enabled: req.enabled ?? true,
-    timezone_offset: req.timezone_offset ?? 0,
+    timezone_offset: timezoneOffset ?? 0,
     next_run_at: nextRunAt,
     last_run_at: null,
     last_run_status: null,
@@ -1478,19 +1428,17 @@ backupRouter.patch('/schedules/:id', apiValidator('json', ScheduleUpdateSchema),
     return c.json({ error: 'Schedule not found' }, 404);
   }
 
-  // 解析时区偏移（对齐原版：优先使用前端传的，否则从 system_settings 读取�?
-  let timezoneOffset = req.timezone_offset;
-  if (timezoneOffset === undefined || timezoneOffset === null) {
-    try {
-      const sysSetting = await db
-        .prepare('SELECT timezone_offset FROM system_settings WHERE id = ?')
-        .bind('default')
-        .first<{ timezone_offset: number }>();
-      if (sysSetting) {
-        timezoneOffset = sysSetting.timezone_offset;
-      }
-    } catch { /* ignore */ }
-  }
+  // 解析时区偏移（调度不存时区，统一从 system_settings 读取）
+  let timezoneOffset = 0;
+  try {
+    const sysSetting = await db
+      .prepare('SELECT timezone_offset FROM system_settings WHERE id = ?')
+      .bind('default')
+      .first<{ timezone_offset: number }>();
+    if (sysSetting) {
+      timezoneOffset = sysSetting.timezone_offset;
+    }
+  } catch { /* ignore */ }
 
   const updates: string[] = ['updated_at = ?'];
   const params: (string | number | null)[] = [serverNow];
@@ -1519,8 +1467,7 @@ backupRouter.patch('/schedules/:id', apiValidator('json', ScheduleUpdateSchema),
   }
 
   if (req.timezone_offset !== undefined) {
-    updates.push('timezone_offset = ?');
-    params.push(req.timezone_offset);
+    // 调度不再存 per-schedule 时区（对齐原版），忽略该字段
   }
 
   if (req.retention_days !== undefined) {
@@ -1677,10 +1624,10 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
   const runInsertResult = await db
     .prepare(
-      `INSERT INTO backup_runs (user_id, ledger_id, remote_id, status, started_at)
-       VALUES (?, ?, ?, 'running', ?)`
+      `INSERT INTO backup_runs (user_id, schedule_id, status, started_at)
+       VALUES (?, ?, 'running', ?)`
     )
-    .bind(schedule.user_id, ledgerId || '', remoteId, serverNow)
+    .bind(schedule.user_id, scheduleId || null, serverNow)
     .run();
 
   const runId = runInsertResult.meta.last_row_id as number;
@@ -1722,9 +1669,9 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
         const finishedAt = new Date().toISOString();
         const finalStatus = backupResult.success ? 'succeeded' : 'failed';
         await db.prepare(
-          'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?, log_text = ? WHERE id = ?'
+          'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, error_message = ?, log_text = ? WHERE id = ?'
         ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
-              backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
+              backupResult.backupPath?.split('/').pop() || null,
               backupResult.success ? null : backupResult.message, logLines.join('\n'), runId).run();
         await broadcastViaDO(c.env, schedule.user_id, { type: 'backup_status', scheduleId: schedule.id, status: finalStatus, runId });
       } catch (err) {
@@ -1886,10 +1833,10 @@ backupRouter.post('/run-now', apiValidator('json', RunNowSchema), async (c) => {
 
   const runInsertResult = await db
     .prepare(
-      `INSERT INTO backup_runs (user_id, ledger_id, remote_id, status, started_at)
-       VALUES (?, ?, ?, 'running', ?)`
+      `INSERT INTO backup_runs (user_id, status, started_at)
+       VALUES (?, 'running', ?)`
     )
-    .bind(userId, ledger.id, remoteId, serverNow)
+    .bind(userId, serverNow)
     .run();
 
   const runId = runInsertResult.meta.last_row_id as number;
@@ -1929,9 +1876,9 @@ backupRouter.post('/run-now', apiValidator('json', RunNowSchema), async (c) => {
         const finishedAt = new Date().toISOString();
         const finalStatus = backupResult.success ? 'succeeded' : 'failed';
         await db.prepare(
-          'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?, log_text = ? WHERE id = ?'
+          'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, error_message = ?, log_text = ? WHERE id = ?'
         ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
-              backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
+              backupResult.backupPath?.split('/').pop() || null,
               backupResult.success ? null : backupResult.message, logLines.join('\n'), runId).run();
         await broadcastViaDO(c.env, userId, { type: 'backup_status', status: finalStatus, runId });
       } catch (err) {
@@ -2134,13 +2081,18 @@ backupRouter.post('/runs/:runId/prepare-restore', async (c) => {
 
   c.executionCtx.waitUntil((async () => {
     try {
-      // 下载备份文件
-      let backupPath = run.backup_path || '';
+      // 下载备份文件：完整 R2 key 在 backup_artifacts.storage_path（backup_path 列已废弃）
+      const artifact = await db.prepare(
+        `SELECT storage_path FROM backup_artifacts WHERE user_id = ? AND file_name = ? AND kind = 'db' ORDER BY created_at DESC LIMIT 1`
+      ).bind(userId, run.backup_filename || '').first<{ storage_path: string }>();
+      let backupPath = artifact?.storage_path || '';
       if (!backupPath && c.env.R2) {
-        const listing = await c.env.R2.list({ prefix: `backups/${userId}/` });
-        if (listing.objects.length > 0) {
-          const latest = listing.objects.sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime())[0];
-          backupPath = latest.key;
+        for (const prefix of [`beecount/backups/${userId}/`, `backups/${userId}/`]) {
+          const listing = await c.env.R2.list({ prefix });
+          if (listing.objects.length > 0) {
+            backupPath = listing.objects.sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime())[0].key;
+            break;
+          }
         }
       }
       if (!backupPath) throw new Error('No backup file found');
@@ -2194,9 +2146,9 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
   }
 
   const run = await db
-    .prepare('SELECT * FROM backup_runs WHERE id = ?')
+    .prepare('SELECT id, schedule_id, user_id, status, bytes_total, backup_filename FROM backup_runs WHERE id = ?')
     .bind(runId)
-    .first<{ id: number; schedule_id: number | null; backup_path: string | null; bytes_total: number | null }>();
+    .first<{ id: number; schedule_id: number | null; user_id: string | null; status: string; bytes_total: number | null; backup_filename: string | null }>();
 
   if (!run) {
     return c.json({ error: 'Backup run not found' }, 404);
@@ -2205,7 +2157,7 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
   const schedule = run.schedule_id
     ? await db.prepare('SELECT user_id FROM backup_schedules WHERE id = ?').bind(run.schedule_id).first<{ user_id: string }>()
     : null;
-  const backupUserId = schedule?.user_id || userId;
+  const backupUserId = schedule?.user_id || run.user_id || userId;
 
   const strRunId = String(runId);
 
@@ -2213,12 +2165,18 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
   try {
     const { performRestore } = await import('../lib/restore-service');
 
-    let backupPath = run.backup_path || '';
+    // 完整 R2 key 在 backup_artifacts.storage_path（backup_path 列已废弃）
+    const artifact = await db.prepare(
+      `SELECT storage_path FROM backup_artifacts WHERE user_id = ? AND file_name = ? AND kind = 'db' ORDER BY created_at DESC LIMIT 1`
+    ).bind(backupUserId, run.backup_filename || '').first<{ storage_path: string }>();
+    let backupPath = artifact?.storage_path || '';
     if (!backupPath && c.env.R2) {
-      const listing = await c.env.R2.list({ prefix: `backups/${backupUserId}/` });
-      if (listing.objects.length > 0) {
-        const latest = listing.objects.sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime())[0];
-        backupPath = latest.key;
+      for (const prefix of [`beecount/backups/${backupUserId}/`, `backups/${backupUserId}/`]) {
+        const listing = await c.env.R2.list({ prefix });
+        if (listing.objects.length > 0) {
+          backupPath = listing.objects.sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime())[0].key;
+          break;
+        }
       }
     }
     if (!backupPath) throw new Error('No backup file found');
@@ -2595,16 +2553,17 @@ backupRouter.post('/upload-db', async (c) => {
   const checksum = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', buffer)))
     .map(b => b.toString(16).padStart(2, '0')).join('');
   const fileName = file.name || `backup-${Date.now()}.db`;
-  const r2Key = `backups/${userId}/${fileName}`;
+  const r2Key = `beecount/backups/${userId}/${fileName}`;
 
   if (r2) {
     await r2.put(r2Key, buffer, { httpMetadata: { contentType: file.type || 'application/octet-stream' } });
   }
 
   const serverNow = new Date().toISOString();
-  await db.prepare(`INSERT INTO backup_snapshots (user_id, ledger_id, kind, file_name, content_type, checksum, size, created_at, note)
-    VALUES (?, ?, 'db', ?, ?, ?, ?, ?, ?)`)
-    .bind(userId, ledgerId || null, fileName, file.type || null, checksum, buffer.byteLength, serverNow, note).run();
+  // 对齐原版 backup_snapshots：文件元数据（kind/file_name/checksum/size）并入 snapshot_json
+  await db.prepare(`INSERT INTO backup_snapshots (user_id, ledger_id, snapshot_json, note, created_at)
+    VALUES (?, ?, ?, ?, ?)`)
+    .bind(userId, ledgerId || null, JSON.stringify({ kind: 'db', file_name: fileName, checksum, size: buffer.byteLength }), note, serverNow).run();
 
   // 备份产物记录（对齐原版 kind=db + checksum + storage_path）
   const artifactId = crypto.randomUUID();
@@ -2638,16 +2597,16 @@ backupRouter.post('/upload-snapshot', apiValidator('json', UploadSnapshotSchema)
   const checksum = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(jsonStr))))
     .map(b => b.toString(16).padStart(2, '0')).join('');
   const fileName = `snapshot-${Date.now()}.json`;
-  const r2Key = `backups/${userId}/${fileName}`;
+  const r2Key = `beecount/backups/${userId}/${fileName}`;
 
   if (r2) {
     await r2.put(r2Key, new TextEncoder().encode(jsonStr), { httpMetadata: { contentType: 'application/json' } });
   }
 
   const serverNow = new Date().toISOString();
-  await db.prepare(`INSERT INTO backup_snapshots (user_id, ledger_id, kind, file_name, content_type, checksum, size, created_at, note)
-    VALUES (?, ?, 'snapshot', ?, 'application/json', ?, ?, ?, ?)`)
-    .bind(userId, req.ledger_id, fileName, checksum, jsonStr.length, serverNow, req.note || null).run();
+  await db.prepare(`INSERT INTO backup_snapshots (user_id, ledger_id, snapshot_json, note, created_at)
+    VALUES (?, ?, ?, ?, ?)`)
+    .bind(userId, req.ledger_id, JSON.stringify({ kind: 'snapshot', file_name: fileName, checksum, size: jsonStr.length }), req.note || null, serverNow).run();
 
   // 备份产物记录（对齐原版 kind=snapshot + checksum + storage_path）
   const artifactId = crypto.randomUUID();
@@ -2676,8 +2635,8 @@ backupRouter.post('/restore/:runId', async (c) => {
   
   // 验证备份记录
   const run = await db.prepare(
-    'SELECT * FROM backup_runs WHERE id = ? AND user_id = ?'
-  ).bind(runId, userId).first<{ id: number; status: string; backup_path: string; backup_filename: string | null; bytes_total: number | null; started_at: string }>();
+    'SELECT id, status, user_id, backup_filename, bytes_total, started_at FROM backup_runs WHERE id = ? AND user_id = ?'
+  ).bind(runId, userId).first<{ id: number; status: string; user_id: string; backup_filename: string | null; bytes_total: number | null; started_at: string }>();
   
   if (!run) {
     return c.json({ error: 'Backup run not found' }, 404);
@@ -2687,7 +2646,12 @@ backupRouter.post('/restore/:runId', async (c) => {
     return c.json({ error: 'Backup run is not completed' }, 400);
   }
   
-  if (!run.backup_path) {
+  // 完整 R2 key 在 backup_artifacts.storage_path（backup_path 列已废弃）
+  const artifact = await db.prepare(
+    `SELECT storage_path FROM backup_artifacts WHERE user_id = ? AND file_name = ? AND kind = 'db' ORDER BY created_at DESC LIMIT 1`
+  ).bind(userId, run.backup_filename || '').first<{ storage_path: string }>();
+  const backupPath = artifact?.storage_path;
+  if (!backupPath) {
     return c.json({ error: 'No backup file found' }, 400);
   }
   
@@ -2697,7 +2661,7 @@ backupRouter.post('/restore/:runId', async (c) => {
     
     // 先尝试 R2
     if (r2) {
-      const r2Obj = await r2.get(run.backup_path);
+      const r2Obj = await r2.get(backupPath);
       if (r2Obj) {
         const buffer = await r2Obj.arrayBuffer();
         backupFile = new Uint8Array(buffer);
@@ -2715,7 +2679,7 @@ backupRouter.post('/restore/:runId', async (c) => {
       for (const target of targets.results) {
         const config = (() => { try { return JSON.parse(target.config_summary || '{}') as Record<string, string>; } catch { return {} as Record<string, string>; } })();
         const remoteConfig: Record<string, string> = { backend_type: target.backend_type, ...config };
-        backupFile = await downloadBackupFile(remoteConfig, run.backup_path);
+        backupFile = await downloadBackupFile(remoteConfig, backupPath);
         if (backupFile) break;
       }
     }
@@ -2728,7 +2692,7 @@ backupRouter.post('/restore/:runId', async (c) => {
       success: true,
       filename: run.backup_filename,
       size: backupFile.length,
-      backup_path: run.backup_path,
+      backup_path: backupPath,
       message: 'Backup file downloaded successfully.'
     });
   } catch (error) {
@@ -2745,19 +2709,23 @@ backupRouter.get('/restore/:runId/info', async (c) => {
   const userId = c.get('userId');
   
   const run = await db.prepare(
-    'SELECT * FROM backup_runs WHERE id = ? AND user_id = ?'
-  ).bind(runId, userId).first<{ id: number; status: string; backup_path: string; backup_filename: string | null; bytes_total: number | null; started_at: string }>();
+    'SELECT id, status, user_id, backup_filename, bytes_total, started_at FROM backup_runs WHERE id = ? AND user_id = ?'
+  ).bind(runId, userId).first<{ id: number; status: string; user_id: string; backup_filename: string | null; bytes_total: number | null; started_at: string }>();
   
   if (!run) {
     return c.json({ error: 'Backup run not found' }, 404);
   }
+  
+  const artifact = await db.prepare(
+    `SELECT storage_path FROM backup_artifacts WHERE user_id = ? AND file_name = ? AND kind = 'db' ORDER BY created_at DESC LIMIT 1`
+  ).bind(userId, run.backup_filename || '').first<{ storage_path: string }>();
   
   return c.json({
     id: run.id,
     filename: run.backup_filename,
     size: run.bytes_total,
     status: run.status,
-    backup_path: run.backup_path,
+    backup_path: artifact?.storage_path ?? null,
     created_at: run.started_at,
   });
 });

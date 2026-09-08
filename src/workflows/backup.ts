@@ -196,10 +196,10 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
 
       // 2. 更新 backup_runs 状态
       await db.prepare(
-        `UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, backup_path = ?, error_message = ?, log_text = ?
+        `UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, error_message = ?, log_text = ?
          WHERE id = ?`,
       ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
-            backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null,
+            backupResult.backupPath?.split('/').pop() || null,
             backupResult.success ? null : backupResult.message, logLines.join('\n'), runId).run();
 
       // 3. 每个远端创建 backup_run_targets 记录

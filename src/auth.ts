@@ -170,7 +170,6 @@ async function decodeJwtPayload(token: string, secret: string): Promise<Record<s
 export async function createAccessToken(
   userId: string,
   secret: string,
-  clientType: string = 'app',
   scopes: string[] = ['app_write'],
   expiresIn: number = 3600,
   tokenType: string = 'access'
@@ -179,7 +178,6 @@ export async function createAccessToken(
   const payload: Record<string, unknown> = {
     sub: userId,
     type: tokenType,
-    client_type: clientType,
     jti: randomUUID().replace(/-/g, ''),
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + expiresIn,
@@ -200,21 +198,20 @@ export async function createRefreshToken(
   userId: string,
   deviceId: string,
   db: D1Database,
-  clientType: string = 'app',
   scopes: string[] = ['app_write'],
   jwtSecret: string = ''
 ): Promise<{ id: string; token: string; expiresAt: Date }> {
   // 与原版对齐：refresh token 也是 JWT（type=refresh），不是随机 UUID
   const expiresIn = 30 * 24 * 60 * 60; // 30 天
-  const token = await createAccessToken(userId, jwtSecret, clientType, scopes, expiresIn, 'refresh');
+  const token = await createAccessToken(userId, jwtSecret, scopes, expiresIn, 'refresh');
   const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
   const expiresAt = new Date(Date.now() + expiresIn * 1000);
   const id = randomUUID();
 
   await db.prepare(`
-    INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at, client_type)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).bind(id, userId, deviceId, tokenHash, expiresAt.toISOString(), clientType).run();
+    INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).bind(id, userId, deviceId, tokenHash, expiresAt.toISOString()).run();
 
   return { id, token, expiresAt };
 }
@@ -223,7 +220,7 @@ export async function decodeRefreshToken(
   token: string,
   db: D1Database,
   jwtSecret?: string
-): Promise<{ valid: true; userId: string; deviceId: string; clientType: string; scopes: string[] } | { valid: false; reason: string }> {
+): Promise<{ valid: true; userId: string; deviceId: string; scopes: string[] } | { valid: false; reason: string }> {
   try {
     // 与原版对齐：先解码 JWT 获取 claims，再查 DB 做吊销检查
     const secret = jwtSecret || '';
@@ -234,7 +231,6 @@ export async function decodeRefreshToken(
     // 尝试解码 JWT，失败时仍然通过 DB 查找（兼容旧版空 payload）
     let payload: Record<string, unknown> | null = null;
     let userIdFromJwt: string | null = null;
-    let clientTypeFromJwt: string | null = null;
     let scopesFromJwt: string[] | null = null;
 
     try {
@@ -244,9 +240,6 @@ export async function decodeRefreshToken(
         // 只取标准 JWT 的 sub 字段
         if (payload.sub) {
           userIdFromJwt = String(payload.sub);
-        }
-        if (payload.client_type) {
-          clientTypeFromJwt = String(payload.client_type);
         }
         if (payload.type && payload.type === 'access') {
           return { valid: false, reason: 'Invalid token type' };
@@ -266,17 +259,17 @@ export async function decodeRefreshToken(
 
     // 查 DB 检查吊销和过期（与原版对齐：JWT + DB 混合验证）
     let result = await db.prepare(`
-      SELECT user_id, device_id, expires_at, client_type
+      SELECT user_id, device_id, expires_at
       FROM refresh_tokens
       WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?
-    `).bind(tokenHash, now).first<{ user_id: string; device_id: string; expires_at: string; client_type: string | null }>();
+    `).bind(tokenHash, now).first<{ user_id: string; device_id: string; expires_at: string }>();
 
     if (!result) {
       const graceResult = await db.prepare(`
-        SELECT user_id, device_id, expires_at, client_type
+        SELECT user_id, device_id, expires_at
         FROM refresh_tokens
         WHERE token_hash = ? AND revoked_at IS NOT NULL AND revoked_at > ? AND expires_at > ?
-      `).bind(tokenHash, graceCutoff, now).first<{ user_id: string; device_id: string; expires_at: string; client_type: string | null }>();
+      `).bind(tokenHash, graceCutoff, now).first<{ user_id: string; device_id: string; expires_at: string }>();
       if (graceResult) {
         result = graceResult;
       }
@@ -288,16 +281,13 @@ export async function decodeRefreshToken(
 
     // 用 DB 记录的 user_id 兜底（兼容 JWT payload 为空的情况）
     const userId = userIdFromJwt || result.user_id;
-    const isApp = result.client_type === 'web' ? false : true;
-    const defaultScopes = isApp ? ['app_write'] : ['web_read', 'web_write', 'ops_write'];
-    const scopes = scopesFromJwt || defaultScopes;
+    const scopes = scopesFromJwt || ['app_write'];
 
     return {
       valid: true,
       userId: userId,
       deviceId: result.device_id,
-      clientType: clientTypeFromJwt || result.client_type || (isApp ? 'app' : 'web'),
-      scopes: scopes,
+      scopes,
     };
   } catch (err) {
     return { valid: false, reason: (err as Error).message };

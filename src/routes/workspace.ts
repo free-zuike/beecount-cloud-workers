@@ -160,18 +160,18 @@ async function findLedgerForUser(
   db: D1Database,
   ledgerExternalId: string,
   userId: string,
-): Promise<{ id: string; user_id: string; external_id: string; name: string | null; currency: string; is_shared: number; month_start_day: number } | null> {
+): Promise<{ id: string; user_id: string; external_id: string; name: string | null; currency: string; month_start_day: number } | null> {
   const ledger = await db
-    .prepare('SELECT id, user_id, external_id, name, currency, is_shared, month_start_day FROM ledgers WHERE external_id = ?')
+    .prepare('SELECT id, user_id, external_id, name, currency, month_start_day FROM ledgers WHERE external_id = ?')
     .bind(ledgerExternalId)
-    .first<{ id: string; user_id: string; external_id: string; name: string | null; currency: string; is_shared: number; month_start_day: number }>();
+    .first<{ id: string; user_id: string; external_id: string; name: string | null; currency: string; month_start_day: number }>();
 
   if (!ledger) return null;
 
   if (ledger.user_id === userId) return ledger;
 
   const member = await db
-    .prepare('SELECT id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
     .bind(ledger.id, userId)
     .first();
 
@@ -1102,9 +1102,9 @@ workspaceRouter.post('/ledgers/:id/invites', zValidator('json', InviteSchema), a
   const req = c.req.valid('json');
 
   const ledger = await db
-    .prepare('SELECT id, user_id, is_shared FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .prepare('SELECT id, user_id FROM ledgers WHERE user_id = ? AND external_id = ?')
     .bind(userId, ledgerExternalId)
-    .first<{ id: string; user_id: string; is_shared: number }>();
+    .first<{ id: string; user_id: string }>();
 
   if (!ledger) {
     return c.json({ error: 'Ledger not found or not owned by you' }, 404);
@@ -1139,7 +1139,7 @@ workspaceRouter.post('/ledgers/:id/invites', zValidator('json', InviteSchema), a
   let attempts = 0;
   while (attempts < 10) {
     const existing = await db
-      .prepare('SELECT id FROM ledger_invites WHERE code = ?')
+      .prepare('SELECT code FROM ledger_invites WHERE code = ?')
       .bind(inviteCode)
       .first();
     if (!existing) break;
@@ -1151,15 +1151,10 @@ workspaceRouter.post('/ledgers/:id/invites', zValidator('json', InviteSchema), a
 
   await db
     .prepare(
-      `INSERT INTO ledger_invites (id, ledger_id, code, target_role, invited_by, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO ledger_invites (code, ledger_id, target_role, invited_by, expires_at)
+       VALUES (?, ?, ?, ?, ?)`
     )
-    .bind(randomUUID(), ledger.id, inviteCode, req.target_role, userId, expiresAt)
-    .run();
-
-  await db
-    .prepare('UPDATE ledgers SET is_shared = 1 WHERE id = ?')
-    .bind(ledger.id)
+    .bind(inviteCode, ledger.id, req.target_role, userId, expiresAt)
     .run();
 
   await insertAuditLog({
@@ -1289,7 +1284,7 @@ workspaceRouter.post('/invites/:code/preview', async (c) => {
 
   const invite = await db
     .prepare(
-      `SELECT li.id, li.code, li.target_role, li.expires_at, li.used_at, li.invited_by,
+      `SELECT li.code, li.target_role, li.expires_at, li.used_at, li.invited_by,
               l.external_id, l.name as ledger_name, l.currency,
               u.email as owner_email,
               p.display_name as owner_display_name
@@ -1357,7 +1352,7 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
 
   const invite = await db
     .prepare(
-      `SELECT li.id, li.ledger_id, li.code, li.target_role, li.expires_at, li.used_at, li.invited_by,
+      `SELECT li.ledger_id, li.code, li.target_role, li.expires_at, li.used_at, li.invited_by,
               l.external_id, l.name as ledger_name, l.user_id as owner_user_id
        FROM ledger_invites li
        JOIN ledgers l ON li.ledger_id = l.id
@@ -1394,7 +1389,7 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
   }
 
   const existingMember = await db
-    .prepare('SELECT id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
     .bind(invite.ledger_id, userId)
     .first();
 
@@ -1414,8 +1409,8 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
   // 并发保护：用 try-catch 捕获 UNIQUE 约束冲突（与原版 SELECT FOR UPDATE 对齐）
   try {
     await db
-      .prepare('INSERT INTO ledger_members (ledger_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)')
-      .bind(invite.ledger_id, userId, invite.target_role, new Date().toISOString())
+      .prepare('INSERT INTO ledger_members (ledger_id, user_id, role, invited_by, joined_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(invite.ledger_id, userId, invite.target_role, invite.invited_by, new Date().toISOString())
       .run();
   } catch (err) {
     if ((err as Error).message?.includes('UNIQUE')) {
@@ -1428,8 +1423,8 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
   }
 
   await db
-    .prepare('UPDATE ledger_invites SET used_at = ?, used_by = ? WHERE id = ?')
-    .bind(nowUtc(), userId, invite.id)
+    .prepare('UPDATE ledger_invites SET used_at = ?, used_by = ? WHERE code = ?')
+    .bind(nowUtc(), userId, invite.code)
     .run();
 
   // 查询 member_count 和 currency（与原版对齐）
@@ -1485,7 +1480,7 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
 
   const invite = await db
     .prepare(
-      `SELECT li.id, li.ledger_id, li.code, li.target_role, li.expires_at, li.used_at, li.invited_by,
+      `SELECT li.ledger_id, li.code, li.target_role, li.expires_at, li.used_at, li.invited_by,
               l.external_id, l.name as ledger_name, l.user_id as owner_user_id
        FROM ledger_invites li
        JOIN ledgers l ON li.ledger_id = l.id
@@ -1519,7 +1514,7 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
   }
 
   const existingMember = await db
-    .prepare('SELECT id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
     .bind(invite.ledger_id, userId)
     .first();
 
@@ -1532,8 +1527,8 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
   // 并发保护：try-catch 捕获 UNIQUE 约束冲突
   try {
     await db
-      .prepare('INSERT INTO ledger_members (ledger_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)')
-      .bind(invite.ledger_id, userId, invite.target_role, nowUtc())
+      .prepare('INSERT INTO ledger_members (ledger_id, user_id, role, invited_by, joined_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(invite.ledger_id, userId, invite.target_role, invite.invited_by, nowUtc())
       .run();
   } catch (err) {
     if ((err as Error).message?.includes('UNIQUE')) {
@@ -1578,9 +1573,14 @@ workspaceRouter.get('/ledgers/:id/members', async (c) => {
   const db = c.env.DB;
   const ledgerExternalId = c.req.param('id');
 
+  // is_shared 由成员表派生：owner 或任一成员可访问（修复双来源不一致）
   const ledger = await db
-    .prepare('SELECT id, user_id FROM ledgers WHERE external_id = ? AND (user_id = ? OR is_shared = 1)')
-    .bind(ledgerExternalId, userId)
+    .prepare(
+      `SELECT l.id, l.user_id FROM ledgers l
+       WHERE l.external_id = ?
+         AND (l.user_id = ? OR EXISTS (SELECT 1 FROM ledger_members lm WHERE lm.ledger_id = l.id AND lm.user_id = ?))`
+    )
+    .bind(ledgerExternalId, userId, userId)
     .first<{ id: string; user_id: string }>();
 
   if (!ledger) {
@@ -2089,7 +2089,7 @@ workspaceRouter.post('/ledgers/:id/transfer', zValidator('json', TransferSchema)
     .run();
 
   const existingOwnerMember = await db
-    .prepare('SELECT id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
     .bind(ledger.id, userId)
     .first();
 

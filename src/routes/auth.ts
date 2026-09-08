@@ -169,7 +169,6 @@ authRouter.post('/register', zValidator('json', z.object({
   device_id: z.string().optional(),
   device_name: z.string().optional().default('Unknown Device'),
   platform: z.string().optional().default('unknown'),
-  client_type: z.string().optional(),
   app_version: z.string().optional(),
   os_version: z.string().optional(),
   device_model: z.string().optional(),
@@ -187,12 +186,11 @@ authRouter.post('/register', zValidator('json', z.object({
 
   const db = c.env.DB;
 
-  const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType, app_version: appVersion, os_version: osVersion, device_model: deviceModel } = c.req.valid('json');
+  const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, app_version: appVersion, os_version: osVersion, device_model: deviceModel } = c.req.valid('json');
   const email = rawEmail.trim().toLowerCase();
   const resolvedDeviceId = deviceId || randomUUID();
   const jwtSecret = c.env.JWT_SECRET;
-  const isApp = clientType !== 'web';
-  const tokenScopes = isApp ? ['app_write'] : ['web_read', 'web_write', 'ops_write'];
+  const tokenScopes = ['app_write'];
 
   const existingUser = await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
   if (existingUser) {
@@ -219,11 +217,11 @@ authRouter.post('/register', zValidator('json', z.object({
     db, userId, resolvedDeviceId, deviceName, platform, appVersion, osVersion, deviceModel, c.req.header('CF-Connecting-IP')
   );
 
-  const accessToken = await createAccessToken(userId, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
+  const accessToken = await createAccessToken(userId, jwtSecret, tokenScopes);
 
   // 创建 refresh token（JWT + hash 在 batch 外计算，INSERT 与 users/profiles 同事务）
   const refreshExpiresIn = 30 * 24 * 60 * 60;
-  const refreshTokenValue = await createAccessToken(userId, jwtSecret, isApp ? 'app' : 'web', tokenScopes, refreshExpiresIn, 'refresh');
+  const refreshTokenValue = await createAccessToken(userId, jwtSecret, tokenScopes, refreshExpiresIn, 'refresh');
   const refreshTokenHash = Array.from(new Uint8Array(await sha256(new TextEncoder().encode(refreshTokenValue)))).map(b => b.toString(16).padStart(2, '0')).join('');
   const refreshExpiresAt = new Date(Date.now() + refreshExpiresIn * 1000);
   const refreshTokenId = randomUUID();
@@ -239,9 +237,9 @@ authRouter.post('/register', zValidator('json', z.object({
        VALUES (?, ?, ?)`
     ).bind(userId, email, DEFAULT_AI_CONFIG),
     db.prepare(
-      `INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at, client_type)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(refreshTokenId, userId, finalDeviceId, refreshTokenHash, refreshExpiresAt.toISOString(), isApp ? 'app' : 'web'),
+      `INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(refreshTokenId, userId, finalDeviceId, refreshTokenHash, refreshExpiresAt.toISOString()),
   ]);
 
   // 不在注册时创建默认账本和分类 — 由 mobile push 时自动创建
@@ -264,7 +262,6 @@ authRouter.post('/login', zValidator('json', z.object({
   device_id: z.string().optional(),
   device_name: z.string().optional().default('Unknown Device'),
   platform: z.string().optional().default('unknown'),
-  client_type: z.string().optional(),
   app_version: z.string().optional(),
   os_version: z.string().optional(),
   device_model: z.string().optional()
@@ -273,12 +270,11 @@ authRouter.post('/login', zValidator('json', z.object({
   if (isRateLimited('login', clientIp)) {
     return c.json({ error: 'Too many requests' }, 429);
   }
-  const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, client_type: clientType, app_version: appVersion, os_version: osVersion, device_model: deviceModel } = c.req.valid('json');
+  const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, app_version: appVersion, os_version: osVersion, device_model: deviceModel } = c.req.valid('json');
   const email = rawEmail.trim().toLowerCase();
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
-  const isApp = clientType !== 'web';
-  const tokenScopes = isApp ? ['app_write'] : ['web_read', 'web_write', 'ops_write'];
+  const tokenScopes = ['app_write'];
 
   const user = await db.prepare('SELECT id, email, password_hash, is_enabled, is_admin, totp_enabled FROM users WHERE email = ?').bind(email).first<{ id: string, email: string, password_hash: string, is_enabled: number, is_admin: number, totp_enabled: number }>();
   if (!user) {
@@ -296,7 +292,7 @@ authRouter.post('/login', zValidator('json', z.object({
 
   if (user.totp_enabled) {
     // 与原版对齐：2FA challenge 时不创建设备，仅在 /2fa/verify 时创建
-    const challengeToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', [], 300, 'totp_challenge');
+    const challengeToken = await createAccessToken(user.id, jwtSecret, [], 300, 'totp_challenge');
     return c.json({
       requires_2fa: true,
       challenge_token: challengeToken,
@@ -320,20 +316,20 @@ authRouter.post('/login', zValidator('json', z.object({
     db, user.id, deviceId || randomUUID(), deviceName, platform, appVersion, osVersion, deviceModel, c.req.header('CF-Connecting-IP')
   );
 
-  const accessToken = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes);
+  const accessToken = await createAccessToken(user.id, jwtSecret, tokenScopes);
 
   // 创建 refresh token + 清理旧 token 同事务原子写入（对齐原版单 commit）
   const refreshExpiresIn = 30 * 24 * 60 * 60;
-  const refreshTokenValue = await createAccessToken(user.id, jwtSecret, isApp ? 'app' : 'web', tokenScopes, refreshExpiresIn, 'refresh');
+  const refreshTokenValue = await createAccessToken(user.id, jwtSecret, tokenScopes, refreshExpiresIn, 'refresh');
   const refreshTokenHash = Array.from(new Uint8Array(await sha256(new TextEncoder().encode(refreshTokenValue)))).map(b => b.toString(16).padStart(2, '0')).join('');
   const refreshExpiresAt = new Date(Date.now() + refreshExpiresIn * 1000);
   const refreshTokenId = randomUUID();
 
   await db.batch([
     db.prepare(
-      `INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at, client_type)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(refreshTokenId, user.id, resolvedDeviceId, refreshTokenHash, refreshExpiresAt.toISOString(), isApp ? 'app' : 'web'),
+      `INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(refreshTokenId, user.id, resolvedDeviceId, refreshTokenHash, refreshExpiresAt.toISOString()),
     db.prepare(
       "DELETE FROM refresh_tokens WHERE user_id = ? AND device_id = ? AND (revoked_at IS NOT NULL OR expires_at < datetime('now'))"
     ).bind(user.id, resolvedDeviceId),
@@ -374,9 +370,9 @@ authRouter.post('/refresh', zValidator('json', z.object({
       return c.json({ error: decoded.reason }, 401);
     }
 
-    const { userId: tokenUserId, deviceId, clientType } = decoded;
+    const { userId: tokenUserId, deviceId } = decoded;
     const tokenScopes = decoded.scopes;
-    serverLogger.info('src.routers.auth', `[REFRESH] OK: user=${tokenUserId} device=${deviceId} client=${clientType}`);
+    serverLogger.info('src.routers.auth', `[REFRESH] OK: user=${tokenUserId} device=${deviceId}`);
 
     // 与原版对齐：从 JWT claims 获取 user_id（不信任 DB）
     const user = await db.prepare('SELECT id, email, is_admin, is_enabled FROM users WHERE id = ?').bind(tokenUserId).first<{ id: string; email: string; is_admin: number; is_enabled: number }>();
@@ -410,14 +406,13 @@ authRouter.post('/refresh', zValidator('json', z.object({
       }
     }
 
-    const isApp = clientType !== 'web';
-    const tokenScopesFinal = tokenScopes && tokenScopes.length > 0 ? tokenScopes : (isApp ? ['app_write'] : ['web_read', 'web_write', 'ops_write']);
+    const tokenScopesFinal = tokenScopes && tokenScopes.length > 0 ? tokenScopes : ['app_write'];
 
-    const accessToken = await createAccessToken(tokenUserId, jwtSecret, isApp ? 'app' : 'web', tokenScopesFinal);
+    const accessToken = await createAccessToken(tokenUserId, jwtSecret, tokenScopesFinal);
 
     // 创建新 refresh token + 吊销旧 token（同事务原子写入，对齐原版单 commit）
     const refreshExpiresIn = 30 * 24 * 60 * 60;
-    const newRefreshTokenValue = await createAccessToken(tokenUserId, jwtSecret, isApp ? 'app' : 'web', tokenScopesFinal, refreshExpiresIn, 'refresh');
+    const newRefreshTokenValue = await createAccessToken(tokenUserId, jwtSecret, tokenScopesFinal, refreshExpiresIn, 'refresh');
     const newRefreshTokenHash = Array.from(new Uint8Array(await sha256(new TextEncoder().encode(newRefreshTokenValue)))).map(b => b.toString(16).padStart(2, '0')).join('');
     const refreshExpiresAt = new Date(Date.now() + refreshExpiresIn * 1000);
     const newRefreshTokenId = randomUUID();
@@ -426,9 +421,9 @@ authRouter.post('/refresh', zValidator('json', z.object({
 
     refreshStmts.push(
       db.prepare(
-        `INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at, client_type)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      ).bind(newRefreshTokenId, tokenUserId, deviceId, newRefreshTokenHash, refreshExpiresAt.toISOString(), clientType),
+        `INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at)
+         VALUES (?, ?, ?, ?, ?)`
+      ).bind(newRefreshTokenId, tokenUserId, deviceId, newRefreshTokenHash, refreshExpiresAt.toISOString()),
       db.prepare(
         `UPDATE refresh_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL`
       ).bind(nowIso, oldRefreshTokenHash),

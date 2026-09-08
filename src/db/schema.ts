@@ -3,7 +3,7 @@
  * 每次变更下方 DDL（新建表/加列/索引/迁移）时必须递增，
  * 否则已初始化的库不会重放 DDL。
  */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export async function initializeDatabase(db: D1Database): Promise<void> {
   try {
@@ -90,7 +90,6 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         token_hash TEXT UNIQUE NOT NULL,
         expires_at TEXT NOT NULL,
         revoked_at TEXT,
-        client_type TEXT DEFAULT 'app',
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
     `).run();
@@ -98,11 +97,6 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_device_id ON refresh_tokens(device_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token_hash)').run();
-
-    // client_type 列后加的，旧表需要 ALTER
-    try {
-      await db.prepare("ALTER TABLE refresh_tokens ADD COLUMN client_type TEXT DEFAULT 'app'").run();
-    } catch { /* 列已存在则忽略 */ }
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS personal_access_tokens (
@@ -154,9 +148,6 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
         ledger_id TEXT,
         action TEXT NOT NULL,
-        entity_type TEXT,
-        entity_id TEXT,
-        details_json TEXT,
         metadata_json TEXT,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
@@ -166,12 +157,6 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     const safeAddColumn = async (table: string, column: string, def: string) => {
       try { await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`).run(); } catch { /* exists */ }
     };
-    await safeAddColumn('audit_logs', 'entity_type', 'TEXT');
-    await safeAddColumn('audit_logs', 'entity_id', 'TEXT');
-    await safeAddColumn('audit_logs', 'details_json', 'TEXT');
-    await safeAddColumn('audit_logs', 'metadata_json', 'TEXT');
-    await safeAddColumn('audit_logs', 'level', 'TEXT DEFAULT \'INFO\'');
-    await safeAddColumn('audit_logs', 'logger', 'TEXT');
 
     // read_tx_projection: add exclude columns
     await safeAddColumn('read_tx_projection', 'exclude_from_stats', 'BOOLEAN DEFAULT 0');
@@ -210,35 +195,23 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         external_id TEXT NOT NULL,
         name TEXT,
         currency TEXT DEFAULT 'CNY' NOT NULL,
-        role TEXT DEFAULT 'owner' NOT NULL,
-        is_shared BOOLEAN DEFAULT 0 NOT NULL,
         month_start_day INTEGER DEFAULT 1,
-        invite_code TEXT,
-        invite_expires_at TEXT,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
         UNIQUE(user_id, external_id)
       )
     `).run();
 
-    // Migrate ledgers columns before indexes
-    await safeAddColumn('ledgers', 'role', "TEXT DEFAULT 'owner' NOT NULL");
-    await safeAddColumn('ledgers', 'is_shared', 'BOOLEAN DEFAULT 0 NOT NULL');
-    await safeAddColumn('ledgers', 'invite_code', 'TEXT');
-    await safeAddColumn('ledgers', 'invite_expires_at', 'TEXT');
-    await safeAddColumn('ledgers', 'month_start_day', 'INTEGER DEFAULT 1');
-
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledgers_user_id ON ledgers(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledgers_external_id ON ledgers(external_id)').run();
-    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledgers_invite_code ON ledgers(invite_code)').run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS ledger_members (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
         ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         role TEXT DEFAULT 'editor' NOT NULL,
+        invited_by TEXT REFERENCES users(id) ON DELETE SET NULL,
         joined_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
-        UNIQUE(ledger_id, user_id)
+        PRIMARY KEY (ledger_id, user_id)
       )
     `).run();
 
@@ -247,19 +220,16 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS ledger_invites (
-        id TEXT PRIMARY KEY,
+        code TEXT PRIMARY KEY,
         ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
-        code TEXT UNIQUE NOT NULL,
+        invited_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         target_role TEXT DEFAULT 'editor' NOT NULL,
-        invited_by TEXT NOT NULL REFERENCES users(id),
         expires_at TEXT NOT NULL,
         used_at TEXT,
-        used_by TEXT REFERENCES users(id),
+        used_by TEXT REFERENCES users(id) ON DELETE SET NULL,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
     `).run();
-
-    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_invites_code ON ledger_invites(code)').run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS sync_changes (
@@ -326,11 +296,6 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
         snapshot_json TEXT NOT NULL,
         note TEXT,
-        kind TEXT DEFAULT 'snapshot',
-        file_name TEXT,
-        content_type TEXT,
-        checksum TEXT,
-        size INTEGER,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
     `).run();
@@ -362,15 +327,17 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_remotes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         name TEXT NOT NULL,
         backend_type TEXT NOT NULL,
-        config_summary TEXT NOT NULL,
+        config_summary TEXT,
         encrypted BOOLEAN DEFAULT 0 NOT NULL,
         last_test_at TEXT,
         last_test_ok BOOLEAN,
         last_test_error TEXT,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
-        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        UNIQUE(user_id, name)
       )
     `).run();
 
@@ -382,11 +349,9 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         name TEXT NOT NULL,
         user_id TEXT NOT NULL,
         cron_expr TEXT NOT NULL,
-        remote_ids TEXT,
         retention_days INTEGER DEFAULT 30,
         include_attachments BOOLEAN DEFAULT 1 NOT NULL,
         enabled BOOLEAN DEFAULT 1 NOT NULL,
-        timezone_offset INTEGER DEFAULT 0,
         next_run_at TEXT,
         last_run_at TEXT,
         last_run_status TEXT,
@@ -403,21 +368,17 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         schedule_id INTEGER REFERENCES backup_schedules(id) ON DELETE SET NULL,
         user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
-        remote_id INTEGER REFERENCES backup_remotes(id) ON DELETE SET NULL,
         status TEXT NOT NULL DEFAULT 'pending',
         error_message TEXT,
         log_text TEXT,
         bytes_total INTEGER,
         backup_filename TEXT,
-        backup_path TEXT,
         started_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
         finished_at TEXT
       )
     `).run();
 
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_runs_schedule_id ON backup_runs(schedule_id)').run();
-    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_runs_ledger_id ON backup_runs(ledger_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_runs_status ON backup_runs(status)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at DESC)').run();
 
@@ -738,6 +699,141 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     try {
       await db.prepare("ALTER TABLE user_category_projection ADD COLUMN parent_sync_id TEXT").run();
     } catch { /* 列已存在则忽略 */ }
+
+    // ================= SCHEMA v3：对齐原版 Alembic 最终结构 =================
+    // 1) 重建 ledger_members：复合主键 (ledger_id,user_id) + 补 invited_by（从 ledger_invites 回填邀请人）
+    // 2) 重建 ledger_invites：code 改主键，去自增 id
+    // 3) 重建 backup_remotes：加 user_id（存量全局远端回填给管理员）+ UNIQUE(user_id,name)
+    // 4) 老 backup_runs 的完整 R2 key 回填到 backup_artifacts.storage_path（删列后恢复仍可定位文件）
+    // 5) 删冗余列：ledgers(role/is_shared/invite_code/invite_expires_at——可从成员/邀请派生)、
+    //    refresh_tokens(client_type)、audit_logs(entity_type/entity_id/details_json/level/logger)、
+    //    backup_schedules(remote_ids→M2M 表、timezone_offset→system_settings 时区)、
+    //    backup_runs(ledger_id→artifacts.ledger_id、remote_id→run_targets.remote_id、backup_path→artifacts.storage_path)、
+    //    backup_snapshots(kind/file_name/content_type/checksum/size→backup_artifacts 同名字段)
+    const tableHasColumn = async (table: string, col: string) => {
+      try { await db.prepare(`SELECT ${col} FROM ${table} LIMIT 1`).first(); return true; } catch { return false; }
+    };
+    const safeDropColumn = async (table: string, column: string) => {
+      try { await db.prepare(`ALTER TABLE ${table} DROP COLUMN ${column}`).run(); } catch { /* 列不存在则忽略 */ }
+    };
+
+    // 1) ledger_members 重建（旧结构有自增 id 列才需要）
+    if (await tableHasColumn('ledger_members', 'id')) {
+      await db.prepare(`
+        CREATE TABLE ledger_members_new (
+          ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          role TEXT DEFAULT 'editor' NOT NULL,
+          invited_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+          joined_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+          PRIMARY KEY (ledger_id, user_id)
+        )
+      `).run();
+      await db.prepare(
+        `INSERT OR IGNORE INTO ledger_members_new (ledger_id, user_id, role, invited_by, joined_at)
+         SELECT m.ledger_id, m.user_id, m.role,
+                (SELECT i.invited_by FROM ledger_invites i
+                  WHERE i.ledger_id = m.ledger_id AND i.used_by = m.user_id AND i.used_at IS NOT NULL
+                  ORDER BY i.expires_at DESC LIMIT 1),
+                m.joined_at
+         FROM ledger_members m`
+      ).run();
+      await db.prepare('DROP TABLE ledger_members').run();
+      await db.prepare('ALTER TABLE ledger_members_new RENAME TO ledger_members').run();
+      await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_members_ledger_id ON ledger_members(ledger_id)').run();
+      await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_members_user_id ON ledger_members(user_id)').run();
+    }
+
+    // 2) ledger_invites 重建（旧结构有 id 列才需要）
+    if (await tableHasColumn('ledger_invites', 'id')) {
+      await db.prepare(`
+        CREATE TABLE ledger_invites_new (
+          code TEXT PRIMARY KEY,
+          ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+          invited_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          target_role TEXT DEFAULT 'editor' NOT NULL,
+          expires_at TEXT NOT NULL,
+          used_at TEXT,
+          used_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+        )
+      `).run();
+      await db.prepare(
+        `INSERT OR IGNORE INTO ledger_invites_new (code, ledger_id, invited_by, target_role, expires_at, used_at, used_by, created_at)
+         SELECT code, ledger_id, invited_by, target_role, expires_at, used_at, used_by, created_at FROM ledger_invites`
+      ).run();
+      await db.prepare('DROP TABLE ledger_invites').run();
+      await db.prepare('ALTER TABLE ledger_invites_new RENAME TO ledger_invites').run();
+      await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_invites_code ON ledger_invites(code)').run();
+    }
+
+    // 3) backup_remotes 重建（旧结构无 user_id 才需要）
+    if (!(await tableHasColumn('backup_remotes', 'user_id'))) {
+      await db.prepare(`
+        CREATE TABLE backup_remotes_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          backend_type TEXT NOT NULL,
+          config_summary TEXT,
+          encrypted BOOLEAN DEFAULT 0 NOT NULL,
+          last_test_at TEXT,
+          last_test_ok BOOLEAN,
+          last_test_error TEXT,
+          created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+          updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+          UNIQUE(user_id, name)
+        )
+      `).run();
+      await db.prepare(
+        `INSERT OR IGNORE INTO backup_remotes_new (id, user_id, name, backend_type, config_summary, encrypted, last_test_at, last_test_ok, last_test_error, created_at, updated_at)
+         SELECT r.id,
+                COALESCE((SELECT u.id FROM users u WHERE u.is_admin = 1 ORDER BY u.created_at LIMIT 1),
+                         (SELECT u.id FROM users u ORDER BY u.created_at LIMIT 1), ''),
+                r.name, r.backend_type, r.config_summary, r.encrypted, r.last_test_at, r.last_test_ok,
+                r.last_test_error, r.created_at, r.updated_at
+         FROM backup_remotes r`
+      ).run();
+      await db.prepare('DROP TABLE backup_remotes').run();
+      await db.prepare('ALTER TABLE backup_remotes_new RENAME TO backup_remotes').run();
+      await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_remotes_backend_type ON backup_remotes(backend_type)').run();
+    }
+
+    // 4) 老 backup_runs 的 R2 key 回填到 backup_artifacts（删 backup_path 前执行）
+    if (await tableHasColumn('backup_runs', 'backup_path')) {
+      await db.prepare(
+        `INSERT OR IGNORE INTO backup_artifacts (id, user_id, ledger_id, kind, file_name, storage_path, content_type, checksum_sha256, size_bytes, metadata_json, created_at)
+         SELECT 'run-' || run.id, run.user_id, run.ledger_id, 'db', run.backup_filename, run.backup_path, NULL, '', run.bytes_total, NULL, run.started_at
+         FROM backup_runs run
+         WHERE run.backup_path IS NOT NULL AND run.backup_path != ''
+           AND NOT EXISTS (SELECT 1 FROM backup_artifacts a WHERE a.storage_path = run.backup_path)`
+      ).run();
+    }
+
+    // 5) 删冗余列（先删依赖它们的索引）
+    try { await db.prepare('DROP INDEX IF EXISTS idx_ledgers_invite_code').run(); } catch {}
+    await safeDropColumn('ledgers', 'role');
+    await safeDropColumn('ledgers', 'is_shared');
+    await safeDropColumn('ledgers', 'invite_code');
+    await safeDropColumn('ledgers', 'invite_expires_at');
+    await safeDropColumn('refresh_tokens', 'client_type');
+    try { await db.prepare('DROP INDEX IF EXISTS idx_audit_logs_entity').run(); } catch {}
+    await safeDropColumn('audit_logs', 'entity_type');
+    await safeDropColumn('audit_logs', 'entity_id');
+    await safeDropColumn('audit_logs', 'details_json');
+    await safeDropColumn('audit_logs', 'level');
+    await safeDropColumn('audit_logs', 'logger');
+    await safeDropColumn('backup_schedules', 'remote_ids');
+    await safeDropColumn('backup_schedules', 'timezone_offset');
+    try { await db.prepare('DROP INDEX IF EXISTS idx_backup_runs_ledger_id').run(); } catch {}
+    await safeDropColumn('backup_runs', 'ledger_id');
+    await safeDropColumn('backup_runs', 'remote_id');
+    await safeDropColumn('backup_runs', 'backup_path');
+    await safeDropColumn('backup_snapshots', 'kind');
+    await safeDropColumn('backup_snapshots', 'file_name');
+    await safeDropColumn('backup_snapshots', 'content_type');
+    await safeDropColumn('backup_snapshots', 'checksum');
+    await safeDropColumn('backup_snapshots', 'size');
 
     // 全部 DDL 完成后记录版本，后续冷启动直接短路
     await db.prepare(

@@ -963,6 +963,30 @@ export async function uploadPreparedBackup(
     }
   }
 
+  // 4.1 备份产物记录（对齐原版 backup_artifacts）：完整存储 key 落库，
+  // 恢复时通过 storage_path 定位文件（backup_runs.backup_path 列已废弃）
+  if (backupPath) {
+    try {
+      const artifactId = crypto.randomUUID();
+      await db.prepare(
+        `INSERT OR IGNORE INTO backup_artifacts (id, user_id, ledger_id, kind, file_name, storage_path, content_type, checksum_sha256, size_bytes, metadata_json, created_at)
+         VALUES (?, ?, ?, 'db', ?, ?, ?, '', ?, ?, ?)`
+      ).bind(
+        artifactId,
+        userId,
+        ledgerId === 'global' ? null : ledgerId,
+        backupPath.split('/').pop() || null,
+        backupPath,
+        null,
+        backupBytes.length,
+        JSON.stringify({ run_id: runId }),
+        new Date().toISOString(),
+      ).run();
+    } catch (err) {
+      logWrap(`[Backup] Artifact record failed: ${(err as Error).message}`);
+    }
+  }
+
   // 5. 附件已打包进 backup.zip / tar.gz，无需单独重新上传到 R2（原残留逻辑已删）
   // 6. 保留策略（只�?schedule 模式且有成功上传时执行）
   if (retentionDays && retentionDays > 0 && successful.length > 0) {

@@ -162,7 +162,7 @@ function extractJson(text: string): any {
 
 // 原版 _self_call：用 JWT 调用 write router 端点，确保走完整写路径（验证 + 审计 + WS 广播）
 export async function selfCall(method: string, path: string, env: { JWT_SECRET: string }, baseUrl: string, userId: string, body: any): Promise<any> {
-  const token = await createAccessToken(userId, env.JWT_SECRET, 'app', ['app_write'], 60);
+  const token = await createAccessToken(userId, env.JWT_SECRET, ['app_write'], 60);
   const url = `${baseUrl}${path}`;
   const res = await fetch(url, {
     method,
