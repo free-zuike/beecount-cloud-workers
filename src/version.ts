@@ -5,6 +5,6 @@
  * CI/CD 通过 wrangler.toml [vars] 注入 APP_VERSION 覆盖此值。
  */
 const FALLBACK_VERSION = '1.0.0';
-export const APP_VERSION = '1.6.5';
+export const APP_VERSION = '1.6.6';
 
 export const APP_NAME = 'BeeCount Cloud';
