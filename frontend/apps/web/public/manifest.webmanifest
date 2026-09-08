@@ -1,20 +1,68 @@
 {
   "id": "/?source=pwa",
   "name": "蜜蜂记账",
+  "name_localized": {
+    "zh-TW": {
+      "value": "蜜蜂記帳",
+      "lang": "zh-TW",
+      "dir": "ltr"
+    },
+    "en": {
+      "value": "BeeCount",
+      "lang": "en-US",
+      "dir": "ltr"
+    }
+  },
   "short_name": "蜜蜂记账",
+  "short_name_localized": {
+    "zh-TW": {
+      "value": "蜜蜂記帳",
+      "lang": "zh-TW",
+      "dir": "ltr"
+    },
+    "en": {
+      "value": "BeeCount",
+      "lang": "en-US",
+      "dir": "ltr"
+    }
+  },
   "description": "自部署的个人记账云 · 移动端 / 网页端实时同步",
+  "description_localized": {
+    "zh-TW": {
+      "value": "自部署的個人記帳雲 · 行動版 / 網頁版即時同步",
+      "lang": "zh-TW",
+      "dir": "ltr"
+    },
+    "en": {
+      "value": "Self-hosted personal bookkeeping cloud · Real-time sync between mobile / web",
+      "lang": "en-US",
+      "dir": "ltr"
+    }
+  },
   "lang": "zh-CN",
   "dir": "ltr",
   "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone", "minimal-ui", "browser"],
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui",
+    "browser"
+  ],
   "orientation": "any",
   "background_color": "#000000",
   "theme_color": "#F59E0B",
-  "categories": ["finance", "productivity", "utilities"],
+  "categories": [
+    "finance",
+    "productivity",
+    "utilities"
+  ],
   "launch_handler": {
-    "client_mode": ["focus-existing", "auto"]
+    "client_mode": [
+      "focus-existing",
+      "auto"
+    ]
   },
   "icons": [
     {
@@ -51,8 +99,44 @@
   "shortcuts": [
     {
       "name": "记一笔",
+      "name_localized": {
+        "zh-TW": {
+          "value": "記一筆",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "Add Transaction",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
       "short_name": "记账",
+      "short_name_localized": {
+        "zh-TW": {
+          "value": "記帳",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "Bookkeeping",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
       "description": "快速新建一笔交易",
+      "description_localized": {
+        "zh-TW": {
+          "value": "快速新增一筆交易",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "Quickly add a transaction",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
       "url": "/app/transactions?action=quick-add&source=shortcut",
       "icons": [
         {
@@ -64,8 +148,44 @@
     },
     {
       "name": "今日账单",
+      "name_localized": {
+        "zh-TW": {
+          "value": "今日帳單",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "Today's Transactions",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
       "short_name": "今日",
+      "short_name_localized": {
+        "zh-TW": {
+          "value": "今日",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "Today",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
       "description": "查看今天的所有交易",
+      "description_localized": {
+        "zh-TW": {
+          "value": "查看今天的所有交易",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "View all transactions from today",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
       "url": "/app/transactions?range=today&source=shortcut",
       "icons": [
         {
@@ -77,8 +197,44 @@
     },
     {
       "name": "本月预算",
+      "name_localized": {
+        "zh-TW": {
+          "value": "本月預算",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "This Month's Budget",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
       "short_name": "预算",
+      "short_name_localized": {
+        "zh-TW": {
+          "value": "預算",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "Budget",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
       "description": "查看本月预算执行情况",
+      "description_localized": {
+        "zh-TW": {
+          "value": "查看本月預算執行情況",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "View this month's budget status",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
       "url": "/app/budgets?source=shortcut",
       "icons": [
         {
@@ -100,7 +256,13 @@
       "files": [
         {
           "name": "files",
-          "accept": ["image/*", "text/csv", ".csv", ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]
+          "accept": [
+            "image/*",
+            "text/csv",
+            ".csv",
+            ".xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          ]
         }
       ]
     }
@@ -109,9 +271,15 @@
     {
       "action": "/app/share-incoming?source=file-handler",
       "accept": {
-        "text/csv": [".csv"],
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-        "application/vnd.ms-excel": [".xls"]
+        "text/csv": [
+          ".csv"
+        ],
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [
+          ".xlsx"
+        ],
+        "application/vnd.ms-excel": [
+          ".xls"
+        ]
       },
       "icons": [
         {
