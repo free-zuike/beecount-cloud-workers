@@ -75,7 +75,7 @@ async function buildCurrencyFields(db: D1Database, userId: string, ledgerBase: s
   const cc = ((currencyArg || accountCurrency || base) || 'CNY').trim().toUpperCase();
   if (cc === base) return {};
   // override 优先
-  const ov = await db.prepare('SELECT rate FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?').bind(userId, base, cc).first<{ rate: string }>();
+  const ov = await db.prepare('SELECT rate FROM user_exchange_rate_projection WHERE user_id = ? AND base_currency = ? AND quote_currency = ?').bind(userId, base, cc).first<{ rate: string }>();
   let native: number | null = null;
   if (ov) {
     const r = parseFloat(ov.rate);

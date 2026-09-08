@@ -6,6 +6,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "vitest",
+    "check:schema": "node scripts/check-schema-sync.mjs",
     "postinstall": "node scripts/patch-ssh2.js"
   },
   "keywords": [

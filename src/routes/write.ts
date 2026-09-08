@@ -2247,20 +2247,20 @@ writeRouter.put('/exchange-rate-overrides', zValidator('json', ExchangeRateSchem
   const serverNow = nowUtc();
 
   // 与原版一致：更新时复用现有 sync_id，新建时生成新 UUID
-  const existingPair = await db.prepare('SELECT sync_id FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
+  const existingPair = await db.prepare('SELECT sync_id FROM user_exchange_rate_projection WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
     .bind(userId, base_currency, quote_currency).first<{ sync_id: string }>();
   const syncId = existingPair?.sync_id || randomUUID();
   // sync_changes + 投影同事务原子写入
-  const existing = await db.prepare('SELECT base_currency FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
+  const existing = await db.prepare('SELECT base_currency FROM user_exchange_rate_projection WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
     .bind(userId, base_currency, quote_currency).first();
   const batchResults = await db.batch([
     db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
     VALUES (?, NULL, 'exchange_rate_override', ?, 'upsert', ?, ?, ?, 'web-console', 'user')`)
       .bind(userId, syncId, JSON.stringify({ syncId, baseCurrency: base_currency, quoteCurrency: quote_currency, rate: String(rate), updatedAt: serverNow }), serverNow, userId),
     existing
-      ? db.prepare('UPDATE exchange_rate_overrides SET rate = ?, updated_at = ? WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
+      ? db.prepare('UPDATE user_exchange_rate_projection SET rate = ?, updated_at = ? WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
         .bind(String(rate), serverNow, userId, base_currency, quote_currency)
-      : db.prepare('INSERT INTO exchange_rate_overrides (user_id, sync_id, base_currency, quote_currency, rate, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      : db.prepare('INSERT INTO user_exchange_rate_projection (user_id, sync_id, base_currency, quote_currency, rate, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
         .bind(userId, syncId, base_currency, quote_currency, String(rate), serverNow),
   ]);
   const changeId = batchResults[0].meta.last_row_id as number;
@@ -2308,7 +2308,7 @@ writeRouter.delete('/exchange-rate-overrides', async (c) => {
   const syncId = randomUUID();
 
   // 查询现有记录的 sync_id，用于 delete 的 entity_sync_id（与原版一致：App 按 syncId 匹配删除）
-  const existingRow = await db.prepare('SELECT sync_id FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
+  const existingRow = await db.prepare('SELECT sync_id FROM user_exchange_rate_projection WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
     .bind(userId, baseCurrency, quoteCurrency).first<{ sync_id: string }>();
   const deleteSyncId = existingRow?.sync_id || syncId;
 
@@ -2316,7 +2316,7 @@ writeRouter.delete('/exchange-rate-overrides', async (c) => {
     db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
     VALUES (?, NULL, 'exchange_rate_override', ?, 'delete', ?, ?, ?, 'web-console', 'user')`)
       .bind(userId, deleteSyncId, '{}', serverNow, userId),
-    db.prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
+    db.prepare('DELETE FROM user_exchange_rate_projection WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
       .bind(userId, baseCurrency, quoteCurrency),
   ]);
   const delChangeId = delResult[0].meta.last_row_id as number;

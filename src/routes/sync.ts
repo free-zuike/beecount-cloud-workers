@@ -1522,6 +1522,14 @@ async function applyUserChangeToProjection(
           `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
         ).bind(userId, entity_type, entity_sync_id),
       ]);
+    } else if (entity_type === 'exchange_rate_override') {
+      await db.batch([
+        db.prepare('DELETE FROM user_exchange_rate_projection WHERE sync_id = ? AND user_id = ?')
+          .bind(entity_sync_id, userId),
+        db.prepare(
+          `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = ? AND entity_sync_id = ? AND action != 'delete'`
+        ).bind(userId, entity_type, entity_sync_id),
+      ]);
     }
     return;
   }
@@ -1766,29 +1774,20 @@ async function applyUserChangeToProjection(
       ).bind(entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
     }
   } else if (entity_type === 'exchange_rate_override') {
-    if (change.action === 'delete') {
-      // 与原版 _delete_user_exchange_rate_override 一致：按 sync_id 删除
-      await db.prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND sync_id = ?')
-        .bind(userId, entity_sync_id).run();
-      // 与原版 _compact_entity_upsert_events 一致：清理旧 upsert 历史，防止 stale upsert 复活
-      await db.prepare(
-        `DELETE FROM sync_changes WHERE user_id = ? AND entity_type = 'exchange_rate_override' AND entity_sync_id = ? AND action != 'delete'`
-      ).bind(userId, entity_sync_id).run();
+    // delete 在函数顶部统一处理；这里只有 upsert
+    const payload = change.payload;
+    const baseCurrency = (payload as any).baseCurrency ?? '';
+    const quoteCurrency = (payload as any).quoteCurrency ?? '';
+    const rate = (payload as any).rate ?? 1;
+    const updatedAt = (payload as any).updatedAt ?? new Date().toISOString();
+    const existing = await db.prepare('SELECT base_currency FROM user_exchange_rate_projection WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
+      .bind(userId, baseCurrency, quoteCurrency).first();
+    if (existing) {
+      await db.prepare('UPDATE user_exchange_rate_projection SET rate = ?, updated_at = ?, source_change_id = ? WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
+        .bind(String(rate), updatedAt, change.change_id ?? 0, userId, baseCurrency, quoteCurrency).run();
     } else {
-      const payload = change.payload;
-      const baseCurrency = (payload as any).baseCurrency ?? '';
-      const quoteCurrency = (payload as any).quoteCurrency ?? '';
-      const rate = (payload as any).rate ?? 1;
-      const updatedAt = (payload as any).updatedAt ?? new Date().toISOString();
-      const existing = await db.prepare('SELECT base_currency FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-        .bind(userId, baseCurrency, quoteCurrency).first();
-      if (existing) {
-        await db.prepare('UPDATE exchange_rate_overrides SET rate = ?, updated_at = ? WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-          .bind(String(rate), updatedAt, userId, baseCurrency, quoteCurrency).run();
-      } else {
-        await db.prepare('INSERT INTO exchange_rate_overrides (user_id, sync_id, base_currency, quote_currency, rate, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-          .bind(userId, entity_sync_id, baseCurrency, quoteCurrency, String(rate), updatedAt).run();
-      }
+      await db.prepare('INSERT INTO user_exchange_rate_projection (user_id, sync_id, base_currency, quote_currency, rate, updated_at, source_change_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(userId, entity_sync_id, baseCurrency, quoteCurrency, String(rate), updatedAt, change.change_id ?? 0).run();
     }
   }
 }
@@ -2287,35 +2286,6 @@ async function applyChangeToProjection(
           .prepare('DELETE FROM attachment_files WHERE id = ?')
           .bind(change.entity_sync_id)
           .run();
-      }
-      break;
-    }
-
-    case 'exchange_rate_override': {
-      if (change.action === 'delete') {
-        await db
-          .prepare('DELETE FROM exchange_rate_overrides WHERE user_id = ? AND sync_id = ?')
-          .bind(userId, change.entity_sync_id)
-          .run();
-      } else {
-        const baseCurrency = (payload as any).baseCurrency ?? '';
-        const quoteCurrency = (payload as any).quoteCurrency ?? '';
-        const existing = await db
-          .prepare('SELECT base_currency FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-          .bind(userId, baseCurrency, quoteCurrency)
-          .first();
-
-        if (existing) {
-          await db
-            .prepare('UPDATE exchange_rate_overrides SET rate = ?, updated_at = ? WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-            .bind((payload as any).rate ?? 1, new Date().toISOString(), userId, baseCurrency, quoteCurrency)
-            .run();
-        } else {
-          await db
-            .prepare('INSERT INTO exchange_rate_overrides (user_id, base_currency, quote_currency, rate, updated_at) VALUES (?, ?, ?, ?, ?)')
-            .bind(userId, baseCurrency, quoteCurrency, (payload as any).rate ?? 1, new Date().toISOString())
-            .run();
-        }
       }
       break;
     }

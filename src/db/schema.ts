@@ -3,7 +3,7 @@
  * 每次变更下方 DDL（新建表/加列/索引/迁移）时必须递增，
  * 否则已初始化的库不会重放 DDL。
  */
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export async function initializeDatabase(db: D1Database): Promise<void> {
   try {
@@ -675,19 +675,34 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     `).run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_settings_key ON settings(key)').run();
 
+    // 手动汇率覆盖投影（对齐原版 0016 user_exchange_rate_projection）：
+    // 主键 (user_id, sync_id)，rate 存 decimal 字符串，source_change_id 记来源同步变更。
     await db.prepare(`
-      CREATE TABLE IF NOT EXISTS exchange_rate_overrides (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+      CREATE TABLE IF NOT EXISTS user_exchange_rate_projection (
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         sync_id TEXT NOT NULL,
         base_currency TEXT NOT NULL,
         quote_currency TEXT NOT NULL,
         rate TEXT NOT NULL,
-        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
-        UNIQUE(user_id, base_currency, quote_currency)
+        updated_at TEXT NOT NULL,
+        source_change_id INTEGER DEFAULT 0 NOT NULL,
+        PRIMARY KEY (user_id, sync_id)
       )
     `).run();
-    await db.prepare('CREATE INDEX IF NOT EXISTS idx_exchange_rate_overrides_user ON exchange_rate_overrides(user_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS ix_user_rate_pair ON user_exchange_rate_projection(user_id, base_currency, quote_currency)').run();
+
+    // 迁移（对齐原版 0016）：老表 exchange_rate_overrides → user_exchange_rate_projection。
+    // 老表 UNIQUE(user_id, base_currency, quote_currency) 保证无重复币对；
+    // 新表主键 (user_id, sync_id)，source_change_id 老数据无从追溯，置 0。
+    const migRateOverride = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).bind('exchange_rate_overrides').first<{ name: string }>();
+    if (migRateOverride) {
+      await db.prepare(
+        `INSERT OR IGNORE INTO user_exchange_rate_projection (user_id, sync_id, base_currency, quote_currency, rate, updated_at, source_change_id)
+         SELECT user_id, sync_id, base_currency, quote_currency, rate, updated_at, 0
+         FROM exchange_rate_overrides`
+      ).run();
+      await db.prepare(`DROP TABLE IF EXISTS exchange_rate_overrides`).run();
+    }
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS exchange_rate_cache (

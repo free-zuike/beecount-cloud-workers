@@ -1643,7 +1643,7 @@ readRouter.get('/exchange-rate-overrides', async (c) => {
   const rows = await db
     .prepare(
       `SELECT sync_id, base_currency, quote_currency, rate, updated_at
-       FROM exchange_rate_overrides
+       FROM user_exchange_rate_projection
        WHERE user_id = ?
        ORDER BY quote_currency, sync_id`
     )

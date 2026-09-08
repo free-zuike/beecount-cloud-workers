@@ -41,6 +41,11 @@ class InMemoryDB {
     if (upper.startsWith('CREATE INDEX')) {
       return { success: true, meta: { last_row_id: 0, changes: 0 }, results: [] };
     }
+    if (upper.startsWith('DROP TABLE')) {
+      const match = trimmed.match(/DROP TABLE\s+(?:IF EXISTS\s+)?(\w+)/i);
+      if (match) this.tables.delete(match[1]);
+      return { success: true, meta: { last_row_id: 0, changes: 0 }, results: [] };
+    }
     if (upper.startsWith('INSERT')) return this.handleInsert(trimmed, bindParams);
     if (upper.startsWith('UPDATE')) return this.handleUpdate(trimmed, bindParams);
     if (upper.startsWith('DELETE')) return this.handleDelete(trimmed, bindParams);
@@ -56,6 +61,11 @@ class InMemoryDB {
 
     const tableName = tableMatch[1];
     const table = this.getTable(tableName);
+
+    // INSERT ... SELECT（schema 迁移用，如 read_*_projection → user_*_projection）
+    if (!sql.toUpperCase().includes('VALUES') && /INSERT[\s\S]+SELECT[\s\S]+FROM/i.test(sql)) {
+      return this.handleInsertSelect(sql, table, params);
+    }
 
     const colsMatch = sql.match(/\(([^)]+)\)\s+(?:ON\s+CONFLICT[^)]+\)\s+)?VALUES/i);
     const valsMatch = sql.match(/VALUES\s*\(([^)]+)\)/i);
@@ -133,6 +143,39 @@ class InMemoryDB {
     return { success: true, meta: { last_row_id: autoIncrementId++, changes: 1 }, results: [] };
   }
 
+  private handleInsertSelect(sql: string, table: Row[], params: unknown[]): MockResult {
+    const colsMatch = sql.match(/\(([^)]+)\)\s+SELECT/i);
+    if (!colsMatch) return { success: false, meta: { last_row_id: 0, changes: 0 }, results: [] };
+    const columns = colsMatch[1].split(',').map(c => c.trim());
+    const fromMatch = sql.match(/FROM\s+(\w+)/i);
+    if (!fromMatch) return { success: false, meta: { last_row_id: 0, changes: 0 }, results: [] };
+    const srcTable = this.getTable(fromMatch[1]);
+    const selectExpr = sql.slice(sql.toUpperCase().indexOf('SELECT') + 6, sql.toUpperCase().indexOf('FROM')).trim();
+    const selCols = selectExpr.split(',').map(c => c.trim());
+    const isIgnore = sql.toUpperCase().includes('OR IGNORE');
+
+    let changes = 0;
+    for (const srcRow of srcTable) {
+      const row: Row = {};
+      selCols.forEach((expr, i) => {
+        const col = columns[i];
+        const t = expr.trim();
+        if (/^-?\d+(\.\d+)?$/.test(t)) row[col] = parseFloat(t);
+        else if (t.toUpperCase() === 'NULL') row[col] = null;
+        else if (/^'.*'$/.test(t)) row[col] = t.slice(1, -1);
+        else row[col] = srcRow[t.split('.').pop()!.replace(/^'|'$/g, '')];
+      });
+      if (isIgnore) {
+        // 迁移 INSERT OR IGNORE 的 PK 是 (user_id, sync_id)；sync_id 才是实体唯一键
+        const dedupeCol = columns.includes('sync_id') ? 'sync_id' : columns[0];
+        if (table.some(r => r[dedupeCol] === row[dedupeCol])) continue;
+      }
+      table.push(row);
+      changes++;
+    }
+    return { success: true, meta: { last_row_id: 0, changes }, results: [] };
+  }
+
   private handleUpdate(sql: string, params: unknown[]): MockResult {
     const tableMatch = sql.match(/UPDATE\s+(\w+)/i);
     if (!tableMatch) return { success: false, meta: { last_row_id: 0, changes: 0 }, results: [] };
@@ -145,14 +188,19 @@ class InMemoryDB {
 
     const setClauses = this.parseSetClauses(setMatch[1]);
     const whereClause = this.parseWhereClause(sql);
+    const setParamCount = Object.values(setClauses).filter(v => v === '?').length;
     const paramIdx = { current: 0 };
 
     let changes = 0;
     for (const row of table) {
-      paramIdx.current = 0;
-      if (whereClause && !this.matchesWhere(row, whereClause, params, paramIdx)) {
-        continue;
+      if (whereClause) {
+        // SET 的 ? 占位符先消费 bind 参数，WHERE 的参数从 setParamCount 开始
+        paramIdx.current = setParamCount;
+        if (!this.matchesWhere(row, whereClause, params, paramIdx)) {
+          continue;
+        }
       }
+      paramIdx.current = 0;
       for (const [col, valExpr] of Object.entries(setClauses)) {
         if (valExpr === '?') {
           row[col] = params[paramIdx.current++];

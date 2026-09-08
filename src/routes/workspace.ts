@@ -2198,7 +2198,7 @@ workspaceRouter.get('/net-worth-history', async (c) => {
       } catch {}
     }
     // 手动汇率覆盖
-    const overrides = await db.prepare('SELECT quote_currency, rate FROM exchange_rate_overrides WHERE user_id = ? AND base_currency = ?').bind(userId, baseCurrency).all<{ quote_currency: string; rate: string }>();
+    const overrides = await db.prepare('SELECT quote_currency, rate FROM user_exchange_rate_projection WHERE user_id = ? AND base_currency = ?').bind(userId, baseCurrency).all<{ quote_currency: string; rate: string }>();
     for (const ov of overrides.results) {
       const r = parseFloat(ov.rate);
       if (r > 0) ratesToBase[(ov.quote_currency || '').toUpperCase()] = r;
