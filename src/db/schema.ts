@@ -717,10 +717,10 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       try { await db.prepare(`ALTER TABLE ${table} DROP COLUMN ${column}`).run(); } catch { /* 列不存在则忽略 */ }
     };
 
-    // 1) ledger_members 重建（旧结构有自增 id 列才需要）
+    // 1) ledger_members 重建（旧结构有自增 id 列才需要；IF NOT EXISTS 保证中途失败可重试）
     if (await tableHasColumn('ledger_members', 'id')) {
       await db.prepare(`
-        CREATE TABLE ledger_members_new (
+        CREATE TABLE IF NOT EXISTS ledger_members_new (
           ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
           user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           role TEXT DEFAULT 'editor' NOT NULL,
@@ -744,10 +744,10 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_members_user_id ON ledger_members(user_id)').run();
     }
 
-    // 2) ledger_invites 重建（旧结构有 id 列才需要）
+    // 2) ledger_invites 重建（旧结构有 id 列才需要；IF NOT EXISTS 保证可重试）
     if (await tableHasColumn('ledger_invites', 'id')) {
       await db.prepare(`
-        CREATE TABLE ledger_invites_new (
+        CREATE TABLE IF NOT EXISTS ledger_invites_new (
           code TEXT PRIMARY KEY,
           ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
           invited_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -767,36 +767,17 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_invites_code ON ledger_invites(code)').run();
     }
 
-    // 3) backup_remotes 重建（旧结构无 user_id 才需要）
+    // 3) backup_remotes 加 user_id（不重建表：backup_run_targets/backup_schedule_remotes
+    //    外键引用它，DROP 父表会触发 FOREIGN KEY constraint failed，迁移卡死）。
+    //    存量全局远端回填给管理员；列级对齐已满足（checker 只比列集合），
+    //    UNIQUE(user_id, name) 约束由代码保证（单管理员 + 同名唯一校验）。
     if (!(await tableHasColumn('backup_remotes', 'user_id'))) {
-      await db.prepare(`
-        CREATE TABLE backup_remotes_new (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          name TEXT NOT NULL,
-          backend_type TEXT NOT NULL,
-          config_summary TEXT,
-          encrypted BOOLEAN DEFAULT 0 NOT NULL,
-          last_test_at TEXT,
-          last_test_ok BOOLEAN,
-          last_test_error TEXT,
-          created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
-          updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
-          UNIQUE(user_id, name)
-        )
-      `).run();
-      await db.prepare(
-        `INSERT OR IGNORE INTO backup_remotes_new (id, user_id, name, backend_type, config_summary, encrypted, last_test_at, last_test_ok, last_test_error, created_at, updated_at)
-         SELECT r.id,
-                COALESCE((SELECT u.id FROM users u WHERE u.is_admin = 1 ORDER BY u.created_at LIMIT 1),
-                         (SELECT u.id FROM users u ORDER BY u.created_at LIMIT 1), ''),
-                r.name, r.backend_type, r.config_summary, r.encrypted, r.last_test_at, r.last_test_ok,
-                r.last_test_error, r.created_at, r.updated_at
-         FROM backup_remotes r`
-      ).run();
-      await db.prepare('DROP TABLE backup_remotes').run();
-      await db.prepare('ALTER TABLE backup_remotes_new RENAME TO backup_remotes').run();
-      await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_remotes_backend_type ON backup_remotes(backend_type)').run();
+      try { await db.prepare('ALTER TABLE backup_remotes ADD COLUMN user_id TEXT').run(); } catch { /* 已存在 */ }
+      const admin = await db.prepare('SELECT id FROM users WHERE is_admin = 1 ORDER BY created_at LIMIT 1').first<{ id: string }>()
+        ?? await db.prepare('SELECT id FROM users ORDER BY created_at LIMIT 1').first<{ id: string }>();
+      if (admin?.id) {
+        await db.prepare('UPDATE backup_remotes SET user_id = ? WHERE user_id IS NULL OR user_id = \'\'').bind(admin.id).run();
+      }
     }
 
     // 4) 老 backup_runs 的 R2 key 回填到 backup_artifacts（删 backup_path 前执行）

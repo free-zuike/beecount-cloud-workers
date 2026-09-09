@@ -146,6 +146,8 @@ function parseLocalSchema() {
     const nameM = ddl.match(/CREATE TABLE IF NOT EXISTS (\w+)/i);
     if (!nameM) continue;
     const name = nameM[1];
+    // 迁移重建用的临时表（ledger_members_new 等）不是真实表，忽略
+    if (name.endsWith('_new')) continue;
     const body = ddl.slice(ddl.indexOf('(') + 1, ddl.lastIndexOf(')'));
     const cols = new Set();
     for (const line of body.split('\n')) {

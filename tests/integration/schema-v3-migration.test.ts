@@ -77,6 +77,8 @@ describe('SCHEMA v3 对齐原版迁移（数据安全）', () => {
     }]);
 
     await initializeDatabase(db as any);
+    // 幂等：再次初始化（模拟中途失败后的重试/冷启动）不报错、不重复迁移
+    await initializeDatabase(db as any);
 
     // 成员数据保留 + 复合主键结构（无 id 列）
     const members = getTable(db, 'ledger_members');
@@ -108,7 +110,7 @@ describe('SCHEMA v3 对齐原版迁移（数据安全）', () => {
 
     await initializeDatabase(db as any);
 
-    // remotes 全部回填给管理员
+    // remotes 全部回填给管理员（ADD COLUMN + UPDATE 路径，幂等）
     const remotes = getTable(db, 'backup_remotes');
     expect(remotes).toHaveLength(2);
     expect(remotes.every(r => r.user_id === 'u-admin')).toBe(true);
