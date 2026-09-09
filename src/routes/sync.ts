@@ -1096,8 +1096,14 @@ syncRouter.get('/pull', async (c) => {
       if (!device) {
         return c.json({ error: 'Invalid device' }, 401);
       }
-      await db.prepare('UPDATE devices SET last_seen_at = ? WHERE id = ? AND user_id = ?')
-        .bind(new Date().toISOString(), deviceId, userId).run();
+      // heartbeat 是非关键写入：D1 写入配额耗尽（free tier 每日上限）时跳过，
+      // 保证 pull 读数据不受影响（失败静默，下次请求再试）
+      try {
+        await db.prepare('UPDATE devices SET last_seen_at = ? WHERE id = ? AND user_id = ?')
+          .bind(new Date().toISOString(), deviceId, userId).run();
+      } catch (e) {
+        serverLogger.info('src.routers.sync', '[SYNC] /sync/pull heartbeat write skipped (quota?):', (e as Error).message);
+      }
     }
 
     // 获取用户可访问的所有账本 ID（自有 + 共享成员）— 与原版 list_accessible_ledgers 对齐
@@ -1174,7 +1180,8 @@ syncRouter.get('/pull', async (c) => {
     }
     serverLogger.info('src.routers.sync', '[SYNC] /sync/pull returning:', limitedResults.length, 'changes, has_more:', hasMore, 'by_type:', JSON.stringify(resultTypeCounts));
 
-    // 写回 SyncCursor（per-device per-ledger 游标持久化）
+    // 写回 SyncCursor（per-device per-ledger 游标持久化）— 非关键写入，
+    // D1 写入配额耗尽时跳过（读数据不受影响，下次请求游标略旧但无数据丢失）
     if (deviceId && limitedResults.length > 0) {
       const perLedgerCursor: Record<string, number> = {};
       for (const r of limitedResults) {
@@ -1182,9 +1189,13 @@ syncRouter.get('/pull', async (c) => {
         perLedgerCursor[lid] = Math.max(perLedgerCursor[lid] ?? 0, r.change_id);
       }
       const now = new Date().toISOString();
-      for (const [ledgerExtId, lastCursor] of Object.entries(perLedgerCursor)) {
-        await db.prepare(`INSERT INTO sync_cursors (user_id, device_id, ledger_external_id, last_cursor, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id, device_id, ledger_external_id) DO UPDATE SET last_cursor = ?, updated_at = ?`)
-          .bind(userId, deviceId, ledgerExtId, lastCursor, now, lastCursor, now).run();
+      try {
+        for (const [ledgerExtId, lastCursor] of Object.entries(perLedgerCursor)) {
+          await db.prepare(`INSERT INTO sync_cursors (user_id, device_id, ledger_external_id, last_cursor, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id, device_id, ledger_external_id) DO UPDATE SET last_cursor = ?, updated_at = ?`)
+            .bind(userId, deviceId, ledgerExtId, lastCursor, now, lastCursor, now).run();
+        }
+      } catch (e) {
+        serverLogger.info('src.routers.sync', '[SYNC] /sync/pull cursor write skipped (quota?):', (e as Error).message);
       }
     }
 
