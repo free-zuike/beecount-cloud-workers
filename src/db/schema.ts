@@ -4,6 +4,9 @@
  * 否则已初始化的库不会重放 DDL。
  */
 const SCHEMA_VERSION = 3;
+// 迁移失败后的重试退避：避免每次冷启动重跑全量 DDL + 数据复制，
+// 把 D1 免费版每日 10 万行写入配额瞬间烧光（曾经 1 小时烧穿）。
+const MIGRATION_RETRY_BACKOFF_MS = 30 * 60 * 1000;
 
 export async function initializeDatabase(db: D1Database): Promise<void> {
   try {
@@ -20,6 +23,21 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         return;
       }
     } catch { /* app_metadata 表尚未创建（首次初始化），继续走完整 DDL */ }
+
+    // 迁移失败退避：上次迁移失败距今 < 30 分钟则本次冷启动跳过 DDL，
+    // 防止反复重跑全量 DDL + 数据复制烧光 D1 写入配额（free tier 每天 10 万行）。
+    try {
+      const errMeta = await db.prepare(
+        `SELECT value FROM app_metadata WHERE key = 'schema_migration_error'`
+      ).first<{ value: string }>();
+      if (errMeta?.value) {
+        const lastFail = new Date(errMeta.value).getTime();
+        if (Date.now() - lastFail < MIGRATION_RETRY_BACKOFF_MS) {
+          console.log('[INIT] Migration failed recently, backing off until', new Date(lastFail + MIGRATION_RETRY_BACKOFF_MS).toISOString());
+          return;
+        }
+      }
+    } catch { /* app_metadata 不存在则忽略 */ }
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS app_metadata (
@@ -823,9 +841,19 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
        VALUES ('schema_version', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
     ).bind(String(SCHEMA_VERSION)).run();
 
+    // 迁移成功 → 清除失败标记
+    try { await db.prepare(`DELETE FROM app_metadata WHERE key = 'schema_migration_error'`).run(); } catch {}
+
     console.log('[INIT] Database tables created/verified successfully');
 
   } catch (error) {
     console.error('[INIT] Failed to initialize database:', error);
+    // 记录失败时间（退避用），避免冷启动重跑烧配额
+    try {
+      await db.prepare(
+        `INSERT OR REPLACE INTO app_metadata (key, value, updated_at)
+         VALUES ('schema_migration_error', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+      ).bind(new Date().toISOString()).run();
+    } catch { /* 标记失败不影响主流程 */ }
   }
 }

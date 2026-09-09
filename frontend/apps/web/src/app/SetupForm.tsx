@@ -4,9 +4,26 @@ interface SetupFormProps {
   onComplete: () => void
 }
 
+const TIMEZONE_OPTIONS = [
+  { offset: -720, label: '-12:00' },
+  { offset: -660, label: '-11:00' },
+  { offset: -600, label: '-10:00' },
+  { offset: -540, label: '-09:00' },
+  { offset: -480, label: 'UTC+8 北京时间' },
+  { offset: -420, label: '+07:00' },
+  { offset: -360, label: '+06:00' },
+  { offset: -300, label: '+05:00' },
+  { offset: -240, label: '+04:00' },
+  { offset: -180, label: '+03:00' },
+  { offset: -120, label: '+02:00' },
+  { offset: -60, label: '+01:00' },
+  { offset: 0, label: 'UTC' },
+]
+
 export function SetupForm({ onComplete }: SetupFormProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [timezoneOffset, setTimezoneOffset] = useState(-480)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -24,7 +41,7 @@ export function SetupForm({ onComplete }: SetupFormProps) {
           admin_mode: 'manual',
           admin_email: email,
           admin_password: password,
-          timezone_offset: -480,
+          timezone_offset: Number(timezoneOffset),
         }),
       })
 
@@ -73,6 +90,18 @@ export function SetupForm({ onComplete }: SetupFormProps) {
           minLength={8}
           className="w-full px-3 py-2 border rounded-md"
         />
+      </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">时区（备份调度按此时区执行）</label>
+        <select
+          value={timezoneOffset}
+          onChange={(e) => setTimezoneOffset(Number(e.target.value))}
+          className="w-full px-3 py-2 border rounded-md"
+        >
+          {TIMEZONE_OPTIONS.map((tz) => (
+            <option key={tz.offset} value={tz.offset}>{tz.label}</option>
+          ))}
+        </select>
       </div>
       <button
         type="submit"
