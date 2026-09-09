@@ -701,9 +701,10 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     } catch { /* 列已存在则忽略 */ }
 
     // ================= SCHEMA v3：对齐原版 Alembic 最终结构 =================
-    // 1) 重建 ledger_members：复合主键 (ledger_id,user_id) + 补 invited_by（从 ledger_invites 回填邀请人）
-    // 2) 重建 ledger_invites：code 改主键，去自增 id
-    // 3) 重建 backup_remotes：加 user_id（存量全局远端回填给管理员）+ UNIQUE(user_id,name)
+    // 1) backup_remotes 加 user_id（排最前：即使中途被打断也先消除备份 500；不重建表
+    //    以免 backup_run_targets/backup_schedule_remotes 外键阻止 DROP 父表）
+    // 2) 重建 ledger_members：复合主键 (ledger_id,user_id) + 补 invited_by（从 ledger_invites 回填邀请人）
+    // 3) 重建 ledger_invites：code 改主键，去自增 id
     // 4) 老 backup_runs 的完整 R2 key 回填到 backup_artifacts.storage_path（删列后恢复仍可定位文件）
     // 5) 删冗余列：ledgers(role/is_shared/invite_code/invite_expires_at——可从成员/邀请派生)、
     //    refresh_tokens(client_type)、audit_logs(entity_type/entity_id/details_json/level/logger)、
@@ -717,7 +718,21 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       try { await db.prepare(`ALTER TABLE ${table} DROP COLUMN ${column}`).run(); } catch { /* 列不存在则忽略 */ }
     };
 
-    // 1) ledger_members 重建（旧结构有自增 id 列才需要；IF NOT EXISTS 保证中途失败可重试）
+    // 1) backup_remotes 加 user_id（最关键，排最前：即使迁移中途被配额/异常打断，
+    //    先完成的也是消除备份 500 的一步。不重建表：backup_run_targets/
+    //    backup_schedule_remotes 外键引用它，DROP 父表会触发 FK 错误卡死迁移）。
+    //    存量全局远端回填给管理员；列级对齐已满足（checker 只比列集合），
+    //    UNIQUE(user_id, name) 约束由代码保证（单管理员 + 同名唯一校验）。
+    if (!(await tableHasColumn('backup_remotes', 'user_id'))) {
+      try { await db.prepare('ALTER TABLE backup_remotes ADD COLUMN user_id TEXT').run(); } catch { /* 已存在 */ }
+      const admin = await db.prepare('SELECT id FROM users WHERE is_admin = 1 ORDER BY created_at LIMIT 1').first<{ id: string }>()
+        ?? await db.prepare('SELECT id FROM users ORDER BY created_at LIMIT 1').first<{ id: string }>();
+      if (admin?.id) {
+        await db.prepare('UPDATE backup_remotes SET user_id = ? WHERE user_id IS NULL OR user_id = \'\'').bind(admin.id).run();
+      }
+    }
+
+    // 2) ledger_members 重建（旧结构有自增 id 列才需要；IF NOT EXISTS 保证中途失败可重试）
     if (await tableHasColumn('ledger_members', 'id')) {
       await db.prepare(`
         CREATE TABLE IF NOT EXISTS ledger_members_new (
@@ -744,7 +759,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_members_user_id ON ledger_members(user_id)').run();
     }
 
-    // 2) ledger_invites 重建（旧结构有 id 列才需要；IF NOT EXISTS 保证可重试）
+    // 3) ledger_invites 重建（旧结构有 id 列才需要；IF NOT EXISTS 保证可重试）
     if (await tableHasColumn('ledger_invites', 'id')) {
       await db.prepare(`
         CREATE TABLE IF NOT EXISTS ledger_invites_new (
@@ -767,19 +782,6 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_invites_code ON ledger_invites(code)').run();
     }
 
-    // 3) backup_remotes 加 user_id（不重建表：backup_run_targets/backup_schedule_remotes
-    //    外键引用它，DROP 父表会触发 FOREIGN KEY constraint failed，迁移卡死）。
-    //    存量全局远端回填给管理员；列级对齐已满足（checker 只比列集合），
-    //    UNIQUE(user_id, name) 约束由代码保证（单管理员 + 同名唯一校验）。
-    if (!(await tableHasColumn('backup_remotes', 'user_id'))) {
-      try { await db.prepare('ALTER TABLE backup_remotes ADD COLUMN user_id TEXT').run(); } catch { /* 已存在 */ }
-      const admin = await db.prepare('SELECT id FROM users WHERE is_admin = 1 ORDER BY created_at LIMIT 1').first<{ id: string }>()
-        ?? await db.prepare('SELECT id FROM users ORDER BY created_at LIMIT 1').first<{ id: string }>();
-      if (admin?.id) {
-        await db.prepare('UPDATE backup_remotes SET user_id = ? WHERE user_id IS NULL OR user_id = \'\'').bind(admin.id).run();
-      }
-    }
-
     // 4) 老 backup_runs 的 R2 key 回填到 backup_artifacts（删 backup_path 前执行）
     if (await tableHasColumn('backup_runs', 'backup_path')) {
       await db.prepare(
@@ -791,8 +793,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       ).run();
     }
 
-    // 5) 删冗余列（先删依赖它们的索引）
-    try { await db.prepare('DROP INDEX IF EXISTS idx_ledgers_invite_code').run(); } catch {}
+    // 5) 删冗余列（先删依赖它们的索引）    try { await db.prepare('DROP INDEX IF EXISTS idx_ledgers_invite_code').run(); } catch {}
     await safeDropColumn('ledgers', 'role');
     await safeDropColumn('ledgers', 'is_shared');
     await safeDropColumn('ledgers', 'invite_code');
