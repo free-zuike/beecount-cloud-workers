@@ -380,8 +380,9 @@ class InMemoryDB {
     }
 
     // 列存在性校验（模拟 SQLite "no such column"）：有注册结构时按表结构校验；
-    // 无结构（getTable 自动建的表）宽松放行。只校验纯列列表，避免误伤 MAX()/COUNT()。
-    if (workingRows.length > 0 && /^[\w.]+(?:\s*,\s*[\w.]+)*$/.test(selectExpr)) {
+    // 无结构（getTable 自动建的表）宽松放行。只校验纯列列表，避免误伤 MAX()/COUNT()；
+    // JOIN 查询跳过（u.email 等来自 join 表，单表 schema 校验会误判）。
+    if (!hasJoin && workingRows.length > 0 && /^[\w.]+(?:\s*,\s*[\w.]+)*$/.test(selectExpr)) {
       const bareCols = this.parseSelectColumns(selectExpr);
       const schema = this.schemas.get(tableName);
       if (schema) {

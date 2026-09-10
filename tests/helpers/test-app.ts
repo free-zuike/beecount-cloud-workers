@@ -10,6 +10,7 @@ import readRouter from '../../src/routes/read';
 import profileRouter from '../../src/routes/profile';
 import devicesRouter from '../../src/routes/devices';
 import batchWriteRouter from '../../src/routes/batch_write';
+import workspaceRouter from '../../src/routes/workspace';
 
 type Bindings = {
   DB: D1Database;
@@ -107,6 +108,7 @@ export function createTestApp(db: D1Database, jwtSecret: string = 'test-secret-k
   app.route('/read', readRouter);
   app.route('/devices', devicesRouter);
   app.route('/profile', profileRouter);
+  app.route('/api/v1', workspaceRouter);
 
   return app;
 }

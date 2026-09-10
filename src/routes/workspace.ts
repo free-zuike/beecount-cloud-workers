@@ -1199,14 +1199,13 @@ workspaceRouter.get('/ledgers/:id/invites', async (c) => {
 
   const invites = await db
     .prepare(
-      `SELECT id, code, target_role, invited_by, expires_at, used_at, used_by, created_at
+      `SELECT code, target_role, invited_by, expires_at, used_at, used_by, created_at
        FROM ledger_invites
        WHERE ledger_id = ? AND used_at IS NULL AND expires_at > ?
        ORDER BY created_at DESC`
     )
     .bind(ledger.id, nowUtc())
     .all<{
-      id: string;
       code: string;
       target_role: string;
       invited_by: string;
@@ -1218,7 +1217,7 @@ workspaceRouter.get('/ledgers/:id/invites', async (c) => {
 
   const shareOrigin = (c.env as any).INVITE_SHARE_ORIGIN || c.req.header('Origin') || `https://${c.req.header('Host')}` || 'https://beecount.qzz.io';
   const result = invites.results.map((inv) => ({
-      id: inv.id,
+      id: inv.code, // v3 后 ledger_invites 主键是 code（原 id 列已删），响应保持 id 字段兼容
       code: inv.code,
       formatted_code: formatInviteCode(inv.code),
       target_role: inv.target_role,
@@ -1539,8 +1538,8 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
     throw err;
   }
 
-  await db.prepare('UPDATE ledger_invites SET used_at = ?, used_by = ? WHERE id = ?')
-    .bind(nowUtc(), userId, invite.id)
+  await db.prepare('UPDATE ledger_invites SET used_at = ?, used_by = ? WHERE code = ?')
+    .bind(nowUtc(), userId, invite.code)
     .run();
 
   const updatedCount = await db.prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).first<{ cnt: number }>();
@@ -2070,9 +2069,9 @@ workspaceRouter.post('/ledgers/:id/transfer', zValidator('json', TransferSchema)
   }
 
   const targetMember = await db
-    .prepare('SELECT id, user_id, role FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
+    .prepare('SELECT user_id, role FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
     .bind(ledger.id, req.target_user_id)
-    .first<{ id: string; user_id: string; role: string }>();
+    .first<{ user_id: string; role: string }>();
 
   if (!targetMember) {
     return c.json({ error: 'Target user is not a member of this ledger' }, 400);
