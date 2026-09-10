@@ -16,7 +16,6 @@
  * - DELETE /admin/backup/schedules/:id       - 删除备份调度
  *
  * - GET    /admin/backup/runs                - 列出备份运行记录
- * - POST   /admin/backup/run-now             - 手动触发备份
  *
  * 功能说明�?
  * - 需要管理员权限
@@ -360,11 +359,6 @@ const ScheduleUpdateSchema = z.object({
   remote_ids: z.array(z.union([z.string(), z.number()])).optional(),
   include_attachments: z.boolean().optional(),
   timezone_offset: z.number().optional(),
-});
-
-const RunNowSchema = z.object({
-  ledger_id: z.string(),
-  remote_id: z.string().optional(),
 });
 
 type Bindings = {
@@ -1806,120 +1800,6 @@ backupRouter.get('/runs', async (c) => {
     total: totalRow?.cnt ?? 0,
     items: runs,
   });
-});
-
-/**
- * 手动触发备份
- */
-backupRouter.post('/run-now', apiValidator('json', RunNowSchema), async (c) => {
-  const db = c.env.DB;
-  const userId = c.get('userId');
-  const req = c.req.valid('json');
-  const serverNow = nowUtc();
-
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE external_id = ?')
-    .bind(req.ledger_id)
-    .first<{ id: string; external_id: string }>();
-
-  if (!ledger) {
-    return c.json({ error: 'Ledger not found' }, 404);
-  }
-
-  // 加载远端配置（支持指�?remote_id 或所有已配置远端�?
-  const remoteConfigs: Array<{ remoteId: string; config: Record<string, string> }> = [];
-  if (req.remote_id) {
-    const remote = await db
-      .prepare('SELECT backend_type, config_summary, encrypted FROM backup_remotes WHERE id = ?')
-      .bind(req.remote_id)
-      .first<{ backend_type: string; config_summary: string; encrypted: number }>();
-    if (remote) {
-      const parsedConfig = safeParseConfig(remote.config_summary);
-      if (remote.backend_type === 'r2' && c.env.R2) parsedConfig._r2Bucket = c.env.R2;
-      remoteConfigs.push({ remoteId: req.remote_id, config: { backend_type: remote.backend_type, ...parsedConfig, _encrypted: String(remote.encrypted) } });
-    }
-  } else {
-    // 无指定远端时加载所有远�?
-    const allRemotes = await db
-      .prepare('SELECT id, backend_type, config_summary, encrypted FROM backup_remotes')
-      .all<{ id: string; backend_type: string; config_summary: string; encrypted: number }>();
-    for (const remote of allRemotes.results || []) {
-      const parsedConfig = safeParseConfig(remote.config_summary);
-      if (remote.backend_type === 'r2' && c.env.R2) parsedConfig._r2Bucket = c.env.R2;
-      remoteConfigs.push({ remoteId: remote.id, config: { backend_type: remote.backend_type, ...parsedConfig, _encrypted: String(remote.encrypted) } });
-    }
-  }
-
-  const shouldEncrypt = remoteConfigs.some(rc => parseInt(rc.config._encrypted as string) === 1);
-  const remoteId = remoteConfigs[0]?.remoteId || null;
-
-  const runInsertResult = await db
-    .prepare(
-      `INSERT INTO backup_runs (user_id, status, started_at)
-       VALUES (?, 'running', ?)`
-    )
-    .bind(userId, serverNow)
-    .run();
-
-  const runId = runInsertResult.meta.last_row_id as number;
-
-  // 后台执行备份
-  // 通过 Workflow 后台执行备份（无 30s 超时限制；_r2Bucket 实例不可序列化，剔除后由 Workflow 重建）
-  if (c.env.BACKUP_WORKFLOW) {
-    try {
-      await c.env.BACKUP_WORKFLOW.create({
-        params: {
-          runId,
-          userId,
-          ledgerId: ledger.id,
-          remoteConfigs: remoteConfigs.map(({ remoteId, config }) => {
-            const { _r2Bucket, ...rest } = config;
-            return { remoteId, config: rest };
-          }),
-          shouldEncrypt,
-          retentionDays: undefined,
-          scheduleId: null,
-          serverNow,
-        },
-      });
-    } catch (wfErr) {
-      serverLogger.error('src.routers.admin', '[Backup] Failed to start backup workflow:', (wfErr as Error).message);
-      await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ? WHERE id = ?')
-        .bind('failed', new Date().toISOString(), (wfErr as Error).message, runId).run();
-    }
-  } else {
-    c.executionCtx.waitUntil((async () => {
-      const logLines: string[] = [];
-      const logFn = (msg: string) => { logLines.push(`[${new Date().toISOString()}] ${msg}`); };
-      try {
-        const backupResult = await performBackupFanOut(db, runId, userId, ledger.id, remoteConfigs, shouldEncrypt, c.env.R2, logFn, undefined, (phase) => {
-          broadcastViaDO(c.env, userId, { type: 'backup_progress', phase, runId }).catch(() => {});
-        });
-        const finishedAt = new Date().toISOString();
-        const finalStatus = backupResult.status ?? (backupResult.success ? 'succeeded' : 'failed');
-        await db.prepare(
-          'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, error_message = ?, log_text = ? WHERE id = ?'
-        ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
-              backupResult.backupPath?.split('/').pop() || null,
-              backupResult.success ? null : backupResult.message, logLines.join('\n'), runId).run();
-        await broadcastViaDO(c.env, userId, { type: 'backup_status', status: finalStatus, runId });
-      } catch (err) {
-        const finishedAt = new Date().toISOString();
-        await db.prepare('UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ?, log_text = ? WHERE id = ?')
-          .bind('failed', finishedAt, (err as Error).message, logLines.join('\n'), runId).run();
-        await broadcastViaDO(c.env, userId, { type: 'backup_status', status: 'failed', runId });
-      }
-    })());
-  }
-
-  return c.json({
-    id: runId,
-    ledger_id: req.ledger_id,
-    remote_id: remoteId,
-    status: 'running',
-    started_at: serverNow,
-    message: 'Backup started.',
-  }, 202);
 });
 
 /**
