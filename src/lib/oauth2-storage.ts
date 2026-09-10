@@ -13,6 +13,17 @@ export async function refreshAccessToken(
   clientSecret: string,
   refreshToken: string,
 ): Promise<string | null> {
+  // 兼容原版 rclone 约定：token 字段可能是整段 OAuth JSON（{"refresh_token": "..."}，
+  // 前端标签即 "OAuth Token (JSON)"），也可能是纯 refresh_token 字符串。
+  // JSON 时提取 refresh_token 再用于刷新。
+  let rt = (refreshToken || '').trim();
+  if (rt.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(rt) as Record<string, unknown>;
+      if (typeof parsed.refresh_token === 'string') rt = parsed.refresh_token;
+    } catch { /* 解析失败则按原字符串发送 */ }
+  }
+
   const endpoints: Record<string, string> = {
     drive: 'https://oauth2.googleapis.com/token',
     onedrive: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
@@ -22,7 +33,7 @@ export async function refreshAccessToken(
   const body = new URLSearchParams({
     client_id: clientId,
     client_secret: clientSecret,
-    refresh_token: refreshToken,
+    refresh_token: rt,
     grant_type: 'refresh_token',
   });
 

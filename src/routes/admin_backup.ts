@@ -34,6 +34,7 @@ import { randomUUID } from 'crypto';
 import { getFirstEnabledS3Config } from './sys_config';
 import { signS3Request } from '../lib/s3';
 import { performBackupFanOut, calculateNextRun, validateCronExpression, resolveAliasRemote, downloadBackupFile } from '../services/backup-executor';
+import { refreshAccessToken, listOAuth2Files } from '../lib/oauth2-storage';
 import { insertAuditLog } from '../lib/audit';
 
 /**
@@ -1105,8 +1106,27 @@ backupRouter.post('/remotes/:id/test', async (c) => {
           testResult.ok = false;
           testResult.message = 'OAuth2 configuration incomplete (token required)';
         } else {
-          testResult.ok = true;
-          testResult.message = `${remote.backend_type} configured (OAuth2 token valid)`;
+          // 真实验证：用存储的 refresh_token 换 access_token 并列出远端目录。
+          // 之前只检查字段非空就报 ok（假阳性），token 填错时备份才暴露。
+          try {
+            const token = await refreshAccessToken(remote.backend_type, config.client_id!, config.client_secret!, config.token!);
+            if (!token) {
+              testResult.ok = false;
+              testResult.message = `${remote.backend_type} token refresh failed (check refresh_token / client_id / client_secret)`;
+            } else {
+              try {
+                const files = await listOAuth2Files(config);
+                testResult.ok = true;
+                testResult.message = `${remote.backend_type} connected (token valid, ${Array.isArray(files) ? files.length : '?'} items listed)`;
+              } catch (listErr) {
+                testResult.ok = true;
+                testResult.message = `${remote.backend_type} token valid (list failed: ${(listErr as Error).message})`;
+              }
+            }
+          } catch (e) {
+            testResult.ok = false;
+            testResult.message = `${remote.backend_type} test failed: ${(e as Error).message}`;
+          }
         }
         break;
 
