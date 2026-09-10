@@ -184,6 +184,17 @@ export async function exportD1ToSqlite(
     }
     const buffer = await fileRes.arrayBuffer();
     const bytes = new Uint8Array(buffer);
+    // D1 导出 signed URL 可能以 gzip 压缩返回（Content-Encoding: gzip）——
+    // 直接当 sqlite 打开会报 "file is not a database"。按魔数检测并解压，
+    // 非 gzip（魔数不符）则原样返回，零副作用。
+    if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+      log(`[SQLite] Export API: gzip detected (${bytes.length} bytes), decompressing...`);
+      const ds = new DecompressionStream('gzip');
+      const decompressed = await new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer();
+      const out = new Uint8Array(decompressed);
+      log(`[SQLite] Export API: decompressed to ${out.length} bytes`);
+      return out;
+    }
     log(`[SQLite] Export API: ${bytes.length} bytes`);
     return bytes;
   }
