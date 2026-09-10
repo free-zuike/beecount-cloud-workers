@@ -1644,10 +1644,10 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
 
   const runInsertResult = await db
     .prepare(
-      `INSERT INTO backup_runs (user_id, schedule_id, status, started_at)
-       VALUES (?, ?, 'running', ?)`
+      `INSERT INTO backup_runs (user_id, status, started_at)
+       VALUES (?, 'running', ?)`
     )
-    .bind(schedule.user_id, scheduleId || null, serverNow)
+    .bind(schedule.user_id, serverNow)
     .run();
 
   const runId = runInsertResult.meta.last_row_id as number;
@@ -1669,7 +1669,9 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
           }),
           shouldEncrypt,
           retentionDays: schedule.retention_days ?? undefined,
-          scheduleId: schedule.id,
+          // 对齐原版：run-now 走 ad-hoc 路径（schedule_id=None）——历史显示"手动触发"，
+          // 且不更新计划的 last_run_at/last_run_status（只有 cron 更新）
+          scheduleId: null,
           serverNow,
         },
       });
@@ -1685,7 +1687,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
       try {
         const backupResult = await performBackupFanOut(db, runId, schedule.user_id, ledgerId || 'global', remoteConfigs, shouldEncrypt, c.env.R2, logFn, schedule.retention_days ?? undefined, (phase) => {
           broadcastViaDO(c.env, schedule.user_id, { type: 'backup_progress', phase, runId }).catch(() => {});
-        }, { scheduleId: schedule.id, scheduleName: schedule.name ?? null });
+        }, { scheduleId: null, scheduleName: null });
         const finishedAt = new Date().toISOString();
         const finalStatus = backupResult.status ?? (backupResult.success ? 'succeeded' : 'failed');
         await db.prepare(

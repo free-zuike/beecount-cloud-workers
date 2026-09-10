@@ -13,15 +13,17 @@ export async function refreshAccessToken(
   clientSecret: string,
   refreshToken: string,
 ): Promise<string | null> {
-  // 兼容原版 rclone 约定：token 字段可能是整段 OAuth JSON（{"refresh_token": "..."}，
-  // 前端标签即 "OAuth Token (JSON)"），也可能是纯 refresh_token 字符串。
-  // JSON 时提取 refresh_token 再用于刷新。
-  let rt = (refreshToken || '').trim();
-  if (rt.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(rt) as Record<string, unknown>;
-      if (typeof parsed.refresh_token === 'string') rt = parsed.refresh_token;
-    } catch { /* 解析失败则按原字符串发送 */ }
+  // 与原版 rclone 一致：token 字段必须是 OAuth JSON（{"access_token":..., "refresh_token":...}），
+  // 非 JSON 或缺少 refresh_token 即刷新失败（原版 rclone 无法解析非 JSON token）。
+  const raw = (refreshToken || '').trim();
+  if (!raw.startsWith('{')) return null;
+  let rt = '';
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof parsed.refresh_token !== 'string' || !parsed.refresh_token) return null;
+    rt = parsed.refresh_token;
+  } catch {
+    return null;
   }
 
   const endpoints: Record<string, string> = {
