@@ -179,6 +179,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
             }
             return {
               success: allSuccess,
+              status: allSuccess ? 'succeeded' : (firstPath ? 'partial' : 'failed'),
               message: messages.join('; '),
               backupSize: primarySize,
               backupPath: firstPath,
@@ -191,7 +192,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
       );
 
       const finishedAt = new Date().toISOString();
-      const finalStatus = backupResult.success ? 'succeeded' : 'failed';
+      const finalStatus = backupResult.status ?? (backupResult.success ? 'succeeded' : 'failed');
       logFn(`backup ${finalStatus}, size=${backupResult.backupSize || 0} bytes`);
 
       // 2. 更新 backup_runs 状态

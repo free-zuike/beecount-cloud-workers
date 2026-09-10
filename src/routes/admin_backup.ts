@@ -1667,7 +1667,7 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
           broadcastViaDO(c.env, schedule.user_id, { type: 'backup_progress', phase, runId }).catch(() => {});
         }, { scheduleId: schedule.id, scheduleName: schedule.name ?? null });
         const finishedAt = new Date().toISOString();
-        const finalStatus = backupResult.success ? 'succeeded' : 'failed';
+        const finalStatus = backupResult.status ?? (backupResult.success ? 'succeeded' : 'failed');
         await db.prepare(
           'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, error_message = ?, log_text = ? WHERE id = ?'
         ).bind(finalStatus, finishedAt, backupResult.backupSize || null,
@@ -1874,7 +1874,7 @@ backupRouter.post('/run-now', apiValidator('json', RunNowSchema), async (c) => {
           broadcastViaDO(c.env, userId, { type: 'backup_progress', phase, runId }).catch(() => {});
         });
         const finishedAt = new Date().toISOString();
-        const finalStatus = backupResult.success ? 'succeeded' : 'failed';
+        const finalStatus = backupResult.status ?? (backupResult.success ? 'succeeded' : 'failed');
         await db.prepare(
           'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, error_message = ?, log_text = ? WHERE id = ?'
         ).bind(finalStatus, finishedAt, backupResult.backupSize || null,

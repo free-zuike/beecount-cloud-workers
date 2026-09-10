@@ -225,21 +225,25 @@ export async function processBackupSchedule(
         });
         const finishedAt = new Date().toISOString();
         const logText = logLines.join('\n').slice(0, 1024 * 1024);
-        const updateSql = backupResult.success
+        const finalStatus = backupResult.status ?? (backupResult.success ? 'succeeded' : 'failed');
+        const hasFile = !!backupResult.backupPath;
+        // partial 且有备份文件 → 走"成功"SQL（记录文件名）；无文件 → 走失败 SQL
+        const useFileSql = finalStatus === 'succeeded' || (finalStatus === 'partial' && hasFile);
+        const updateSql = useFileSql
           ? 'UPDATE backup_runs SET status = ?, finished_at = ?, bytes_total = ?, backup_filename = ?, log_text = ? WHERE id = ?'
           : 'UPDATE backup_runs SET status = ?, finished_at = ?, error_message = ?, log_text = ? WHERE id = ?';
-        const updateParams = backupResult.success
-          ? ['succeeded', finishedAt, backupResult.backupSize || null, backupResult.backupPath?.split('/').pop() || null, backupResult.backupPath || null, logText, runId]
-          : ['failed', finishedAt, backupResult.message || null, logText, runId];
+        const updateParams = useFileSql
+          ? [finalStatus, finishedAt, backupResult.backupSize || null, backupResult.backupPath?.split('/').pop() || null, logText, runId]
+          : [finalStatus, finishedAt, backupResult.message || null, logText, runId];
         await db.prepare(updateSql).bind(...updateParams).run();
         await broadcastProgress(beeCountDO, schedule.user_id, {
-          status: backupResult.success ? 'succeeded' : 'failed', runId, scheduleId: schedule.id,
+          status: finalStatus, runId, scheduleId: schedule.id,
           backupSize: backupResult.backupSize, backupPath: backupResult.backupPath,
         });
         try {
           const nextRun = calculateNextRun(schedule.cron_expr, timezoneOffset);
           await db.prepare('UPDATE backup_schedules SET last_run_at = ?, last_run_status = ?, next_run_at = ?, updated_at = ? WHERE id = ?')
-            .bind(startedAt, backupResult.success ? 'succeeded' : 'failed', nextRun, startedAt, schedule.id).run();
+            .bind(startedAt, finalStatus, nextRun, startedAt, schedule.id).run();
         } catch (schedErr) {
           console.error(`[CRON] Failed to update backup_schedules: ${(schedErr as Error).message}`);
         }

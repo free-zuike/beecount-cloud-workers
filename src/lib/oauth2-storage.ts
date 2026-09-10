@@ -36,7 +36,11 @@ export async function refreshAccessToken(
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      console.error(`[OAuth2] ${provider} token refresh failed: ${res.status} ${errText.slice(0, 300)}`);
+      return null;
+    }
     const data = await res.json() as { access_token?: string };
     return data.access_token || null;
   } catch {
@@ -227,11 +231,10 @@ export async function uploadToDropbox(
   config: Record<string, string>,
   fileName: string,
   data: Uint8Array,
-): Promise<boolean> {
+): Promise<{ ok: boolean; message: string }> {
   const token = await refreshAccessToken('dropbox', config.client_id!, config.client_secret!, config.token!);
   if (!token) {
-    console.error('[Dropbox] Token refresh failed');
-    return false;
+    return { ok: false, message: 'token refresh failed (check Dropbox authorization)' };
   }
 
   try {
@@ -247,12 +250,11 @@ export async function uploadToDropbox(
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => 'unknown');
-      console.error(`[Dropbox] Upload failed: ${res.status} ${errText}`);
+      return { ok: false, message: `HTTP ${res.status}: ${errText.slice(0, 300)}` };
     }
-    return res.ok;
+    return { ok: true, message: 'Upload successful' };
   } catch (e) {
-    console.error('[Dropbox] Upload error:', e);
-    return false;
+    return { ok: false, message: `exception: ${(e as Error).message}` };
   }
 }
 
@@ -308,12 +310,18 @@ export async function uploadToOAuth2Provider(
   config: Record<string, string>,
   fileName: string,
   data: Uint8Array,
-): Promise<boolean> {
+): Promise<{ ok: boolean; message: string }> {
   switch (config.backend_type) {
-    case 'drive': return await uploadToDrive(config, fileName, data);
-    case 'onedrive': return await uploadToOneDrive(config, fileName, data);
+    case 'drive': {
+      const ok = await uploadToDrive(config, fileName, data);
+      return ok ? { ok: true, message: 'Upload successful' } : { ok: false, message: 'Upload failed' };
+    }
+    case 'onedrive': {
+      const ok = await uploadToOneDrive(config, fileName, data);
+      return ok ? { ok: true, message: 'Upload successful' } : { ok: false, message: 'Upload failed' };
+    }
     case 'dropbox': return await uploadToDropbox(config, fileName, data);
-    default: return false;
+    default: return { ok: false, message: `unknown backend_type: ${config.backend_type}` };
   }
 }
 

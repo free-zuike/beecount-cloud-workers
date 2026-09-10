@@ -164,6 +164,7 @@ async function uploadToWebDav(
 
 export interface BackupResult {
   success: boolean;
+  status?: 'succeeded' | 'partial' | 'failed';
   message: string;
   backupSize?: number;
   backupPath?: string;
@@ -768,7 +769,7 @@ export async function uploadBackupToRemote(
     else prefix = 'beecount/';
     const key = `${prefix}backups/${userId}/${folder}/${ts}${suffix}${encrypted ? '.zip' : '.tar.gz'}`;
     const result = await uploadToOAuth2Provider(remoteConfig, key, backupBytes);
-    return result ? { ok: true, message: 'Upload successful', key } : { ok: false, message: 'Upload failed' };
+    return result.ok ? { ok: true, message: 'Upload successful', key } : { ok: false, message: result.message };
   }
 
   if (remoteConfig.backend_type === 'ftp') {
@@ -1018,6 +1019,7 @@ export async function uploadPreparedBackup(
 
   return {
     success: allSucceeded,
+    status,
     message: allSucceeded
       ? `Backup completed to ${remoteConfigs.length} remote(s)`
       : `${successful.length}/${remoteConfigs.length} succeeded, ${failed.length} failed`,
