@@ -184,7 +184,8 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
               }
             }));
             for (const r of results) {
-              if (r.ok && r.path && !firstPath) firstPath = r.path;
+              // firstPath 只看是否有成功路径（部分远端失败时主文件已上传成功，应判 partial 而非 failed）
+              if (r.path && !firstPath) firstPath = r.path;
               if (!r.ok) allSuccess = false;
               messages.push(r.message);
             }
