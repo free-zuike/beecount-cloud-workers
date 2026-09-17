@@ -13,11 +13,11 @@ type BackupPackEnv = {
 const CLEANUP_TABLES = ['sync_push_idempotency', 'audit_logs', 'refresh_tokens', 'mcp_call_logs'];
 
 /**
- * 把 tar.gz 流式上传到 R2。
- * R2 的 put() 只接受已知长度的流（request/response body 或 FixedLengthStream 的 readable half），
- * 裸 ReadableStream 会报 "Provided readable stream must have a known length"。
- * 因此先压一遍数出字节数，再用 FixedLengthStream 包第二遍流式写入；两次压缩同一输入，
- * 输出长度一致，且压缩包从不整包落内存。makeStream 每次调用都新建独立生成流。
+ * 把 tar.gz 上传到 R2。附件条目已流式（gzip 逐块吃流，内存只占一块），
+ * 但 R2 put 要求已知长度且压缩输出长度无法预知——若先压一遍数长度再
+ * FixedLengthStream 写第二遍，两次压缩输出长度不一致会报
+ * "Attempt to write too many bytes through a FixedLengthStream"。
+ * 因此这里单遍压缩、缓冲整包（归档体积有界，通常 ≤ 数十 MB）后直接 put。
  */
 async function putTarGzToR2(
   r2: R2Bucket,
@@ -25,21 +25,9 @@ async function putTarGzToR2(
   makeStream: () => ReadableStream<Uint8Array>,
   contentType: string,
 ): Promise<number> {
-  let total = 0;
-  for await (const chunk of makeStream()) total += chunk.length;
-  const fixed = new FixedLengthStream(total);
-  const pump = (async () => {
-    const writer = fixed.writable.getWriter();
-    try {
-      for await (const chunk of makeStream()) await writer.write(chunk);
-      await writer.close();
-    } catch (e) {
-      await writer.abort(e instanceof Error ? e : new Error(String(e))).catch(() => {});
-    }
-  })();
-  const obj = await r2.put(key, fixed.readable, { httpMetadata: { contentType } });
-  await pump;
-  return obj.size;
+  const bytes = new Uint8Array(await new Response(makeStream()).arrayBuffer());
+  await r2.put(key, bytes, { httpMetadata: { contentType } });
+  return bytes.length;
 }
 
 /**
