@@ -1393,7 +1393,7 @@ backupRouter.post('/schedules', apiValidator('json', ScheduleCreateSchema), asyn
     )
     .run();
 
-  const scheduleId = (insertResult as any).lastRowId;
+  const scheduleId = insertResult.meta.last_row_id as number;
 
   // schedule ↔ remote 多对多（对齐原版 BackupScheduleRemote）
   if (req.remote_ids && req.remote_ids.length > 0) {
