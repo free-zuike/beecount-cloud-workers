@@ -124,9 +124,10 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
               }),
             });
             if (!res.ok) throw new Error(`backup-pack failed: ${await res.text()}`);
-            const r = await res.json() as { ok: boolean; files?: { r2Key: string; size: number; encrypted: boolean }[]; error?: string };
+            const r = await res.json() as { ok: boolean; files?: { r2Key: string; size: number; encrypted: boolean }[]; error?: string; heldBytes?: { sqlite: number; entries: number } };
             if (!r.ok) throw new Error(r.error || 'backup-pack failed');
             packFiles = r.files || [];
+            if (r.heldBytes) logFn(`[Backup] DO held bytes: ${JSON.stringify(r.heldBytes)}`);
             logFn(`[Backup] DO packed: ${packFiles.length} file(s), sizes: ${packFiles.map(f => f.r2Key.split('/').pop()).join(', ')}`);
             return 'ok';
           },

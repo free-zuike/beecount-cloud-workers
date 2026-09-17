@@ -9,6 +9,39 @@ type BackupPackEnv = {
   BEECOUNT_DO: DurableObjectNamespace;
 };
 
+/** 运维表清理清单（对齐原版 VACUUM INTO 前清表；保留 backup_runs/backup_run_targets 备份历史） */
+const CLEANUP_TABLES = ['sync_push_idempotency', 'audit_logs', 'refresh_tokens', 'mcp_call_logs'];
+
+/**
+ * 把 tar.gz 流式上传到 R2。
+ * R2 的 put() 只接受已知长度的流（request/response body 或 FixedLengthStream 的 readable half），
+ * 裸 ReadableStream 会报 "Provided readable stream must have a known length"。
+ * 因此先压一遍数出字节数，再用 FixedLengthStream 包第二遍流式写入；两次压缩同一输入，
+ * 输出长度一致，且压缩包从不整包落内存。makeStream 每次调用都新建独立生成流。
+ */
+async function putTarGzToR2(
+  r2: R2Bucket,
+  key: string,
+  makeStream: () => ReadableStream<Uint8Array>,
+  contentType: string,
+): Promise<number> {
+  let total = 0;
+  for await (const chunk of makeStream()) total += chunk.length;
+  const fixed = new FixedLengthStream(total);
+  const pump = (async () => {
+    const writer = fixed.writable.getWriter();
+    try {
+      for await (const chunk of makeStream()) await writer.write(chunk);
+      await writer.close();
+    } catch (e) {
+      await writer.abort(e instanceof Error ? e : new Error(String(e))).catch(() => {});
+    }
+  })();
+  const obj = await r2.put(key, fixed.readable, { httpMetadata: { contentType } });
+  await pump;
+  return obj.size;
+}
+
 /**
  * BeeCount 统一 Durable Object
  *
@@ -159,35 +192,14 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
 
       let sqlite: Uint8Array | null = null;
 
-      // 有 db.sqlite3（用户提供了 CLOUDFLARE_API_TOKEN）→ 加载 + 清理运维表
+      // 有 db.sqlite3（用户提供了 CLOUDFLARE_API_TOKEN）→ 加载。
+      // 运维表清理已合并进 rewriteSqliteAttachmentPaths（generateBackupBytes 内），
+      // 整条打包路径只加载一次 sql.js，避免二次加载的 asm.js 堆把 isolate 顶爆。
       if (body.sqliteR2Key) {
         const obj = await r2.get(body.sqliteR2Key);
         if (!obj) throw new Error(`sqlite temp not found: ${body.sqliteR2Key}`);
         sqlite = new Uint8Array(await obj.arrayBuffer());
         logFn(`loaded sqlite: ${sqlite.length} bytes`);
-
-        // 对齐原版 VACUUM INTO 后的运维表清理（best-effort）：
-        // 保留 backup_runs / backup_run_targets（备份历史，用户要求不归零），
-        // 清空其余运维表数据（schema 保留）
-        try {
-          const initSqlJs = (await import('sql.js/dist/sql-asm.js')).default;
-          if (typeof self !== 'undefined' && !(self as any).location) {
-            (self as any).location = { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:', host: 'localhost', hostname: 'localhost', port: '80', pathname: '/', search: '', hash: '' };
-          }
-          const SQL = await initSqlJs();
-          const sdb = new SQL.Database(sqlite);
-          sdb.run(
-            'DELETE FROM sync_push_idempotency;' +
-            'DELETE FROM audit_logs;' +
-            'DELETE FROM refresh_tokens;' +
-            'DELETE FROM mcp_call_logs;'
-          );
-          sqlite = sdb.export();
-          sdb.close();
-          logFn(`cleaned operational tables, sqlite: ${sqlite.length} bytes`);
-        } catch (e) {
-          logFn(`operational table cleanup skipped: ${(e as Error).message}`);
-        }
       } else {
         logFn(`no sqliteR2Key (no CLOUDFLARE_API_TOKEN) — using db.json only`);
       }
@@ -200,6 +212,7 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
         db, body.userId, body.ledgerId, r2, logFn,
         { scheduleId: body.scheduleId ?? null, scheduleName: body.scheduleName ?? null },
         sqlite, body.jwtSecret ?? null,
+        undefined, CLEANUP_TABLES,
       );
       logFn(`generated entries: ${generated.entries.length} (incl. remapped attachments)`);
       // 内存占用基线（定位超限用）：sqlite 缓冲 + 全部条目（附件/db.json）原始字节
@@ -247,9 +260,9 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
           logFn(`sqlite archive: ${bytes.length} bytes, encrypted=true`);
           files.push({ r2Key: sqliteKey, size: bytes.length, encrypted: true });
         } else {
-          const obj = await r2.put(sqliteKey, createTarGzStream(sqliteGen()), { httpMetadata: { contentType } });
-          logFn(`sqlite archive: ${obj.size} bytes (streamed), encrypted=false`);
-          files.push({ r2Key: sqliteKey, size: obj.size, encrypted: false });
+          const size = await putTarGzToR2(r2, sqliteKey, () => createTarGzStream(sqliteGen()), contentType);
+          logFn(`sqlite archive: ${size} bytes (streamed), encrypted=false`);
+          files.push({ r2Key: sqliteKey, size, encrypted: false });
         }
       }
 
@@ -263,12 +276,12 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
         logFn(`json archive: ${jsonBytes.length} bytes, encrypted=true`);
         files.push({ r2Key: jsonKey, size: jsonBytes.length, encrypted: true });
       } else {
-        const obj = await r2.put(jsonKey, createTarGzStream(jsonGen()), { httpMetadata: { contentType: jsonContentType } });
-        logFn(`json archive: ${obj.size} bytes (streamed), encrypted=false`);
-        files.push({ r2Key: jsonKey, size: obj.size, encrypted: false });
+        const size = await putTarGzToR2(r2, jsonKey, () => createTarGzStream(jsonGen()), jsonContentType);
+        logFn(`json archive: ${size} bytes (streamed), encrypted=false`);
+        files.push({ r2Key: jsonKey, size, encrypted: false });
       }
 
-      return Response.json({ ok: true, files });
+      return Response.json({ ok: true, files, heldBytes: { sqlite: sqlite?.length ?? 0, entries: entriesBytes } });
     } catch (e) {
       console.error('[BackupPack] failed:', e);
       return Response.json({ ok: false, error: (e as Error).message }, { status: 500 });

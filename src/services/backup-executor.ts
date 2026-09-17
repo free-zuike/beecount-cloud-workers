@@ -17,13 +17,17 @@ import { downloadFromStorage } from '../lib/storage-adapter';
  * /data/attachments/<user>/<ledger>/<sha[:2]>/<fileId>_<name>（对齐原版 Docker 部署
  * ATTACHMENT_STORAGE_DIR=/data/attachments）。tar 附件用相对路径 attachments/...，
  * 解压后 rsync 到 /data 即命中。
+ * cleanupTables：顺带清空的运维表（不存在则跳过）——原版 VACUUM INTO 前清表，
+ * 这里与改写合并为同一个 sql.js 会话，整条打包路径只加载一次 sql.js（内存大头）。
  */
 async function rewriteSqliteAttachmentPaths(
   sqliteBytes: Uint8Array,
   storagePathRewrite: Map<string, string>,
   avatarFileIdRewrite?: Map<string, string>,
+  cleanupTables?: string[],
 ): Promise<Uint8Array> {
-  if (storagePathRewrite.size === 0 && (!avatarFileIdRewrite || avatarFileIdRewrite.size === 0)) return sqliteBytes;
+  const hasRewrite = storagePathRewrite.size > 0 || (avatarFileIdRewrite && avatarFileIdRewrite.size > 0);
+  if (!hasRewrite && (!cleanupTables || cleanupTables.length === 0)) return sqliteBytes;
   try {
     const initSqlJs = (await import('sql.js/dist/sql-asm.js')).default;
     if (typeof self !== 'undefined' && !(self as any).location) {
@@ -32,6 +36,9 @@ async function rewriteSqliteAttachmentPaths(
     const SQL = await initSqlJs();
     const db = new SQL.Database(sqliteBytes);
     try {
+      for (const t of cleanupTables ?? []) {
+        try { db.run(`DELETE FROM "${t}"`); } catch { /* 表不存在则跳过 */ }
+      }
       for (const [id, newPath] of storagePathRewrite) {
         db.run(`UPDATE attachment_files SET storage_path = ? WHERE id = ?`, [newPath, id]);
       }
@@ -408,6 +415,7 @@ export async function generateBackupBytes(
   preSqliteBytes?: Uint8Array | null,
   jwtSecret?: string | null,
   skipAttachments?: boolean,
+  cleanupTables?: string[],
 ): Promise<GeneratedBackup> {
   const log = logFn || console.log;
   const logLines: string[] = [];
@@ -473,8 +481,8 @@ export async function generateBackupBytes(
   entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: APP_VERSION, createdAt: now, scheduleId: schedule?.scheduleId ?? null, scheduleName: schedule?.scheduleName ?? null, userId, includeAttachments: true }, null, 2)) });
   if (sqliteBytes) {
     // 改写 db.sqlite3 的 attachment_files.storage_path + user_profiles.avatar_file_id
-    // 为原版格式（绝对路径 / 纯文件名），供原版恢复后按表读
-    sqliteBytes = await rewriteSqliteAttachmentPaths(sqliteBytes, storagePathRewrite, avatarFileIdRewrite);
+    // 为原版格式（绝对路径 / 纯文件名），供原版恢复后按表读；同时清空运维表数据。
+    sqliteBytes = await rewriteSqliteAttachmentPaths(sqliteBytes, storagePathRewrite, avatarFileIdRewrite, cleanupTables);
     entries.push({ name: 'db.sqlite3', data: sqliteBytes });
   }
   if (jwtSecret) entries.push({ name: '.jwt_secret', data: new TextEncoder().encode(jwtSecret) });
@@ -495,7 +503,8 @@ export async function generateBackupBytes(
       return row;
     });
   }
-  entries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: now, version: '1.0', schema_version: 1, user_id: userId, tables }, null, 2)) });
+  // db.json 紧凑格式（无 pretty-print）——仅内部恢复/列表摘要用，原版忽略；省一半 JSON 文本内存
+  entries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: now, version: '1.0', schema_version: 1, user_id: userId, tables })) });
   for (const [key, value] of originalAttachments) entries.push({ name: key, data: value });
 
   let backupBytes = await withRetry(() => createTarGz(entries), 2, 1000, 'create tar.gz');
