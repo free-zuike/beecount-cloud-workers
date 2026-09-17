@@ -1,7 +1,7 @@
 // 加密 zip 流式往返测试：createEncryptedZipStream（zip.js 2.15，ReadableStream entry）
 // 产出 AES-256 加密 zip，用 ZipReader + 密码解回，校验流式附件内容与 data 条目一致。
 import { describe, it, expect } from 'vitest';
-import { ZipReader, Uint8ArrayReader, TextWriter } from '@zip.js/zip.js';
+import { ZipReader, Uint8ArrayReader, TextWriter, type FileEntry } from '@zip.js/zip.js';
 import { createEncryptedZipStream } from '../../src/lib/zip-lib';
 
 describe('encrypted zip streaming', () => {
@@ -22,10 +22,11 @@ describe('encrypted zip streaming', () => {
         'attachments/u1/led-1/ab/att-1_photo.jpg',
       ]);
 
-      const meta = await zipEntries[0].getData(new TextWriter());
+      const fileEntries = zipEntries.filter((e): e is FileEntry => !e.directory);
+      const meta = await fileEntries[0].getData(new TextWriter());
       expect(meta).toBe('{"schemaVersion":1}');
 
-      const att = await zipEntries[1].getData(new TextWriter());
+      const att = await fileEntries[1].getData(new TextWriter());
       expect(att).toBe('FAKE_IMAGE_STREAM_CONTENT_附件内容');
     } finally {
       await reader.close();

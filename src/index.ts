@@ -214,14 +214,20 @@ app.use('*', async (c, next) => {
 // ---- OAuth2 回调（不需要认证，被 OAuth 提供商直接调用） ----
 app.get('/api/v1/admin/backup/remotes/oauth2/callback', async (c) => {
   const code = c.req.query('code');
-  const provider = c.req.query('provider') || c.req.query('state') || 'drive';
+  const provider = c.req.query('provider') || c.req.query('state') || '';
   if (!code) return c.text('Missing authorization code', 400);
+  // 授权链接应带 state=<provider>（或 provider=<provider>），否则无法确定换 token 端点。
+  // 缺失时页面提供下拉选择兜底，避免把 Dropbox 的 code 发到 Google 端点报 invalid_client。
+  const providerOptions = ['drive', 'onedrive', 'dropbox']
+    .map(p => `<option value="${p}"${p === provider ? ' selected' : ''}>${p}</option>`)
+    .join('');
   // 跳转到回调页面，用前端 POST 换取 token
   return c.html(`<!DOCTYPE html><html><body>
     <h2>授权成功</h2>
     <p>授权码: <code style="word-break:break-all" id="oauth-code">${code}</code></p>
     <p style="color:#c00">授权码有效期只有几分钟，请立刻在下方填入 Client ID / Client Secret 并点击"换取 Token"。</p>
     <form id="oauth-form">
+      <p>Provider: <select id="oauth-provider">${providerOptions}</select></p>
       <p>Client ID: <input id="oauth-cid" size="60" style="font-family:monospace"></p>
       <p>Client Secret: <input id="oauth-csec" size="60" style="font-family:monospace"></p>
       <p><button type="submit">换取 Token</button></p>
@@ -229,7 +235,6 @@ app.get('/api/v1/admin/backup/remotes/oauth2/callback', async (c) => {
     <pre id="oauth-out" style="white-space:pre-wrap;word-break:break-all;border:1px solid #ccc;padding:8px"></pre>
     <script>
       const code = document.getElementById('oauth-code').textContent;
-      const provider = ${JSON.stringify(provider)};
       document.getElementById('oauth-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const out = document.getElementById('oauth-out');
@@ -240,7 +245,7 @@ app.get('/api/v1/admin/backup/remotes/oauth2/callback', async (c) => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               code,
-              provider,
+              provider: document.getElementById('oauth-provider').value,
               client_id: document.getElementById('oauth-cid').value.trim(),
               client_secret: document.getElementById('oauth-csec').value.trim(),
             }),
