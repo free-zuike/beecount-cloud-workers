@@ -154,10 +154,11 @@ export async function createTarGz(entries: TarEntry[]): Promise<Uint8Array> {
 /**
  * 流式创建 tar.gz — 接受异步迭代器，逐个写入条目，同一时间只有一个条目在内存。
  * 用于大附件场景：附件从 R2 逐个下载、逐个写入 tar，不全加载到内存。
+ * 返回 ReadableStream，调用方直接 r2.put(key, stream) 流式上传，压缩包不落内存。
  */
-export async function createTarGzStream(
+export function createTarGzStream(
   entries: AsyncIterable<{ name: string; data: Uint8Array; mode?: number; mtime?: number }>,
-): Promise<Uint8Array> {
+): ReadableStream<Uint8Array> {
   const tarStream = new ReadableStream<Uint8Array>({
     async start(controller) {
       for await (const entry of entries) {
@@ -175,7 +176,5 @@ export async function createTarGzStream(
       controller.close();
     },
   });
-  const gzipped = tarStream.pipeThrough(new CompressionStream('gzip'));
-  const response = new Response(gzipped);
-  return new Uint8Array(await response.arrayBuffer());
+  return tarStream.pipeThrough(new CompressionStream('gzip'));
 }

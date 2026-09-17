@@ -202,6 +202,9 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
         sqlite, body.jwtSecret ?? null,
       );
       logFn(`generated entries: ${generated.entries.length} (incl. remapped attachments)`);
+      // 内存占用基线（定位超限用）：sqlite 缓冲 + 全部条目（附件/db.json）原始字节
+      const entriesBytes = generated.entries.reduce((n, e) => n + e.data.length, 0);
+      logFn(`held bytes: sqlite=${sqlite?.length ?? 0}, entries=${entriesBytes}`);
 
       // 拆分基础条目 vs 附件（附件 entry 名已是原版相对路径）
       const baseEntries = generated.entries;
@@ -232,39 +235,38 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
       const baseKey = body.outR2Key;
       const files: { r2Key: string; size: number; encrypted: boolean }[] = [];
 
-      // 有 db.sqlite3 → 流式生成原版格式文件（附件逐个下载写入，不全加载到内存）
+      // 有 db.sqlite3 → 生成原版格式文件。tar.gz 真流式写 R2（压缩包不落内存，
+      // 附件仍逐个入流）；加密 zip 因 central directory 无法流式，维持单份缓冲。
       if (sqlite) {
         const sqliteKey = baseKey;
-        let bytes: Uint8Array;
-        let enc = false;
-        if (body.shouldEncrypt && body.password) {
-          bytes = await createEncryptedZipStream(sqliteGen(), body.password);
-          enc = true;
+        const enc = !!(body.shouldEncrypt && body.password);
+        const contentType = enc ? 'application/zip' : 'application/gzip';
+        if (enc) {
+          const bytes = await createEncryptedZipStream(sqliteGen(), body.password!);
+          await r2.put(sqliteKey, bytes, { httpMetadata: { contentType } });
+          logFn(`sqlite archive: ${bytes.length} bytes, encrypted=true`);
+          files.push({ r2Key: sqliteKey, size: bytes.length, encrypted: true });
         } else {
-          bytes = await createTarGzStream(sqliteGen());
+          const obj = await r2.put(sqliteKey, createTarGzStream(sqliteGen()), { httpMetadata: { contentType } });
+          logFn(`sqlite archive: ${obj.size} bytes (streamed), encrypted=false`);
+          files.push({ r2Key: sqliteKey, size: obj.size, encrypted: false });
         }
-        await r2.put(sqliteKey, bytes, {
-          httpMetadata: { contentType: enc ? 'application/zip' : 'application/gzip' },
-        });
-        logFn(`sqlite archive: ${bytes.length} bytes, encrypted=${enc}`);
-        files.push({ r2Key: sqliteKey, size: bytes.length, encrypted: enc });
       }
 
-      // 流式生成 json 版独立文件
+      // 生成 json 版独立文件（同上：tar.gz 流式 / 加密 zip 缓冲）
       const jsonKey = baseKey.replace(/\.(tar\.gz|zip)$/, '-json.$1');
-      let jsonBytes: Uint8Array;
-      let jsonEnc = false;
-      if (body.shouldEncrypt && body.password) {
-        jsonBytes = await createEncryptedZipStream(jsonGen(), body.password);
-        jsonEnc = true;
+      const jsonEnc = !!(body.shouldEncrypt && body.password);
+      const jsonContentType = jsonEnc ? 'application/zip' : 'application/gzip';
+      if (jsonEnc) {
+        const jsonBytes = await createEncryptedZipStream(jsonGen(), body.password!);
+        await r2.put(jsonKey, jsonBytes, { httpMetadata: { contentType: jsonContentType } });
+        logFn(`json archive: ${jsonBytes.length} bytes, encrypted=true`);
+        files.push({ r2Key: jsonKey, size: jsonBytes.length, encrypted: true });
       } else {
-        jsonBytes = await createTarGzStream(jsonGen());
+        const obj = await r2.put(jsonKey, createTarGzStream(jsonGen()), { httpMetadata: { contentType: jsonContentType } });
+        logFn(`json archive: ${obj.size} bytes (streamed), encrypted=false`);
+        files.push({ r2Key: jsonKey, size: obj.size, encrypted: false });
       }
-      await r2.put(jsonKey, jsonBytes, {
-        httpMetadata: { contentType: jsonEnc ? 'application/zip' : 'application/gzip' },
-      });
-      logFn(`json archive: ${jsonBytes.length} bytes, encrypted=${jsonEnc}`);
-      files.push({ r2Key: jsonKey, size: jsonBytes.length, encrypted: jsonEnc });
 
       return Response.json({ ok: true, files });
     } catch (e) {
