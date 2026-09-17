@@ -159,24 +159,34 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
             let firstPath: string | undefined;
             let allSuccess = true;
             const messages: string[] = [];
-            for (const f of packFiles) {
-              const obj = await this.env.R2.get(f.r2Key);
-              if (!obj) { allSuccess = false; messages.push(`${f.r2Key} not found`); continue; }
-              const bytes = new Uint8Array(await obj.arrayBuffer());
-              // 主文件大小：第一个文件（有 sqlite 时是 sqlite，无 token 时是 json），不叠加
-              if (primarySize === 0) primarySize = bytes.length;
-              // 从 r2Key 提取后缀（backup-json.tar.gz → -json；backup.tar.gz → 无后缀=原版名称）
-              const suffixMatch = f.r2Key.match(/-json\./);
-              const suffix = suffixMatch ? '-json' : '';
-              const result = await uploadPreparedBackup(
-                db, runId, userId, ledgerId, effectiveConfigs,
-                this.env.R2, logFn, retentionDays,
-                (phase) => { broadcast({ type: 'backup_progress', phase, runId }).catch(() => {}); },
-                bytes, f.encrypted, suffix,
-              );
-              if (result.backupPath && !firstPath) firstPath = result.backupPath;
-              if (!result.success) allSuccess = false;
-              messages.push(`${suffix || 'default'}: ${result.message}`);
+            // 两个归档（主 + -json）并行上传到所有远端：慢远端（如 B2）不再被串行等两轮，
+            // 总耗时约减半。retention 只对主归档跑一次——它按远端整体计算新旧文件，
+            // 一次覆盖两种后缀，并行时避免两份 retention 重复删除同一批旧文件。
+            const results = await Promise.all(packFiles.map(async (f, idx) => {
+              try {
+                const obj = await this.env.R2.get(f.r2Key);
+                if (!obj) return { ok: false, message: `${f.r2Key} not found` };
+                const bytes = new Uint8Array(await obj.arrayBuffer());
+                // 主文件大小：第一个文件（有 sqlite 时是 sqlite，无 token 时是 json），不叠加
+                if (idx === 0) primarySize = bytes.length;
+                // 从 r2Key 提取后缀（backup-json.tar.gz → -json；backup.tar.gz → 无后缀=原版名称）
+                const suffixMatch = f.r2Key.match(/-json\./);
+                const suffix = suffixMatch ? '-json' : '';
+                const result = await uploadPreparedBackup(
+                  db, runId, userId, ledgerId, effectiveConfigs,
+                  this.env.R2, logFn, idx === 0 ? retentionDays : undefined,
+                  (phase) => { broadcast({ type: 'backup_progress', phase, runId }).catch(() => {}); },
+                  bytes, f.encrypted, suffix,
+                );
+                return { ok: result.success, path: result.backupPath, message: `${suffix || 'default'}: ${result.message}` };
+              } catch (e) {
+                return { ok: false, message: `${f.r2Key}: ${(e as Error).message}` };
+              }
+            }));
+            for (const r of results) {
+              if (r.ok && r.path && !firstPath) firstPath = r.path;
+              if (!r.ok) allSuccess = false;
+              messages.push(r.message);
             }
             return {
               success: allSuccess,
