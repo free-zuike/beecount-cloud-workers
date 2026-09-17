@@ -7,8 +7,8 @@
 import { uploadToS3, listS3Objects, deleteS3Object, downloadFromS3 } from '../lib/s3';
 import { createFtpClient } from '../lib/ftp';
 import { createSftpClient } from '../lib/sftp';
-import { createTarGz } from '../lib/tar';
-import { createEncryptedZip } from '../lib/zip-lib';
+import { createTarGz, type TarEntrySource } from '../lib/tar';
+import { createEncryptedZipStream } from '../lib/zip-lib';
 import { exportD1ToSqlite, DEFAULT_EXCLUDED_TABLES } from '../lib/sqlite-writer';
 import { downloadFromStorage } from '../lib/storage-adapter';
 
@@ -272,8 +272,8 @@ async function fetchR2Attachments(
   db: D1Database,
   r2: R2Bucket | undefined,
   userId: string,
-): Promise<{ originalAttachments: Map<string, Uint8Array>; storagePathRewrite: Map<string, string>; avatarFileIdRewrite: Map<string, string> }> {
-  const originalAttachments = new Map<string, Uint8Array>();
+): Promise<{ originalAttachments: Map<string, AttachmentSource>; storagePathRewrite: Map<string, string>; avatarFileIdRewrite: Map<string, string> }> {
+  const originalAttachments = new Map<string, AttachmentSource>();
   const storagePathRewrite = new Map<string, string>();
   const avatarFileIdRewrite = new Map<string, string>();
 
@@ -291,9 +291,29 @@ async function fetchR2Attachments(
 
   await parallelMap(rows.results, async (row) => {
     if (!row.storage_path) return;
-    // 从任一可用存储取文件（R2 优先，再遍历所有备份远端；与下载端 downloadFromStorage 一致）
-    const data = await downloadFromStorage(db, { R2: r2 }, row.storage_path);
-    if (!data) return;
+    // 优先 R2 流式源（只取元数据 + 按需再 get 流，附件字节不进内存）；
+    // R2 无此 key 时回退 downloadFromStorage 缓冲（罕见，远端兜底）
+    let source: AttachmentSource | null = null;
+    if (r2) {
+      const r2Obj = await r2.get(row.storage_path);
+      if (r2Obj) {
+        const key = row.storage_path;
+        source = {
+          size: r2Obj.size,
+          getStream: async () => {
+            const o = await r2.get(key);
+            if (!o) throw new Error(`attachment vanished from R2: ${key}`);
+            return o.body;
+          },
+        };
+      }
+    }
+    if (!source) {
+      const data = await downloadFromStorage(db, { R2: r2 }, row.storage_path);
+      if (!data) return;
+      const buf = data;
+      source = { size: buf.length, getStream: () => new Blob([buf]).stream() };
+    }
 
     const userPart = row.user_id;
     const shaDir = (row.sha256 ?? '').slice(0, 2) || 'na';
@@ -311,7 +331,7 @@ async function fetchR2Attachments(
     const originalRel = `attachments/${userPart}/${subDir}/${shaDir}/${row.id}_${fileName}`;
     const originalAbs = `/data/attachments/${userPart}/${subDir}/${shaDir}/${row.id}_${fileName}`;
 
-    originalAttachments.set(originalRel, data);
+    originalAttachments.set(originalRel, source);
     storagePathRewrite.set(row.id, originalAbs);
   }, 6);
 
@@ -328,6 +348,7 @@ async function fetchR2Attachments(
     ).bind(userId, '').first<{ avatar_file_id: string; avatar_version: number }>();
     if (profile?.avatar_file_id) {
       const sp = profile.avatar_file_id;
+      // 头像单文件小，保持缓冲（需要魔数猜扩展名）
       const data = await downloadFromStorage(db, { R2: r2 }, sp);
       if (data) {
         const ext = detectImageExt(data);
@@ -338,7 +359,8 @@ async function fetchR2Attachments(
         const rawStem = baseName.replace(/^avatar_/, '');
         const stemWithExt = rawStem.includes('.') ? rawStem : `${rawStem}${ext ? `.${ext}` : ''}`;
         const originalName = `avatar_${stemWithExt}`;
-        originalAttachments.set(`attachments/profile-avatars/${userId}/${originalName}`, data);
+        const buf = data;
+        originalAttachments.set(`attachments/profile-avatars/${userId}/${originalName}`, { size: buf.length, getStream: () => new Blob([buf]).stream() });
         // 记录 avatar_file_id 改写（由 worker 的完整路径 → 原版纯文件名），恢复后原版
         // _avatar_root()/<user_id>/<avatar_file_id> 即可命中
         avatarFileIdRewrite.set(userId, originalName);
@@ -351,6 +373,9 @@ async function fetchR2Attachments(
   console.log(`[Backup] attachments remapped to original layout: ${originalAttachments.size} files`);
   return { originalAttachments, storagePathRewrite, avatarFileIdRewrite };
 }
+
+/** 附件条目源：已知大小 + 按需取流（R2 流式 / 缓冲回退） */
+type AttachmentSource = { size: number; getStream: () => ReadableStream<Uint8Array> | Promise<ReadableStream<Uint8Array>> };
 
 /** 按字节魔数推断图片扩展名（jpg/png/webp/gif），用于原版恢复时猜 MIME */
 function detectImageExt(data: Uint8Array): string {
@@ -389,7 +414,7 @@ async function withRetry<T>(
 
 export interface GeneratedBackup {
   backupBytes: Uint8Array;
-  entries: Array<{ name: string; data: Uint8Array }>;
+  entries: TarEntrySource[];
   encrypted: boolean;
   backupSize: number;
   logLines: string[];
@@ -416,6 +441,7 @@ export async function generateBackupBytes(
   jwtSecret?: string | null,
   skipAttachments?: boolean,
   cleanupTables?: string[],
+  skipPacking?: boolean,
 ): Promise<GeneratedBackup> {
   const log = logFn || console.log;
   const logLines: string[] = [];
@@ -460,7 +486,7 @@ export async function generateBackupBytes(
   //    R2 都要尝试收集（downloadFromStorage 内部自动遍历 R2 + 全部远端）。
   //    skipAttachments=true：调用方（DO backup-pack）已自行按 R2 key 收集附件，
   //    这里跳过避免重复下载（Workflow 路径）。
-  let originalAttachments = new Map<string, Uint8Array>();
+  let originalAttachments = new Map<string, AttachmentSource>();
   let storagePathRewrite = new Map<string, string>();
   let avatarFileIdRewrite = new Map<string, string>();
   if (!skipAttachments) {
@@ -476,8 +502,10 @@ export async function generateBackupBytes(
   }
 
   // 4. 构建文件条目（供 tar.gz / ZIP 使用；原版解包后根目录直接是这些文件）
+  //    附件条目为 {name, size, stream} 流式源：tar.gz 路径归档时逐张从存储流入，
+  //    内存只占一块；加密 zip 路径由调用方 materializeEntries 物化。
   const now = new Date().toISOString();
-  const entries: { name: string; data: Uint8Array }[] = [];
+  const entries: TarEntrySource[] = [];
   entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, appVersion: APP_VERSION, createdAt: now, scheduleId: schedule?.scheduleId ?? null, scheduleName: schedule?.scheduleName ?? null, userId, includeAttachments: true }, null, 2)) });
   if (sqliteBytes) {
     // 改写 db.sqlite3 的 attachment_files.storage_path + user_profiles.avatar_file_id
@@ -505,9 +533,15 @@ export async function generateBackupBytes(
   }
   // db.json 紧凑格式（无 pretty-print）——仅内部恢复/列表摘要用，原版忽略；省一半 JSON 文本内存
   entries.push({ name: 'db.json', data: new TextEncoder().encode(JSON.stringify({ backup_time: now, version: '1.0', schema_version: 1, user_id: userId, tables })) });
-  for (const [key, value] of originalAttachments) entries.push({ name: key, data: value });
+  for (const [key, value] of originalAttachments) entries.push({ name: key, size: value.size, stream: value.getStream });
 
-  let backupBytes = await withRetry(() => createTarGz(entries), 2, 1000, 'create tar.gz');
+  let backupBytes: Uint8Array;
+  if (skipPacking) {
+    // DO 打包路径不需要物化 backupBytes（流式生成归档），避免重复下载附件
+    backupBytes = new Uint8Array(0);
+  } else {
+    backupBytes = await withRetry(() => createTarGz(entries), 2, 1000, 'create tar.gz');
+  }
   logWrap(`[Backup] tar.gz created: ${backupBytes.length} bytes, ${Object.keys(tables).length} tables, attachments ${originalAttachments.size}`);
 
   return { backupBytes, entries, encrypted: false, backupSize: backupBytes.length, logLines };
@@ -892,7 +926,8 @@ export async function performBackupFanOut(
     const pw = remoteConfigs[0].config.age_passphrase || remoteConfigs[0].config.zipryption_password;
     if (pw) {
       try {
-        backupBytes = await createEncryptedZip(generated.entries, pw);
+        // 附件条目流式进加密管线（zip.js 2.15 支持 ReadableStream entry）
+        backupBytes = await createEncryptedZipStream(generated.entries, pw);
         encrypted = true;
         logWrap(`[Backup] Encrypted (AES-256 ZIP): ${backupBytes.length} bytes`);
       } catch (e) {

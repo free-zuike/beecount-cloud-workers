@@ -7,23 +7,29 @@
 
 // ==================== Token 刷新 ====================
 
-export async function refreshAccessToken(
+/**
+ * 刷新 access_token，返回 { token, error }——error 带提供商真实原因，
+ * 供运行日志直接显示（不再笼统 "check xxx authorization"）。
+ */
+async function refreshAccessTokenDetailed(
   provider: 'drive' | 'onedrive' | 'dropbox',
   clientId: string,
   clientSecret: string,
   refreshToken: string,
-): Promise<string | null> {
+): Promise<{ token: string | null; error: string }> {
   // 与原版 rclone 一致：token 字段必须是 OAuth JSON（{"access_token":..., "refresh_token":...}），
   // 非 JSON 或缺少 refresh_token 即刷新失败（原版 rclone 无法解析非 JSON token）。
   const raw = (refreshToken || '').trim();
-  if (!raw.startsWith('{')) return null;
+  if (!raw.startsWith('{')) return { token: null, error: 'token 不是 OAuth JSON（需含 refresh_token）' };
   let rt = '';
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (typeof parsed.refresh_token !== 'string' || !parsed.refresh_token) return null;
+    if (typeof parsed.refresh_token !== 'string' || !parsed.refresh_token) {
+      return { token: null, error: 'token JSON 缺少 refresh_token 字段' };
+    }
     rt = parsed.refresh_token;
   } catch {
-    return null;
+    return { token: null, error: 'token JSON 解析失败' };
   }
 
   const endpoints: Record<string, string> = {
@@ -52,13 +58,24 @@ export async function refreshAccessToken(
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
       console.error(`[OAuth2] ${provider} token refresh failed: ${res.status} ${errText.slice(0, 300)}`);
-      return null;
+      return { token: null, error: `HTTP ${res.status}: ${errText.slice(0, 200) || 'no body'}` };
     }
     const data = await res.json() as { access_token?: string };
-    return data.access_token || null;
-  } catch {
-    return null;
+    if (!data.access_token) return { token: null, error: '响应缺少 access_token' };
+    return { token: data.access_token, error: '' };
+  } catch (e) {
+    return { token: null, error: `request failed: ${(e as Error).message}` };
   }
+}
+
+export async function refreshAccessToken(
+  provider: 'drive' | 'onedrive' | 'dropbox',
+  clientId: string,
+  clientSecret: string,
+  refreshToken: string,
+): Promise<string | null> {
+  const r = await refreshAccessTokenDetailed(provider, clientId, clientSecret, refreshToken);
+  return r.token;
 }
 
 // ==================== Google Drive ====================
@@ -245,10 +262,11 @@ export async function uploadToDropbox(
   fileName: string,
   data: Uint8Array,
 ): Promise<{ ok: boolean; message: string }> {
-  const token = await refreshAccessToken('dropbox', config.client_id!, config.client_secret!, config.token!);
-  if (!token) {
-    return { ok: false, message: 'token refresh failed (check Dropbox authorization)' };
+  const r = await refreshAccessTokenDetailed('dropbox', config.client_id!, config.client_secret!, config.token!);
+  if (!r.token) {
+    return { ok: false, message: `token refresh failed: ${r.error || 'check Dropbox authorization'}` };
   }
+  const token = r.token;
 
   try {
     const path = config.folder_path ? `/${config.folder_path}/${fileName}` : `/${fileName}`;

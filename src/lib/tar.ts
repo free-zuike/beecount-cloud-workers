@@ -3,12 +3,18 @@
  * Compatible with POSIX.1-2001 (ustar) format
  */
 
-interface TarEntry {
+/**
+ * tar 条目源：data 直接给字节；或 stream 提供已知大小(size)的字节流
+ * （大附件场景：归档时逐个从存储流式读入，不整包驻留内存）。
+ */
+export type TarEntrySource = {
   name: string;
-  data: Uint8Array;
+  data?: Uint8Array;
+  size?: number;
+  stream?: () => ReadableStream<Uint8Array> | Promise<ReadableStream<Uint8Array>>;
   mode?: number;
   mtime?: number;
-}
+};
 
 const BLOCK_SIZE = 512;
 
@@ -53,7 +59,7 @@ function writeString(value: string, offset: number, length: number, buffer: Uint
 /**
  * Create a TAR header for a file entry
  */
-function createHeader(entry: TarEntry, size: number): Uint8Array {
+function createHeader(entry: { name: string; mode?: number; mtime?: number }, size: number): Uint8Array {
   const header = new Uint8Array(BLOCK_SIZE);
   
   // File name (offset 0, 100 bytes)
@@ -98,42 +104,6 @@ function createHeader(entry: TarEntry, size: number): Uint8Array {
 }
 
 /**
- * Create a TAR archive from multiple file entries
- */
-export function createTar(entries: TarEntry[]): Uint8Array {
-  // Calculate total size
-  let totalSize = 0;
-  for (const entry of entries) {
-    totalSize += BLOCK_SIZE; // header
-    totalSize += Math.ceil(entry.data.length / BLOCK_SIZE) * BLOCK_SIZE; // data (padded)
-  }
-  totalSize += BLOCK_SIZE * 2; // end blocks
-  
-  const tar = new Uint8Array(totalSize);
-  let offset = 0;
-  
-  for (const entry of entries) {
-    // Write header
-    const header = createHeader(entry, entry.data.length);
-    tar.set(header, offset);
-    offset += BLOCK_SIZE;
-    
-    // Write data
-    tar.set(entry.data, offset);
-    offset += entry.data.length;
-    
-    // Pad to block boundary
-    const padding = Math.ceil(entry.data.length / BLOCK_SIZE) * BLOCK_SIZE - entry.data.length;
-    offset += padding;
-  }
-  
-  // Write end blocks (two 512-byte zero blocks)
-  // Already zero-initialized, so nothing to write
-  
-  return tar;
-}
-
-/**
  * Compress data using gzip (CompressionStream API)
  */
 export async function gzip(data: Uint8Array): Promise<Uint8Array> {
@@ -144,31 +114,52 @@ export async function gzip(data: Uint8Array): Promise<Uint8Array> {
 }
 
 /**
- * Create a tar.gz archive from multiple file entries
+ * Create a tar.gz archive from multiple file entries（含流式附件时物化后打包，
+ * 仅用于本地/缓冲调用方；生产 DO 打包走 createTarGzStream 真流式）
  */
-export async function createTarGz(entries: TarEntry[]): Promise<Uint8Array> {
-  const tar = createTar(entries);
-  return gzip(tar);
+export async function createTarGz(entries: TarEntrySource[]): Promise<Uint8Array> {
+  const stream = createTarGzStream(entries);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 /**
- * 流式创建 tar.gz — 接受异步迭代器，逐个写入条目，同一时间只有一个条目在内存。
- * 用于大附件场景：附件从 R2 逐个下载、逐个写入 tar，不全加载到内存。
+ * 流式创建 tar.gz — 接受异步迭代器，逐个写入条目。
+ * 条目可以是 {name, data}（直接字节），或 {name, size, stream}（归档时
+ * 从 stream 逐块读入，同一时间只有一块在内存）。用于大附件场景：
+ * 附件从 R2 逐个流式下载写入 tar，不全加载到内存。
  * 返回 ReadableStream，调用方直接 r2.put(key, stream) 流式上传，压缩包不落内存。
  */
 export function createTarGzStream(
-  entries: AsyncIterable<{ name: string; data: Uint8Array; mode?: number; mtime?: number }>,
+  entries: Iterable<TarEntrySource> | AsyncIterable<TarEntrySource>,
 ): ReadableStream<Uint8Array> {
   const tarStream = new ReadableStream<Uint8Array>({
     async start(controller) {
       for await (const entry of entries) {
+        const size = entry.data ? entry.data.length : (entry.size ?? 0);
         // 写 header
-        const header = createHeader(entry, entry.data.length);
+        const header = createHeader(entry, size);
         controller.enqueue(header);
-        // 写数据
-        controller.enqueue(entry.data);
+        if (entry.data) {
+          // 写数据
+          controller.enqueue(entry.data);
+        } else if (entry.stream) {
+          // 从存储流式读（逐块 enqueue，内存只占一块）
+          const src = await entry.stream();
+          const reader = src.getReader();
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              controller.enqueue(value);
+            }
+          } finally {
+            reader.releaseLock();
+          }
+        } else {
+          throw new Error(`tar entry has no data or stream: ${entry.name}`);
+        }
         // 写 padding 到 512 字节边界
-        const padding = Math.ceil(entry.data.length / BLOCK_SIZE) * BLOCK_SIZE - entry.data.length;
+        const padding = Math.ceil(size / BLOCK_SIZE) * BLOCK_SIZE - size;
         if (padding > 0) controller.enqueue(new Uint8Array(padding));
       }
       // 写结束块（两个 512 字节零块）

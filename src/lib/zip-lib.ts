@@ -5,6 +5,7 @@
 
 // 使用 index.min.js 尝试兼容 Workers
 import { configure, ZipWriter, Uint8ArrayWriter, Uint8ArrayReader } from '@zip.js/zip.js';
+import type { TarEntrySource } from './tar';
 
 // 配置 zip.js 不使用 Web Workers（Cloudflare Workers 不支持）
 configure({ useWebWorkers: false });
@@ -31,11 +32,12 @@ export async function createEncryptedZip(
 }
 
 /**
- * 流式创建 AES-256 加密 ZIP — 接受异步迭代器，逐个添加条目。
- * 同一时间只有一个条目的数据在内存，用于大附件场景。
+ * 流式创建 AES-256 加密 ZIP — 接受条目迭代器。
+ * data 条目用 Uint8ArrayReader；stream 条目直接把 ReadableStream 交给 ZipWriter
+ * （zip.js 2.15 支持流式 entry），附件从存储逐块流入加密管线，同一时间只有一块在内存。
  */
 export async function createEncryptedZipStream(
-  entries: AsyncIterable<{ name: string; data: Uint8Array }>,
+  entries: Iterable<TarEntrySource> | AsyncIterable<TarEntrySource>,
   password: string,
 ): Promise<Uint8Array> {
   const writer = new Uint8ArrayWriter();
@@ -45,7 +47,13 @@ export async function createEncryptedZipStream(
   });
 
   for await (const file of entries) {
-    await zipWriter.add(file.name, new Uint8ArrayReader(file.data));
+    if (file.data) {
+      await zipWriter.add(file.name, new Uint8ArrayReader(file.data));
+    } else if (file.stream) {
+      await zipWriter.add(file.name, await file.stream());
+    } else {
+      throw new Error(`zip entry has no data or stream: ${file.name}`);
+    }
   }
 
   await zipWriter.close();

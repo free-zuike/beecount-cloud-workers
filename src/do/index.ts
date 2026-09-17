@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { generateBackupBytes } from '../services/backup-executor';
 import { createEncryptedZipStream } from '../lib/zip-lib';
-import { createTarGzStream } from '../lib/tar';
+import { createTarGzStream, type TarEntrySource } from '../lib/tar';
 
 type BackupPackEnv = {
   DB: D1Database;
@@ -208,16 +208,20 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
       // 会把 R2 key 重映射为原版相对路径（attachments/<user>/<ledger>/<sha>/<id>_<name>
       // + profile-avatars/<user>/avatar_<uuid>.<ext>，头像已按魔数补扩展名），
       // tar 内附件路径与原版完全一致，可直接互恢复。不再用裸 R2 key 命名。
+      // skipPacking=true：附件条目是 {name,size,stream} 流式源，不物化 backupBytes。
+      const hasSqlite = sqlite != null;
       const generated = await generateBackupBytes(
         db, body.userId, body.ledgerId, r2, logFn,
         { scheduleId: body.scheduleId ?? null, scheduleName: body.scheduleName ?? null },
         sqlite, body.jwtSecret ?? null,
-        undefined, CLEANUP_TABLES,
+        undefined, CLEANUP_TABLES, true,
       );
+      const sqliteLen = sqlite?.length ?? 0;
+      sqlite = null; // 释放原始 sqlite 缓冲（改写后的副本已在 entries 里）
       logFn(`generated entries: ${generated.entries.length} (incl. remapped attachments)`);
-      // 内存占用基线（定位超限用）：sqlite 缓冲 + 全部条目（附件/db.json）原始字节
-      const entriesBytes = generated.entries.reduce((n, e) => n + e.data.length, 0);
-      logFn(`held bytes: sqlite=${sqlite?.length ?? 0}, entries=${entriesBytes}`);
+      // 内存占用基线（定位超限用）：sqlite 缓冲 + 全部条目逻辑字节（附件已流式，不驻留）
+      const entriesBytes = generated.entries.reduce((n, e) => n + (e.data?.length ?? e.size ?? 0), 0);
+      logFn(`held bytes: sqlite=${sqliteLen}, entries=${entriesBytes}`);
 
       // 拆分基础条目 vs 附件（附件 entry 名已是原版相对路径）
       const baseEntries = generated.entries;
@@ -236,11 +240,11 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
   logFn(`sqlite base ${sqliteBase.length}, json base ${jsonBase.length}, attachments ${attachmentEntries.length}`);
 
   // 生成器：基础条目 + 原版布局附件（两个文件各自独立可恢复）
-  const sqliteGen = async function* (): AsyncGenerator<{ name: string; data: Uint8Array }> {
+  const sqliteGen = async function* (): AsyncGenerator<TarEntrySource> {
     for (const e of sqliteBase) yield e;
     for (const e of attachmentEntries) yield e;
   };
-  const jsonGen = async function* (): AsyncGenerator<{ name: string; data: Uint8Array }> {
+  const jsonGen = async function* (): AsyncGenerator<TarEntrySource> {
     for (const e of jsonBase) yield e;
     for (const e of attachmentEntries) yield e;
   };
@@ -248,9 +252,9 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
       const baseKey = body.outR2Key;
       const files: { r2Key: string; size: number; encrypted: boolean }[] = [];
 
-      // 有 db.sqlite3 → 生成原版格式文件。tar.gz 真流式写 R2（压缩包不落内存，
-      // 附件仍逐个入流）；加密 zip 因 central directory 无法流式，维持单份缓冲。
-      if (sqlite) {
+      // 有 db.sqlite3 → 生成原版格式文件。tar.gz 真流式写 R2（附件逐张流入，
+      // 内存只占一块）；加密 zip 也流式（zip.js 2.15 支持 ReadableStream entry）。
+      if (hasSqlite) {
         const sqliteKey = baseKey;
         const enc = !!(body.shouldEncrypt && body.password);
         const contentType = enc ? 'application/zip' : 'application/gzip';
@@ -266,7 +270,7 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
         }
       }
 
-      // 生成 json 版独立文件（同上：tar.gz 流式 / 加密 zip 缓冲）
+      // 生成 json 版独立文件（同上：tar.gz / 加密 zip 均流式）
       const jsonKey = baseKey.replace(/\.(tar\.gz|zip)$/, '-json.$1');
       const jsonEnc = !!(body.shouldEncrypt && body.password);
       const jsonContentType = jsonEnc ? 'application/zip' : 'application/gzip';
@@ -281,7 +285,7 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
         files.push({ r2Key: jsonKey, size, encrypted: false });
       }
 
-      return Response.json({ ok: true, files, heldBytes: { sqlite: sqlite?.length ?? 0, entries: entriesBytes } });
+      return Response.json({ ok: true, files, heldBytes: { sqlite: sqliteLen, entries: entriesBytes } });
     } catch (e) {
       console.error('[BackupPack] failed:', e);
       return Response.json({ ok: false, error: (e as Error).message }, { status: 500 });
