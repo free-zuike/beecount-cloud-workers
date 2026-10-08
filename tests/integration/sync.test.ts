@@ -237,6 +237,32 @@ describe('Sync - Pull', () => {
 });
 
 describe('Sync - Full sync', () => {
+  it('should advance full-sync cursor for user-global account changes', async () => {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/accounts`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        name: 'Cursor Account',
+        account_type: 'debit',
+        currency: 'CNY',
+        initial_balance: 100,
+      }),
+    });
+    expect(createRes.status).toBe(200);
+    const createBody = await createRes.json() as any;
+
+    const res = await env.app.request(`/api/v1/sync/full?ledger_id=${ledgerId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.latest_cursor).toBeGreaterThanOrEqual(createBody.new_change_id);
+    expect(body.snapshot.change_id).toBe(body.latest_cursor);
+  });
+
   it('should return full sync snapshot', async () => {
     const txSyncId = crypto.randomUUID();
     await env.app.request('/api/v1/sync/push', {

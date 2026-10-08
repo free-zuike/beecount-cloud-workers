@@ -1336,10 +1336,10 @@ syncRouter.get('/full', async (c) => {
     console.debug(`[SYNC] sync/full projection ledger_ids:`, JSON.stringify(sampleTx.results?.map(r => r.ledger_id)));
     console.debug(`[SYNC] sync/full looking for ledger.id:`, ledger.id);
 
-    // latest_cursor 只取该账本的 max change_id（与原版 _max_cursor_for_ledgers 对齐）
+    // full snapshot 同时包含账本实体和当前用户的 user-global 实体，cursor 必须覆盖两者。
     const latestCursorRow = await db
-      .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id = ?')
-      .bind(ledger.id)
+      .prepare('SELECT MAX(change_id) as max_id FROM sync_changes WHERE ledger_id = ? OR (ledger_id IS NULL AND user_id = ?)')
+      .bind(ledger.id, userId)
       .first<{ max_id: number | null }>();
     const latestCursor = latestCursorRow?.max_id ?? 0;
 
