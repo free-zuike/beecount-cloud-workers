@@ -14,7 +14,7 @@ import { CategorySelector } from './CategorySelector'
 type CategoryPickerDialogProps = {
   open: boolean
   onClose: () => void
-  kind: 'expense' | 'income'
+  kind: 'expense' | 'income' | 'transfer'
   /** 候选行(已经按 use case 预过滤,例如父级选取时只传 level=1 + tx_count=0)。 */
   rows: readonly WorkspaceCategory[]
   iconPreviewUrlByFileId?: Record<string, string>

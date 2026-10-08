@@ -30,7 +30,7 @@ beforeEach(async () => {
       to_account_sync_id TEXT, to_account_name TEXT,
       tags_csv TEXT, tag_sync_ids_json TEXT, attachments_json TEXT, tx_index INTEGER,
       created_by_user_id TEXT, last_edited_by_user_id TEXT, source_change_id INTEGER,
-      currency_code TEXT, native_amount REAL,
+      currency_code TEXT, native_amount REAL, transfer_to_amount REAL,
       exclude_from_stats INTEGER DEFAULT 0, exclude_from_budget INTEGER DEFAULT 0,
       PRIMARY KEY (ledger_id, sync_id)
     );

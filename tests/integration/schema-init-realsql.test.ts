@@ -7,7 +7,7 @@ import { initializeDatabase } from '../../src/db/schema';
 // 死索引 idx_audit_logs_entity → no such column → 外层 catch 吞掉 → 后续
 // DDL 全跳 → 版本号写不进 → 每次冷启动重跑必挂。已移除，本测试锁住此回归）。
 describe('新库初始化（真实 SQLite）', () => {
-  it('initializeDatabase 全新库完整建表并写入 schema_version=3', async () => {
+  it('initializeDatabase 全新库完整建表并写入 schema_version=4', async () => {
     const sqlite = new DatabaseSync(':memory:');
     const db: D1Database = {
       prepare(sql: string) {
@@ -49,7 +49,7 @@ describe('新库初始化（真实 SQLite）', () => {
       expect(tables).toContain(required);
     }
     const v = sqlite.prepare("SELECT value FROM app_metadata WHERE key = 'schema_version'").get() as { value: string };
-    expect(v.value).toBe('3');
+    expect(v.value).toBe('4');
     sqlite.close();
   });
 });

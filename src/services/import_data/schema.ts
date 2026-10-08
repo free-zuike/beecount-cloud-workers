@@ -104,6 +104,7 @@ export interface ImportTransaction {
   excludeFromStats?: boolean | null;
   excludeFromBudget?: boolean | null;
   nativeAmount?: number | null;
+  transferToAmount?: number | null;
 }
 
 export interface ImportData {

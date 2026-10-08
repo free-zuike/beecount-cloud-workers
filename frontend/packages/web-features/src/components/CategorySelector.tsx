@@ -4,10 +4,10 @@ import type { WorkspaceCategory } from '@beecount/api-client'
 
 import { CategoryIcon } from './CategoryIcon'
 
-type CategorySelectorKind = 'expense' | 'income'
+type CategorySelectorKind = 'expense' | 'income' | 'transfer'
 
 type CategorySelectorProps = {
-  /** 分类类型,只有 expense / income 让选(transfer 是虚拟分类不参与选择)。 */
+  /** 分类类型。transfer 也是正式 category kind，可选择/展示系统转账分类。 */
   kind: CategorySelectorKind
   /** 全量分类列表(workspace dedup 后),通常从 fetchWorkspaceCategories 拿。
    *  组件内部按 kind 过滤 + 按 parent_name 分组,父级展示在网格,点开后子级
@@ -30,7 +30,7 @@ type CategorySelectorProps = {
 /**
  * 通用分类选择器 —— 1:1 复刻 app `lib/widgets/category/category_selector.dart`
  * 的交互模型:
- *   - kind 切支出 / 收入,只展示对应方向的分类
+ *   - kind 切支出 / 收入 / 转账,只展示对应类型的分类
  *   - 顶级分类按 4(默认)列网格平铺
  *   - 父级有子分类:点击切换展开/折叠,**不**触发 onSelect
  *   - 父级无子分类:点击直接 onSelect,同时折叠所有已展开的父级

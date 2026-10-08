@@ -29,6 +29,7 @@
 import { Hono } from 'hono';
 
 import { normalizeTransactionAccounts } from '../lib/transaction-normalization';
+import { resolveTransactionCategory } from '../lib/transfer-category';
 import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
@@ -195,6 +196,8 @@ const WriteTransactionCreateSchema = WriteBaseSchema.extend({
   ledger_id: z.string().optional(),
   tx_type: z.enum(['expense', 'income', 'transfer']).default('expense'),
   amount: z.number(),
+  transfer_to_amount: z.number().positive().nullable().optional(),
+  transferToAmount: z.number().positive().nullable().optional(),
   happened_at: z.string().or(z.date()),
   note: z.string().nullable().optional(),
   category_name: z.string().nullable().optional(),
@@ -221,6 +224,8 @@ const WriteTransactionCreateSchema = WriteBaseSchema.extend({
 const WriteTransactionUpdateSchema = WriteBaseSchema.extend({
   tx_type: z.enum(['expense', 'income', 'transfer']).nullable().optional(),
   amount: z.number().nullable().optional(),
+  transfer_to_amount: z.number().positive().nullable().optional(),
+  transferToAmount: z.number().positive().nullable().optional(),
   happened_at: z.string().or(z.date()).nullable().optional(),
   note: z.string().nullable().optional(),
   category_name: z.string().nullable().optional(),
@@ -760,15 +765,21 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
   }
 
   const syncId = randomUUID();
+  const resolvedCategory = await resolveTransactionCategory(db, userId, req.tx_type, {
+    categoryId: req.category_id ?? null,
+    categoryName: req.category_name ?? null,
+    categoryKind: req.category_kind ?? null,
+  });
   const payload: Record<string, unknown> = {
     syncId: syncId,
     type: req.tx_type,
     amount: req.amount,
+    transferToAmount: req.tx_type === 'transfer' ? (req.transfer_to_amount ?? req.transferToAmount ?? null) : null,
     happenedAt: req.happened_at ? new Date(req.happened_at as string).toISOString() : new Date().toISOString(),
     note: req.note ?? null,
-    categoryId: req.category_id ?? null,
-    categoryName: req.category_name ?? null,
-    categoryKind: req.category_kind ?? null,
+    categoryId: resolvedCategory.categoryId,
+    categoryName: resolvedCategory.categoryName,
+    categoryKind: resolvedCategory.categoryKind,
     accountId: req.account_id ?? null,
     accountName: req.account_name ?? null,
     fromAccountId: req.from_account_id ?? null,
@@ -831,18 +842,19 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
           account_sync_id, account_name,
           from_account_sync_id, from_account_name,
           to_account_sync_id, to_account_name,
-          tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id,
+          transfer_to_amount, tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id,
           exclude_from_stats, exclude_from_budget,
           created_by_user_id, last_edited_by_user_id,
           currency_code, native_amount)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()),
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()),
          ?, ?, ?, ?, ?, ?)`
       ).bind(
         ledger.id, syncId, userId, req.tx_type, req.amount, happenedAt,
-        req.note ?? null, req.category_id ?? null, req.category_name ?? null, req.category_kind ?? null,
+        req.note ?? null, resolvedCategory.categoryId, resolvedCategory.categoryName, resolvedCategory.categoryKind,
         txAccountCols.account_sync_id, txAccountCols.account_name,
         txAccountCols.from_account_sync_id, txAccountCols.from_account_name,
         txAccountCols.to_account_sync_id, txAccountCols.to_account_name,
+        req.tx_type === 'transfer' ? (req.transfer_to_amount ?? req.transferToAmount ?? null) : null,
         resolvedTagsCsv, req.tag_ids ? safeJsonStringify(req.tag_ids) : null,
         req.attachments ? safeJsonStringify(req.attachments) : null, 0,
         req.exclude_from_stats != null ? (req.exclude_from_stats ? 1 : 0) : null,
@@ -1213,6 +1225,8 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   // 合并更新字段（统一用 camelCase 与 mobile 对齐）
   if (req.tx_type !== undefined) newPayload.type = req.tx_type;
   if (req.amount !== undefined) newPayload.amount = req.amount;
+  if (req.transfer_to_amount !== undefined || req.transferToAmount !== undefined)
+    newPayload.transferToAmount = req.transfer_to_amount ?? req.transferToAmount;
   if (req.happened_at !== undefined)
     newPayload.happenedAt =
       typeof req.happened_at === 'string' ? req.happened_at : req.happened_at ? req.happened_at.toISOString() : null;
@@ -1250,6 +1264,17 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
     }
   }
 
+  // transfer 必须落到 transfer kind 分类；历史空分类在任意一次编辑时也会
+  // 自动收敛到用户现有的顶级「转账」分类。
+  const resolvedCategory = await resolveTransactionCategory(db, userId, newPayload.type, {
+    categoryId: nullOr(newPayload.categoryId) as string | null,
+    categoryName: nullOr(newPayload.categoryName) as string | null,
+    categoryKind: nullOr(newPayload.categoryKind) as string | null,
+  });
+  newPayload.categoryId = resolvedCategory.categoryId;
+  newPayload.categoryName = resolvedCategory.categoryName;
+  newPayload.categoryKind = resolvedCategory.categoryKind;
+
   // 更新操作者（与原版对齐）
   newPayload.updatedByUserId = userId;
 
@@ -1268,7 +1293,7 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
        account_sync_id = ?, account_name = ?,
        from_account_sync_id = ?, from_account_name = ?,
        to_account_sync_id = ?, to_account_name = ?,
-       tags_csv = ?, tag_sync_ids_json = ?, attachments_json = ?,
+       transfer_to_amount = ?, tags_csv = ?, tag_sync_ids_json = ?, attachments_json = ?,
        currency_code = ?, native_amount = ?,
        exclude_from_stats = ?, exclude_from_budget = ?,
        source_change_id = (SELECT last_insert_rowid())
@@ -1280,6 +1305,7 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
         nullOr(newPayload.accountId), nullOr(newPayload.accountName),
         nullOr(newPayload.fromAccountId), nullOr(newPayload.fromAccountName),
         nullOr(newPayload.toAccountId), nullOr(newPayload.toAccountName),
+        newPayload.type === 'transfer' ? (newPayload.transferToAmount ?? null) : null,
         newPayload.tags ?? null, newPayload.tagIds ? safeJsonStringify(newPayload.tagIds) : null,
         newPayload.attachments ? safeJsonStringify(newPayload.attachments) : null,
         newPayload.currencyCode ?? null, newPayload.nativeAmount ?? null,

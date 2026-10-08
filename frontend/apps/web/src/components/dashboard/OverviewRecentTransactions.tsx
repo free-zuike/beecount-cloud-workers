@@ -1,5 +1,6 @@
 import type { ReadTransaction } from '@beecount/api-client'
 import { Card, CardContent, CardHeader, CardTitle, useT } from '@beecount/ui'
+import { transferAmountDisplay } from '@beecount/web-features'
 
 interface Props {
   transactions: ReadTransaction[]
@@ -36,14 +37,22 @@ export function OverviewRecentTransactions({ transactions, onClickTransaction }:
         ) : (
           <ul className="divide-y divide-border/50">
             {top.map((tx) => {
-              const sign =
-                tx.tx_type === 'expense' ? '-' : tx.tx_type === 'income' ? '+' : ''
-              const amountColor =
-                tx.tx_type === 'expense'
-                  ? 'text-expense'
-                  : tx.tx_type === 'income'
-                    ? 'text-income'
-                    : 'text-foreground'
+              const transferDisplay = transferAmountDisplay(tx)
+              const sign = transferDisplay
+                ? ''
+                : tx.tx_type === 'expense' ? '-' : tx.tx_type === 'income' ? '+' : ''
+              const amountColor = transferDisplay?.tone === 'negative'
+                ? 'text-expense'
+                : transferDisplay?.tone === 'positive'
+                  ? 'text-income'
+                  : tx.tx_type === 'expense'
+                    ? 'text-expense'
+                    : tx.tx_type === 'income'
+                      ? 'text-income'
+                      : 'text-foreground'
+              const accountText = tx.tx_type === 'transfer'
+                ? `${tx.from_account_name || '-'} → ${tx.to_account_name || '-'}`
+                : tx.account_name
               return (
                 <li
                   key={tx.id}
@@ -68,16 +77,20 @@ export function OverviewRecentTransactions({ transactions, onClickTransaction }:
                     </div>
                     <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
                       <span>{formatDate(tx.happened_at)}</span>
-                      {tx.account_name ? <span>· {tx.account_name}</span> : null}
+                      {accountText ? <span>· {accountText}</span> : null}
                       {tx.ledger_name ? <span>· {tx.ledger_name}</span> : null}
                     </div>
                   </div>
                   <div className={`shrink-0 font-mono tabular-nums ${amountColor}`}>
-                    {sign}
-                    {tx.amount.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2
-                    })}
+                    {transferDisplay ? transferDisplay.text : (
+                      <>
+                        {sign}
+                        {tx.amount.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2
+                        })}
+                      </>
+                    )}
                   </div>
                 </li>
               )

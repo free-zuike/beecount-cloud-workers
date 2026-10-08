@@ -5,6 +5,10 @@ export type TxForm = {
   editingOwnerUserId: string
   tx_type: 'expense' | 'income' | 'transfer'
   amount: string
+  /** 转账币种模式。默认同币种；跨币种时才要求 transfer_to_amount。 */
+  transfer_currency_mode: 'same' | 'different'
+  /** 跨币种转账的转入端金额；同币种转账不使用。 */
+  transfer_to_amount: string
   happened_at: string
   note: string
   category_name: string
@@ -97,6 +101,8 @@ export const txDefaults = (): TxForm => ({
   editingOwnerUserId: '',
   tx_type: 'expense',
   amount: '',
+  transfer_currency_mode: 'same',
+  transfer_to_amount: '',
   happened_at: new Date().toISOString(),
   note: '',
   category_name: '',

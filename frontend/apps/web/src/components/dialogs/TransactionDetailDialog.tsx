@@ -10,7 +10,7 @@ import {
   DialogTitle,
   useT,
 } from '@beecount/ui'
-import { buildTagColorMap, TagChip } from '@beecount/web-features'
+import { buildTagColorMap, TagChip, transferAmountDisplay } from '@beecount/web-features'
 import { Calendar, ChevronLeft, ChevronRight, Edit3, Hash, ImageOff, Tag, User, Wallet, X } from 'lucide-react'
 
 import { useAttachmentCache } from '../../context/AttachmentCacheContext'
@@ -49,16 +49,23 @@ export function TransactionDetailDialog({
   const tagColorByName = useMemo(() => buildTagColorMap(tags), [tags])
 
   const open = Boolean(tx)
-  const sign = tx?.tx_type === 'expense'
-      ? '−'
-      : tx?.tx_type === 'income'
-        ? '+'
-        : ''
-  const tone = tx?.tx_type === 'expense'
+  const transferDisplay = tx ? transferAmountDisplay(tx) : null
+  const sign = transferDisplay
+      ? ''
+      : tx?.tx_type === 'expense'
+        ? '−'
+        : tx?.tx_type === 'income'
+          ? '+'
+          : ''
+  const tone = transferDisplay?.tone === 'negative'
       ? 'text-expense'
-      : tx?.tx_type === 'income'
+      : transferDisplay?.tone === 'positive'
         ? 'text-income'
-        : 'text-foreground'
+        : tx?.tx_type === 'expense'
+          ? 'text-expense'
+          : tx?.tx_type === 'income'
+            ? 'text-income'
+            : 'text-foreground'
   const typeLabel = tx ? t(`enum.txType.${tx.tx_type}`) : ''
   const accountText = tx
     ? tx.tx_type === 'transfer'
@@ -90,17 +97,23 @@ export function TransactionDetailDialog({
               <span className="text-[11px] uppercase tracking-widest text-muted-foreground">
                 {typeLabel}
               </span>
-              <span className={`text-4xl font-bold tabular-nums ${tone}`}>
-                {sign}
-                {tx.amount.toLocaleString('zh-CN', {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
-                {tx.currency_code && tx.native_amount != null && tx.native_amount !== tx.amount ? (
-                  <span className="ml-2 align-middle text-sm font-medium text-muted-foreground">
-                    {tx.currency_code}
-                  </span>
-                ) : null}
+              <span className={`${transferDisplay ? 'text-2xl' : 'text-4xl'} font-bold tabular-nums ${tone}`}>
+                {transferDisplay ? (
+                  transferDisplay.text
+                ) : (
+                  <>
+                    {sign}
+                    {tx.amount.toLocaleString('zh-CN', {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                    {tx.currency_code && tx.native_amount != null && tx.native_amount !== tx.amount ? (
+                      <span className="ml-2 align-middle text-sm font-medium text-muted-foreground">
+                        {tx.currency_code}
+                      </span>
+                    ) : null}
+                  </>
+                )}
               </span>
               {/* 交易级多币种:外币交易显示折账本本位币快照(记账时汇率) */}
               {tx.currency_code && tx.native_amount != null && tx.native_amount !== tx.amount ? (
@@ -125,7 +138,7 @@ export function TransactionDetailDialog({
               <DetailRow
                 icon={<Hash className="h-4 w-4" />}
                 label={t('detail.transaction.category')}
-                value={tx.category_name || '—'}
+                value={tx.category_name || (tx.tx_type === 'transfer' ? typeLabel : '—')}
               />
               <DetailRow
                 icon={<Wallet className="h-4 w-4" />}

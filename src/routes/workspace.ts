@@ -413,7 +413,7 @@ workspaceRouter.get('/accounts', async (c) => {
         COALESCE(SUM(CASE WHEN tx_type = 'expense' AND account_sync_id = ? THEN amount ELSE 0 END), 0) as expense_in,
         COALESCE(SUM(CASE WHEN tx_type = 'income' AND account_sync_id = ? THEN amount ELSE 0 END), 0) as income_in,
         COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND from_account_sync_id = ? THEN amount ELSE 0 END), 0) as expense_transfer,
-        COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND to_account_sync_id = ? THEN amount ELSE 0 END), 0) as income_transfer,
+        COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND to_account_sync_id = ? THEN COALESCE(transfer_to_amount, amount) ELSE 0 END), 0) as income_transfer,
         COUNT(CASE WHEN account_sync_id = ? OR from_account_sync_id = ? OR to_account_sync_id = ? THEN 1 END) as tx_count
       FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})
     `).bind(accountSyncId, accountSyncId, accountSyncId, accountSyncId, accountSyncId, accountSyncId, accountSyncId, ...ledgerInternalIds).first<{ expense_in: number; income_in: number; expense_transfer: number; income_transfer: number; tx_count: number }>();

@@ -9,6 +9,7 @@ import {
   type WorkspaceTransaction,
 } from '@beecount/api-client'
 import { Button, Card, CardContent, useLocale, useT } from '@beecount/ui'
+import { transferAmountDisplay } from '@beecount/web-features'
 import { ChevronLeft, ChevronRight, Info, Plus, Sparkles } from 'lucide-react'
 
 import { useAuth } from '../../context/AuthContext'
@@ -817,7 +818,9 @@ function DayTxList({ txs, loading, currency }: DayTxListProps) {
                 {tx.category_name || (tx.tx_type === 'transfer' ? '↔︎' : '—')}
               </div>
               <div className="truncate text-[11px] text-muted-foreground">
-                {tx.account_name || tx.from_account_name || '—'}
+                {tx.tx_type === 'transfer'
+                  ? `${tx.from_account_name || '—'} → ${tx.to_account_name || '—'}`
+                  : tx.account_name || '—'}
                 {tx.note ? ` · ${tx.note}` : ''}
               </div>
             </div>
@@ -831,8 +834,9 @@ function DayTxList({ txs, loading, currency }: DayTxListProps) {
                     : 'text-foreground',
               ].join(' ')}
             >
-              {tx.tx_type === 'income' ? '+' : tx.tx_type === 'expense' ? '-' : ''}
-              {currency} {Number(tx.amount).toFixed(2)}
+              {tx.tx_type === 'transfer'
+                ? transferAmountDisplay(tx)?.text
+                : `${tx.tx_type === 'income' ? '+' : tx.tx_type === 'expense' ? '-' : ''}${currency} ${Number(tx.amount).toFixed(2)}`}
             </div>
           </button>
         </li>

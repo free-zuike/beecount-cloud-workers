@@ -17,6 +17,7 @@
 import { Hono } from 'hono';
 
 import { normalizeTransactionAccounts } from '../lib/transaction-normalization';
+import { resolveTransactionCategory } from '../lib/transfer-category';
 import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
@@ -46,6 +47,8 @@ const BatchTransactionCreateSchema = z.object({
   transactions: z.array(z.object({
     tx_type: z.enum(['expense', 'income', 'transfer']).default('expense'),
     amount: z.number(),
+    transfer_to_amount: z.number().positive().nullable().optional(),
+    transferToAmount: z.number().positive().nullable().optional(),
     happened_at: z.string().or(z.date()),
     note: z.string().nullable().optional(),
     category_name: z.string().nullable().optional(),
@@ -223,6 +226,12 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
         .first<{ sync_id: string }>();
       if (cat) categorySyncId = cat.sync_id;
     }
+    const resolvedCategory = await resolveTransactionCategory(db, userId, txType, {
+      categoryId: categorySyncId,
+      categoryName: tx.category_name ?? null,
+      categoryKind: tx.category_kind ?? null,
+    });
+    categorySyncId = resolvedCategory.categoryId;
 
     // 确保账户存在
     let accountSyncId: string | null = tx.account_id || null;
@@ -250,9 +259,12 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
       syncId: txSyncId,
       type: txType,
       amount: tx.amount,
+      transferToAmount: txType === 'transfer' ? (tx.transfer_to_amount ?? tx.transferToAmount ?? null) : null,
       happenedAt: tx.happened_at,
       note: tx.note || null,
       categoryId: categorySyncId,
+      categoryName: resolvedCategory.categoryName,
+      categoryKind: resolvedCategory.categoryKind,
       accountId: txAccountCols.account_sync_id,
       fromAccountId: txAccountCols.from_account_sync_id,
       toAccountId: txAccountCols.to_account_sync_id,
@@ -274,18 +286,19 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
            category_sync_id, category_name, category_kind,
            account_sync_id, account_name,
            from_account_sync_id, from_account_name,
-           to_account_sync_id, to_account_name,
+           to_account_sync_id, to_account_name, transfer_to_amount,
            tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id,
            exclude_from_stats, exclude_from_budget,
            created_by_user_id, last_edited_by_user_id,
            currency_code, native_amount)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()),
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()),
           ?, ?, ?, ?, ?, ?)`)
         .bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null,
-          categorySyncId, tx.category_name || null, tx.category_kind || null,
+          categorySyncId, resolvedCategory.categoryName, resolvedCategory.categoryKind,
           txAccountCols.account_sync_id, txAccountCols.account_name,
           txAccountCols.from_account_sync_id, txAccountCols.from_account_name,
           txAccountCols.to_account_sync_id, txAccountCols.to_account_name,
+          txType === 'transfer' ? (tx.transfer_to_amount ?? tx.transferToAmount ?? null) : null,
           tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null,
           tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null,
           mergeSharedAttachment(tx.attachments, sharedAttachment) ? safeJsonStringify(mergeSharedAttachment(tx.attachments, sharedAttachment)) : null,
@@ -455,6 +468,12 @@ batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch', zValidator('json'
       const cat = await db.prepare('SELECT sync_id FROM user_category_projection WHERE user_id = ? AND name = ? AND kind = ? LIMIT 1').bind(userId, tx.category_name, tx.category_kind || txType).first<{ sync_id: string }>();
       if (cat) categorySyncId = cat.sync_id;
     }
+    const resolvedCategory = await resolveTransactionCategory(db, userId, txType, {
+      categoryId: categorySyncId,
+      categoryName: tx.category_name ?? null,
+      categoryKind: tx.category_kind ?? null,
+    });
+    categorySyncId = resolvedCategory.categoryId;
     let accountSyncId: string | null = tx.account_id || null;
     if (tx.account_name && !accountSyncId) {
       const acc = await db.prepare('SELECT sync_id FROM user_account_projection WHERE user_id = ? AND name = ? LIMIT 1').bind(userId, tx.account_name).first<{ sync_id: string }>();
@@ -473,10 +492,10 @@ batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch', zValidator('json'
       to_account_name: tx.to_account_name ?? null,
     });
 
-    const payload: Record<string, unknown> = { syncId: txSyncId, type: txType, amount: tx.amount, happenedAt: tx.happened_at, note: tx.note || null, categoryId: categorySyncId, accountId: txAccountCols.account_sync_id, fromAccountId: txAccountCols.from_account_sync_id, toAccountId: txAccountCols.to_account_sync_id, tags: tx.tags || null, attachments: mergeSharedAttachment(tx.attachments, sharedAttachment), updatedByUserId: userId, createdByUserId: userId };
+    const payload: Record<string, unknown> = { syncId: txSyncId, type: txType, amount: tx.amount, transferToAmount: txType === 'transfer' ? (tx.transfer_to_amount ?? tx.transferToAmount ?? null) : null, happenedAt: tx.happened_at, note: tx.note || null, categoryId: categorySyncId, categoryName: resolvedCategory.categoryName, categoryKind: resolvedCategory.categoryKind, accountId: txAccountCols.account_sync_id, fromAccountId: txAccountCols.from_account_sync_id, toAccountId: txAccountCols.to_account_sync_id, tags: tx.tags || null, attachments: mergeSharedAttachment(tx.attachments, sharedAttachment), updatedByUserId: userId, createdByUserId: userId };
     const batchResults = await db.batch([
       db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope) VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, ?, ?, 'ledger')`).bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, deviceId),
-      db.prepare(`INSERT OR REPLACE INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, category_name, category_kind, account_sync_id, account_name, from_account_sync_id, from_account_name, to_account_sync_id, to_account_name, tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id, exclude_from_stats, exclude_from_budget, created_by_user_id, last_edited_by_user_id, currency_code, native_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()), ?, ?, ?, ?, ?, ?)`).bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null, categorySyncId, tx.category_name || null, tx.category_kind || null, txAccountCols.account_sync_id, txAccountCols.account_name, txAccountCols.from_account_sync_id, txAccountCols.from_account_name, txAccountCols.to_account_sync_id, txAccountCols.to_account_name, tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null, tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null, mergeSharedAttachment(tx.attachments, sharedAttachment) ? safeJsonStringify(mergeSharedAttachment(tx.attachments, sharedAttachment)) : null, 0, tx.exclude_from_stats != null ? (tx.exclude_from_stats ? 1 : 0) : null, tx.exclude_from_budget != null ? (tx.exclude_from_budget ? 1 : 0) : null, userId, userId, tx.currency_code ?? tx.currencyCode ?? null, tx.native_amount ?? tx.nativeAmount ?? null),
+      db.prepare(`INSERT OR REPLACE INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, category_name, category_kind, account_sync_id, account_name, from_account_sync_id, from_account_name, to_account_sync_id, to_account_name, tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id, exclude_from_stats, exclude_from_budget, created_by_user_id, last_edited_by_user_id, currency_code, native_amount, transfer_to_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()), ?, ?, ?, ?, ?, ?, ?)`).bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null, categorySyncId, resolvedCategory.categoryName, resolvedCategory.categoryKind, txAccountCols.account_sync_id, txAccountCols.account_name, txAccountCols.from_account_sync_id, txAccountCols.from_account_name, txAccountCols.to_account_sync_id, txAccountCols.to_account_name, tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null, tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null, mergeSharedAttachment(tx.attachments, sharedAttachment) ? safeJsonStringify(mergeSharedAttachment(tx.attachments, sharedAttachment)) : null, 0, tx.exclude_from_stats != null ? (tx.exclude_from_stats ? 1 : 0) : null, tx.exclude_from_budget != null ? (tx.exclude_from_budget ? 1 : 0) : null, userId, userId, tx.currency_code ?? tx.currencyCode ?? null, tx.native_amount ?? tx.nativeAmount ?? null, txType === 'transfer' ? (tx.transfer_to_amount ?? tx.transferToAmount ?? null) : null),
     ]);
     const changeId = batchResults[0].meta.last_row_id as number;
     maxChangeId = Math.max(maxChangeId, changeId);

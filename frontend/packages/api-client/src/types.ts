@@ -172,6 +172,8 @@ export type ReadTransaction = {
   tx_index: number
   tx_type: 'expense' | 'income' | 'transfer'
   amount: number
+  /** 转账转入端实际到账金额；null 时与 amount 相同（兼容旧同币种转账）。 */
+  transfer_to_amount?: number | null
   happened_at: string
   note: string | null
   category_name: string | null
@@ -183,6 +185,10 @@ export type ReadTransaction = {
   from_account_id?: string | null
   to_account_name: string | null
   to_account_id?: string | null
+  /** 账户币种快照来自当前账户投影；用于跨币种转账按两端真实币种显示。 */
+  account_currency?: string | null
+  from_account_currency?: string | null
+  to_account_currency?: string | null
   tags: string | null
   tags_list: string[]
   tag_ids?: string[]
@@ -568,6 +574,8 @@ export type AdminBackupRestoreResponse = {
 export type TxPayload = {
   tx_type: 'expense' | 'income' | 'transfer'
   amount: number
+  /** 跨币种 transfer 的转入端实际到账金额；由用户填写，不自动按汇率计算。 */
+  transfer_to_amount?: number | null
   happened_at: string
   /** 交易级多币种(0018):原币种;不传 = 账本本位币(不产生字段)。 */
   currency_code?: string | null

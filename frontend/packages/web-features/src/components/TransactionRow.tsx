@@ -5,6 +5,7 @@ import { CategoryIcon } from './CategoryIcon'
 import { TagChip } from './TagChip'
 import { currencySymbol } from '../lib/currencies'
 import { composeTransactionRowTitle, type NoteDisplayMode } from '../lib/transactionRowTitle'
+import { transferAmountDisplay } from '../lib/transactionTransferDisplay'
 
 export type TransactionRowVariant = 'default' | 'compact'
 
@@ -52,6 +53,9 @@ type CommonProps = {
   showLedger?: boolean
   /** 备注显示方式:'note' = 备注优先(有备注显示备注);默认 'category' = 分类 + 备注括号。 */
   noteDisplayMode?: NoteDisplayMode
+  /** 账户详情场景的当前账户。transfer 金额按该账户方向显示实际转出/转入值。 */
+  accountContextId?: string | null
+  accountContextCurrency?: string | null
 }
 
 /**
@@ -82,15 +86,21 @@ export function TransactionRow({
   selected = false,
   onToggleSelect,
   showLedger = false,
-  noteDisplayMode = 'category'
+  noteDisplayMode = 'category',
+  accountContextId,
+  accountContextCurrency
 }: CommonProps) {
   const t = useT()
   const attachments = Array.isArray(row.attachments) ? row.attachments : []
 
   const editableOnEdit = onEdit
-  const amountTone =
-    row.tx_type === 'expense' ? 'negative' : row.tx_type === 'income' ? 'positive' : 'default'
-  const sign = row.tx_type === 'expense' ? '-' : row.tx_type === 'income' ? '+' : ''
+  const transferDisplay = transferAmountDisplay(row, {
+    id: accountContextId,
+    currency: accountContextCurrency,
+  })
+  const amountTone = transferDisplay?.tone ??
+    (row.tx_type === 'expense' ? 'negative' : row.tx_type === 'income' ? 'positive' : 'default')
+  const sign = transferDisplay ? '' : row.tx_type === 'expense' ? '-' : row.tx_type === 'income' ? '+' : ''
   // 交易级多币种:折算快照存在且 ≠ 原币值 → 外币交易,金额旁标币种 + ≈ 折算行。
   // 同币种交易 native === amount 恒成立,自然不显示;无需引入账本本位币 prop。
   const isForeignCurrency =
@@ -259,13 +269,19 @@ export function TransactionRow({
                 ? 'text-expense'
                 : 'text-foreground'
           } ${isCompact ? 'text-sm' : 'text-base'}`}>
-            {sign}
-            {/* 外币显示其币种符号(JP¥/US$…,与本位币一眼区分);本位币维持纯数字 */}
-            {isForeignCurrency ? currencySymbol(row.currency_code as string) : ''}
-            {row.amount.toLocaleString('zh-CN', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2
-            })}
+            {transferDisplay ? (
+              transferDisplay.text
+            ) : (
+              <>
+                {sign}
+                {/* 外币显示其币种符号(JP¥/US$…,与本位币一眼区分);本位币维持纯数字 */}
+                {isForeignCurrency ? currencySymbol(row.currency_code as string) : ''}
+                {row.amount.toLocaleString('zh-CN', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2
+                })}
+              </>
+            )}
           </span>
         </div>
 

@@ -22,6 +22,7 @@ import type { ImportFieldMapping, ImportData, ImportTransaction } from '../servi
 import { makeDefaultMapping, isMappingComplete } from '../services/import_data/schema';
 import { serverLogger } from '../lib/logger';
 import { normalizeTransactionAccounts } from '../lib/transaction-normalization';
+import { resolveTransactionCategory } from '../lib/transfer-category';
 
 function nowUtc(): string { return new Date().toISOString(); }
 
@@ -155,9 +156,12 @@ function buildTxPayload(tx: ImportTransaction, autoTags: string[]): Record<strin
   return {
     type: tx.txType,
     amount: tx.amount,
+    transferToAmount: tx.txType === 'transfer' ? (tx.transferToAmount ?? null) : null,
     happenedAt: tx.happenedAt.slice(0, 10),
     note: tx.note ?? null,
+    categoryId: tx.categoryId ?? null,
     categoryName: tx.categoryName ?? null,
+    categoryKind: tx.categoryKind ?? null,
     accountName: tx.accountName ?? null,
     fromAccountName: tx.fromAccountName ?? null,
     toAccountName: tx.toAccountName ?? null,
@@ -557,6 +561,14 @@ importRouter.post('/:token/execute', async (c) => {
           }
 
           try {
+            const resolvedCategory = await resolveTransactionCategory(db, userId, tx.txType, {
+              categoryId: tx.categoryId ?? null,
+              categoryName: tx.categoryName ?? null,
+              categoryKind: tx.categoryKind ?? null,
+            });
+            tx.categoryId = resolvedCategory.categoryId;
+            tx.categoryName = resolvedCategory.categoryName;
+            tx.categoryKind = resolvedCategory.categoryKind;
             const payload = buildTxPayload(tx, autoTagNames);
             const syncId = randomUUID();
             const now = nowUtc();
@@ -593,9 +605,9 @@ importRouter.post('/:token/execute', async (c) => {
                   tags_csv, tag_sync_ids_json, tx_index, source_change_id,
                   exclude_from_stats, exclude_from_budget,
                   created_by_user_id, last_edited_by_user_id,
-                  currency_code, native_amount)
+                  currency_code, native_amount, transfer_to_amount)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()),
-                  ?, ?, ?, ?, ?, ?)`
+                  ?, ?, ?, ?, ?, ?, ?)`
               ).bind(
                 ledger.id, syncId, userId,
                 tx.txType, tx.amount, happenedAt,
@@ -610,6 +622,7 @@ importRouter.post('/:token/execute', async (c) => {
                 tx.excludeFromBudget != null ? (tx.excludeFromBudget ? 1 : 0) : null,
                 userId, userId,
                 tx.currencyCode ?? null, tx.nativeAmount ?? tx.amount,
+                tx.txType === 'transfer' ? (tx.transferToAmount ?? null) : null,
               ),
             ]);
 

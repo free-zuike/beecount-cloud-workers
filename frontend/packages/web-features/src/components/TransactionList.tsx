@@ -57,6 +57,9 @@ interface Props {
   showLedger?: boolean
   /** 备注显示方式,透传到 TransactionRow。默认 'category'。 */
   noteDisplayMode?: 'category' | 'note'
+  /** 账户详情上下文：transfer 在当前账户视角显示实际入/出金额。 */
+  accountContextId?: string | null
+  accountContextCurrency?: string | null
 }
 
 /**
@@ -91,7 +94,9 @@ export function TransactionList({
   showCreator = false,
   currentUserId,
   showLedger = false,
-  noteDisplayMode = 'category'
+  noteDisplayMode = 'category',
+  accountContextId,
+  accountContextCurrency
 }: Props) {
   const t = useT()
   const sentinelRef = useRef<HTMLDivElement | null>(null)
@@ -162,6 +167,8 @@ export function TransactionList({
                 onToggleSelect={onToggleSelect}
                 showLedger={showLedger}
                 noteDisplayMode={noteDisplayMode}
+                accountContextId={accountContextId}
+                accountContextCurrency={accountContextCurrency}
               />
             </li>
           ))}

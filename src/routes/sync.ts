@@ -19,6 +19,7 @@
 import { Hono } from 'hono';
 import { serverLogger } from '../lib/logger';
 import { normalizeTransactionAccounts, type TxAccountColumns } from '../lib/transaction-normalization';
+import { resolveTransactionCategory } from '../lib/transfer-category';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
@@ -635,7 +636,21 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
               .bind(ledgerRowId || '', change.entity_sync_id).first<{ created_by_user_id: string | null }>();
             p.createdByUserId = existing?.created_by_user_id || userId;
           }
+          const txType = (p.type ?? p.tx_type ?? p.txType) as string | undefined;
+          if (txType === 'transfer') {
+            const resolvedCategory = await resolveTransactionCategory(db, userId, txType, {
+              categoryId: (p.categoryId ?? p.category_id) as string | null | undefined,
+              categoryName: (p.categoryName ?? p.category_name) as string | null | undefined,
+              categoryKind: (p.categoryKind ?? p.category_kind) as string | null | undefined,
+            });
+            p.categoryId = resolvedCategory.categoryId;
+            p.categoryName = resolvedCategory.categoryName;
+            p.categoryKind = resolvedCategory.categoryKind;
+          }
           payloadForStorage = p;
+          // 后续 applyChangeToProjection 使用 change.payload；同步替换成同一个规范化 payload，
+          // 保证 sync_changes 与投影不会分叉。
+          change.payload = p;
         }
 
         const ledgerRowRef = isUserGlobal ? null : { id: ledgerRowId as string, external_id: '' };
@@ -1959,7 +1974,7 @@ async function applyChangeToProjection(
            account_sync_id, account_name, from_account_sync_id, from_account_name,
            to_account_sync_id, to_account_name, tags_csv, tag_sync_ids_json, attachments_json,
            tx_index, created_by_user_id, last_edited_by_user_id,
-           exclude_from_stats, exclude_from_budget, currency_code, native_amount
+           exclude_from_stats, exclude_from_budget, currency_code, native_amount, transfer_to_amount
            FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?`
         ).bind(ledgerId, change.entity_sync_id).first<Record<string, unknown>>();
 
@@ -1987,6 +2002,9 @@ async function applyChangeToProjection(
           exclude_from_budget: (payload as any).excludeFromBudget ?? existingTx?.exclude_from_budget ?? 0,
           currency_code: (payload as any).currencyCode ?? existingTx?.currency_code ?? null,
           native_amount: (payload as any).nativeAmount ?? existingTx?.native_amount ?? null,
+          transfer_to_amount: ((payload as any).type ?? payload.tx_type ?? payload.txType ?? existingTx?.tx_type) === 'transfer'
+            ? ((payload as any).transferToAmount ?? (payload as any).transfer_to_amount ?? existingTx?.transfer_to_amount ?? null)
+            : null,
         };
 
         // 与原版 _sync_native_amount_after_merge 对齐：amount 改变时等比缩放 nativeAmount
@@ -1998,6 +2016,18 @@ async function applyChangeToProjection(
             txMerged.native_amount = oldNative / oldAmount * newAmount;
           }
         }
+
+        // transfer 是正式分类 kind。移动端历史 payload 可能没有 category；
+        // 服务端在投影落库前统一补用户的顶级 transfer 分类，避免 Web / App
+        // / MCP 三条写入路径出现不同口径。
+        const resolvedCategory = await resolveTransactionCategory(db, userId, txMerged.tx_type as string, {
+          categoryId: txMerged.category_sync_id as string | null,
+          categoryName: txMerged.category_name as string | null,
+          categoryKind: txMerged.category_kind as string | null,
+        });
+        txMerged.category_sync_id = resolvedCategory.categoryId;
+        txMerged.category_name = resolvedCategory.categoryName;
+        txMerged.category_kind = resolvedCategory.categoryKind;
 
         // 与原版 transaction_normalization 对齐：按交易类型清空无效账户列，
         // 防 partial merge 恢复旧转账关联（新建与合并都经过）。
@@ -2013,9 +2043,9 @@ async function applyChangeToProjection(
               to_account_sync_id, to_account_name,
               tags_csv, tag_sync_ids_json, attachments_json, tx_index,
               created_by_user_id, last_edited_by_user_id, source_change_id,
-              currency_code, native_amount,
+              currency_code, native_amount, transfer_to_amount,
               exclude_from_stats, exclude_from_budget)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .bind(
             ledgerId,
@@ -2043,6 +2073,7 @@ async function applyChangeToProjection(
             change.change_id,
             txMerged.currency_code,
             txMerged.native_amount,
+            txMerged.transfer_to_amount,
             txMerged.exclude_from_stats ? 1 : 0,
             txMerged.exclude_from_budget ? 1 : 0,
           )

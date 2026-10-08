@@ -3,7 +3,7 @@
  * 每次变更下方 DDL（新建表/加列/索引/迁移）时必须递增，
  * 否则已初始化的库不会重放 DDL。
  */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 // 迁移失败后的重试退避：避免每次冷启动重跑全量 DDL + 数据复制，
 // 把 D1 免费版每日 10 万行写入配额瞬间烧光（曾经 1 小时烧穿）。
 const MIGRATION_RETRY_BACKOFF_MS = 30 * 60 * 1000;
@@ -485,6 +485,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         from_account_name TEXT,
         to_account_sync_id TEXT,
         to_account_name TEXT,
+        transfer_to_amount REAL,
         tags_csv TEXT,
         tag_sync_ids_json TEXT,
         attachments_json TEXT,
@@ -503,6 +504,8 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     // Migrate: add currency_code/native_amount for multi-currency (0018)
     await safeAddColumn('read_tx_projection', 'currency_code', 'TEXT');
     await safeAddColumn('read_tx_projection', 'native_amount', 'REAL');
+    // v4: cross-currency transfer stores the destination-side amount explicitly.
+    await safeAddColumn('read_tx_projection', 'transfer_to_amount', 'REAL');
 
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_tx_ledger_time ON read_tx_projection(ledger_id, happened_at DESC, tx_index DESC)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_tx_ledger_category ON read_tx_projection(ledger_id, category_sync_id)').run();

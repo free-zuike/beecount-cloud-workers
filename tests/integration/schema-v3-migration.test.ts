@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createMockDB, getTable } from '../helpers/mock-db';
 import { initializeDatabase } from '../../src/db/schema';
 
-// SCHEMA v3 迁移（对齐原版 Alembic 最终结构）：验证存量库(v2 结构)迁移后数据不丢
+// SCHEMA v4 迁移（对齐原版 Alembic 最终结构）：验证存量库(v2 结构)迁移后数据不丢
 // 旧结构表用显式 CREATE TABLE 建（mock 注册表结构），模拟真实 v2 库
 const V2_LEDGER_MEMBERS = `CREATE TABLE ledger_members (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +57,7 @@ async function seedTable(db: any, createSql: string, rows: Record<string, unknow
   t.push(...rows);
 }
 
-describe('SCHEMA v3 对齐原版迁移（数据安全）', () => {
+describe('SCHEMA v4 对齐原版 + 跨币种转账扩展迁移（数据安全）', () => {
   it('v2 库迁移：ledger_members/ledger_invites 重建保留数据 + invited_by 回填 + 主键改造', async () => {
     const db = createMockDB();
     getTable(db, 'users').push(
@@ -127,12 +127,12 @@ describe('SCHEMA v3 对齐原版迁移（数据安全）', () => {
     });
   });
 
-  it('全新库初始化直接得到 v3 结构，不触发迁移，版本号=3', async () => {
+  it('全新库初始化直接得到 v4 结构，不触发迁移，版本号=4', async () => {
     const db = createMockDB();
     await initializeDatabase(db as any);
     expect(getTable(db, 'ledger_members')).toHaveLength(0);
     expect(getTable(db, 'ledger_invites')).toHaveLength(0);
     expect(getTable(db, 'backup_remotes')).toHaveLength(0);
-    expect(getTable(db, 'app_metadata').some(r => r.key === 'schema_version' && r.value === '3')).toBe(true);
+    expect(getTable(db, 'app_metadata').some(r => r.key === 'schema_version' && r.value === '4')).toBe(true);
   });
 });

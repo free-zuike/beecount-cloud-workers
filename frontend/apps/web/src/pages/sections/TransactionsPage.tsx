@@ -523,14 +523,17 @@ export function TransactionsPage() {
     const source =
       txIsSharedEditor && sharedBundle ? sharedAsRead.accounts : txDictionaryAccounts
     return source.filter((row) => {
-      const currency = (row.currency || 'CNY').trim().toUpperCase()
-      if (currency !== txFormCurrency) return false
+      // transfer 允许投资/估值账户作为资金流端点（例如给 Charles Schwab 入金）。
+      // 普通收入/支出仍排除估值账户，避免把投资账户当日常钱包使用。
+      if (txForm.tx_type === 'transfer') return true
       if (VALUATION_ACCOUNT_TYPES.has(row.account_type || '')) return false
-      return true
+      const currency = (row.currency || 'CNY').trim().toUpperCase()
+      return currency === txFormCurrency
     })
   }, [
     txDictionaryAccounts,
     txFormCurrency,
+    txForm.tx_type,
     VALUATION_ACCOUNT_TYPES,
     txIsSharedEditor,
     sharedBundle,
@@ -1427,6 +1430,24 @@ export function TransactionsPage() {
       const toAccountName = txForm.to_account_name.trim()
       const categoryName = txForm.category_name.trim()
       const categoryKind = txForm.category_kind
+      const fromCurrency = (txWriteAccounts.find((row) => row.name.trim() === fromAccountName)?.currency || '').toUpperCase()
+      const toCurrency = (txWriteAccounts.find((row) => row.name.trim() === toAccountName)?.currency || '').toUpperCase()
+      const isDifferentCurrencyTransfer = isTransfer && txForm.transfer_currency_mode === 'different'
+      if (isTransfer && fromCurrency && toCurrency) {
+        if (!isDifferentCurrencyTransfer && fromCurrency !== toCurrency) {
+          setErrorNotice(t('transactions.error.transferSameCurrencyRequired'))
+          return false
+        }
+        if (isDifferentCurrencyTransfer && fromCurrency === toCurrency) {
+          setErrorNotice(t('transactions.error.transferDifferentCurrencyRequired'))
+          return false
+        }
+      }
+      const transferToAmount = isDifferentCurrencyTransfer ? Number(txForm.transfer_to_amount.trim()) : null
+      if (isDifferentCurrencyTransfer && (!Number.isFinite(transferToAmount) || (transferToAmount ?? 0) <= 0)) {
+        setErrorNotice(t('transactions.error.transferToAmountInvalid'))
+        return false
+      }
       const txTagIds = txForm.tags
         .map((value) => tagByName.get(value.trim().toLowerCase()))
         .filter((value): value is string => Boolean(value))
@@ -1456,11 +1477,12 @@ export function TransactionsPage() {
       const payload = {
         tx_type: txForm.tx_type,
         amount: Number(txForm.amount || 0),
+        transfer_to_amount: isTransfer ? transferToAmount : null,
         happened_at: txForm.happened_at || new Date().toISOString(),
         note: txForm.note || null,
-        category_name: isTransfer ? null : categoryName || null,
-        category_kind: isTransfer ? null : categoryKind || null,
-        category_id: isTransfer ? null : categoryByKey.get(`${categoryKind}:${categoryName.toLowerCase()}`) || null,
+        category_name: categoryName || null,
+        category_kind: categoryKind || null,
+        category_id: categoryName ? categoryByKey.get(`${categoryKind}:${categoryName.toLowerCase()}`) || null : null,
         account_name: isTransfer ? null : accountName || null,
         account_id: isTransfer ? null : accountByName.get(accountName.toLowerCase()) || null,
         from_account_name: isTransfer ? fromAccountName || null : null,
@@ -1976,10 +1998,12 @@ export function TransactionsPage() {
                     editingOwnerUserId: tx.created_by_user_id || '',
                     tx_type: tx.tx_type,
                     amount: String(tx.amount),
+                    transfer_currency_mode: tx.transfer_to_amount != null ? 'different' : 'same',
+                    transfer_to_amount: tx.transfer_to_amount != null ? String(tx.transfer_to_amount) : '',
                     happened_at: tx.happened_at,
                     note: tx.note || '',
                     category_name: tx.category_name || '',
-                    category_kind: (tx.category_kind as TxForm['category_kind']) || 'expense',
+                    category_kind: (tx.category_kind as TxForm['category_kind']) || tx.tx_type,
                     account_name: tx.account_name || '',
                     from_account_name: tx.from_account_name || '',
                     to_account_name: tx.to_account_name || '',

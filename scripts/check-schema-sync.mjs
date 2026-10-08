@@ -29,7 +29,9 @@ const KNOWN = {
     'ai_image_cache',    // 截图记账缓存（D1+R2 持久化，上游无）
     'backup_restores',   // 恢复任务（上游无恢复功能）
   ]),
-  columnAdditions: {},
+  columnAdditions: {
+    read_tx_projection: ['transfer_to_amount'], // 跨币种转账的转入端实际金额（Worker 扩展）
+  },
   columnMissing: {},
 };
 

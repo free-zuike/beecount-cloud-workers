@@ -338,13 +338,35 @@ export function TransactionsPanel({
   }, [categories, form.category_name, form.tx_type])
 
   const isTransfer = form.tx_type === 'transfer'
+  const isDifferentCurrencyTransfer = isTransfer && form.transfer_currency_mode === 'different'
+  const fromAccount = isTransfer ? accounts.find((row) => row.name.trim() === form.from_account_name.trim()) : undefined
+  const toAccount = isTransfer ? accounts.find((row) => row.name.trim() === form.to_account_name.trim()) : undefined
+  const fromCurrency = (fromAccount?.currency || '').trim().toUpperCase()
+  const toCurrency = (toAccount?.currency || '').trim().toUpperCase()
+  const transferToAmountNumber = Number(form.transfer_to_amount.trim())
+  const transferToAmountValid = !isDifferentCurrencyTransfer || (Number.isFinite(transferToAmountNumber) && transferToAmountNumber > 0)
+  const transferOutAmountNumber = Number(form.amount)
+  const impliedRate = isDifferentCurrencyTransfer && fromCurrency && toCurrency && Number.isFinite(transferOutAmountNumber) && transferOutAmountNumber > 0 && transferToAmountValid
+    ? transferToAmountNumber / transferOutAmountNumber
+    : null
+  const transferToAccountOptions = accountOptionsWithPinned(form.to_account_name)
+    .filter((name) => name !== form.from_account_name.trim())
+    .filter((name) => {
+      if (!fromCurrency) return true
+      const currency = (accounts.find((row) => row.name.trim() === name)?.currency || '').trim().toUpperCase()
+      if (!currency) return true
+      return form.transfer_currency_mode === 'different' ? currency !== fromCurrency : currency === fromCurrency
+    })
   // 非转账允许不选账户（与 mobile 保持一致，tx.accountId 本来就是 nullable）；
   // 转账必须两端都选（否则无法表达方向）。
   const canSubmit = Boolean(writeLedgerId.trim()) && (isTransfer
-    ? Boolean(form.from_account_name.trim()) && Boolean(form.to_account_name.trim())
+    ? Boolean(form.from_account_name.trim()) && Boolean(form.to_account_name.trim()) && transferToAmountValid
     : true)
   const selectedTags = form.tags
   const categoryValue = form.category_name.trim()
+  const defaultTransferCategory = (categories as WorkspaceCategory[]).find(
+    (row) => row.kind === 'transfer' && Number(row.level ?? 1) === 1,
+  ) ?? (categories as WorkspaceCategory[]).find((row) => row.kind === 'transfer')
 
   const applyTxType = (nextType: TxForm['tx_type']) => {
     if (nextType === 'transfer') {
@@ -356,7 +378,9 @@ export function TransactionsPanel({
         tx_type: nextType,
         account_name: '',
         currency: '',
-        category_name: '',
+        transfer_currency_mode: 'same',
+        transfer_to_amount: '',
+        category_name: defaultTransferCategory?.name || '',
         category_kind: 'transfer',
         exclude_from_stats: false,
         exclude_from_budget: false
@@ -371,6 +395,8 @@ export function TransactionsPanel({
       category_name: keepCategory,
       from_account_name: '',
       to_account_name: '',
+      transfer_currency_mode: 'same',
+      transfer_to_amount: '',
       // 不计入预算仅 expense 显示;切到 income 时清掉
       exclude_from_budget: nextType === 'expense' ? form.exclude_from_budget : false
     })
@@ -451,17 +477,64 @@ export function TransactionsPanel({
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label>{t('transactions.table.amount')}</Label>
-              <Input
-                placeholder={t('transactions.placeholder.amount')}
-                value={form.amount}
-                onChange={(e) => onFormChange({ ...form, amount: e.target.value })}
-              />
-              {/* v30 多币种:币种另起一行,全宽显示币种全名+国旗(挨金额太窄会截断);
-                  选非本位币 → 账户下拉按币种过滤 + 已选账户清空(币种优先联动,
-                  transfer 不支持)。 */}
-              {form.tx_type !== 'transfer' ? (
+            {isTransfer ? (
+              <>
+                <div className="space-y-1">
+                  <Label>{t('transactions.transfer.currencyMode')}</Label>
+                  <Select
+                    value={form.transfer_currency_mode}
+                    onValueChange={(value) =>
+                      onFormChange({
+                        ...form,
+                        transfer_currency_mode: value as TxForm['transfer_currency_mode'],
+                        to_account_name: '',
+                        transfer_to_amount: ''
+                      })
+                    }
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="same">{t('transactions.transfer.sameCurrency')}</SelectItem>
+                      <SelectItem value="different">{t('transactions.transfer.differentCurrency')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="md:col-span-2 grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label>{`${t('transactions.transfer.outAmount')}${fromCurrency ? ` (${fromCurrency})` : ''}`}</Label>
+                    <Input
+                      inputMode="decimal"
+                      placeholder={t('transactions.transfer.outAmount')}
+                      value={form.amount}
+                      onChange={(e) => onFormChange({ ...form, amount: e.target.value })}
+                    />
+                  </div>
+                  {isDifferentCurrencyTransfer ? (
+                    <div className="space-y-1">
+                      <Label>{`${t('transactions.transfer.inAmount')}${toCurrency ? ` (${toCurrency})` : ''}`}</Label>
+                      <Input
+                        inputMode="decimal"
+                        value={form.transfer_to_amount}
+                        onChange={(e) => onFormChange({ ...form, transfer_to_amount: e.target.value })}
+                        placeholder={t('transactions.transfer.inAmount')}
+                      />
+                      {impliedRate != null ? (
+                        <p className="text-xs text-muted-foreground">
+                          {t('transactions.transfer.impliedRate')} 1 {fromCurrency} = {impliedRate.toLocaleString(undefined, { maximumFractionDigits: 8 })} {toCurrency}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <div className="space-y-1">
+                <Label>{t('transactions.table.amount')}</Label>
+                <Input
+                  placeholder={t('transactions.placeholder.amount')}
+                  value={form.amount}
+                  onChange={(e) => onFormChange({ ...form, amount: e.target.value })}
+                />
                 <CurrencySelectorTrigger
                   value={form.currency || baseCurrency}
                   onChange={(code) =>
@@ -477,8 +550,8 @@ export function TransactionsPanel({
                   ratesToBase={currencyRates}
                   rateBase={baseCurrency}
                 />
-              ) : null}
-            </div>
+              </div>
+            )}
             <div className="space-y-1">
               <Label>{t('transactions.table.time')}</Label>
               <Input
@@ -495,39 +568,31 @@ export function TransactionsPanel({
             </div>
             <div className="space-y-1">
               <Label>{t('transactions.table.category')}</Label>
-              {isTransfer ? (
-                <Input disabled value={t('common.none')} />
-              ) : (
-                // 跟同行的 SelectTrigger 视觉对齐:h-10 + bg-muted + border-input,
-                // 图标用 h-6 w-6 圆形塞得进 40px 高度,不撑大行高。
-                <button
-                  type="button"
-                  disabled={dictionariesLoading}
-                  onClick={() => setCategoryPickerOpen(true)}
-                  className="flex h-10 w-full items-center gap-2 rounded-md border border-input bg-muted px-3 py-2 text-left text-sm shadow-sm transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {selectedCategoryRow ? (
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/15">
-                      <CategoryIcon
-                        icon={selectedCategoryRow.icon}
-                        iconType={selectedCategoryRow.icon_type}
-                        iconCloudFileId={selectedCategoryRow.icon_cloud_file_id}
-                        iconPreviewUrlByFileId={iconPreviewUrlByFileId}
-                        size={16}
-                        className="text-primary"
-                      />
-                    </span>
-                  ) : null}
-                  <span
-                    className={`flex-1 truncate ${
-                      categoryValue ? '' : 'text-muted-foreground'
-                    }`}
-                  >
-                    {categoryValue || t('transactions.placeholder.categoryName')}
+              {/* transfer 也是正式 category kind。默认选中系统「转账」分类，
+                  用户仍可在存在多个 transfer 分类时手动切换。 */}
+              <button
+                type="button"
+                disabled={dictionariesLoading}
+                onClick={() => setCategoryPickerOpen(true)}
+                className="flex h-10 w-full items-center gap-2 rounded-md border border-input bg-muted px-3 py-2 text-left text-sm shadow-sm transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {selectedCategoryRow ? (
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/15">
+                    <CategoryIcon
+                      icon={selectedCategoryRow.icon}
+                      iconType={selectedCategoryRow.icon_type}
+                      iconCloudFileId={selectedCategoryRow.icon_cloud_file_id}
+                      iconPreviewUrlByFileId={iconPreviewUrlByFileId}
+                      size={16}
+                      className="text-primary"
+                    />
                   </span>
-                  <span className="text-xs text-muted-foreground opacity-60">▾</span>
-                </button>
-              )}
+                ) : null}
+                <span className={`flex-1 truncate ${categoryValue ? '' : 'text-muted-foreground'}`}>
+                  {categoryValue || t('transactions.placeholder.categoryName')}
+                </span>
+                <span className="text-xs text-muted-foreground opacity-60">▾</span>
+              </button>
             </div>
 
             {isTransfer ? (
@@ -537,7 +602,7 @@ export function TransactionsPanel({
                   <Select
                     value={form.from_account_name || undefined}
                     disabled={dictionariesLoading}
-                    onValueChange={(value) => onFormChange({ ...form, from_account_name: value })}
+                    onValueChange={(value) => onFormChange({ ...form, from_account_name: value, to_account_name: '', transfer_to_amount: '' })}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder={t('transactions.placeholder.fromAccountName')} />
@@ -545,7 +610,7 @@ export function TransactionsPanel({
                     <SelectContent>
                       {accountOptionsWithPinned(form.from_account_name).map((name) => (
                         <SelectItem key={name} value={name}>
-                          {name}
+                          {name}{accounts.find((row) => row.name.trim() === name)?.currency ? ` (${accounts.find((row) => row.name.trim() === name)?.currency?.toUpperCase()})` : ''}
                           {hiddenAccountNames.has(name) ? (
                             <span className="ml-1 text-xs text-muted-foreground">
                               {t('accounts.hidden.optionSuffix')}
@@ -561,15 +626,15 @@ export function TransactionsPanel({
                   <Select
                     value={form.to_account_name || undefined}
                     disabled={dictionariesLoading}
-                    onValueChange={(value) => onFormChange({ ...form, to_account_name: value })}
+                    onValueChange={(value) => onFormChange({ ...form, to_account_name: value, transfer_to_amount: '' })}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder={t('transactions.placeholder.toAccountName')} />
                     </SelectTrigger>
                     <SelectContent>
-                      {accountOptionsWithPinned(form.to_account_name).map((name) => (
+                      {transferToAccountOptions.map((name) => (
                         <SelectItem key={name} value={name}>
-                          {name}
+                          {name}{accounts.find((row) => row.name.trim() === name)?.currency ? ` (${accounts.find((row) => row.name.trim() === name)?.currency?.toUpperCase()})` : ''}
                           {hiddenAccountNames.has(name) ? (
                             <span className="ml-1 text-xs text-muted-foreground">
                               {t('accounts.hidden.optionSuffix')}
@@ -758,13 +823,13 @@ export function TransactionsPanel({
       />
 
       {/* 分类 picker —— 跟 mobile category_selector_dialog 同样的网格 + 子级
-          展开交互。expense / income 切换跟随 form.tx_type;转账类型不开 picker。
+          展开交互。expense / income / transfer 都跟随 form.tx_type。
           移除"未分类"footer —— 非转账交易必选分类(对齐 mobile transaction_editor_page,
           page 层 onSaveTransaction 也会再 guard 一次)。 */}
       <CategoryPickerDialog
         open={categoryPickerOpen}
         onClose={() => setCategoryPickerOpen(false)}
-        kind={form.tx_type === 'income' ? 'income' : 'expense'}
+        kind={form.tx_type}
         rows={categories as WorkspaceCategory[]}
         iconPreviewUrlByFileId={iconPreviewUrlByFileId}
         selectedId={selectedCategoryRow?.id}

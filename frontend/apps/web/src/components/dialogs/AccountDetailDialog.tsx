@@ -93,6 +93,8 @@ export function AccountDetailDialog({
                 emptyTitle={t('transactions.empty.forAccount.title')}
                 showLedger={scope === 'all'}
                 noteDisplayMode={noteDisplayMode}
+                accountContextId={account.id}
+                accountContextCurrency={account.currency}
               />
             </div>
           </div>

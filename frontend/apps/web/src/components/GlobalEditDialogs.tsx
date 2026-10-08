@@ -47,6 +47,8 @@ import { onOpenEditCategory, onOpenEditTx, onOpenNewTx } from '../lib/txDialogEv
  * 编辑分类暂时仍走 navigate 到 /app/categories(分类编辑表单依赖 inline form
  * 的 icon picker / parent picker,数据流复杂,后续单独再做全局化)。
  */
+const VALUATION_ACCOUNT_TYPES = new Set(['real_estate', 'vehicle', 'investment', 'insurance', 'social_fund', 'loan'])
+
 export function GlobalEditDialogs() {
   const t = useT()
   const toast = useToast()
@@ -140,6 +142,8 @@ export function GlobalEditDialogs() {
         editingOwnerUserId: tx.created_by_user_id || '',
         tx_type: tx.tx_type,
         amount: String(tx.amount),
+        transfer_currency_mode: tx.transfer_to_amount != null ? 'different' : 'same',
+        transfer_to_amount: tx.transfer_to_amount != null ? String(tx.transfer_to_amount) : '',
         happened_at: tx.happened_at,
         // v30 多币种:回显该笔币种 + 原币种(提交时币种未变不发字段,金额
         // 变更折算由 server L14 隐含汇率联动,防快照漂移)
@@ -147,7 +151,7 @@ export function GlobalEditDialogs() {
         original_currency: (tx.currency_code || '').toUpperCase(),
         note: tx.note || '',
         category_name: tx.category_name || '',
-        category_kind: (tx.category_kind as TxForm['category_kind']) || 'expense',
+        category_kind: (tx.category_kind as TxForm['category_kind']) || tx.tx_type,
         account_name: tx.account_name || '',
         from_account_name: tx.from_account_name || '',
         to_account_name: tx.to_account_name || '',
@@ -233,6 +237,25 @@ export function GlobalEditDialogs() {
       }
     }
 
+    const fromCurrency = (editTxAccounts.find((a) => (a.name || '').trim() === editTxForm.from_account_name.trim())?.currency || '').toUpperCase()
+    const toCurrency = (editTxAccounts.find((a) => (a.name || '').trim() === editTxForm.to_account_name.trim())?.currency || '').toUpperCase()
+    const isDifferentCurrencyTransfer = editTxForm.tx_type === 'transfer' && editTxForm.transfer_currency_mode === 'different'
+    if (editTxForm.tx_type === 'transfer' && fromCurrency && toCurrency) {
+      if (!isDifferentCurrencyTransfer && fromCurrency !== toCurrency) {
+        notifyError(new Error(t('transactions.error.transferSameCurrencyRequired')))
+        return false
+      }
+      if (isDifferentCurrencyTransfer && fromCurrency === toCurrency) {
+        notifyError(new Error(t('transactions.error.transferDifferentCurrencyRequired')))
+        return false
+      }
+    }
+    const transferToAmount = isDifferentCurrencyTransfer ? Number(editTxForm.transfer_to_amount.trim()) : null
+    if (isDifferentCurrencyTransfer && (!Number.isFinite(transferToAmount) || (transferToAmount ?? 0) <= 0)) {
+      notifyError(new Error(t('transactions.error.transferToAmountInvalid')))
+      return false
+    }
+
     // v30 多币种:共享 helper(override 口径/编辑防漂移/改回本位币),与
     // TransactionsPage 提交完全同一实现。
     const ledgerBase = (
@@ -270,14 +293,11 @@ export function GlobalEditDialogs() {
     const payload = {
       tx_type: editTxForm.tx_type,
       amount: amountNum,
+      transfer_to_amount: editTxForm.tx_type === 'transfer' ? transferToAmount : null,
       happened_at: editTxForm.happened_at,
       note: editTxForm.note.trim() || null,
-      category_name:
-        editTxForm.tx_type === 'transfer'
-          ? null
-          : editTxForm.category_name.trim() || null,
-      category_kind:
-        editTxForm.tx_type === 'transfer' ? null : editTxForm.tx_type,
+      category_name: editTxForm.category_name.trim() || null,
+      category_kind: editTxForm.category_kind || editTxForm.tx_type,
       account_name:
         editTxForm.tx_type === 'transfer'
           ? null
@@ -422,8 +442,9 @@ export function GlobalEditDialogs() {
       page={1}
       pageSize={20}
       accounts={editTxAccounts.filter((a) => {
-        // 币种优先联动:账户下拉只显示「表单所选币种(默认=账本主币种)」的
-        // 账户,防止选出币种与账户不一致的组合(与 TransactionsPage 同规则)
+        // transfer 允许估值账户参与资金流；普通收支继续排除估值账户。
+        if (editTxForm.tx_type === 'transfer') return true
+        if (VALUATION_ACCOUNT_TYPES.has(a.account_type || '')) return false
         const wanted = (editTxForm.currency || editTxBase).toUpperCase()
         return ((a.currency || 'CNY').trim().toUpperCase()) === wanted
       })}

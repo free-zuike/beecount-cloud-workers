@@ -1037,8 +1037,8 @@ adminRouter.post('/backups/restore', zValidator('json', BackupRestoreSchema), as
             tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id,
             exclude_from_stats, exclude_from_budget,
             created_by_user_id, last_edited_by_user_id,
-            currency_code, native_amount)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            currency_code, native_amount, transfer_to_amount)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(
           targetLedger.id, syncId, userId,
@@ -1052,7 +1052,7 @@ adminRouter.post('/backups/restore', zValidator('json', BackupRestoreSchema), as
           txRecord.exclude_from_stats != null ? (txRecord.exclude_from_stats ? 1 : 0) : null,
           txRecord.exclude_from_budget != null ? (txRecord.exclude_from_budget ? 1 : 0) : null,
           txRecord.created_by_user_id ?? null, txRecord.last_edited_by_user_id ?? null,
-          txRecord.currency_code ?? null, txRecord.native_amount ?? null,
+          txRecord.currency_code ?? null, txRecord.native_amount ?? null, txRecord.transfer_to_amount ?? null,
         )
         .run();
 
