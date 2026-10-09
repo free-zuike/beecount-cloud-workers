@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout fork
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -34,30 +34,63 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Sync from upstream
+      - name: Prepare upstream sync
+        id: sync
         run: |
-          # 添加上游仓库
           git remote add upstream https://github.com/free-zuike/beecount-cloud-workers.git || true
-          git fetch upstream
-
-          # 获取当前分支
+          git fetch upstream main
           CURRENT_BRANCH=$(git branch --show-current)
-          echo "Current branch: $CURRENT_BRANCH"
+          echo "branch=$CURRENT_BRANCH" >> "$GITHUB_OUTPUT"
 
-          # 纯跟随 fork（HEAD 是 upstream/main 的祖先，即没有本地独有提交）：
-          # 直接对齐上游历史，避免 merge 制造分叉和残留旧提交链
           if git merge-base --is-ancestor HEAD upstream/main 2>/dev/null; then
-            echo "No local commits — fast-forwarding to upstream"
+            echo "No local commits — preparing fast-forward state"
             git reset --hard upstream/main
-            git push --force-with-lease origin "$CURRENT_BRANCH"
+            echo "mode=fast-forward" >> "$GITHUB_OUTPUT"
           else
-            # fork 有本地独有提交：合并保留双方历史（不会丢失本地工作）
-            echo "Local commits detected — merging upstream"
+            echo "Local commits detected — merging upstream in the Actions workspace"
             git merge upstream/main --no-edit
-            git push origin "$CURRENT_BRANCH"
+            echo "mode=merge" >> "$GITHUB_OUTPUT"
           fi
 
-          echo "✅ Fork synced with upstream"
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.15.1
+
+      - name: Install Worker dependencies
+        run: npm ci
+
+      - name: Install frontend dependencies
+        run: cd frontend && pnpm install --frozen-lockfile
+
+      - name: Validate merged Worker
+        run: |
+          npm test -- --run
+          npx tsc --noEmit --pretty false --project tsconfig.json
+          npm run check:schema
+
+      - name: Validate merged frontend
+        run: |
+          cd frontend
+          pnpm test
+          pnpm build
+          test -s apps/web/dist/index.html
+          test -s apps/web/dist/sw.js
+
+      - name: Push validated sync
+        run: |
+          BRANCH="${{ steps.sync.outputs.branch }}"
+          if [ "${{ steps.sync.outputs.mode }}" = "fast-forward" ]; then
+            git push --force-with-lease origin "$BRANCH"
+          else
+            git push origin "$BRANCH"
+          fi
+          echo "Fork synced with upstream after quality gates passed"
 
       - name: Create PR if merge conflicts
         if: failure()

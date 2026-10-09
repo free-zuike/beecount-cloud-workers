@@ -13,20 +13,57 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
+          version: 10.15.1
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install Worker dependencies
+        run: npm ci
+
+      - name: Install frontend dependencies
+        run: cd frontend && pnpm install --frozen-lockfile
+
+      - name: Fetch upstream schema reference
+        run: |
+          git remote add upstream https://github.com/free-zuike/beecount-cloud-workers.git || true
+          git fetch --depth=1 upstream main
+
+      - name: Worker tests
+        run: npm test -- --run
+
+      - name: Worker typecheck
+        run: npx tsc --noEmit --pretty false --project tsconfig.json
+
+      - name: Schema compatibility check
+        run: npm run check:schema
+
+      - name: Frontend tests
+        run: cd frontend && pnpm test
+
+      - name: Build frontend
+        run: cd frontend && pnpm build
+
+      - name: Verify SPA entry artifact
+        run: |
+          test -s frontend/apps/web/dist/index.html
+          test -s frontend/apps/web/dist/sw.js
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts)
+          grep -Fq "beecount-web-v3-$VERSION" frontend/apps/web/dist/sw.js
+
+      - name: Validate Cloudflare deployment secret
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::GitHub Actions secret CLOUDFLARE_API_TOKEN is not configured. Tests passed, but deployment cannot continue."
+            exit 1
+          fi
 
       - name: Setup D1 database
         id: d1
@@ -114,7 +151,9 @@ jobs:
           echo "Patching account_id to: $ACCOUNT_ID"
           sed -i "s|database_id = \"[^\"]*\"|database_id = \"$DB_ID\"|" wrangler.toml
           sed -i "s|CLOUDFLARE_ACCOUNT_ID = \"[^\"]*\"|CLOUDFLARE_ACCOUNT_ID = \"$ACCOUNT_ID\"|" wrangler.toml
-          grep "database_id\|CLOUDFLARE_ACCOUNT_ID" wrangler.toml
+          sed -i "s|D1_DATABASE_ID = \"[^\"]*\"|D1_DATABASE_ID = \"$DB_ID\"|" wrangler.toml
+          grep "database_id\|CLOUDFLARE_ACCOUNT_ID\|D1_DATABASE_ID" wrangler.toml
+          grep -Fq "D1_DATABASE_ID = \"$DB_ID\"" wrangler.toml
 
       - name: Bind R2 bucket to Worker (if R2 enabled)
         if: steps.r2.outputs.r2_enabled == 'true'
@@ -129,18 +168,6 @@ jobs:
           else
             echo "R2 bucket already in wrangler.toml"
           fi
-
-      - name: Build frontend
-        run: cd frontend && pnpm install --no-frozen-lockfile && pnpm build
-
-      - name: Inject version into sw.js
-        run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts)
-          sed -i "s/beecount-web-v2/beecount-web-v2-$VERSION/" frontend/apps/web/dist/sw.js
-          echo "Injected version $VERSION into sw.js"
-
-      - name: Rename index.html to app.html
-        run: mv frontend/apps/web/dist/index.html frontend/apps/web/dist/app.html
 
       - name: Deploy
         run: npx wrangler deploy
