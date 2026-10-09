@@ -540,8 +540,10 @@ readRouter.get('/workspace/transactions', async (c) => {
     bindings.push(categorySyncId);
   }
   if (accountSyncId) {
-    query += ' AND rt.account_sync_id = ?';
-    bindings.push(accountSyncId);
+    // Account detail must include both ordinary transactions and transfers.
+    // Transfers deliberately keep account_sync_id NULL and use from/to account ids.
+    query += ' AND (rt.account_sync_id = ? OR rt.from_account_sync_id = ? OR rt.to_account_sync_id = ?)';
+    bindings.push(accountSyncId, accountSyncId, accountSyncId);
   }
   if (amountMin !== null) {
     query += ' AND rt.amount >= ?';
@@ -599,9 +601,13 @@ readRouter.get('/workspace/transactions', async (c) => {
       note: row.note as string | null,
       tags_list: parseTagsCsv(row.tags_csv as string | null),
       attachments: attachments,
-      account_id: row.account_id as string | null,
+      account_id: (row.account_sync_id as string) ?? null,
       account_name: row.account_name as string | null,
-      category_id: row.category_id as string | null,
+      from_account_id: (row.from_account_sync_id as string) ?? null,
+      from_account_name: row.from_account_name as string | null,
+      to_account_id: (row.to_account_sync_id as string) ?? null,
+      to_account_name: row.to_account_name as string | null,
+      category_id: (row.category_sync_id as string) ?? null,
       category_sync_id: row.category_sync_id as string | null,
       category_name: row.category_name as string | null,
       category_kind: row.category_kind as string | null,

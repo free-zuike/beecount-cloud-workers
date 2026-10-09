@@ -99,11 +99,11 @@ export function GlobalEntityDialogs() {
   }, [token])
 
   const loadAccountTxs = useCallback(
-    async (accountName: string, scope: DetailScope, offset: number) => {
+    async (accountSyncId: string, scope: DetailScope, offset: number) => {
       setAccountLoading(true)
       try {
         const page = await fetchWorkspaceTransactions(token, {
-          accountName,
+          accountSyncId,
           ledgerId: scope === 'current' ? activeLedgerId || undefined : undefined,
           limit: DETAIL_PAGE_SIZE,
           offset,
@@ -128,7 +128,7 @@ export function GlobalEntityDialogs() {
       setAccountTxs([])
       setAccountTotal(0)
       setAccountOffset(0)
-      void loadAccountTxs(acc.name, defaultScope, 0)
+      void loadAccountTxs(acc.id, defaultScope, 0)
       // 同时拉一份 tags 字典(如还没拉)
       if (tagsDict.length === 0) {
         void fetchWorkspaceTags(token, { limit: 500 }).then(setTagsDict).catch(() => undefined)
@@ -143,7 +143,7 @@ export function GlobalEntityDialogs() {
       setAccountTxs([])
       setAccountTotal(0)
       setAccountOffset(0)
-      void loadAccountTxs(account.name, next, 0)
+      void loadAccountTxs(account.id, next, 0)
     },
     [account, accountScope, loadAccountTxs],
   )
@@ -330,7 +330,7 @@ export function GlobalEntityDialogs() {
         loading={accountLoading}
         tags={tagsDict}
         onClose={() => setAccount(null)}
-        onLoadMore={(name, off) => void loadAccountTxs(name, accountScope, off)}
+        onLoadMore={(accountId, off) => void loadAccountTxs(accountId, accountScope, off)}
       />
       <CategoryDetailDialog
         category={category}

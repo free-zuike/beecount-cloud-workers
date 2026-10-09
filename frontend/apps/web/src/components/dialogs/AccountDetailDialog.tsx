@@ -34,7 +34,7 @@ interface Props {
   loading: boolean
   tags: WorkspaceTag[]
   onClose: () => void
-  onLoadMore: (accountName: string, offset: number) => void
+  onLoadMore: (accountSyncId: string, offset: number) => void
   onPreviewAttachment?: (ctx: unknown) => void
   resolveAttachmentPreviewUrl?: (att: unknown) => string | null
 }
@@ -86,7 +86,7 @@ export function AccountDetailDialog({
                 loading={loading}
                 hasMore={transactions.length < total}
                 onLoadMore={() => {
-                  if (!loading) onLoadMore(account.name, offset)
+                  if (!loading) onLoadMore(account.id, offset)
                 }}
                 onPreviewAttachment={onPreviewAttachment as never}
                 resolveAttachmentPreviewUrl={resolveAttachmentPreviewUrl as never}
