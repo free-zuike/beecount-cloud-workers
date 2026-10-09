@@ -903,27 +903,27 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
     if (existing?.account_type) extraType = { type: existing.account_type };
   }
 
-  // 取完整账户数据写入 payload（与原版 _diff_entity_list 一致，App 需要完整数据）
+  // 生成更新后的完整账户状态，避免 PATCH 成功后同步事件仍携带旧值。
   const full = await db.prepare('SELECT * FROM user_account_projection WHERE sync_id = ? AND user_id = ?').bind(accountSyncId, userId).first<Record<string, unknown>>();
-
-  const changePayload = full ? safeJsonStringify({
-      syncId: accountSyncId,
-      name: full.name,
-      type: full.account_type,
-      currency: full.currency,
-      initialBalance: full.initial_balance,
-      note: full.note,
-      creditLimit: full.credit_limit,
-      billingDay: full.billing_day,
-      paymentDueDay: full.payment_due_day,
-      bankName: full.bank_name,
-      cardLastFour: full.card_last_four,
-      hidden: req.hidden !== undefined ? req.hidden : Boolean(full.hidden),
-    }) : safeJsonStringify({
-      syncId: accountSyncId,
-      ...(req.hidden !== undefined && { hidden: req.hidden }),
-      ...extraType,
-    });
+  const nextAccountType = req.account_type !== undefined ? req.account_type : (full?.account_type ?? extraType.type ?? null);
+  const isLiability = nextAccountType === 'credit_card' || nextAccountType === 'loan';
+  const nextInitialBalance = req.initial_balance != null
+    ? (isLiability ? -Math.abs(req.initial_balance) : req.initial_balance)
+    : (full?.initial_balance ?? 0);
+  const changePayload = safeJsonStringify({
+    syncId: accountSyncId,
+    name: req.name !== undefined ? req.name : (full?.name ?? null),
+    type: nextAccountType,
+    currency: req.currency !== undefined ? req.currency : (full?.currency ?? null),
+    initialBalance: nextInitialBalance,
+    note: req.note !== undefined ? req.note : (full?.note ?? null),
+    creditLimit: req.credit_limit !== undefined ? req.credit_limit : (full?.credit_limit ?? null),
+    billingDay: req.billing_day !== undefined ? req.billing_day : (full?.billing_day ?? null),
+    paymentDueDay: req.payment_due_day !== undefined ? req.payment_due_day : (full?.payment_due_day ?? null),
+    bankName: req.bank_name !== undefined ? req.bank_name : (full?.bank_name ?? null),
+    cardLastFour: req.card_last_four !== undefined ? req.card_last_four : (full?.card_last_four ?? null),
+    hidden: req.hidden !== undefined ? req.hidden : Boolean(full?.hidden),
+  });
 
   // sync_changes + projection 同事务原子写入（db.batch = SQL transaction，任一失败整批回滚）
   const existingAccount = await db

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createTestEnv, registerTestUser, getAuthToken, createTestLedger } from '../helpers/test-env';
+import { createTestEnv, registerTestUser, getAuthToken, createTestLedger, getTable } from '../helpers/test-env';
 
 let env: Awaited<ReturnType<typeof createTestEnv>>;
 let token: string;
@@ -151,6 +151,54 @@ describe('CRUD - Accounts', () => {
     });
 
     expect(updateRes.status).toBe(200);
+  });
+
+  it('should emit the post-update account state in sync_changes', async () => {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/accounts`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        name: '更新前账户',
+        account_type: 'debit',
+        currency: 'CNY',
+        initial_balance: 100,
+        note: 'before',
+      }),
+    });
+    expect(createRes.status).toBe(200);
+    const { entity_id: acctId } = await createRes.json() as any;
+
+    const updateRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/accounts/${acctId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        name: '更新后账户',
+        account_type: 'credit_card',
+        initial_balance: 50,
+        note: 'after',
+      }),
+    });
+    expect(updateRes.status).toBe(200);
+
+    const changes = getTable(env.db, 'sync_changes')
+      .filter((row: any) => row.entity_type === 'account' && row.entity_sync_id === acctId && row.action === 'upsert');
+    const latest = changes.at(-1) as any;
+    expect(latest).toBeDefined();
+    const payload = JSON.parse(latest.payload_json);
+    expect(payload).toMatchObject({
+      syncId: acctId,
+      name: '更新后账户',
+      type: 'credit_card',
+      currency: 'CNY',
+      initialBalance: -50,
+      note: 'after',
+    });
   });
 
   it('should delete an account', async () => {
