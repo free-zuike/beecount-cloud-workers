@@ -81,4 +81,42 @@ describe('writeRouter 交易账户字段规范化（真实 SQLite）', () => {
     expect(row.to_account_sync_id).toBe('to-1');
     expect(row.to_account_name).toBe('B');
   });
+
+  it('renaming an account cascades the latest name into historical transaction projections and sync payloads', async () => {
+    sqlite.prepare("INSERT INTO user_account_projection (sync_id, user_id, name, account_type, currency) VALUES ('acc-bank', 'user-1', '银行卡', 'bank_card', 'CNY')").run();
+
+    const expenseId = await createTx({
+      tx_type: 'expense', amount: 12, happened_at: '2025-01-15T10:00:00.000Z',
+      account_id: 'acc-cash', account_name: '现金',
+    });
+    const transferId = await createTx({
+      tx_type: 'transfer', amount: 20, happened_at: '2025-01-15T11:00:00.000Z',
+      from_account_id: 'acc-cash', from_account_name: '现金',
+      to_account_id: 'acc-bank', to_account_name: '银行卡',
+    });
+
+    const res = await app.request('/api/v1/write/ledgers/ledger-1/accounts/acc-cash', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Device-ID': 'test-device' },
+      body: JSON.stringify({ name: '现金钱包' }),
+    }, { DB: db });
+    expect(res.status).toBe(200);
+
+    expect(sqlite.prepare('SELECT name FROM user_account_projection WHERE sync_id = ?').get('acc-cash')).toEqual({ name: '现金钱包' });
+    expect(projection(expenseId).account_name).toBe('现金钱包');
+    expect(projection(transferId).from_account_name).toBe('现金钱包');
+    expect(projection(transferId).to_account_name).toBe('银行卡');
+
+    const cascades = sqlite.prepare(
+      "SELECT entity_sync_id, payload_json FROM sync_changes WHERE updated_by_device_id = 'account-rename-cascade' ORDER BY change_id"
+    ).all() as Array<{ entity_sync_id: string; payload_json: string }>;
+    expect(cascades).toHaveLength(2);
+    expect(cascades.map((row) => row.entity_sync_id).sort()).toEqual([expenseId, transferId].sort());
+    for (const row of cascades) {
+      const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+      if (row.entity_sync_id === expenseId) expect(payload.accountName).toBe('现金钱包');
+      if (row.entity_sync_id === transferId) expect(payload.fromAccountName).toBe('现金钱包');
+    }
+  });
+
 });

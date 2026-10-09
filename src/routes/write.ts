@@ -905,6 +905,9 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
 
   // 生成更新后的完整账户状态，避免 PATCH 成功后同步事件仍携带旧值。
   const full = await db.prepare('SELECT * FROM user_account_projection WHERE sync_id = ? AND user_id = ?').bind(accountSyncId, userId).first<Record<string, unknown>>();
+  const requestedName = typeof req.name === 'string' ? req.name : null;
+  const accountNameChanged = requestedName !== null && requestedName !== (full?.name ?? null);
+
   const nextAccountType = req.account_type !== undefined ? req.account_type : (full?.account_type ?? extraType.type ?? null);
   const isLiability = nextAccountType === 'credit_card' || nextAccountType === 'loan';
   const nextInitialBalance = req.initial_balance != null
@@ -974,7 +977,7 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
         req.bank_name ?? null, req.card_last_four ?? null, req.hidden != null ? (req.hidden ? 1 : 0) : null);
   }
 
-  const batchResults = await db.batch([
+  const batchStatements = [
     db.prepare(
       `INSERT INTO sync_changes
        (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
@@ -982,16 +985,83 @@ writeRouter.patch('/ledgers/:ledgerId/accounts/:id', zValidator('json', WriteAcc
     )
       .bind(userId, 'account', accountSyncId, 'upsert', changePayload, serverNow, userId),
     projectionStmt,
-  ]);
-  const newChangeId = batchResults[0].meta.last_row_id as number;
+  ];
+
+  if (accountNameChanged && requestedName !== null) {
+    // Transactions denormalize account names for fast rendering. Keep every historical
+    // transaction that references this account aligned with the latest account name,
+    // and emit transaction sync upserts so incremental clients converge too.
+    batchStatements.push(
+      db.prepare(
+        `INSERT INTO sync_changes
+         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+         SELECT t.user_id, t.ledger_id, 'transaction', t.sync_id, 'upsert',
+                json_set(sc.payload_json,
+                  '$.accountName', CASE WHEN t.account_sync_id = ? THEN ? ELSE json_extract(sc.payload_json, '$.accountName') END,
+                  '$.fromAccountName', CASE WHEN t.from_account_sync_id = ? THEN ? ELSE json_extract(sc.payload_json, '$.fromAccountName') END,
+                  '$.toAccountName', CASE WHEN t.to_account_sync_id = ? THEN ? ELSE json_extract(sc.payload_json, '$.toAccountName') END),
+                ?, ?, 'account-rename-cascade', 'ledger'
+         FROM read_tx_projection t
+         JOIN sync_changes sc ON sc.change_id = (
+           SELECT MAX(s2.change_id) FROM sync_changes s2
+           WHERE s2.entity_type = 'transaction' AND s2.entity_sync_id = t.sync_id AND s2.action = 'upsert'
+         )
+         WHERE t.user_id = ?
+           AND (t.account_sync_id = ? OR t.from_account_sync_id = ? OR t.to_account_sync_id = ?)`
+      ).bind(
+        accountSyncId, requestedName, accountSyncId, requestedName, accountSyncId, requestedName,
+        serverNow, userId, userId, accountSyncId, accountSyncId, accountSyncId,
+      ),
+      db.prepare(
+        `UPDATE read_tx_projection
+         SET account_name = CASE WHEN account_sync_id = ? THEN ? ELSE account_name END,
+             from_account_name = CASE WHEN from_account_sync_id = ? THEN ? ELSE from_account_name END,
+             to_account_name = CASE WHEN to_account_sync_id = ? THEN ? ELSE to_account_name END,
+             source_change_id = (
+               SELECT MAX(s.change_id) FROM sync_changes s
+               WHERE s.entity_type = 'transaction'
+                 AND s.entity_sync_id = read_tx_projection.sync_id
+                 AND s.updated_by_device_id = 'account-rename-cascade'
+                 AND s.updated_at = ?
+             )
+         WHERE user_id = ?
+           AND (account_sync_id = ? OR from_account_sync_id = ? OR to_account_sync_id = ?)`
+      ).bind(
+        accountSyncId, requestedName, accountSyncId, requestedName, accountSyncId, requestedName,
+        serverNow, userId, accountSyncId, accountSyncId, accountSyncId,
+      ),
+    );
+  }
+
+  const batchResults = await db.batch(batchStatements);
+  const accountChangeId = batchResults[0].meta.last_row_id as number;
+  let newChangeId = accountChangeId;
+  if (accountNameChanged) {
+    const latestCascade = await db.prepare(
+      `SELECT MAX(change_id) AS max_id FROM sync_changes
+       WHERE updated_by_device_id = 'account-rename-cascade' AND updated_at = ? AND updated_by_user_id = ?`
+    ).bind(serverNow, userId).first<{ max_id: number | null }>();
+    newChangeId = Math.max(accountChangeId, latestCascade?.max_id ?? 0);
+  }
 
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'update', entityType: 'account', entityId: accountSyncId,
     details: { name: req.name ?? null },
   });
 
-  // WS 广播
-  await broadcastWriteEvent(c, ledger.id, newChangeId);
+  // WS 广播。改名可能影响多个账本中的历史交易，因此逐账本广播最新游标。
+  if (accountNameChanged) {
+    const affectedLedgers = await db.prepare(
+      `SELECT DISTINCT ledger_id FROM read_tx_projection
+       WHERE user_id = ? AND (account_sync_id = ? OR from_account_sync_id = ? OR to_account_sync_id = ?)`
+    ).bind(userId, accountSyncId, accountSyncId, accountSyncId).all<{ ledger_id: string }>();
+    const ledgerIds = new Set<string>([ledger.id, ...affectedLedgers.results.map((row) => row.ledger_id)]);
+    for (const affectedLedgerId of ledgerIds) {
+      await broadcastWriteEvent(c, affectedLedgerId, newChangeId);
+    }
+  } else {
+    await broadcastWriteEvent(c, ledger.id, newChangeId);
+  }
 
   return c.json({
     ledger_id: ledger.external_id,
