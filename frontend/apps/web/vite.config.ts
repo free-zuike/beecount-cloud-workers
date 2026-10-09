@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 
@@ -24,6 +24,25 @@ if (!appVersion) {
 }
 
 export default defineConfig({
+  plugins: [
+    {
+      name: 'inject-service-worker-version',
+      closeBundle() {
+        const swPath = path.resolve(__dirname, 'dist/sw.js')
+        try {
+          const sw = readFileSync(swPath, 'utf-8')
+          const versioned = sw.replace(
+            /const CACHE_VERSION = '[^']*'/,
+            `const CACHE_VERSION = 'beecount-web-v3-${appVersion}'`,
+          )
+          if (versioned === sw) throw new Error('CACHE_VERSION marker not found')
+          writeFileSync(swPath, versioned)
+        } catch (error) {
+          throw new Error(`Failed to inject service-worker version: ${String(error)}`)
+        }
+      },
+    },
+  ],
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
     // 本地 dev 时 process.env.VITE_APP_VERSION 为空,Vite 自动注入也拿不到值。

@@ -76,8 +76,11 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone()
-          caches.open(CACHE_VERSION).then((cache) => cache.put('/index.html', copy))
+          const contentType = res.headers.get('content-type') || ''
+          if (res.ok && contentType.includes('text/html')) {
+            const copy = res.clone()
+            caches.open(CACHE_VERSION).then((cache) => cache.put('/index.html', copy))
+          }
           return res
         })
         .catch(() => caches.match('/index.html').then((res) => res || caches.match('/')))
