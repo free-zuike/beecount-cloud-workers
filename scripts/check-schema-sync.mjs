@@ -3,7 +3,7 @@
  * Schema 同步核对脚本 —— 每次同步上游后运行：
  *   node scripts/check-schema-sync.mjs
  *
- * 对比 upstream/main 的 Alembic 迁移（0001~0019 的最终结构）与我们的 src/db/schema.ts，
+ * 对比 upstream/main 的 canonical schema（新版 src/db/schema.ts；旧版回退 Alembic）与我们的 src/db/schema.ts，
  * 输出逐表列差异。核心同步表必须一致（FAIL），服务端扩展按已知差异白名单放行。
  *
  * 退出码：0 = 无意外差异（白名单内差异仅提示）；1 = 有需要跟进的新差异。
@@ -83,6 +83,18 @@ function columnNamesInBlock(text, start, end) {
 function parseUpstreamSchema() {
   const files = execSync(`git ls-tree -r --name-only ${UPSTREAM_REF} -- alembic/versions`, { cwd: ROOT })
     .toString().trim().split('\n').filter(f => /\d{4}_.*\.py$/.test(f)).sort();
+
+  // Newer upstream versions migrated away from Alembic and keep the canonical
+  // schema directly in src/db/schema.ts. The old checker silently parsed zero
+  // tables in that layout, which made every local table look like drift.
+  if (files.length === 0) {
+    const text = execSync(`git show ${UPSTREAM_REF}:src/db/schema.ts`, {
+      cwd: ROOT,
+      maxBuffer: 10 * 1024 * 1024,
+    }).toString();
+    return parseSchemaTs(text);
+  }
+
   const tables = new Map(); // name -> Set(columns)
 
   for (const file of files) {
@@ -135,9 +147,8 @@ function parseUpstreamSchema() {
   return tables;
 }
 
-// ---------- 本地 schema.ts 解析 ----------
-function parseLocalSchema() {
-  const text = readFileSync(join(ROOT, 'src/db/schema.ts'), 'utf8');
+// ---------- schema.ts 解析（本地 + 新版上游共用） ----------
+function parseSchemaTs(text) {
   const tables = new Map();
 
   // 每条 DDL 是一个模板字符串：await db.prepare(`...CREATE TABLE...`).run();
@@ -166,6 +177,10 @@ function parseLocalSchema() {
   }
   for (const m of text.matchAll(/DROP TABLE IF EXISTS (\w+)/g)) tables.delete(m[1]);
   return tables;
+}
+
+function parseLocalSchema() {
+  return parseSchemaTs(readFileSync(join(ROOT, 'src/db/schema.ts'), 'utf8'));
 }
 
 // ---------- 对比 ----------
