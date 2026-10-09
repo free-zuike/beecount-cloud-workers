@@ -1389,7 +1389,21 @@ syncRouter.get('/full', async (c) => {
         monthStartDay: ledger.month_start_day || 1,
         count: txs.results.length,
         items: txs.results.map(r => convertBooleans(r as Record<string, unknown>)),
-        accounts: accounts.results.map(r => convertBooleans(r as Record<string, unknown>)),
+        accounts: accounts.results.map(r => {
+          const account = convertBooleans(r as Record<string, unknown>);
+          return {
+            ...account,
+            syncId: account.sync_id,
+            type: account.account_type,
+            accountType: account.account_type,
+            initialBalance: account.initial_balance,
+            creditLimit: account.credit_limit,
+            billingDay: account.billing_day,
+            paymentDueDay: account.payment_due_day,
+            bankName: account.bank_name,
+            cardLastFour: account.card_last_four,
+          };
+        }),
         categories: categories.results.map(r => convertBooleans(r as Record<string, unknown>)),
         tags: tags.results.map(r => convertBooleans(r as Record<string, unknown>)),
         budgets: budgets.results.map(r => convertBooleans(r as Record<string, unknown>)),

@@ -237,6 +237,52 @@ describe('Sync - Pull', () => {
 });
 
 describe('Sync - Full sync', () => {
+  it('should serialize full-sync accounts with native sync field names', async () => {
+    const createRes = await env.app.request(`/api/v1/write/ledgers/${ledgerId}/accounts`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        name: 'Full Sync Account',
+        account_type: 'debit',
+        currency: 'USD',
+        initial_balance: 123.45,
+        credit_limit: 500,
+        billing_day: 3,
+        payment_due_day: 20,
+        bank_name: 'Test Bank',
+        card_last_four: '1234',
+      }),
+    });
+    expect(createRes.status).toBe(200);
+    const { entity_id: accountId } = await createRes.json() as any;
+
+    const res = await env.app.request(`/api/v1/sync/full?ledger_id=${ledgerId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    const content = JSON.parse(body.snapshot.payload.content);
+    const account = content.accounts.find((item: any) => item.sync_id === accountId);
+
+    expect(account).toMatchObject({
+      sync_id: accountId,
+      syncId: accountId,
+      account_type: 'debit',
+      type: 'debit',
+      accountType: 'debit',
+      initial_balance: 123.45,
+      initialBalance: 123.45,
+      creditLimit: 500,
+      billingDay: 3,
+      paymentDueDay: 20,
+      bankName: 'Test Bank',
+      cardLastFour: '1234',
+    });
+  });
+
   it('should return full sync snapshot', async () => {
     const txSyncId = crypto.randomUUID();
     await env.app.request('/api/v1/sync/push', {
