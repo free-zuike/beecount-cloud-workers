@@ -43,3 +43,6 @@ beecount/backups/
 
 # Temp wrangler configs used during CI
 wrangler.toml.bak
+
+# TypeScript incremental build cache
+*.tsbuildinfo
