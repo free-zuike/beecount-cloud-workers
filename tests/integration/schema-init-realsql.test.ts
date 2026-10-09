@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import type { SQLInputValue } from 'node:sqlite';
 import { initializeDatabase } from '../../src/db/schema';
+import { createRealDb } from '../helpers/realsql-db';
 
 // 全新库初始化必须在真实 SQLite 上完整成功（schema.ts 曾含引用已删列的
 // 死索引 idx_audit_logs_entity → no such column → 外层 catch 吞掉 → 后续
@@ -50,6 +51,17 @@ describe('新库初始化（真实 SQLite）', () => {
     }
     const v = sqlite.prepare("SELECT value FROM app_metadata WHERE key = 'schema_version'").get() as { value: string };
     expect(v.value).toBe('3');
+    sqlite.close();
+  });
+
+
+  it('近期迁移失败处于退避期时拒绝继续服务', async () => {
+    const { sqlite, db } = createRealDb();
+    await initializeDatabase(db);
+    sqlite.prepare("UPDATE app_metadata SET value = '2' WHERE key = 'schema_version'").run();
+    sqlite.prepare("INSERT OR REPLACE INTO app_metadata (key, value, updated_at) VALUES ('schema_migration_error', ?, datetime('now'))").run(new Date().toISOString());
+
+    await expect(initializeDatabase(db)).rejects.toThrow('Schema migration retry backoff active');
     sqlite.close();
   });
 });

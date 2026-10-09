@@ -33,11 +33,17 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       if (errMeta?.value) {
         const lastFail = new Date(errMeta.value).getTime();
         if (Date.now() - lastFail < MIGRATION_RETRY_BACKOFF_MS) {
-          console.log('[INIT] Migration failed recently, backing off until', new Date(lastFail + MIGRATION_RETRY_BACKOFF_MS).toISOString());
-          return;
+          const retryAt = new Date(lastFail + MIGRATION_RETRY_BACKOFF_MS).toISOString();
+          console.log('[INIT] Migration failed recently, backing off until', retryAt);
+          throw new Error(`Schema migration retry backoff active until ${retryAt}`);
         }
       }
-    } catch { /* app_metadata 不存在则忽略 */ }
+    } catch (err) {
+      // A missing app_metadata table is expected on first boot. A deliberate
+      // backoff error, however, must stop request handling rather than serving
+      // against a partially migrated schema.
+      if (err instanceof Error && err.message.startsWith('Schema migration retry backoff active')) throw err;
+    }
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS app_metadata (
@@ -857,5 +863,6 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
          VALUES ('schema_migration_error', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
       ).bind(new Date().toISOString()).run();
     } catch { /* 标记失败不影响主流程 */ }
+    throw error;
   }
 }
