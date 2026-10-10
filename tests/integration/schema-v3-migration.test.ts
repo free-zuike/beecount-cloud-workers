@@ -122,9 +122,12 @@ describe('SCHEMA v3/v4 迁移（真实 SQLite 数据安全）', () => {
   it('全新库初始化直接得到 v4 结构，不触发迁移，版本号=4', async () => {
     const { sqlite, db } = createRealDb();
     await initializeDatabase(db as any);
-    expect(sqlite.prepare('SELECT COUNT(*) c FROM ledger_members').get().c).toBe(0);
-    expect(sqlite.prepare('SELECT COUNT(*) c FROM ledger_invites').get().c).toBe(0);
-    expect(sqlite.prepare('SELECT COUNT(*) c FROM backup_remotes').get().c).toBe(0);
+    const memberCount = sqlite.prepare('SELECT COUNT(*) c FROM ledger_members').get() as { c: number };
+    const inviteCount = sqlite.prepare('SELECT COUNT(*) c FROM ledger_invites').get() as { c: number };
+    const remoteCount = sqlite.prepare('SELECT COUNT(*) c FROM backup_remotes').get() as { c: number };
+    expect(memberCount.c).toBe(0);
+    expect(inviteCount.c).toBe(0);
+    expect(remoteCount.c).toBe(0);
     const meta = sqlite.prepare("SELECT value FROM app_metadata WHERE key = 'schema_version'").get() as any;
     expect(meta.value).toBe('4');
   });
