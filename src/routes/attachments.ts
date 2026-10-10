@@ -23,12 +23,28 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { uploadToStorage, downloadFromStorage, deleteFromStorage } from '../lib/storage-adapter';
 import { sweepDuplicateAttachments } from '../lib/attachment-dedup';
+import { detectSafeImageMime } from '../lib/image-mime';
 
 // 附件统一以 attachments/{ledgerExternalId}/{fileId}_{fileName} 为 key
 // （storage-adapter 内部会自动加 beecount/ 前缀，key 本身不含该前缀）
 // 下载历史数据时可能遇到含 beecount/ 前缀的旧路径，需去掉后传给 adapter
 function stripBeecountPrefix(key: string): string {
   return key.replace(/^beecount\//, '').replace(/^attachments\/attachments\//, 'attachments/');
+}
+
+export function buildAttachmentHeaders(mimeType: string, fileName: string, size: number): HeadersInit {
+  const mime = (mimeType || 'application/octet-stream').toLowerCase();
+  const inlineSafe = /^(image\/(jpeg|png|webp|gif))$/.test(mime);
+  const disposition = inlineSafe ? 'inline' : 'attachment';
+  const encodedName = encodeURIComponent(fileName || 'attachment');
+  return {
+    'Content-Type': mime,
+    'Content-Disposition': `${disposition}; filename*=UTF-8''${encodedName}`,
+    'Content-Length': String(size),
+    'Cache-Control': 'private, max-age=31536000, immutable',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "sandbox; default-src 'none'",
+  };
 }
 
 type Bindings = {
@@ -42,6 +58,7 @@ type Bindings = {
   S3_BUCKET_NAME?: string;
   S3_PATH_STYLE?: string;
   S3_CDN_DOMAIN?: string;
+  BEECOUNT_DO?: DurableObjectNamespace;
 };
 
 type Variables = {
@@ -101,7 +118,11 @@ const handleUpload = async (c: any) => {
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         const sha256Hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 
-        const mimeType = file.type || 'application/octet-stream';
+        const declaredMimeType = (file.type || 'application/octet-stream').toLowerCase();
+        const detectedImageMime = detectSafeImageMime(new Uint8Array(fileBuffer));
+        const mimeType = declaredMimeType.startsWith('image/')
+            ? (detectedImageMime ?? 'application/octet-stream')
+            : declaredMimeType;
         // 文件名安全处理：截断255字符，去除路径分隔符，清理非法字符
         const rawFileName = fileName || file.name || 'unnamed';
         const safeFileName = rawFileName
@@ -269,9 +290,9 @@ attachmentsRouter.get('/:id', async (c) => {
     const fileId = c.req.param('id');
 
     // 速率限制
-    const { isRateLimited } = await import('../lib/rate-limit');
-    const clientIp = c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
-    if (isRateLimited('attachment-download', clientIp, 60, 60)) {
+    const { isRateLimitedDistributed } = await import('../lib/rate-limit');
+    const clientIp = c.req.header('CF-Connecting-IP') || c.req.header('x-real-ip') || 'unknown';
+    if (await isRateLimitedDistributed(c.env.BEECOUNT_DO, 'attachment-download', clientIp, 60, 60)) {
         return c.json({ error: 'Rate limit exceeded' }, 429);
     }
 
@@ -324,13 +345,7 @@ attachmentsRouter.get('/:id', async (c) => {
                 const mimeGuess = ext === 'png' ? 'image/png' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : ext === 'gif' ? 'image/gif' : (obj.httpMetadata?.contentType || row.mime_type || 'application/octet-stream');
                 serverLogger.info('src.routers.attachments', '[ATTACH] R2 found:', key, 'size:', obj.size, 'mime:', mimeGuess);
                 return new Response(obj.body, {
-                    headers: {
-                        'Content-Type': mimeGuess,
-                        'Content-Disposition': `inline; filename="${encodeURIComponent(row.file_name || 'attachment')}"`,
-                        'Content-Length': String(obj.size),
-                        'Cache-Control': 'public, max-age=31536000, immutable',
-                        'Access-Control-Allow-Origin': '*',
-                    },
+                    headers: buildAttachmentHeaders(mimeGuess, row.file_name || 'attachment', obj.size),
                 });
             }
         }
@@ -343,13 +358,7 @@ attachmentsRouter.get('/:id', async (c) => {
         const ext = (row.file_name || '').split('.').pop()?.toLowerCase() || '';
         const mimeGuess = ext === 'png' ? 'image/png' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : ext === 'gif' ? 'image/gif' : (row.mime_type || 'application/octet-stream');
         return new Response(data.slice().buffer as ArrayBuffer, {
-            headers: {
-                'Content-Type': mimeGuess,
-                'Content-Disposition': `inline; filename="${encodeURIComponent(row.file_name || 'attachment')}"`,
-                'Content-Length': String(data.byteLength),
-                'Cache-Control': 'public, max-age=31536000, immutable',
-                'Access-Control-Allow-Origin': '*',
-            },
+            headers: buildAttachmentHeaders(mimeGuess, row.file_name || 'attachment', data.byteLength),
         });
     }
     serverLogger.info('src.routers.attachments', '[ATTACH] Not found in R2 or backup remotes, returning metadata');
@@ -456,19 +465,16 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
         }
 
         const fileBuffer = await file.arrayBuffer();
+        const fileBytes = new Uint8Array(fileBuffer);
+        const effectiveMimeType = detectSafeImageMime(fileBytes);
+        if (!effectiveMimeType) {
+            return c.json({ error: 'Icon format invalid: expected JPEG, PNG, WebP or GIF' }, 400);
+        }
         const hashBuffer = await crypto.subtle.digest('SHA-256', fileBuffer);
         const sha256Hash = Array.from(new Uint8Array(hashBuffer))
             .map(b => b.toString(16).padStart(2, '0')).join('');
-        const mimeType = file.type || 'image/png';
         const fileName = file.name || 'icon.png';
-        // 如果 MIME 类型是通用类型，根据文件扩展名推断实际类型
-        const effectiveMimeType = mimeType === 'application/octet-stream' || mimeType === 'application/octet-stream'
-            ? (fileName.endsWith('.png') ? 'image/png'
-                : fileName.endsWith('.jpg') || fileName.endsWith('.jpeg') ? 'image/jpeg'
-                : fileName.endsWith('.gif') ? 'image/gif'
-                : fileName.endsWith('.webp') ? 'image/webp'
-                : 'image/png')
-            : mimeType;
+        const mimeType = effectiveMimeType;
         const size = file.size;
 
         // 去重：同一用户同SHA256的category_icon不重复创建
@@ -490,7 +496,7 @@ attachmentsRouter.post('/category-icons/upload', async (c) => {
         const r2Key = `category-icons/${userId}/${randomUUID()}_${fileName}`;
 
         // 上传到 storage-adapter（R2 优先，回退所有备份远端）
-        const uploadResult = await uploadToStorage(db, c.env, r2Key, new Uint8Array(fileBuffer), effectiveMimeType);
+        const uploadResult = await uploadToStorage(db, c.env, r2Key, fileBytes, effectiveMimeType);
         if (!uploadResult.ok) {
             serverLogger.error('src.routers.attachments', '[ATTACH] Category icon upload failed: no available storage');
             return c.json({ error: 'Upload failed: no available storage' }, 503);

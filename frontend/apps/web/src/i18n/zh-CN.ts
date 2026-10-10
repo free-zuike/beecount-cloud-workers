@@ -1504,7 +1504,7 @@ const zhCN = {
   'admin.users.password.confirmPassword': '确认新密码',
   'admin.users.password.submit': '修改密码',
   'admin.users.password.error.adminRequired': '请输入你当前的密码',
-  'admin.users.password.error.tooShort': '新密码至少 6 位',
+  'admin.users.password.error.tooShort': '新密码至少 8 位',
   'admin.users.password.error.mismatch': '两次输入的新密码不一致',
   'admin.users.error.createRequired': '请填写邮箱和密码。',
   'admin.users.filter.enabled': '仅启用',

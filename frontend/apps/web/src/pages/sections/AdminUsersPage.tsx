@@ -33,7 +33,6 @@ export function AdminUsersPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('enabled')
   const [createEmail, setCreateEmail] = useState('')
   const [createPassword, setCreatePassword] = useState('')
-  const [createIsAdmin, setCreateIsAdmin] = useState(false)
   const [createIsEnabled, setCreateIsEnabled] = useState(true)
 
   const notifyError = useCallback(
@@ -121,13 +120,11 @@ export function AdminUsersPage() {
       await createAdminUser(token, {
         email: createEmail.trim(),
         password: createPassword,
-        is_admin: createIsAdmin,
         is_enabled: createIsEnabled,
       })
       await refresh()
       setCreateEmail('')
       setCreatePassword('')
-      setCreateIsAdmin(false)
       setCreateIsEnabled(true)
       notifySuccess(t('notice.userCreated'))
       return true
@@ -150,11 +147,9 @@ export function AdminUsersPage() {
       onStatusFilterChange={setStatusFilter}
       createEmail={createEmail}
       createPassword={createPassword}
-      createIsAdmin={createIsAdmin}
       createIsEnabled={createIsEnabled}
       onCreateEmailChange={setCreateEmail}
       onCreatePasswordChange={setCreatePassword}
-      onCreateIsAdminChange={setCreateIsAdmin}
       onCreateIsEnabledChange={setCreateIsEnabled}
       onCreate={onCreate}
     />

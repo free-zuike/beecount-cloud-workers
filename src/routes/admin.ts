@@ -1,3 +1,4 @@
+import { boundedInt } from '../lib/query-params';
 /**
  * 管理路由模块 - 实现 BeeCount Cloud 管理员接口
  *
@@ -43,8 +44,7 @@ function nowUtc(): string {
 /** 创建用户请求 */
 const AdminUserCreateSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(6),
-  is_admin: z.boolean().default(false),
+  password: z.string().min(8),
   is_enabled: z.boolean().default(true),
 });
 
@@ -225,8 +225,8 @@ adminRouter.get('/users', async (c) => {
   const db = c.env.DB;
   const q = c.req.query('q') ?? null;
   const status = c.req.query('status') ?? null;
-  const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
-  const offset = parseInt(c.req.query('offset') ?? '0', 10);
+  const limit = boundedInt(c.req.query('limit'), 100, 1, 1000);
+  const offset = boundedInt(c.req.query('offset'), 0, 0, 1_000_000);
 
   let whereClause = 'WHERE 1=1';
   const params: (string | number)[] = [];
@@ -308,22 +308,16 @@ adminRouter.post('/users', zValidator('json', AdminUserCreateSchema), async (c) 
   const userId = randomUUID();
   const passwordHash = await hashPassword(req.password);
 
-  await db
-    .prepare(
+  await db.batch([
+    db.prepare(
       `INSERT INTO users (id, email, password_hash, is_admin, is_enabled, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    )
-    .bind(userId, req.email.toLowerCase(), passwordHash, 0, req.is_enabled ? 1 : 0, serverNow)
-    .run();
-
-  // 创建用户 profile
-  await db
-    .prepare(
+       VALUES (?, ?, ?, 0, ?, ?)`
+    ).bind(userId, req.email.toLowerCase(), passwordHash, req.is_enabled ? 1 : 0, serverNow),
+    db.prepare(
       `INSERT INTO user_profiles (user_id, display_name, avatar_version)
        VALUES (?, ?, 0)`
-    )
-    .bind(userId, req.email.split('@')[0])
-    .run();
+    ).bind(userId, req.email.split('@')[0]),
+  ]);
 
   await insertAuditLog({ db, userId: c.get('userId'), action: 'admin_user_create', entityType: 'user', entityId: userId, details: { email: req.email.toLowerCase() } });
 
@@ -504,7 +498,7 @@ adminRouter.delete('/users/:id', async (c) => {
 adminRouter.get('/devices', async (c) => {
   const db = c.env.DB;
   const view = c.req.query('view') ?? 'deduped';
-  const activeWithinDays = parseInt(c.req.query('active_within_days') ?? '30', 10);
+  const activeWithinDays = boundedInt(c.req.query('active_within_days'), 30, 0, 3650);
 
   let whereClause = 'd.revoked_at IS NULL';
   const bindParams: (string | number)[] = [];
@@ -651,10 +645,10 @@ adminRouter.post('/devices/:id/revoke', async (c) => {
     return c.json({ error: 'Device not found' }, 404);
   }
 
-  await db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ?').bind(now, deviceId).run();
-  await db.prepare(
-    "UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL"
-  ).bind(now, deviceId).run();
+  await db.batch([
+    db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ?').bind(now, deviceId),
+    db.prepare("UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL").bind(now, deviceId),
+  ]);
 
   return c.json({ ok: true, device_id: deviceId });
 });
@@ -672,8 +666,10 @@ adminRouter.delete('/devices/:id', async (c) => {
     return c.json({ error: 'Device not found' }, 404);
   }
 
-  await db.prepare('DELETE FROM devices WHERE id = ?').bind(deviceId).run();
-  await db.prepare("DELETE FROM refresh_tokens WHERE device_id = ?").bind(deviceId).run();
+  await db.batch([
+    db.prepare('DELETE FROM refresh_tokens WHERE device_id = ?').bind(deviceId),
+    db.prepare('DELETE FROM devices WHERE id = ?').bind(deviceId),
+  ]);
 
   return c.json({ ok: true, device_id: deviceId });
 });
@@ -692,7 +688,7 @@ adminRouter.delete('/devices/:id', async (c) => {
 // 修改用户密码
 adminRouter.post('/users/:id/password', zValidator('json', z.object({
   admin_password: z.string(),
-  new_password: z.string().min(6)
+  new_password: z.string().min(8)
 })), async (c) => {
   const db = c.env.DB;
   const userId = c.req.param('id');
@@ -724,18 +720,13 @@ adminRouter.post('/users/:id/password', zValidator('json', z.object({
     return c.json({ error: 'User not found' }, 404);
   }
 
-  // 更新密码
+  // 密码更新与 refresh token 吊销必须是同一事务。
   const newPasswordHash = await hashPassword(new_password);
-  await db
-    .prepare('UPDATE users SET password_hash = ? WHERE id = ?')
-    .bind(newPasswordHash, userId)
-    .run();
-
-  // 撤销该用户的所有 refresh token（强制重新登录）
-  await db
-    .prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL')
-    .bind(new Date().toISOString(), userId)
-    .run();
+  const revokeAt = new Date().toISOString();
+  await db.batch([
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(newPasswordHash, userId),
+    db.prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL').bind(revokeAt, userId),
+  ]);
 
   // 返回更新后的用户信息
   const updatedUser = await db
@@ -777,11 +768,11 @@ adminRouter.post('/users/:id/password', zValidator('json', z.object({
 });
 
 adminRouter.get('/logs', async (c) => {
-  const limit = Math.min(parseInt(c.req.query('limit') ?? '500', 10), 1000);
+  const limit = boundedInt(c.req.query('limit'), 500, 1, 1000);
   const level = c.req.query('level');
   const q = c.req.query('q');
   const source = c.req.query('source');
-  const sinceSeq = parseInt(c.req.query('since_seq') ?? '0', 10);
+  const sinceSeq = boundedInt(c.req.query('since_seq'), 0, 0, Number.MAX_SAFE_INTEGER);
 
   // 从 LogBuffer DO（内存 ring buffer）读日志 —— 对齐原版「内存，重启清零」。
   // 审计事件（insertAuditLog）仍在 D1 持久化，但普通日志/请求日志只进内存。
@@ -904,7 +895,7 @@ adminRouter.get('/backups/artifacts', async (c) => {
   const userId = c.get('userId');
   const ledgerId = c.req.query('ledger_id') || undefined;
   const kind = c.req.query('kind') || undefined;
-  const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') || '100', 10) || 100, 500));
+  const limit = boundedInt(c.req.query('limit'), 100, 1, 500);
 
   let q = `SELECT a.id, a.user_id, a.ledger_id, a.kind, a.file_name, a.content_type,
                   a.checksum_sha256, a.size_bytes, a.metadata_json, a.created_at,
@@ -1078,7 +1069,7 @@ adminRouter.post('/backups/restore', zValidator('json', BackupRestoreSchema), as
 
 adminRouter.get('/sync/errors', async (c) => {
   const db = c.env.DB;
-  const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
+  const limit = boundedInt(c.req.query('limit'), 100, 1, 1000);
 
   const rows = await db
     .prepare(

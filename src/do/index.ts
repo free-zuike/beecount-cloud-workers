@@ -100,6 +100,24 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
       return new Response('ok');
     }
 
+    // ===== 分布式速率限制模式 =====
+    if (path.endsWith('/rate-limit/check')) {
+      const { windowSeconds = 60, maxRequests = 30 } = await request.json<{
+        windowSeconds?: number;
+        maxRequests?: number;
+      }>();
+      const safeWindowSeconds = Math.max(1, Math.min(24 * 60 * 60, Math.floor(windowSeconds)));
+      const safeMaxRequests = Math.max(1, Math.min(10000, Math.floor(maxRequests)));
+      const now = Date.now();
+      const windowMs = safeWindowSeconds * 1000;
+      const existing = await this.ctx.storage.get<{ timestamps: number[] }>('rate-limit');
+      const timestamps = (existing?.timestamps ?? []).filter((ts) => now - ts < windowMs);
+      const limited = timestamps.length >= safeMaxRequests;
+      if (!limited) timestamps.push(now);
+      await this.ctx.storage.put('rate-limit', { timestamps });
+      return Response.json({ limited, remaining: Math.max(0, safeMaxRequests - timestamps.length) });
+    }
+
     // ===== 分布式锁模式 =====
     if (path.endsWith('/lock')) {
       const { holder, ttlMs } = await request.json<{ holder?: string; ttlMs?: number }>();
@@ -113,8 +131,16 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
     }
 
     if (path.endsWith('/unlock')) {
+      let requestedHolder: string | undefined;
+      try {
+        requestedHolder = (await request.json<{ holder?: string }>()).holder;
+      } catch { /* legacy callers send no body */ }
+      const lock = await this.ctx.storage.get<{ holder: string | null; at: number; ttl: number }>('lock');
+      if (requestedHolder && lock?.holder && lock.holder !== requestedHolder) {
+        return Response.json({ released: false, holder: lock.holder }, { status: 409 });
+      }
       await this.ctx.storage.put('lock', { holder: null, at: 0, ttl: 0 });
-      return new Response('ok');
+      return Response.json({ released: true });
     }
 
     // ===== 导入会话缓存模式（原版 Python 用内存字典，Worker 用 DO 存储） =====

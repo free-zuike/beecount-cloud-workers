@@ -37,22 +37,20 @@ function nowUtc(): string {
  * 这样 App 的 sync/pull 就能获取到投影数据
  */
 export async function createSyncChangesForUser(db: D1Database, targetUserId: string): Promise<void> {
-  const projectionTables: Array<{ table: string; entityType: string }> = [
-    { table: 'user_category_projection', entityType: 'category' },
-    { table: 'user_tag_projection', entityType: 'tag' },
-    { table: 'read_budget_projection', entityType: 'budget' },
-    { table: 'user_account_projection', entityType: 'account' },
-    { table: 'read_tx_projection', entityType: 'transaction' },
+  const projectionTables: Array<{ table: string; entityType: string; ledgerIdCol: string | null }> = [
+    { table: 'user_category_projection', entityType: 'category', ledgerIdCol: null },
+    { table: 'user_tag_projection', entityType: 'tag', ledgerIdCol: null },
+    { table: 'read_budget_projection', entityType: 'budget', ledgerIdCol: 'ledger_id' },
+    { table: 'user_account_projection', entityType: 'account', ledgerIdCol: null },
+    { table: 'user_exchange_rate_projection', entityType: 'exchange_rate_override', ledgerIdCol: null },
+    { table: 'read_tx_projection', entityType: 'transaction', ledgerIdCol: 'ledger_id' },
   ];
 
-  const maxChangeId = await db.prepare('SELECT MAX(change_id) as max_id FROM sync_changes').first<{ max_id: number | null }>();
-  let currentId = (maxChangeId?.max_id ?? 0);
-
   for (const pt of projectionTables) {
-    const rows = await db.prepare(`SELECT sync_id, ledger_id FROM "${pt.table}" WHERE user_id = ? AND sync_id IS NOT NULL AND sync_id != ''`).bind(targetUserId).all<{ sync_id: string; ledger_id: string | null }>();
+    const ledgerSelect = pt.ledgerIdCol ? `${pt.ledgerIdCol} AS ledger_id` : 'NULL AS ledger_id';
+    const rows = await db.prepare(`SELECT sync_id, ${ledgerSelect} FROM "${pt.table}" WHERE user_id = ? AND sync_id IS NOT NULL AND sync_id != ''`).bind(targetUserId).all<{ sync_id: string; ledger_id: string | null }>();
     for (const row of (rows.results || [])) {
-      currentId++;
-      const fullRow = await db.prepare(`SELECT * FROM "${pt.table}" WHERE sync_id = ?`).bind(row.sync_id).first<Record<string, unknown>>();
+      const fullRow = await db.prepare(`SELECT * FROM "${pt.table}" WHERE user_id = ? AND sync_id = ?`).bind(targetUserId, row.sync_id).first<Record<string, unknown>>();
       if (!fullRow) continue;
       const payload: Record<string, unknown> = {};
       const BOOL_KEYS = ['enabled', 'exclude_from_stats', 'exclude_from_budget', 'is_default', 'hidden', 'income_is_red'];
@@ -65,8 +63,13 @@ export async function createSyncChangesForUser(db: D1Database, targetUserId: str
         if (ledger) payload.ledger_id = ledger.external_id;
       }
       try {
-        await db.prepare(`INSERT INTO sync_changes (change_id, user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, scope) VALUES (?, ?, ?, ?, ?, 'upsert', ?, ?, ?)`)
-          .bind(currentId, targetUserId, row.ledger_id || null, pt.entityType, row.sync_id, JSON.stringify(payload), new Date().toISOString(), pt.entityType === 'account' || pt.entityType === 'category' || pt.entityType === 'tag' ? 'user' : 'ledger').run();
+        const inserted = await db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, scope) VALUES (?, ?, ?, ?, 'upsert', ?, ?, ?)`)
+          .bind(targetUserId, row.ledger_id || null, pt.entityType, row.sync_id, JSON.stringify(payload), new Date().toISOString(), pt.ledgerIdCol ? 'ledger' : 'user').run();
+        const changeId = Number(inserted.meta.last_row_id || 0);
+        if (changeId > 0) {
+          await db.prepare(`UPDATE "${pt.table}" SET source_change_id = ? WHERE user_id = ? AND sync_id = ?`)
+            .bind(changeId, targetUserId, row.sync_id).run();
+        }
       } catch {}
     }
   }
@@ -192,44 +195,8 @@ backupRouter.delete('/clear-data', async (c) => {
 
     serverLogger.info('src.routers.admin', '[BACKUP] Cleared projections and attachments');
 
-    // 6. 恢复账户（如果之前有账户的话）
-    for (const account of accounts.results) {
-      // 检查账本是否还存在，如果不存在则不恢复
-      const ledgerExists = await db
-        .prepare('SELECT id FROM ledgers WHERE id = ?')
-        .bind(account.ledger_id)
-        .first();
-
-      if (!ledgerExists) {
-        serverLogger.info('src.routers.admin', '[BACKUP] Skipping account', account.sync_id, 'because ledger was deleted');
-        continue;
-      }
-
-      // 恢复账户
-      await db
-        .prepare(
-          `INSERT OR IGNORE INTO user_account_projection 
-           (sync_id, user_id, name, account_type, currency, initial_balance, 
-            note, credit_limit, billing_day, payment_due_day, bank_name, card_last_four, hidden, source_change_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
-        )
-        .bind(
-          account.sync_id,
-          userId,
-          account.name,
-          account.account_type,
-          account.currency,
-          account.initial_balance,
-          account.note,
-          account.credit_limit,
-          account.billing_day,
-          account.payment_due_day,
-          account.bank_name,
-          account.card_last_four,
-          0,
-        )
-        .run();
-    }
+    // user_account_projection 是 user-global 表，没有 ledger_id，也不会随账本
+    // 删除级联。前面刻意没有删除它，所以此处无需“恢复”账户。
 
     serverLogger.info('src.routers.admin', '[BACKUP] Data clear completed, restored', accounts.results.length, 'accounts');
 
@@ -253,31 +220,36 @@ backupRouter.delete('/clear-data', async (c) => {
  */
 backupRouter.post('/fix-data', async (c) => {
   const db = c.env.DB;
+  const userId = c.get('userId');
   const fixes: Record<string, unknown> = {};
 
-  // 诊断：sync_changes 中各 entity_type 的数量
-  const typeCounts = await db.prepare(`SELECT entity_type, COUNT(*) as cnt FROM sync_changes GROUP BY entity_type`).all<{ entity_type: string; cnt: number }>();
+  // Repair is strictly tenant-scoped. This endpoint is available to ordinary
+  // authenticated users, so every diagnostic and mutation must be constrained
+  // to the caller's user_id.
+  const typeCounts = await db.prepare(`SELECT entity_type, COUNT(*) as cnt FROM sync_changes WHERE user_id = ? GROUP BY entity_type`)
+    .bind(userId).all<{ entity_type: string; cnt: number }>();
   fixes['sync_changes_by_type'] = Object.fromEntries((typeCounts.results || []).map(r => [r.entity_type, r.cnt]));
 
   // 诊断：投影表行数
   const projCounts: Record<string, number> = {};
-  for (const t of ['read_budget_projection', 'user_account_projection', 'user_category_projection', 'user_tag_projection', 'read_tx_projection']) {
+  for (const t of ['read_budget_projection', 'user_account_projection', 'user_category_projection', 'user_tag_projection', 'user_exchange_rate_projection', 'read_tx_projection']) {
     try {
-      const r = await db.prepare(`SELECT COUNT(*) as cnt FROM "${t}"`).first<{ cnt: number }>();
+      const r = await db.prepare(`SELECT COUNT(*) as cnt FROM "${t}" WHERE user_id = ?`).bind(userId).first<{ cnt: number }>();
       projCounts[t] = r?.cnt ?? 0;
     } catch { projCounts[t] = -1; }
   }
   fixes['projection_counts'] = projCounts;
 
   // 1. 修复 sync_id 为空的投影记录
-  const tables = ['user_account_projection', 'user_category_projection', 'user_tag_projection', 'read_tx_projection', 'read_budget_projection'];
+  const tables = ['user_account_projection', 'user_category_projection', 'user_tag_projection', 'user_exchange_rate_projection', 'read_tx_projection', 'read_budget_projection'];
   for (const tableName of tables) {
     try {
-      const empty = await db.prepare(`SELECT rowid FROM "${tableName}" WHERE sync_id IS NULL OR sync_id = ''`).all<{ rowid: number }>();
+      const empty = await db.prepare(`SELECT rowid FROM "${tableName}" WHERE user_id = ? AND (sync_id IS NULL OR sync_id = '')`)
+        .bind(userId).all<{ rowid: number }>();
       if (empty.results && empty.results.length > 0) {
         for (const row of empty.results) {
           const newSyncId = crypto.randomUUID();
-          await db.prepare(`UPDATE "${tableName}" SET sync_id = ? WHERE rowid = ?`).bind(newSyncId, row.rowid).run();
+          await db.prepare(`UPDATE "${tableName}" SET sync_id = ? WHERE rowid = ? AND user_id = ?`).bind(newSyncId, row.rowid, userId).run();
         }
         fixes[`${tableName}_sync_id`] = empty.results.length;
       }
@@ -291,12 +263,14 @@ backupRouter.post('/fix-data', async (c) => {
     { table: 'user_account_projection', entityType: 'account', ledgerIdCol: '', userCol: 'user_id' },
     { table: 'user_category_projection', entityType: 'category', ledgerIdCol: '', userCol: 'user_id' },
     { table: 'user_tag_projection', entityType: 'tag', ledgerIdCol: '', userCol: 'user_id' },
+    { table: 'user_exchange_rate_projection', entityType: 'exchange_rate_override', ledgerIdCol: '', userCol: 'user_id' },
+    { table: 'read_tx_projection', entityType: 'transaction', ledgerIdCol: 'ledger_id', userCol: 'user_id' },
   ];
 
   for (const pt of projectionTables) {
     try {
-      // 先删除该 entity_type 的所有 sync_changes，然后重建
-      const deleted = await db.prepare(`DELETE FROM sync_changes WHERE entity_type = ?`).bind(pt.entityType).run();
+      // 只重建当前用户的该 entity_type；绝不能触碰其他租户的同步历史。
+      const deleted = await db.prepare(`DELETE FROM sync_changes WHERE entity_type = ? AND user_id = ?`).bind(pt.entityType, userId).run();
       if (deleted.meta?.changes && deleted.meta.changes > 0) {
         fixes[`deleted_${pt.entityType}`] = deleted.meta.changes;
       }
@@ -306,14 +280,14 @@ backupRouter.post('/fix-data', async (c) => {
       const missing = await db.prepare(`
         SELECT p.sync_id, p.${pt.userCol} as user_id, ${ledgerSelect} p.source_change_id
         FROM "${pt.table}" p
-        WHERE p.sync_id IS NOT NULL AND p.sync_id != ''
-      `).all<{ sync_id: string; user_id: string; ledger_id: string | null; source_change_id: number | null }>();
+        WHERE p.${pt.userCol} = ? AND p.sync_id IS NOT NULL AND p.sync_id != ''
+      `).bind(userId).all<{ sync_id: string; user_id: string; ledger_id: string | null; source_change_id: number | null }>();
 
       if (missing.results && missing.results.length > 0) {
         let insertedCount = 0;
         for (const row of missing.results) {
           // 从投影表中获取完整数据构建 payload
-          const fullRow = await db.prepare(`SELECT * FROM "${pt.table}" WHERE sync_id = ?`).bind(row.sync_id).first<Record<string, unknown>>();
+          const fullRow = await db.prepare(`SELECT * FROM "${pt.table}" WHERE sync_id = ? AND ${pt.userCol} = ?`).bind(row.sync_id, userId).first<Record<string, unknown>>();
           if (!fullRow) continue;
 
           const payload: Record<string, unknown> = {};
@@ -349,8 +323,10 @@ backupRouter.post('/fix-data', async (c) => {
               row.sync_id,
               JSON.stringify(payload),
               new Date().toISOString(),
-              pt.entityType === 'account' || pt.entityType === 'category' || pt.entityType === 'tag' ? 'user' : 'ledger'
+              pt.ledgerIdCol ? 'ledger' : 'user'
             ).run();
+            await db.prepare(`UPDATE "${pt.table}" SET source_change_id = ? WHERE ${pt.userCol} = ? AND sync_id = ?`)
+              .bind(newChangeId, userId, row.sync_id).run();
             insertedCount++;
           } catch (err) {
             serverLogger.error('src.routers.admin', `[FixData] Failed to insert sync_changes for ${pt.entityType} ${row.sync_id}:`, (err as Error).message);

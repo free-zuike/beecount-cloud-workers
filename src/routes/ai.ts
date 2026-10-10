@@ -39,6 +39,8 @@ import { createHmac, randomUUID } from 'crypto';
 import { EmbeddingNotConfiguredError, embedQuery, getRagService } from '../services/rag-refresh';
 import type { RetrievedChunk } from '../services/rag-index';
 import { serverLogger } from '../lib/logger';
+import { parseSafeExternalHttpsUrl, readResponseBodyLimited } from '../lib/external-url';
+import { bytesToBase64 } from '../lib/base64';
 
 function nowUtc(): string {
   return new Date().toISOString();
@@ -131,10 +133,11 @@ function _rejectedParam(payload: Record<string, unknown>, statusCode: number, bo
 async function _postChatAdaptive(
   url: string, headers: Record<string, string>, payload: Record<string, unknown>, timeout: number
 ): Promise<Response> {
+  const safeUrl = parseSafeExternalHttpsUrl(url).toString();
   let currentPayload = { ...payload };
-  let response = await fetch(url, {
+  let response = await fetch(safeUrl, {
     method: 'POST', headers, body: JSON.stringify(currentPayload),
-    signal: AbortSignal.timeout(timeout),
+    signal: AbortSignal.timeout(timeout), redirect: 'manual',
   });
   for (let i = 0; i < _MAX_PARAM_STRIPS; i++) {
     if (response.ok) return response;
@@ -144,9 +147,9 @@ async function _postChatAdaptive(
     currentPayload = Object.fromEntries(
       Object.entries(currentPayload).filter(([k]) => k !== param)
     );
-    response = await fetch(url, {
+    response = await fetch(safeUrl, {
       method: 'POST', headers, body: JSON.stringify(currentPayload),
-      signal: AbortSignal.timeout(timeout),
+      signal: AbortSignal.timeout(timeout), redirect: 'manual',
     });
   }
   return response;
@@ -214,7 +217,7 @@ async function* streamAiChat(
   messages: Array<{ role: string; content: string | Array<unknown> }>,
   timeout: number = 30000
 ): AsyncGenerator<string> {
-  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const url = parseSafeExternalHttpsUrl(`${baseUrl.replace(/\/$/, '')}/chat/completions`).toString();
   
   const response = await fetch(url, {
     method: 'POST',
@@ -230,6 +233,7 @@ async function* streamAiChat(
       stream: true,
     }),
     signal: AbortSignal.timeout(timeout),
+    redirect: 'manual',
   });
   
   if (!response.ok) {
@@ -703,13 +707,13 @@ aiRouter.post('/parse-tx-image', async (c) => {
       error: { code: 'AI_IMAGE_TYPE_INVALID', message: `unsupported image type: ${mime!}; allowed: jpeg/png/webp/gif` },
     }, 400);
   }
-  const imageBytes = new Uint8Array(await imageFile.arrayBuffer());
   const _MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-  if (imageBytes.length > _MAX_IMAGE_BYTES) {
+  if (imageFile.size > _MAX_IMAGE_BYTES) {
     return c.json({
-      error: { code: 'AI_IMAGE_TOO_LARGE', message: `image size ${imageBytes.length} exceeds 5MB` },
+      error: { code: 'AI_IMAGE_TOO_LARGE', message: `image size ${imageFile.size} exceeds 5MB` },
     }, 413);
   }
+  const imageBytes = new Uint8Array(await imageFile.arrayBuffer());
 
   // 3. 解析 vision provider
   const profile = await db
@@ -728,7 +732,7 @@ aiRouter.post('/parse-tx-image', async (c) => {
   const { categories, accounts, ledgerCurrency } = await loadLedgerContext(db, userId, ledgerId);
 
   // 5. 拼 prompt（多币种：schema 含 currency + CURRENCY_HINT 上下文）
-  const imageDataUrl = `data:${mime};base64,${btoa(String.fromCharCode(...imageBytes))}`;
+  const imageDataUrl = `data:${mime};base64,${bytesToBase64(imageBytes)}`;
   const systemPrompt = `你是一个专业的记账助手。请分析图片中的内容，提取交易信息。
 
 请返回 JSON 格式：
@@ -920,7 +924,7 @@ const _TEST_WAV_BASE64 = _buildTestWavBase64();
  * 语音测试：发 1 秒静音 WAV 到 /audio/transcriptions（对齐原版 _test_speech）
  */
 async function _testSpeech(baseUrl: string, apiKey: string, model: string, timeout: number): Promise<string> {
-  const whisperUrl = `${baseUrl.replace(/\/$/, '')}/audio/transcriptions`;
+  const whisperUrl = parseSafeExternalHttpsUrl(`${baseUrl.replace(/\/$/, '')}/audio/transcriptions`).toString();
   const wavBytes = Uint8Array.from(atob(_TEST_WAV_BASE64), c => c.charCodeAt(0));
 
   // 手动构造 multipart body（Workers 的 FormData 在某些 provider 上兼容性有问题）
@@ -958,6 +962,7 @@ async function _testSpeech(baseUrl: string, apiKey: string, model: string, timeo
     },
     body: merged,
     signal: AbortSignal.timeout(timeout),
+    redirect: 'manual',
   });
 
   if (!response.ok) {
@@ -1226,41 +1231,43 @@ aiRouter.post('/speech-to-text', zValidator('json', AiSpeechToTextSchema), async
   }
 
   const whisperBaseUrl = provider.baseUrl.replace(/\/chat\/completions$/, '').replace(/\/$/, '');
-  const whisperUrl = `${whisperBaseUrl}/audio/transcriptions`;
+  let whisperUrl: string;
+  try {
+    whisperUrl = parseSafeExternalHttpsUrl(`${whisperBaseUrl}/audio/transcriptions`).toString();
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
 
   try {
     let audioBlob: Blob;
     let filename = 'audio.webm';
 
     if (req.audio_data) {
+      const maxAudioBytes = 25 * 1024 * 1024;
+      if (req.audio_data.length > Math.ceil(maxAudioBytes * 4 / 3) + 16) {
+        return c.json({ error: 'Audio too large (max 25MB)' }, 413);
+      }
       const binaryStr = atob(req.audio_data);
+      if (binaryStr.length > maxAudioBytes) return c.json({ error: 'Audio too large (max 25MB)' }, 413);
       const bytes = new Uint8Array(binaryStr.length);
       for (let i = 0; i < binaryStr.length; i++) {
         bytes[i] = binaryStr.charCodeAt(i);
       }
       audioBlob = new Blob([bytes], { type: 'audio/webm' });
     } else {
-      // SSRF 防护：仅允许 https URL，拒绝私有 IP
-      const parsedUrl = new URL(req.audio_url!);
-      if (parsedUrl.protocol !== 'https:') {
-        return c.json({ error: 'Only HTTPS URLs are allowed for audio_url' }, 400);
+      let audioUrl: string;
+      try {
+        audioUrl = parseSafeExternalHttpsUrl(req.audio_url!).toString();
+      } catch (err) {
+        return c.json({ error: (err as Error).message }, 400);
       }
-      const hostname = parsedUrl.hostname;
-      if (
-        hostname === '127.0.0.1' || hostname === 'localhost' ||
-        hostname.startsWith('10.') || hostname.startsWith('192.168.') ||
-        /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
-        /^0\./.test(hostname) || hostname === '::1' || hostname === '0.0.0.0'
-      ) {
-        return c.json({ error: 'Private/internal URLs are not allowed' }, 400);
-      }
-      const audioResponse = await fetch(req.audio_url!);
+      const audioResponse = await fetch(audioUrl, { redirect: 'manual', signal: AbortSignal.timeout(30000) });
       if (!audioResponse.ok) {
         return c.json({ error: `Failed to fetch audio: ${audioResponse.status}` }, 400);
       }
-      const audioBuffer = await audioResponse.arrayBuffer();
-      audioBlob = new Blob([audioBuffer], { type: audioResponse.headers.get('content-type') || 'audio/webm' });
-      const urlParts = req.audio_url!.split('/');
+      const audioBytes = await readResponseBodyLimited(audioResponse, 25 * 1024 * 1024);
+      audioBlob = new Blob([audioBytes], { type: audioResponse.headers.get('content-type') || 'audio/webm' });
+      const urlParts = audioUrl.split('/');
       filename = urlParts[urlParts.length - 1].split('?')[0] || 'audio.webm';
     }
 
@@ -1278,6 +1285,7 @@ aiRouter.post('/speech-to-text', zValidator('json', AiSpeechToTextSchema), async
       },
       body: formData,
       signal: AbortSignal.timeout(60000),
+      redirect: 'manual',
     });
 
     if (!response.ok) {

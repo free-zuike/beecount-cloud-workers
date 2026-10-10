@@ -314,33 +314,35 @@ export async function revokeRefreshToken(
   }
 }
 
+export async function validateSignedToken(
+  token: string,
+  secret: string,
+  expectedType: string,
+): Promise<{ userId: string; type: string; scopes: string[] } | { expired: true } | null> {
+  try {
+    const payload = await decodeJwtPayload(token, secret);
+    if (!payload) return null;
+    if (payload.exp && Number(payload.exp) < Math.floor(Date.now() / 1000)) {
+      return { expired: true };
+    }
+    if (payload.type !== expectedType || typeof payload.sub !== 'string' || !payload.sub) {
+      return null;
+    }
+    return {
+      userId: payload.sub,
+      type: expectedType,
+      scopes: Array.isArray(payload.scopes) ? payload.scopes.map(String) : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function validateAccessToken(
   token: string,
   secret: string
 ): Promise<{ userId: string } | { expired: true } | null> {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    
-    const [headerB64, payloadB64, signature] = parts;
-    
-    const expectedSignature = await hmacSHA256(secret, `${headerB64}.${payloadB64}`);
-    
-    const encoder = new TextEncoder();
-    const sig1 = encoder.encode(signature);
-    const sig2 = encoder.encode(expectedSignature);
-    if (!timingSafeEqualBytes(sig1, sig2)) return null;
-    
-    const payloadStr = base64urlDecode(payloadB64);
-    if (!payloadStr) return null;
-    
-    const payload = JSON.parse(payloadStr);
-    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
-      return { expired: true };
-    }
-    
-    return { userId: payload.sub as string };
-  } catch {
-    return null;
-  }
+  const result = await validateSignedToken(token, secret, 'access');
+  if (!result || 'expired' in result) return result;
+  return { userId: result.userId };
 }

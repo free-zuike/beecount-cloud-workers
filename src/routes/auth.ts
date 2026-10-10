@@ -3,6 +3,7 @@ import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import { upsertDevice } from '../lib/device-upsert';
 import { DEFAULT_AI_CONFIG } from '../lib/defaults';
 
 interface DefaultCategory {
@@ -102,62 +103,16 @@ const DEFAULT_CATEGORIES: DefaultCategory[] = [
   ]},
 ];
 import { hashPassword, verifyPassword, createAccessToken, createRefreshToken, validateAccessToken, decodeRefreshToken, revokeRefreshToken, sha256 } from '../auth';
-import { isRateLimited } from '../lib/rate-limit';
+import { isRateLimitedDistributed } from '../lib/rate-limit';
 import twoFactorRouter from './two_factor';
 
 function nowUtc(): string { return new Date().toISOString(); }
-
-/** 设备 upsert — 处理跨用户 device_id 冲突（与原版 _upsert_device 对齐） */
-export async function upsertDevice(
-  db: D1Database,
-  userId: string,
-  deviceId: string,
-  deviceName: string,
-  platform: string,
-  appVersion?: string,
-  osVersion?: string,
-  deviceModel?: string,
-  clientIp?: string | null
-): Promise<string> {
-  let targetId = deviceId;
-  const now = new Date().toISOString();
-
-  // 检查 device_id 是否被其他用户占用
-  const existingAny = await db.prepare('SELECT id, user_id FROM devices WHERE id = ?').bind(targetId).first<{ id: string; user_id: string }>();
-  if (existingAny && existingAny.user_id !== userId) {
-    serverLogger.info('src.routers.auth', `[AUTH] device_id cross-user collision id=${targetId} prev_user=${existingAny.user_id} new_user=${userId} -> minting new device_id`);
-    targetId = randomUUID();
-  }
-
-  const existingDevice = await db.prepare('SELECT id, revoked_at, name, platform, app_version, os_version, device_model, last_ip FROM devices WHERE id = ? AND user_id = ?').bind(targetId, userId).first<{ id: string; revoked_at: string | null; name: string | null; platform: string | null; app_version: string | null; os_version: string | null; device_model: string | null; last_ip: string | null }>();
-
-  if (!existingDevice) {
-    await db.prepare(
-      `INSERT INTO devices (id, user_id, name, platform, app_version, os_version, device_model, last_ip, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(targetId, userId, deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, clientIp, now).run();
-  } else {
-    // 对齐原版 _upsert_device：未传字段保留现有值（device_name or device.name 模式）
-    await db.prepare(
-      `UPDATE devices SET last_seen_at = ?, last_ip = ?, name = ?, platform = ?, app_version = ?, os_version = ?, device_model = ?${existingDevice.revoked_at ? ', revoked_at = NULL' : ''} WHERE id = ?`
-    ).bind(
-      now,
-      clientIp ?? existingDevice.last_ip,
-      deviceName ?? existingDevice.name,
-      platform ?? existingDevice.platform,
-      appVersion ?? existingDevice.app_version,
-      osVersion ?? existingDevice.os_version,
-      deviceModel ?? existingDevice.device_model,
-      targetId
-    ).run();
-  }
-
-  return targetId;
-}
 
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
   REGISTRATION_ENABLED?: string;
+  BEECOUNT_DO?: DurableObjectNamespace;
 };
 
 const authRouter = new Hono<{ Bindings: Bindings; Variables: { userId: string } }>();
@@ -165,7 +120,7 @@ const authRouter = new Hono<{ Bindings: Bindings; Variables: { userId: string } 
 // Register
 authRouter.post('/register', zValidator('json', z.object({
   email: z.string().email(),
-  password: z.string().min(6),
+  password: z.string().min(8),
   device_id: z.string().optional(),
   device_name: z.string().optional().default('Unknown Device'),
   platform: z.string().optional().default('unknown'),
@@ -174,7 +129,7 @@ authRouter.post('/register', zValidator('json', z.object({
   device_model: z.string().optional(),
 })), async (c) => {
   const clientIp = c.req.header('CF-Connecting-IP') || 'unknown';
-  if (isRateLimited('register', clientIp)) {
+  if (await isRateLimitedDistributed(c.env.BEECOUNT_DO, 'register', clientIp)) {
     return c.json({ error: 'Too many requests' }, 429);
   }
 
@@ -200,22 +155,12 @@ authRouter.post('/register', zValidator('json', z.object({
   const userId = randomUUID();
   const passwordHash = await hashPassword(password);
 
-  // users + user_profiles 同事务写入（对齐原版 db.commit() 单事务）
-  await db.batch([
-    db.prepare(
-      `INSERT INTO users (id, email, password_hash, is_admin, is_enabled)
-       VALUES (?, ?, ?, 0, 1)`
-    ).bind(userId, email, passwordHash),
-    db.prepare(
-      `INSERT INTO user_profiles (user_id, display_name, ai_config_json)
-       VALUES (?, ?, ?)`
-    ).bind(userId, email, DEFAULT_AI_CONFIG),
-  ]);
-
-  // Create device（使用 upsert 处理跨用户冲突）
-  const finalDeviceId = await upsertDevice(
-    db, userId, resolvedDeviceId, deviceName, platform, appVersion, osVersion, deviceModel, c.req.header('CF-Connecting-IP')
-  );
+  // 注册是全新 user：先只解析 device_id 是否已被别的用户占用，然后把
+  // user/profile/device/refresh-token 一次性提交，避免中途失败留下半注册账户。
+  let finalDeviceId = resolvedDeviceId;
+  const deviceCollision = await db.prepare('SELECT id FROM devices WHERE id = ?')
+    .bind(finalDeviceId).first<{ id: string }>();
+  if (deviceCollision) finalDeviceId = randomUUID();
 
   const accessToken = await createAccessToken(userId, jwtSecret, tokenScopes);
 
@@ -226,7 +171,8 @@ authRouter.post('/register', zValidator('json', z.object({
   const refreshExpiresAt = new Date(Date.now() + refreshExpiresIn * 1000);
   const refreshTokenId = randomUUID();
 
-  // users + user_profiles + refresh_tokens 同事务原子写入
+  // 全部注册状态一次事务落库。device 对 users 有 FK，batch 内按顺序执行。
+  const now = nowUtc();
   await db.batch([
     db.prepare(
       `INSERT INTO users (id, email, password_hash, is_admin, is_enabled)
@@ -236,6 +182,10 @@ authRouter.post('/register', zValidator('json', z.object({
       `INSERT INTO user_profiles (user_id, display_name, ai_config_json)
        VALUES (?, ?, ?)`
     ).bind(userId, email, DEFAULT_AI_CONFIG),
+    db.prepare(
+      `INSERT INTO devices (id, user_id, name, platform, app_version, os_version, device_model, last_ip, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(finalDeviceId, userId, deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, c.req.header('CF-Connecting-IP') || null, now),
     db.prepare(
       `INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at)
        VALUES (?, ?, ?, ?, ?)`
@@ -267,7 +217,7 @@ authRouter.post('/login', zValidator('json', z.object({
   device_model: z.string().optional()
 })), async (c) => {
   const clientIp = c.req.header('CF-Connecting-IP') || 'unknown';
-  if (isRateLimited('login', clientIp)) {
+  if (await isRateLimitedDistributed(c.env.BEECOUNT_DO, 'login', clientIp)) {
     return c.json({ error: 'Too many requests' }, 429);
   }
   const { email: rawEmail, password, device_id: deviceId, device_name: deviceName, platform, app_version: appVersion, os_version: osVersion, device_model: deviceModel } = c.req.valid('json');
@@ -359,9 +309,7 @@ authRouter.post('/refresh', zValidator('json', z.object({
   const db = c.env.DB;
   const jwtSecret = c.env.JWT_SECRET;
 
-  // 调试日志：追踪 refresh 请求
-  const tokenPrefix = refreshToken.substring(0, 8);
-  serverLogger.info('src.routers.auth', `[REFRESH] token=${tokenPrefix}...`);
+  serverLogger.info('src.routers.auth', '[REFRESH] request received');
 
   try {
     const decoded = await decodeRefreshToken(refreshToken, db, jwtSecret);
@@ -466,12 +414,15 @@ authRouter.get('/me', async (c) => {
     userId = result.userId;
   }
   
-  const user = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string, email: string }>();
+  const user = await db.prepare('SELECT id, email, is_enabled FROM users WHERE id = ?').bind(userId).first<{ id: string, email: string, is_enabled: number }>();
   
   if (!user) {
     return c.json({ error: 'User not found' }, 404);
   }
-  
+  if (!user.is_enabled) {
+    return c.json({ error: 'User disabled' }, 403);
+  }
+
   return c.json({
     id: user.id,
     email: user.email

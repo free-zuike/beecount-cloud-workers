@@ -23,8 +23,8 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { validateAccessToken, createAccessToken, createRefreshToken, verifyPassword, base64urlDecode, sha256 } from '../auth';
-import { upsertDevice } from './auth';
-import { isRateLimited } from '../lib/rate-limit';
+import { upsertDevice } from '../lib/device-upsert';
+import { isRateLimitedDistributed } from '../lib/rate-limit';
 
 // ===========================
 // 辅助函数
@@ -177,6 +177,7 @@ const TwoFARegenerateSchema = z.object({
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
+  BEECOUNT_DO?: DurableObjectNamespace;
 };
 
 type Variables = {
@@ -326,7 +327,7 @@ twoFactorRouter.post('/confirm', zValidator('json', TwoFAConfirmSchema), async (
 twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c) => {
   const clientIp = c.req.header('CF-Connecting-IP') || 'unknown';
   serverLogger.info('app', `[2FA-VERIFY] called from ${clientIp}`);
-  if (isRateLimited('2fa-verify', clientIp, 60, 5)) {
+  if (await isRateLimitedDistributed(c.env.BEECOUNT_DO, '2fa-verify', clientIp, 60, 5)) {
     return c.json({ error: 'Too many requests. Try again later.' }, 429);
   }
   const db = c.env.DB;

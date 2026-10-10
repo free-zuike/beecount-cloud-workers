@@ -1,50 +1,82 @@
 /**
- * 内存速率限制器 - 与原版 _apply_rate_limit 对齐
- * 
- * 使用滑动窗口算法：在指定时间窗口内，每个 (action + IP) 组合限制最大请求数。
- * 仅在内存中存储，Worker 重启后重置（与原版行为一致）。
+ * Rate limiting helpers.
  *
- * ⚠️ 已知限制：内存 Map 在多 Worker 实例间不共享，限流仅在单实例内有效。
- * 生产环境应配置 wrangler.toml 中 single_worker: true 或使用 D1/KV 做分布式限流。
+ * Production uses one Durable Object per (action + client key), so limits are
+ * shared across Worker isolates. The in-memory implementation remains as a
+ * fallback for tests / local environments and if the DO binding is temporarily
+ * unavailable.
  */
 
-type RateBucket = { timestamps: number[] };
+type RateBucket = { timestamps: number[] }
 
-const buckets = new Map<string, RateBucket>();
+const buckets = new Map<string, RateBucket>()
 
-const DEFAULT_WINDOW_SECONDS = 60;
-const DEFAULT_MAX_REQUESTS = 30;
+const DEFAULT_WINDOW_SECONDS = 60
+const DEFAULT_MAX_REQUESTS = 30
+
+function isVitest(): boolean {
+  return typeof process !== 'undefined' && Boolean(process.env?.VITEST)
+}
 
 /**
- * 检查请求是否超过速率限制
- * @returns true 如果被限制（应返回 429），false 如果通过
+ * Process-local sliding-window limiter. Keep this as the deterministic fallback
+ * rather than failing open when Durable Object access is unavailable.
  */
 export function isRateLimited(
   action: string,
-  clientIp: string,
+  clientKey: string,
   windowSeconds: number = DEFAULT_WINDOW_SECONDS,
-  maxRequests: number = DEFAULT_MAX_REQUESTS
+  maxRequests: number = DEFAULT_MAX_REQUESTS,
 ): boolean {
-  // 与原版一致：测试环境跳过限流
-  if (typeof process !== 'undefined' && process.env?.VITEST) return false;
+  if (isVitest()) return false
 
-  const now = Date.now();
-  const key = `${action}:${clientIp}`;
-  const windowMs = windowSeconds * 1000;
+  const now = Date.now()
+  const key = `${action}:${clientKey}`
+  const windowMs = windowSeconds * 1000
 
-  let bucket = buckets.get(key);
+  let bucket = buckets.get(key)
   if (!bucket) {
-    bucket = { timestamps: [] };
-    buckets.set(key, bucket);
+    bucket = { timestamps: [] }
+    buckets.set(key, bucket)
   }
 
-  // 清理过期时间戳
-  bucket.timestamps = bucket.timestamps.filter(ts => now - ts < windowMs);
+  bucket.timestamps = bucket.timestamps.filter((ts) => now - ts < windowMs)
+  if (bucket.timestamps.length >= maxRequests) return true
 
-  if (bucket.timestamps.length >= maxRequests) {
-    return true;
+  bucket.timestamps.push(now)
+  return false
+}
+
+/**
+ * Cluster-wide rate limit check backed by BeeCountDO.
+ *
+ * Each action/client pair maps to a single Durable Object instance. DO request
+ * serialization makes check+increment atomic across all Worker isolates.
+ */
+export async function isRateLimitedDistributed(
+  namespace: DurableObjectNamespace | null | undefined,
+  action: string,
+  clientKey: string,
+  windowSeconds: number = DEFAULT_WINDOW_SECONDS,
+  maxRequests: number = DEFAULT_MAX_REQUESTS,
+): Promise<boolean> {
+  if (!namespace) {
+    return isRateLimited(action, clientKey, windowSeconds, maxRequests)
   }
 
-  bucket.timestamps.push(now);
-  return false;
+  try {
+    const id = namespace.idFromName(`rate-limit:${action}:${clientKey}`)
+    const stub = namespace.get(id)
+    const response = await stub.fetch('http://do/rate-limit/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ windowSeconds, maxRequests }),
+    })
+    if (!response.ok) throw new Error(`rate limit DO returned ${response.status}`)
+    const body = await response.json<{ limited?: boolean }>()
+    return Boolean(body.limited)
+  } catch {
+    // A transient DO failure must not disable abuse protection entirely.
+    return isRateLimited(action, clientKey, windowSeconds, maxRequests)
+  }
 }

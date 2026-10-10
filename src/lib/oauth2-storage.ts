@@ -57,7 +57,7 @@ async function refreshAccessTokenDetailed(
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
-      console.error(`[OAuth2] ${provider} token refresh failed: ${res.status} ${errText.slice(0, 300)}`);
+      console.error(`[OAuth2] ${provider} token refresh failed: HTTP ${res.status}`);
       return { token: null, error: `HTTP ${res.status}: ${errText.slice(0, 200) || 'no body'}` };
     }
     const data = await res.json() as { access_token?: string };

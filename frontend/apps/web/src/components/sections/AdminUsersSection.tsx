@@ -30,11 +30,9 @@ interface Props {
   onStatusFilterChange: (value: 'enabled' | 'disabled' | 'all') => void
   createEmail: string
   createPassword: string
-  createIsAdmin: boolean
   createIsEnabled: boolean
   onCreateEmailChange: (value: string) => void
   onCreatePasswordChange: (value: string) => void
-  onCreateIsAdminChange: (value: boolean) => void
   onCreateIsEnabledChange: (value: boolean) => void
   onCreate: () => Promise<boolean>
 }
@@ -82,11 +80,9 @@ export function AdminUsersSection(props: Props) {
         onStatusFilterChange={props.onStatusFilterChange}
         createEmail={props.createEmail}
         createPassword={props.createPassword}
-        createIsAdmin={props.createIsAdmin}
         createIsEnabled={props.createIsEnabled}
         onCreateEmailChange={props.onCreateEmailChange}
         onCreatePasswordChange={props.onCreatePasswordChange}
-        onCreateIsAdminChange={props.onCreateIsAdminChange}
         onCreateIsEnabledChange={props.onCreateIsEnabledChange}
         onCreate={props.onCreate}
       />

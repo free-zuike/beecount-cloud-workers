@@ -1,3 +1,4 @@
+import { boundedInt } from '../lib/query-params';
 /**
  * 管理员备份路由模�?- 实现 BeeCount Cloud 备份管理接口
  *
@@ -406,12 +407,6 @@ backupRouter.get('/test', (c) => {
 // ---------------------------------------------------------------------------
 
 backupRouter.use('/*', async (c, next) => {
-  // OAuth2 回调/token 是公共端点（授权码换 token），无登录态，跳过管理员校验
-  const reqPath = c.req.path;
-  if (reqPath.includes('/remotes/oauth2/')) {
-    return next();
-  }
-
   const userId = c.get('userId');
   const db = c.env.DB;
 
@@ -1725,8 +1720,8 @@ backupRouter.post('/schedules/:id/run-now', async (c) => {
  */
 backupRouter.get('/runs', async (c) => {
   const db = c.env.DB;
-  const limit = Math.min(parseInt(c.req.query('limit') ?? '50', 10), 100);
-  const offset = parseInt(c.req.query('offset') ?? '0', 10);
+  const limit = boundedInt(c.req.query('limit'), 50, 1, 100);
+  const offset = boundedInt(c.req.query('offset'), 0, 0, 1_000_000);
 
   const rows = await db
     .prepare(
@@ -2172,7 +2167,7 @@ backupRouter.post('/restores/:runId/trigger', async (c) => {
 backupRouter.get('/restores', async (c) => {
   const db = c.env.DB;
   const userId = c.get('userId');
-  const limit = parseInt(c.req.query('limit') ?? '20');
+  const limit = boundedInt(c.req.query('limit'), 20, 1, 200);
 
   const result = await db
     .prepare('SELECT * FROM backup_restores WHERE user_id = ? ORDER BY created_at DESC LIMIT ?')
@@ -2450,6 +2445,10 @@ backupRouter.post('/upload-db', async (c) => {
   const note = formData.get('note') as string | null;
 
   if (!file) return c.json({ error: 'No file provided' }, 400);
+  const MAX_BACKUP_UPLOAD_BYTES = 100 * 1024 * 1024;
+  if (file.size > MAX_BACKUP_UPLOAD_BYTES) {
+    return c.json({ error: 'Backup file too large (max 100MB)' }, 413);
+  }
 
   const buffer = await file.arrayBuffer();
   const checksum = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', buffer)))

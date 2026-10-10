@@ -423,7 +423,6 @@ export type UserAdmin = {
 export type UserAdminCreatePayload = {
   email: string
   password: string
-  is_admin?: boolean
   is_enabled?: boolean
 }
 

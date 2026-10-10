@@ -50,11 +50,9 @@ type AdminUsersPanelProps = {
   onStatusFilterChange: (value: 'enabled' | 'disabled' | 'all') => void
   createEmail: string
   createPassword: string
-  createIsAdmin: boolean
   createIsEnabled: boolean
   onCreateEmailChange: (value: string) => void
   onCreatePasswordChange: (value: string) => void
-  onCreateIsAdminChange: (value: boolean) => void
   onCreateIsEnabledChange: (value: boolean) => void
   onCreate: () => Promise<boolean> | boolean
 }
@@ -86,11 +84,9 @@ export function AdminUsersPanel({
   onStatusFilterChange,
   createEmail,
   createPassword,
-  createIsAdmin,
   createIsEnabled,
   onCreateEmailChange,
   onCreatePasswordChange,
-  onCreateIsAdminChange,
   onCreateIsEnabledChange,
   onCreate
 }: AdminUsersPanelProps) {
@@ -179,7 +175,7 @@ export function AdminUsersPanel({
       )
       return
     }
-    if (newPassword.length < 6) {
+    if (newPassword.length < 8) {
       setPasswordDialog((prev) =>
         prev ? { ...prev, error: t('admin.users.password.error.tooShort') } : prev
       )

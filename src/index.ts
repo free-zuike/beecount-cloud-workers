@@ -1,15 +1,17 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
-import { initializeDatabase } from './db/schema';
+import { initializeDatabase, SCHEMA_VERSION } from './db/schema';
 import { APP_VERSION, APP_NAME } from './version';
 import { authMiddleware } from './middleware/auth';
+import { validateAccessToken } from './auth';
 import { spaMiddleware } from './middleware/spa';
 import { processBackupSchedule } from './services/backup-scheduler';
 import { initLogger, serverLogger } from './lib/logger';
 import { getFirstEnabledS3Config } from './routes/sys_config';
 import { signRequest } from './lib/s3';
 import { downloadFromStorage, deleteFromStorage } from './lib/storage-adapter';
+import { detectSafeImageMime } from './lib/image-mime';
 
 import setupRouter from './routes/setup';
 import authRouter from './routes/auth';
@@ -73,13 +75,92 @@ app.use('*', async (c, next) => {
   return cors({ origin: corsOrigins })(c, next);
 });
 
+app.use('*', async (c, next) => {
+  await next();
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', 'DENY');
+  c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  c.header('Content-Security-Policy', "frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
+  if (new URL(c.req.url).protocol === 'https:') {
+    c.header('Strict-Transport-Security', 'max-age=31536000');
+  }
+});
+
 let initialized = false;
+let initializationPromise: Promise<void> | null = null;
 let setupCompleted = false;
-async function ensureInitialized(db: D1Database, logBuffer?: DurableObjectNamespace): Promise<void> {
-  if (!initialized) {
+
+async function waitForSchemaVersion(db: D1Database, timeoutMs = 30000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const meta = await db.prepare("SELECT value FROM app_metadata WHERE key = 'schema_version'").first<{ value: string }>();
+      if (meta?.value === String(SCHEMA_VERSION)) return true;
+    } catch { /* first boot: table may not exist yet */ }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
+async function initializeOnce(db: D1Database, coordination?: DurableObjectNamespace): Promise<void> {
+  let lockStub: DurableObjectStub | null = null;
+  let lockHolder: string | null = null;
+  let acquired = false;
+
+  if (coordination) {
+    try {
+      lockHolder = `schema-${SCHEMA_VERSION}-${crypto.randomUUID()}`;
+      const lockId = coordination.idFromName(`schema-migration-v${SCHEMA_VERSION}`);
+      lockStub = coordination.get(lockId);
+      const lockResult = await lockStub.fetch('http://do/lock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ holder: lockHolder, ttlMs: 10 * 60 * 1000 }),
+      }).then((r) => r.json<{ acquired: boolean }>());
+      acquired = Boolean(lockResult.acquired);
+    } catch {
+      // DO coordination failure should not make a healthy D1 unusable. The
+      // per-isolate promise still prevents duplicate work locally.
+      lockStub = null;
+      lockHolder = null;
+    }
+  }
+
+  if (lockStub && !acquired) {
+    if (!(await waitForSchemaVersion(db))) {
+      throw new Error(`Timed out waiting for schema migration v${SCHEMA_VERSION}`);
+    }
+    return;
+  }
+
+  try {
     await initializeDatabase(db);
-    initLogger(db, logBuffer);
-    initialized = true;
+  } finally {
+    if (lockStub && acquired && lockHolder) {
+      try {
+        await lockStub.fetch('http://do/unlock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ holder: lockHolder }),
+        });
+      } catch { /* lock TTL is the final safety net */ }
+    }
+  }
+}
+
+async function ensureInitialized(db: D1Database, coordination?: DurableObjectNamespace): Promise<void> {
+  if (!initialized) {
+    if (!initializationPromise) {
+      initializationPromise = (async () => {
+        await initializeOnce(db, coordination);
+        initLogger(db, coordination);
+        initialized = true;
+      })().catch((error) => {
+        initializationPromise = null;
+        throw error;
+      });
+    }
+    await initializationPromise;
   }
   if (!setupCompleted) {
     try {
@@ -165,9 +246,9 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
   const r2 = c.env.R2;
 
   // 速率限制
-  const { isRateLimited } = await import('./lib/rate-limit');
-  const clientIp = c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
-  if (isRateLimited('avatar-download', clientIp, 60, 60)) {
+  const { isRateLimitedDistributed } = await import('./lib/rate-limit');
+  const clientIp = c.req.header('CF-Connecting-IP') || c.req.header('x-real-ip') || 'unknown';
+  if (await isRateLimitedDistributed(c.env.BEECOUNT_DO, 'avatar-download', clientIp, 60, 60)) {
     return c.json({ error: 'Rate limit exceeded' }, 429);
   }
 
@@ -181,17 +262,13 @@ app.get('/api/v1/profile/avatar/:userId', async (c) => {
   // 纯文件名（原版恢复导入）或已带前缀（beecount/avatars/...）的存量。
   const data = await downloadFromStorage(db, c.env, key.replace(/^beecount\//, ''));
   if (!data) return c.json({ error: 'Avatar not found' }, 404);
-  // 按扩展名 / 魔数给定 MIME（原版恢复的头像文件名带 .jpg/.png，直接能猜）
-  const ext = (key.split('.').pop() || '').toLowerCase();
-  const imgType = ext === 'png' ? 'image/png'
-    : ext === 'webp' ? 'image/webp'
-    : ext === 'gif' ? 'image/gif'
-    : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
-    : 'image/png';
+  const imgType = detectSafeImageMime(data);
+  if (!imgType) return c.json({ error: 'Avatar content is not a supported image' }, 415);
   return new Response(data, {
     headers: {
       'Content-Type': imgType,
       'Cache-Control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
+      'X-Content-Type-Options': 'nosniff',
     },
   });
 });
@@ -216,7 +293,10 @@ app.use('*', async (c, next) => {
   }
 });
 
-// ---- OAuth2 回调（不需要认证，被 OAuth 提供商直接调用） ----
+// ---- OAuth2 回调（OAuth 提供商直接调用，GET 本身保持公开） ----
+const escapeHtml = (value: string): string =>
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
 app.get('/api/v1/admin/backup/remotes/oauth2/callback', async (c) => {
   const code = c.req.query('code');
   const provider = c.req.query('provider') || c.req.query('state') || '';
@@ -227,10 +307,12 @@ app.get('/api/v1/admin/backup/remotes/oauth2/callback', async (c) => {
     .map(p => `<option value="${p}"${p === provider ? ' selected' : ''}>${p}</option>`)
     .join('');
   // 跳转到回调页面，用前端 POST 换取 token
+  c.header('Cache-Control', 'no-store');
   return c.html(`<!DOCTYPE html><html><body>
     <h2>授权成功</h2>
-    <p>授权码: <code style="word-break:break-all" id="oauth-code">${code}</code></p>
-    <p style="color:#c00">授权码有效期只有几分钟，请立刻在下方填入 Client ID / Client Secret 并点击"换取 Token"。</p>
+    <p>已收到授权码，请在几分钟内完成 Token 交换。</p>
+    <code id="oauth-code" hidden>${escapeHtml(code)}</code>
+    <p style="color:#c00">此操作要求当前浏览器已登录 BeeCount 管理员账户。</p>
     <form id="oauth-form">
       <p>Provider: <select id="oauth-provider">${providerOptions}</select></p>
       <p>Client ID: <input id="oauth-cid" size="60" style="font-family:monospace"></p>
@@ -240,14 +322,28 @@ app.get('/api/v1/admin/backup/remotes/oauth2/callback', async (c) => {
     <pre id="oauth-out" style="white-space:pre-wrap;word-break:break-all;border:1px solid #ccc;padding:8px"></pre>
     <script>
       const code = document.getElementById('oauth-code').textContent;
+      const findAccessToken = () => {
+        const legacy = localStorage.getItem('beecount.token');
+        if (legacy) return legacy;
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('beecount.token.')) {
+            const value = localStorage.getItem(key);
+            if (value) return value;
+          }
+        }
+        return '';
+      };
       document.getElementById('oauth-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const out = document.getElementById('oauth-out');
         out.textContent = '换取中...';
         try {
+          const accessToken = findAccessToken();
+          if (!accessToken) throw new Error('请先在当前站点登录管理员账户');
           const r = await fetch('/api/v1/admin/backup/remotes/oauth2/token', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + accessToken },
             body: JSON.stringify({
               code,
               provider: document.getElementById('oauth-provider').value,
@@ -265,6 +361,18 @@ app.get('/api/v1/admin/backup/remotes/oauth2/callback', async (c) => {
   </body></html>`);
 });
 app.post('/api/v1/admin/backup/remotes/oauth2/token', async (c) => {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader?.startsWith('Bearer ') || !c.env.JWT_SECRET) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  const validation = await validateAccessToken(authHeader.slice(7), c.env.JWT_SECRET);
+  if (!validation || !('userId' in validation) || !validation.userId) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  const admin = await c.env.DB.prepare('SELECT is_admin, is_enabled FROM users WHERE id = ?')
+    .bind(validation.userId).first<{ is_admin: number; is_enabled: number }>();
+  if (!admin?.is_admin || !admin.is_enabled) return c.json({ error: 'Forbidden' }, 403);
+
   let body: Record<string, string>;
   try {
     body = await c.req.json();
@@ -277,7 +385,8 @@ app.post('/api/v1/admin/backup/remotes/oauth2/token', async (c) => {
   const tokenUrl = tokenEndpoints[provider || 'drive'];
   if (!tokenUrl) return c.json({ error: `Unsupported provider: ${provider}` }, 400);
   try {
-    const params = new URLSearchParams({ code, client_id, client_secret, redirect_uri: 'https://beecount.qzz.io/api/v1/admin/backup/remotes/oauth2/callback', grant_type: 'authorization_code' });
+    const redirectUri = new URL('/api/v1/admin/backup/remotes/oauth2/callback', c.req.url).toString();
+    const params = new URLSearchParams({ code, client_id, client_secret, redirect_uri: redirectUri, grant_type: 'authorization_code' });
     if (provider === 'onedrive') params.set('scope', 'offline_access Files.ReadWrite');
     const resp = await fetch(tokenUrl, {
       method: 'POST',
@@ -376,7 +485,7 @@ app.get('/', async (c) => {
     if (!setupCompleted) {
       const settings = await c.env.DB.prepare("SELECT setup_completed FROM system_settings WHERE id = ?").bind('default').first<{ setup_completed: number }>();
     if (!settings || settings.setup_completed !== 1) {
-      return c.html(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>BeeCount - 初始化</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:-apple-system,system-ui,sans-serif;max-width:420px;margin:60px auto;padding:0 20px}h1{font-size:22px;margin-bottom:4px}p{color:#666;margin-bottom:28px;font-size:14px}label{display:block;margin-bottom:4px;font-weight:600;font-size:13px;color:#374151}input,select{width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;margin-bottom:16px;font-size:15px;box-sizing:border-box;outline:none}input:focus,select:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.15)}button{background:#2563eb;color:#fff;border:none;padding:11px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;width:100%}button:hover{background:#1d4ed8}.error{color:#dc2626;font-size:13px;margin-top:10px;text-align:center}.success{color:#16a34a;font-size:13px;margin-top:10px;text-align:center}</style></head><body><h1>初始化系统</h1><p>创建管理员账户，开始使用 BeeCount</p><form id="f"><label>管理员邮箱</label><input type="email" id="e" placeholder="admin@example.com" required><label>密码</label><input type="password" id="p" minlength="6" placeholder="至少 6 位" required><label>时区</label><select id="t"><option value="-720">-12:00</option><option value="-660">-11:00</option><option value="-600">-10:00</option><option value="-540">-09:00</option><option value="-480" selected>UTC+8 北京时间</option><option value="-420">+07:00</option><option value="-360">+06:00</option><option value="-300">+05:00</option><option value="-240">+04:00</option><option value="-180">+03:00</option><option value="-120">+02:00</option><option value="-60">+01:00</option><option value="0">UTC</option></select><button type="submit">完成初始化</button></form><p id="m"></p><script>document.getElementById('f').onsubmit=async(e)=>{e.preventDefault();const r=await fetch('/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({admin_email:document.getElementById('e').value,admin_password:document.getElementById('p').value,timezone_offset:parseInt(document.getElementById('t').value),admin_mode:'manual'})});const d=await r.json();if(d.success){document.getElementById('m').className='success';document.getElementById('m').textContent='初始化成功，即将跳转...';setTimeout(()=>window.location.href='/app',1500)}else{document.getElementById('m').className='error';document.getElementById('m').textContent=d.error||'设置失败'}}</script></body></html>`);
+      return c.html(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>BeeCount - 初始化</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:-apple-system,system-ui,sans-serif;max-width:420px;margin:60px auto;padding:0 20px}h1{font-size:22px;margin-bottom:4px}p{color:#666;margin-bottom:28px;font-size:14px}label{display:block;margin-bottom:4px;font-weight:600;font-size:13px;color:#374151}input,select{width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;margin-bottom:16px;font-size:15px;box-sizing:border-box;outline:none}input:focus,select:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.15)}button{background:#2563eb;color:#fff;border:none;padding:11px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;width:100%}button:hover{background:#1d4ed8}.error{color:#dc2626;font-size:13px;margin-top:10px;text-align:center}.success{color:#16a34a;font-size:13px;margin-top:10px;text-align:center}</style></head><body><h1>初始化系统</h1><p>创建管理员账户，开始使用 BeeCount</p><form id="f"><label>管理员邮箱</label><input type="email" id="e" placeholder="admin@example.com" required><label>密码</label><input type="password" id="p" minlength="8" placeholder="至少 8 位" required><label>时区</label><select id="t"><option value="-720">-12:00</option><option value="-660">-11:00</option><option value="-600">-10:00</option><option value="-540">-09:00</option><option value="-480" selected>UTC+8 北京时间</option><option value="-420">+07:00</option><option value="-360">+06:00</option><option value="-300">+05:00</option><option value="-240">+04:00</option><option value="-180">+03:00</option><option value="-120">+02:00</option><option value="-60">+01:00</option><option value="0">UTC</option></select><button type="submit">完成初始化</button></form><p id="m"></p><script>document.getElementById('f').onsubmit=async(e)=>{e.preventDefault();const r=await fetch('/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({admin_email:document.getElementById('e').value,admin_password:document.getElementById('p').value,timezone_offset:parseInt(document.getElementById('t').value),admin_mode:'manual'})});const d=await r.json();if(d.success){document.getElementById('m').className='success';document.getElementById('m').textContent='初始化成功，即将跳转...';setTimeout(()=>window.location.href='/app',1500)}else{document.getElementById('m').className='error';document.getElementById('m').textContent=d.error||'设置失败'}}</script></body></html>`);
     }
     setupCompleted = true;
     }
@@ -412,6 +521,11 @@ export default {
         }
 
         const userId = (result as any).userId;
+        const activeUser = await env.DB.prepare('SELECT is_enabled FROM users WHERE id = ?')
+          .bind(userId).first<{ is_enabled: number }>();
+        if (!activeUser?.is_enabled) {
+          return new Response(JSON.stringify({ error: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+        }
         const doId = env.BEECOUNT_DO.idFromName(`ws-${userId}`);
         const doStub = env.BEECOUNT_DO.get(doId);
 
@@ -440,6 +554,7 @@ export default {
     const db = env.DB;
     
     try {
+      await ensureInitialized(db, env.BEECOUNT_DO);
       const schedulesResult = await db
         .prepare('SELECT * FROM backup_schedules WHERE enabled = 1')
         .all();

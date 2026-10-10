@@ -1454,7 +1454,7 @@ const zhTW = {
   'admin.users.password.confirmPassword': '確認新密碼',
   'admin.users.password.submit': '修改密碼',
   'admin.users.password.error.adminRequired': '請輸入你當前的密碼',
-  'admin.users.password.error.tooShort': '新密碼至少 6 位',
+  'admin.users.password.error.tooShort': '新密碼至少 8 位',
   'admin.users.password.error.mismatch': '兩次輸入的新密碼不一致',
   'admin.users.error.createRequired': '請填寫信箱與密碼。',
   'admin.users.filter.enabled': '僅啟用',

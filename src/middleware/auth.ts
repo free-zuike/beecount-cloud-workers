@@ -1,11 +1,20 @@
 import { Context, Next } from 'hono';
 import { validateAccessToken } from '../auth';
 
+function isPathOrChild(path: string, root: string): boolean {
+  return path === root || path.startsWith(`${root}/`);
+}
+
 export const authMiddleware = async (c: any, next: Next) => {
   const path = c.req.path;
-  // auth 路由、MCP 路由、setup 路由和头像下载公开端点自己处理认证，跳过中间件
-  // oauth2 回调/token 是公共端点（OAuth 提供商直接回调 / 用户换 token，无法先登录）
-  if (path.startsWith('/api/v1/auth') || path.startsWith('/api/v1/mcp') || path.startsWith('/api/v1/setup') || path.startsWith('/api/v1/profile/avatar') || path.includes('/remotes/oauth2/')) {
+  // Only these exact route trees are self-authenticating/public. Bare startsWith
+  // would also exempt siblings such as /api/v1/mcp-calls.
+  if (
+    isPathOrChild(path, '/api/v1/auth') ||
+    isPathOrChild(path, '/api/v1/mcp') ||
+    isPathOrChild(path, '/api/v1/setup') ||
+    isPathOrChild(path, '/api/v1/profile/avatar')
+  ) {
     return next();
   }
 
@@ -50,8 +59,8 @@ export const authMiddleware = async (c: any, next: Next) => {
 
   // 检查用户是否存在于数据库中（数据库被删后旧 token 不能继续使用）
   try {
-    const user = await (c.env.DB as D1Database).prepare('SELECT id FROM users WHERE id = ?').bind(userId).first<{ id: string }>();
-    if (!user) {
+    const user = await (c.env.DB as D1Database).prepare('SELECT id, is_enabled FROM users WHERE id = ?').bind(userId).first<{ id: string; is_enabled: number }>();
+    if (!user || !user.is_enabled) {
       console.log(`[AUTH-MW] User ${userId} not found in database, rejecting token`);
       return c.json({ error: 'Unauthorized' }, 401);
     }
@@ -66,8 +75,8 @@ export const authMiddleware = async (c: any, next: Next) => {
     const clientIp = c.req.header('CF-Connecting-IP');
     c.executionCtx.waitUntil(
       c.env.DB
-        .prepare('UPDATE devices SET last_seen_at = ?, last_ip = ? WHERE id = ?')
-        .bind(now, clientIp ?? null, deviceId)
+        .prepare('UPDATE devices SET last_seen_at = ?, last_ip = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL')
+        .bind(now, clientIp ?? null, deviceId, userId)
         .run()
     );
   }

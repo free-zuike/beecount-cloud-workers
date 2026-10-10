@@ -1463,7 +1463,7 @@ const en = {
   'admin.users.password.confirmPassword': 'Confirm new password',
   'admin.users.password.submit': 'Change password',
   'admin.users.password.error.adminRequired': 'Enter your current password',
-  'admin.users.password.error.tooShort': 'New password must be at least 6 characters',
+  'admin.users.password.error.tooShort': 'New password must be at least 8 characters',
   'admin.users.password.error.mismatch': 'The two new passwords do not match',
   'admin.users.error.createRequired': 'Email and password are required.',
   'admin.users.filter.enabled': 'Enabled only',
@@ -1525,7 +1525,7 @@ const en = {
   'error.ENTITY_NOT_FOUND': 'Legacy data ID is being repaired. Please refresh and try again.',
   'error.WRITE_VALIDATION_FAILED': 'Write validation failed. Please check input values.',
   'error.USER_EMAIL_EXISTS': 'Email already exists.',
-  'error.USER_PASSWORD_TOO_SHORT': 'Password must be at least 6 characters.',
+  'error.USER_PASSWORD_TOO_SHORT': 'Password must be at least 8 characters.',
 
   'notice.userCreated': 'User created.',
 

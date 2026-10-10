@@ -3,7 +3,7 @@
  * 每次变更下方 DDL（新建表/加列/索引/迁移）时必须递增，
  * 否则已初始化的库不会重放 DDL。
  */
-const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 4;
 // 迁移失败后的重试退避：避免每次冷启动重跑全量 DDL + 数据复制，
 // 把 D1 免费版每日 10 万行写入配额瞬间烧光（曾经 1 小时烧穿）。
 const MIGRATION_RETRY_BACKOFF_MS = 30 * 60 * 1000;
