@@ -6,6 +6,8 @@ import { Hono } from 'hono';
 import { serverLogger } from '../lib/logger';
 import { randomUUID } from 'crypto';
 import { createAccessToken } from '../auth';
+import { uploadToStorage } from '../lib/storage-adapter';
+import { sweepDuplicateAttachments } from '../lib/attachment-dedup';
 
 function nowUtc(): string { return new Date().toISOString(); }
 async function hashToken(t: string): Promise<string> {
@@ -50,9 +52,10 @@ export const TOOL_DEFS: ToolDef[] = [
   { name: 'get_ledger_stats', description: 'Get summary stats for a ledger (transaction/category/account/tag/budget counts).', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' } } } },
   { name: 'get_analytics_summary', description: 'Income/expense/balance plus top-10 spending categories. scope: \'month\' | \'year\' | \'all\'. period: For month: \'YYYY-MM\'. For year: \'YYYY\'. Defaults to current. ledger_id: Optional, uses active ledger if omitted.', inputSchema: { type: 'object', properties: { scope: { type: 'string', enum: ['month', 'year', 'all'] }, period: { type: 'string' }, ledger_id: { type: 'string' } } } },
   { name: 'search', description: 'Full-text fuzzy search across transaction notes, category names, account names.', inputSchema: { type: 'object', properties: { q: { type: 'string' }, limit: { type: 'number', default: 20 } }, required: ['q'] } },
-  { name: 'create_transaction', description: 'Create a new transaction. amount: Positive number; type captured separately via tx_type. tx_type: \'expense\' (default), \'income\', or \'transfer\'. category: Existing category name (server rejects unknown names). account: Existing account name. For transfers this is the from-account. happened_at: ISO date or datetime. Defaults to now. Use a timezone suffix (e.g. \'2026-10-03T12:00:00+08:00\') to pin an instant, or pass time_zone (e.g. \'Asia/Shanghai\' / \'UTC+8\') so bare datetimes are interpreted in that zone. note: Optional memo. tags: Optional list of tag names. ledger_id: Optional; uses active ledger if omitted. currency: ISO 4217 code (e.g. \'USD\', \'JPY\') when the amount is in a foreign currency. Omit to follow the account\'s currency, or the ledger\'s base currency when no account is given. The server converts to the ledger base at current rates and stores both amounts.', inputSchema: { type: 'object', properties: { amount: { type: 'number' }, tx_type: { type: 'string', enum: ['expense', 'income', 'transfer'] }, category: { type: 'string' }, account: { type: 'string' }, happened_at: { type: 'string' }, time_zone: { type: 'string', description: 'IANA name (Asia/Shanghai) or UTC offset (UTC+8 / +08:00). Used when happened_at has no offset.' }, note: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, ledger_id: { type: 'string' }, currency: { type: 'string' } }, required: ['amount'] } },
+  { name: 'upload_attachment', description: 'Upload a receipt/file to a ledger and return its file_id and SHA256. The client reads the user\'s local file and sends standard Base64 bytes (without a data URL prefix). A remote Cloud cannot read client file paths. Prefer small receipt images; the configured attachment upload size limit applies. Same bytes in the same ledger reuse the existing file_id. If multiple ledgers exist, supply ledger_id. Uploading does not create a transaction: pass the returned file_id to create/update_transaction\'s ordered attachments list, using the same ledger.', inputSchema: { type: 'object', properties: { file_name: { type: 'string', description: 'Original file name; used for storage naming and MIME inference.' }, content_base64: { type: 'string', description: 'Standard Base64 bytes of the file content, without a data URL prefix.' }, ledger_id: { type: 'string', description: 'Ledger external id; required when the user has multiple ledgers.' }, mime_type: { type: 'string', description: 'Optional MIME type; inferred from file_name when omitted.' } }, required: ['file_name', 'content_base64'] } },
+  { name: 'create_transaction', description: 'Create a new transaction. amount: Positive number; type captured separately via tx_type. tx_type: \'expense\' (default), \'income\', or \'transfer\'. category: Existing category name (server rejects unknown names). account: Existing account name. For transfers this is the from-account. happened_at: ISO date or datetime. Defaults to now. Use a timezone suffix (e.g. \'2026-10-03T12:00:00+08:00\') to pin an instant, or pass time_zone (e.g. \'Asia/Shanghai\' / \'UTC+8\') so bare datetimes are interpreted in that zone. note: Optional memo. tags: Optional list of tag names. ledger_id: Optional; uses active ledger if omitted. currency: ISO 4217 code (e.g. \'USD\', \'JPY\') when the amount is in a foreign currency. Omit to follow the account\'s currency, or the ledger\'s base currency when no account is given. The server converts to the ledger base at current rates and stores both amounts. attachments: Ordered file_id list returned by upload_attachment. Files must belong to this ledger; do not pass local paths or URLs. Omit for no attachments. Repeated IDs are rejected.', inputSchema: { type: 'object', properties: { amount: { type: 'number' }, tx_type: { type: 'string', enum: ['expense', 'income', 'transfer'] }, category: { type: 'string' }, account: { type: 'string' }, happened_at: { type: 'string' }, time_zone: { type: 'string', description: 'IANA name (Asia/Shanghai) or UTC offset (UTC+8 / +08:00). Used when happened_at has no offset.' }, note: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, attachments: { type: 'array', items: { type: 'string' }, description: 'Ordered file_id list returned by upload_attachment. Files must belong to this ledger; do not pass local paths or URLs. Repeated IDs are rejected.' }, ledger_id: { type: 'string' }, currency: { type: 'string' } }, required: ['amount'] } },
   { name: 'create_transactions', description: 'Create many transactions at once - use this for bulk imports. Far more efficient than calling create_transaction in a loop. transactions: list of objects, each like create_transaction\'s args - {amount (>0), tx_type (expense|income|transfer, default expense), category, account, happened_at (ISO, default now), note, tags, currency (ISO 4217, only for foreign-currency amounts)}. category/account must be existing names. time_zone applies to all items without an offset. ledger_id: Optional. Max 200 transactions per call.', inputSchema: { type: 'object', properties: { transactions: { type: 'array', items: { type: 'object' } }, time_zone: { type: 'string', description: 'IANA name (Asia/Shanghai) or UTC offset (UTC+8 / +08:00). Applied to items whose happened_at has no offset.' }, ledger_id: { type: 'string' } }, required: ['transactions'] } },
-  { name: 'update_transaction', description: 'Patch an existing transaction. Only the fields you pass are changed. happened_at: use a timezone suffix to pin an instant, or pass time_zone so bare datetimes are interpreted in that zone.', inputSchema: { type: 'object', properties: { sync_id: { type: 'string' }, amount: { type: 'number' }, tx_type: { type: 'string', enum: ['expense', 'income', 'transfer'] }, category: { type: 'string' }, account: { type: 'string' }, happened_at: { type: 'string' }, time_zone: { type: 'string', description: 'IANA name (Asia/Shanghai) or UTC offset (UTC+8 / +08:00). Used when happened_at has no offset.' }, note: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } } }, required: ['sync_id'] } },
+  { name: 'update_transaction', description: 'Patch an existing transaction. Only the fields you pass are changed. happened_at: use a timezone suffix to pin an instant, or pass time_zone so bare datetimes are interpreted in that zone. attachments: Omit (or null) to preserve existing files. An ordered file_id list replaces all attachments; [] removes all. To append, read the current attachments with get_transaction and include their cloudFileIds first. All files must have been uploaded to this transaction\'s ledger.', inputSchema: { type: 'object', properties: { sync_id: { type: 'string' }, amount: { type: 'number' }, tx_type: { type: 'string', enum: ['expense', 'income', 'transfer'] }, category: { type: 'string' }, account: { type: 'string' }, happened_at: { type: 'string' }, time_zone: { type: 'string', description: 'IANA name (Asia/Shanghai) or UTC offset (UTC+8 / +08:00). Used when happened_at has no offset.' }, note: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, attachments: { type: 'array', items: { type: 'string' }, description: 'Omit (or null) to preserve existing files. An ordered file_id list replaces all attachments; [] removes all. To append, read the current attachments with get_transaction and include their cloudFileIds first.' } }, required: ['sync_id'] } },
   { name: 'delete_transaction', description: 'Delete a transaction. Destructive - two-step confirmation required. Calling with confirm=False returns a confirmation_required placeholder; you must then prompt the user, and only call again with confirm=true after they explicitly agree.', inputSchema: { type: 'object', properties: { sync_id: { type: 'string' }, confirm: { type: 'boolean' } }, required: ['sync_id'] } },
   { name: 'create_category', description: 'Create a new category. Usually unnecessary - prefer existing categories. name: required. kind: expense/income/transfer, default expense. parent_name: optional, for level-2 categories.', inputSchema: { type: 'object', properties: { name: { type: 'string' }, kind: { type: 'string', enum: ['expense', 'income', 'transfer'] }, parent_name: { type: 'string' }, icon: { type: 'string' }, ledger_id: { type: 'string' } }, required: ['name'] } },
   { name: 'update_budget', description: 'Update a budget\'s amount.', inputSchema: { type: 'object', properties: { budget_id: { type: 'string' }, amount: { type: 'number' } }, required: ['budget_id', 'amount'] } },
@@ -126,6 +129,75 @@ async function resolveWriteLedger(db: D1Database, userId: string, ledgerId?: str
   if (live.length === 0) return { ledger: null, status: { status: 'no_ledger', message: 'You have no ledger yet. Create one in BeeCount first.' } };
   if (live.length === 1) return { ledger: live[0], status: null };
   return { ledger: null, status: { status: 'ledger_required', message: 'You have multiple ledgers — refusing to guess which one to write to. Re-call this tool with an explicit `ledger_id` (the `id` field of one of the candidates below).', candidates: live.map(l => ({ id: l.external_id, name: l.name })) } };
+}
+
+// ── 附件（对齐原版 mcp/attachments.py + write_tools.upload_attachment）─────
+
+/** 从文件名推断 MIME（对齐 Python mimetypes.guess_type 常见结果）。 */
+function guessMimeType(fileName: string): string {
+  const ext = fileName.split('.').pop()?.toLowerCase() || '';
+  switch (ext) {
+    case 'png': return 'image/png';
+    case 'jpg': case 'jpeg': return 'image/jpeg';
+    case 'gif': return 'image/gif';
+    case 'webp': return 'image/webp';
+    case 'pdf': return 'application/pdf';
+    case 'svg': return 'image/svg+xml';
+    case 'heic': return 'image/heic';
+    case 'txt': return 'text/plain';
+    case 'csv': return 'text/csv';
+    case 'json': return 'application/json';
+    case 'zip': return 'application/zip';
+    default: return 'application/octet-stream';
+  }
+}
+
+/** 严格 base64 解码：拒绝空白、非法字符、错误 padding（对齐 b64decode(validate=True)）。 */
+export function decodeStrictBase64(b64: string): Uint8Array {
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64) || b64.length % 4 !== 0) {
+    throw new Error('content_base64 is not valid base64');
+  }
+  let bin: string;
+  try { bin = atob(b64); } catch { throw new Error('content_base64 is not valid base64'); }
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * 将已上传文件的权威元数据转换为 App/Web 共用的交易附件引用（对齐原版
+ * resolve_transaction_attachments）：保持传入顺序；不允许引用其他账本、
+ * 分类图标或未知文件；缺失时不泄露文件是否在其他用户/账本中存在。
+ */
+export async function resolveTransactionAttachments(
+  db: D1Database,
+  ledgerId: string,
+  fileIds: string[],
+): Promise<Array<Record<string, unknown>>> {
+  if (fileIds.some((v) => typeof v !== 'string' || !v.trim())) {
+    throw new Error('attachments must contain non-empty uploaded file IDs');
+  }
+  const ids = fileIds.map((v) => v.trim());
+  if (new Set(ids).size !== ids.length) throw new Error('Duplicate attachment file IDs are not allowed');
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = await db.prepare(`SELECT id, file_name, size_bytes, mime_type, sha256 FROM attachment_files WHERE id IN (${placeholders}) AND ledger_id = ? AND attachment_kind = 'transaction'`).bind(...ids, ledgerId).all<{ id: string; file_name: string | null; size_bytes: number; mime_type: string | null; sha256: string }>();
+  const byId = new Map(rows.results.map((row) => [row.id, row]));
+  if (byId.size !== ids.length) {
+    throw new Error('Attachment not found in the target ledger; upload it there first');
+  }
+  return ids.map((fileId, index) => {
+    const row = byId.get(fileId)!;
+    return {
+      fileName: `${row.id}_${row.file_name || 'attachment.bin'}`,
+      originalName: row.file_name || 'attachment.bin',
+      fileSize: row.size_bytes,
+      mimeType: row.mime_type,
+      cloudFileId: row.id,
+      cloudSha256: row.sha256,
+      sortOrder: index,
+    };
+  });
 }
 
 // MCP 默认标签工具
@@ -294,7 +366,7 @@ async function createTxViaWriteRouter(
   env: { JWT_SECRET: string; CLOUD_TIMEZONE?: string; TZ?: string },
   baseUrl: string,
   userId: string,
-  args: { amount: number; tx_type?: string; category?: string; account?: string; happened_at?: string; note?: string | null; tags?: string[] | null; currency?: string | null; ledger_id?: string | null; time_zone?: string | null },
+  args: { amount: number; tx_type?: string; category?: string; account?: string; happened_at?: string; note?: string | null; tags?: string[] | null; currency?: string | null; ledger_id?: string | null; time_zone?: string | null; attachments?: string[] | null },
 ): Promise<{ ok: true; tx: any } | { ok: false; status: any }> {
   const { ledger: led, status: ledgerStatus } = await resolveWriteLedger(db, userId, args.ledger_id);
   if (ledgerStatus) return { ok: false, status: ledgerStatus };
@@ -318,6 +390,9 @@ async function createTxViaWriteRouter(
     if (txType === 'transfer') body.from_account_name = args.account;
     else body.account_name = args.account;
   }
+  if (args.attachments !== undefined && args.attachments !== null) {
+    body.attachments = await resolveTransactionAttachments(db, led.id, args.attachments);
+  }
   // v30 多币种:非转账才折算(转账币种恒=账户币种,本阶段不支持跨币种转账)。
   // 币种优先级:currency 参数 > 账户币种 > 账本本位币。
   if (txType !== 'transfer') {
@@ -332,9 +407,9 @@ async function createTxViaWriteRouter(
   };
 }
 
-async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_TIMEZONE?: string; TZ?: string }, baseUrl: string, userId: string, scopes: string[], name: string, args: Record<string, unknown>, patId: string, patPrefix: string, patName: string): Promise<{ content: { type: string; text: string }[] }> {
+export async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_TIMEZONE?: string; TZ?: string; R2?: R2Bucket }, baseUrl: string, userId: string, scopes: string[], name: string, args: Record<string, unknown>, patId: string, patPrefix: string, patName: string): Promise<{ content: { type: string; text: string }[] }> {
   const t = Date.now();
-  const isWrite = ['create_transaction', 'update_transaction', 'delete_transaction', 'create_category', 'update_budget', 'create_transactions', 'parse_and_create_from_text'].includes(name);
+  const isWrite = ['create_transaction', 'update_transaction', 'delete_transaction', 'create_category', 'update_budget', 'create_transactions', 'parse_and_create_from_text', 'upload_attachment'].includes(name);
   if (isWrite && !scopes.includes('mcp:write')) throw new Error('PAT missing required scope: mcp:write');
   if (!isWrite && !scopes.includes('mcp:read') && !scopes.includes('mcp:write')) throw new Error('PAT missing required scope: mcp:read');
 
@@ -395,6 +470,7 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_TIMEZON
           currency: (args.currency as string) || null,
           ledger_id: args.ledger_id as string | null | undefined,
           time_zone: args.time_zone as string | null | undefined,
+          attachments: args.attachments as string[] | null | undefined,
         });
         if (!created.ok) { r = created.status; break; }
         r = created.tx;
@@ -426,6 +502,9 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_TIMEZON
         if (args.account !== undefined) {
           if (effectiveTxType === 'transfer') body.from_account_name = args.account;
           else body.account_name = args.account;
+        }
+        if (args.attachments !== undefined && args.attachments !== null) {
+          body.attachments = await resolveTransactionAttachments(db, tx.ledger_id, args.attachments as string[]);
         }
         const updated = Object.keys(body).filter(k => k !== 'base_change_id');
         const result = await selfCall('PATCH', `/api/v1/write/ledgers/${led.external_id}/transactions/${args.sync_id}`, env, baseUrl, userId, body);
@@ -545,6 +624,40 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_TIMEZON
         }
         const rows = await db.prepare(`SELECT * FROM read_tx_projection WHERE user_id = ? AND (${conds}) ORDER BY happened_at DESC LIMIT ?`).bind(...p, limit).all();
         r = (rows.results as any[]).map(x => ({ sync_id: x.sync_id, tx_type: x.tx_type, amount: Number(x.amount || 0), happened_at: x.happened_at, note: x.note, category_name: x.category_name, category_id: x.category_sync_id || null, account_name: x.account_name, account_id: x.account_sync_id || null, from_account_name: x.from_account_name, from_account_id: x.from_account_sync_id || null, to_account_name: x.to_account_name, to_account_id: x.to_account_sync_id || null, tags: x.tags_csv || '' }));
+        break;
+      }
+      case 'upload_attachment': {
+        const rawName = (args.file_name as string) || '';
+        if (!rawName.trim()) throw new Error('file_name must not be empty');
+        const bytes = decodeStrictBase64((args.content_base64 as string) || '');
+        if (bytes.length === 0) throw new Error('file is empty');
+        // 对齐原版 attachment_max_upload_bytes = 64 MiB
+        const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
+        if (bytes.length > MAX_UPLOAD_BYTES) throw new Error(`File too large (max ${MAX_UPLOAD_BYTES / 1024 / 1024} MiB)`);
+        const { ledger: led, status: ledgerStatus } = await resolveWriteLedger(db, userId, args.ledger_id as string);
+        if (ledgerStatus) { r = ledgerStatus; break; }
+        if (!led) throw new Error('No ledger found');
+        // 文件名安全处理（对齐 attachments.ts /upload）
+        const safeName = rawName.replace(/^.*[/\\]/, '').substring(0, 255).replace(/[^\w\s.\-()]/g, '_') || 'unnamed';
+        const mimeType = (args.mime_type as string) || guessMimeType(safeName);
+        const hashBuf = await crypto.subtle.digest('SHA-256', bytes);
+        const sha256Hash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+        const existing = await db.prepare(`SELECT id FROM attachment_files WHERE sha256 = ? AND ledger_id = ? AND attachment_kind = 'transaction'`).bind(sha256Hash, led.id).first<{ id: string }>();
+        const now = new Date().toISOString();
+        let effectiveFileId: string;
+        if (existing) {
+          effectiveFileId = existing.id;
+        } else {
+          const fileId = randomUUID();
+          const storageKey = `attachments/${led.external_id}/${fileId}_${safeName}`;
+          const up = await uploadToStorage(db, env, storageKey, bytes, mimeType);
+          if (!up.ok) throw new Error('Failed to upload attachment (no available storage)');
+          await db.prepare(`INSERT INTO attachment_files (id, ledger_id, user_id, sha256, size_bytes, mime_type, file_name, storage_path, attachment_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'transaction', ?)`).bind(fileId, led.id, userId, sha256Hash, bytes.length, mimeType, safeName, storageKey, now).run();
+          const canonical = await db.prepare(`SELECT id FROM attachment_files WHERE sha256 = ? AND ledger_id = ? AND attachment_kind = 'transaction' ORDER BY created_at ASC, id ASC LIMIT 1`).bind(sha256Hash, led.id).first<{ id: string }>();
+          effectiveFileId = canonical?.id ?? fileId;
+        }
+        await sweepDuplicateAttachments(db, env, sha256Hash, led.id, 'transaction');
+        r = { file_id: effectiveFileId, ledger_id: led.external_id, sha256: sha256Hash, size: bytes.length, mime_type: mimeType, file_name: safeName, created_at: now };
         break;
       }
       case 'create_category': {
@@ -783,7 +896,7 @@ async function jsonRpcHandler(c: any) {
       const negotiated = negotiateVersion(reqVersion);
       return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { protocolVersion: negotiated, capabilities: { tools: {} }, serverInfo: SERVER_INFO } }), { headers: { 'Content-Type': 'application/json' } });
     }
-    if (method === 'server/discover') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', ttlMs: 0, cacheScope: 'private', supportedVersions: SUPPORTED_VERSIONS, capabilities: { tools: {} }, instructions: 'BeeCount Cloud MCP server - manage your personal finance ledgers via 18 tools.' } }), { headers: { 'Content-Type': 'application/json' } });
+    if (method === 'server/discover') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', ttlMs: 0, cacheScope: 'private', supportedVersions: SUPPORTED_VERSIONS, capabilities: { tools: {} }, instructions: 'BeeCount Cloud MCP server - manage your personal finance ledgers via 19 tools.' } }), { headers: { 'Content-Type': 'application/json' } });
     if (method === 'tools/list') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', tools: TOOL_DEFS, _meta: { 'io.modelcontextprotocol/serverInfo': SERVER_INFO } } }), { headers: { 'Content-Type': 'application/json' } });
     if (method === 'tools/call') {
       const p = (params || {}) as { name?: string; arguments?: Record<string, unknown> };

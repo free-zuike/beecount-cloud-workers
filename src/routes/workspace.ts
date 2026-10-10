@@ -532,6 +532,7 @@ workspaceRouter.get('/categories', async (c) => {
       icon_cloud_file_id: row.icon_cloud_file_id,
       icon_cloud_sha256: row.icon_cloud_sha256,
       parent_name: row.parent_name,
+      parent_sync_id: row.parent_sync_id ?? null,
       last_change_id: row.source_change_id,
       ledger_id: ledExtId,
       ledger_name: null,
@@ -1975,13 +1976,13 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
   const ownerCategories = await db
     .prepare(
       `SELECT DISTINCT sync_id, name, kind, level, sort_order, icon, icon_type,
-              icon_cloud_file_id, icon_cloud_sha256, parent_name
+              icon_cloud_file_id, icon_cloud_sha256, parent_name, parent_sync_id
        FROM user_category_projection
        WHERE user_id = ? AND sync_id IS NOT NULL AND sync_id != ''
        ORDER BY kind, sort_order, LOWER(name) ASC`
     )
     .bind(ownerId)
-    .all<{ sync_id: string; name: string | null; kind: string | null; level: number | null; sort_order: number | null; icon: string | null; icon_type: string | null; icon_cloud_file_id: string | null; icon_cloud_sha256: string | null; parent_name: string | null }>();
+    .all<{ sync_id: string; name: string | null; kind: string | null; level: number | null; sort_order: number | null; icon: string | null; icon_type: string | null; icon_cloud_file_id: string | null; icon_cloud_sha256: string | null; parent_name: string | null; parent_sync_id: string | null }>();
 
   const ownerAccounts = await db
     .prepare(
@@ -2016,6 +2017,7 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
       icon_cloud_file_id: cat.icon_cloud_file_id,
       icon_cloud_sha256: cat.icon_cloud_sha256,
       parent_name: cat.parent_name,
+      parent_sync_id: cat.parent_sync_id,
       updated_at: new Date().toISOString(),
     })),
     accounts: ownerAccounts.results.map((acct) => ({

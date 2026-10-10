@@ -1284,7 +1284,7 @@ readRouter.get('/ledgers/:ledgerExternalId/categories', async (c) => {
     .prepare(
       `SELECT DISTINCT r.sync_id, r.name, r.kind, r.level, r.sort_order,
               r.icon, r.icon_type, r.custom_icon_path,
-              r.icon_cloud_file_id, r.icon_cloud_sha256, r.parent_name
+              r.icon_cloud_file_id, r.icon_cloud_sha256, r.parent_name, r.parent_sync_id
        FROM user_category_projection r
        WHERE r.user_id = ?
        ORDER BY r.kind, r.sort_order, LOWER(r.name)`
@@ -1304,6 +1304,7 @@ readRouter.get('/ledgers/:ledgerExternalId/categories', async (c) => {
     icon_cloud_file_id: row.icon_cloud_file_id as string | null,
     icon_cloud_sha256: row.icon_cloud_sha256 as string | null,
     parent_name: row.parent_name as string | null,
+    parent_sync_id: row.parent_sync_id as string | null,
     last_change_id: latestChangeId?.max_id ?? 0,
     ledger_id: ledger.external_id,
     ledger_name: ledger.name,

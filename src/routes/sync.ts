@@ -1310,18 +1310,18 @@ syncRouter.get('/full', async (c) => {
   try {
     // 支持共享账本：先查 owner 的，再查通过 ledger_members 共享的
     let ledger = await db
-      .prepare(`SELECT id, external_id, name, currency, month_start_day FROM ledgers WHERE user_id = ? AND external_id = ?`)
+      .prepare(`SELECT id, external_id, name, currency, month_start_day, user_id FROM ledgers WHERE user_id = ? AND external_id = ?`)
       .bind(userId, ledgerId)
-      .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number }>();
+      .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number; user_id: string }>();
 
     if (!ledger) {
       // 检查是否通过 ledger_members 共享
       const shared = await db
-        .prepare(`SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day
+        .prepare(`SELECT l.id, l.external_id, l.name, l.currency, l.month_start_day, l.user_id
                   FROM ledgers l JOIN ledger_members lm ON l.id = lm.ledger_id
                   WHERE lm.user_id = ? AND l.external_id = ?`)
         .bind(userId, ledgerId)
-        .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number }>();
+        .first<{ id: string; external_id: string; name: string | null; currency: string; month_start_day: number; user_id: string }>();
       if (shared) ledger = shared;
     }
 
@@ -1379,8 +1379,13 @@ syncRouter.get('/full', async (c) => {
     ]);
     console.log(`[SYNC] sync/full ledger=${ledger.id} ext=${ledger.external_id} effective=${effectiveLedgerId} txs=${txs.results.length} budgets=${budgets.results.length} userId=${userId}`);
 
-    // 检查缓存（与原版 snapshot_cache 对齐）
-    let snapshot = snapshotCacheGet(ledger.id, latestCursor) as Record<string, unknown> | null;
+    // 检查缓存（与原版 snapshot_cache 对齐）。分类/账户/标签等 user-global
+    // 更新不推进 ledger change_id，缓存键跟踪 owner 全局版本（对齐上游 0758b41/full.py）
+    const userChangeRow = await db
+      .prepare("SELECT MAX(change_id) AS max_id FROM sync_changes WHERE scope = 'user' AND user_id = ?")
+      .bind(ledger.user_id).first<{ max_id: number | null }>().catch(() => null);
+    const cacheKey = Math.max(latestCursor, userChangeRow?.max_id ?? 0);
+    let snapshot = snapshotCacheGet(ledger.id, cacheKey) as Record<string, unknown> | null;
     if (!snapshot) {
       snapshot = {
         ledgerSyncId: ledger.external_id,
@@ -1388,7 +1393,46 @@ syncRouter.get('/full', async (c) => {
         currency: ledger.currency || 'CNY',
         monthStartDay: ledger.month_start_day || 1,
         count: txs.results.length,
-        items: txs.results.map(r => convertBooleans(r as Record<string, unknown>)),
+        items: txs.results.map((r) => {
+          const row = r as Record<string, unknown>;
+          const item: Record<string, unknown> = {
+            syncId: row.sync_id,
+            type: row.tx_type,
+            amount: row.amount,
+            happenedAt: row.happened_at,
+            // 对齐原版 07c4093：全量快照保留交易统计/预算标记，防止 apply 缺省重置
+            excludeFromStats: Boolean(row.exclude_from_stats),
+            excludeFromBudget: Boolean(row.exclude_from_budget),
+          };
+          if (row.note != null) item.note = row.note;
+          if (row.category_sync_id) item.categoryId = row.category_sync_id;
+          if (row.category_name) item.categoryName = row.category_name;
+          if (row.category_kind) item.categoryKind = row.category_kind;
+          if (row.account_sync_id) item.accountId = row.account_sync_id;
+          if (row.account_name) item.accountName = row.account_name;
+          if (row.from_account_sync_id) item.fromAccountId = row.from_account_sync_id;
+          if (row.from_account_name) item.fromAccountName = row.from_account_name;
+          if (row.to_account_sync_id) item.toAccountId = row.to_account_sync_id;
+          if (row.to_account_name) item.toAccountName = row.to_account_name;
+          if (row.tags_csv) item.tags = row.tags_csv;
+          if (row.tag_sync_ids_json) {
+            try {
+              const parsed = JSON.parse(row.tag_sync_ids_json as string);
+              if (Array.isArray(parsed) && parsed.length > 0) item.tagIds = parsed;
+            } catch { /* 忽略坏 JSON，与原版一致 */ }
+          }
+          if (row.attachments_json) {
+            try {
+              const parsed = JSON.parse(row.attachments_json as string);
+              if (Array.isArray(parsed) && parsed.length > 0) item.attachments = parsed;
+            } catch { /* 忽略坏 JSON，与原版一致 */ }
+          }
+          if (row.tx_index) item.txIndex = row.tx_index;
+          if (row.created_by_user_id) item.createdByUserId = row.created_by_user_id;
+          if (row.currency_code) item.currencyCode = row.currency_code;
+          if (row.native_amount != null) item.nativeAmount = row.native_amount;
+          return item;
+        }),
         accounts: accounts.results.map(r => {
           const account = convertBooleans(r as Record<string, unknown>);
           return {
@@ -1404,11 +1448,27 @@ syncRouter.get('/full', async (c) => {
             cardLastFour: account.card_last_four,
           };
         }),
-        categories: categories.results.map(r => convertBooleans(r as Record<string, unknown>)),
+        categories: categories.results.map((r) => {
+          const row = convertBooleans(r as Record<string, unknown>);
+          return {
+            syncId: row.sync_id,
+            name: row.name ?? '',
+            kind: row.kind ?? null,
+            level: row.level ?? null,
+            sortOrder: row.sort_order ?? null,
+            icon: row.icon ?? null,
+            iconType: row.icon_type ?? null,
+            customIconPath: row.custom_icon_path ?? null,
+            iconCloudFileId: row.icon_cloud_file_id ?? null,
+            iconCloudSha256: row.icon_cloud_sha256 ?? null,
+            parentName: row.parent_name ?? null,
+            parentSyncId: row.parent_sync_id ?? null,
+          };
+        }),
         tags: tags.results.map(r => convertBooleans(r as Record<string, unknown>)),
         budgets: budgets.results.map(r => convertBooleans(r as Record<string, unknown>)),
       };
-      snapshotCachePut(ledger.id, latestCursor, snapshot);
+      snapshotCachePut(ledger.id, cacheKey, snapshot);
     }
 
     return c.json({
@@ -1549,14 +1609,26 @@ async function applyUserChangeToProjection(
 
   if (entity_type === 'category') {
     // APP 用 camelCase (parentName, parentSyncId)，原版用 snake_case (parent_name, parent_sync_id)
-    const parentName = (payload as any).parentName ?? payload.parent_name ?? null;
+    const parentNameFromPayload = (payload as any).parentName ?? payload.parent_name ?? null;
     let parentSyncId = (payload as any).parentSyncId ?? payload.parent_sync_id ?? null;
-    // 原版 projection.py:378-386：parentSyncId 缺失时用 parentName + kind + level=1 反查
+    let parentName = parentNameFromPayload;
+    // 对齐原版 0020/upsert_category：parentSyncId 缺失时用 parentName 反查，
+    // 必须唯一匹配「顶级无父」分类（同 kind、level=1、非自己、自身无父），歧义不猜
     if (parentSyncId === null && parentName) {
+      const parentRows = await db.prepare(
+        `SELECT sync_id FROM user_category_projection
+         WHERE user_id = ? AND name = ? AND kind = ?
+           AND (level IS NULL OR level = 1) AND sync_id != ?
+           AND parent_sync_id IS NULL AND parent_name IS NULL`
+      ).bind(userId, parentName, payload.kind ?? null, entity_sync_id).all<{ sync_id: string }>();
+      if (parentRows.results.length === 1) parentSyncId = parentRows.results[0].sync_id;
+    }
+    // parentSyncId 存在时校验父（kind/level=1）并用父的实际 name 覆盖 parentName
+    if (parentSyncId) {
       const parentRow = await db.prepare(
-        'SELECT sync_id FROM user_category_projection WHERE user_id = ? AND name = ? AND kind = ? AND (level IS NULL OR level = 1) LIMIT 1'
-      ).bind(userId, parentName, payload.kind ?? null).first<{ sync_id: string }>();
-      if (parentRow) parentSyncId = parentRow.sync_id;
+        `SELECT name FROM user_category_projection WHERE user_id = ? AND sync_id = ? AND kind = ? AND (level IS NULL OR level = 1)`
+      ).bind(userId, parentSyncId, payload.kind ?? null).first<{ name: string | null }>();
+      if (parentRow) parentName = parentRow.name;
     }
     const sortOrder = (payload as any).sortOrder ?? payload.sort_order ?? null;
     const iconType = (payload as any).iconType ?? payload.icon_type ?? null;
@@ -1585,6 +1657,19 @@ async function applyUserChangeToProjection(
       stmts.push(
         db.prepare('UPDATE read_tx_projection SET category_name = ?, category_kind = ? WHERE user_id = ? AND category_sync_id = ?')
           .bind(newName, payload.kind ?? existingRow.kind ?? null, userId, entity_sync_id),
+      );
+      // 对齐原版 rename_cascade_category：改名时子分类跟新父名/父ID；
+      // 旧客户端遗留的 parent_sync_id=NULL + parent_name=旧名的孤儿子分类也回捞挂靠
+      stmts.push(
+        db.prepare(
+          `UPDATE user_category_projection
+           SET parent_name = ?, parent_sync_id = ?
+           WHERE user_id = ? AND sync_id != ?
+             AND (parent_sync_id = ? OR (parent_sync_id IS NULL AND parent_name = ? AND kind = ?))`
+        ).bind(
+          newName, entity_sync_id, userId, entity_sync_id,
+          entity_sync_id, existingRow.name, payload.kind ?? existingRow.kind ?? null,
+        ),
       );
     }
 

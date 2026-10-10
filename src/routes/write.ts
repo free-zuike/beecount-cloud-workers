@@ -29,6 +29,7 @@
 import { Hono } from 'hono';
 
 import { normalizeTransactionAccounts } from '../lib/transaction-normalization';
+import { resolveCategoryParent } from '../lib/category-parent';
 import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
@@ -285,6 +286,7 @@ const WriteCategoryCreateSchema = WriteBaseSchema.extend({
   icon_cloud_file_id: z.string().nullable().optional(),
   icon_cloud_sha256: z.string().nullable().optional(),
   parent_name: z.string().nullable().optional(),
+  parent_sync_id: z.string().nullable().optional(),
 });
 
 /** 更新分类请求 */
@@ -299,6 +301,7 @@ const WriteCategoryUpdateSchema = WriteBaseSchema.extend({
   icon_cloud_file_id: z.string().nullable().optional(),
   icon_cloud_sha256: z.string().nullable().optional(),
   parent_name: z.string().nullable().optional(),
+  parent_sync_id: z.string().nullable().optional(),
 });
 
 /** 创建标签请求 */
@@ -1500,18 +1503,24 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
   }
 
   const syncId = randomUUID();
+  // 对齐上游 0758b41：parent_sync_id 稳定关联优先，parent_name 唯一解析
+  const resolvedParent = await resolveCategoryParent(
+    db, userId, req.kind, req.parent_sync_id, req.parent_name, syncId,
+  );
+  const effectiveLevel = resolvedParent.parentSyncId ? 2 : (req.level ?? null);
   const payload: Record<string, unknown> = {
     syncId: syncId,
     name: req.name,
     kind: req.kind,
-    level: req.level ?? null,
+    level: effectiveLevel,
     sortOrder: req.sort_order ?? null,
     icon: req.icon ?? null,
     iconType: req.icon_type ?? null,
     customIconPath: req.custom_icon_path ?? null,
     iconCloudFileId: req.icon_cloud_file_id ?? null,
     iconCloudSha256: req.icon_cloud_sha256 ?? null,
-    parentName: req.parent_name ?? null,
+    parentName: resolvedParent.parentName,
+    parentSyncId: resolvedParent.parentSyncId,
     createdByUserId: userId,
     updatedByUserId: userId,
   };
@@ -1528,14 +1537,14 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
       `INSERT INTO user_category_projection
        (sync_id, user_id, name, kind, level, sort_order,
         icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
-        parent_name, source_change_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()))`
+        parent_name, parent_sync_id, source_change_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()))`
     )
       .bind(
-        syncId, userId, req.name, req.kind, req.level ?? null,
+        syncId, userId, req.name, req.kind, effectiveLevel,
         req.sort_order ?? null, req.icon ?? null, req.icon_type ?? null,
         req.custom_icon_path ?? null, req.icon_cloud_file_id ?? null,
-        req.icon_cloud_sha256 ?? null, req.parent_name ?? null,
+        req.icon_cloud_sha256 ?? null, resolvedParent.parentName, resolvedParent.parentSyncId,
       ),
   ]);
 
@@ -1586,24 +1595,53 @@ writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteC
   // 取完整分类数据写入 payload（与原版 _diff_entity_list 一致）
   const fullCat = await db.prepare('SELECT * FROM user_category_projection WHERE sync_id = ? AND user_id = ?').bind(categorySyncId, userId).first<Record<string, unknown>>();
 
+  // 有子分类保护 + 父级解析（对齐上游 0758b41 snapshot_mutator）：
+  // 有子分类的分类不能改 kind、不能变成子分类、不能改父级；
+  // 父级仅在显式传 parent_sync_id/parent_name 时重新解析（未传保留现有）。
+  const childRows = await db.prepare(
+    `SELECT sync_id FROM user_category_projection WHERE user_id = ? AND sync_id != ?
+     AND (parent_sync_id = ? OR (parent_sync_id IS NULL AND parent_name = ? AND kind = ?))`
+  ).bind(
+    userId, categorySyncId, categorySyncId,
+    fullCat?.name ?? null, req.kind ?? fullCat?.kind ?? null,
+  ).all<{ sync_id: string }>();
+  const childCount = childRows.results.length;
+  const parentEditRequested = req.parent_sync_id !== undefined || req.parent_name !== undefined;
+  if (childCount > 0 && (
+    (req.kind !== undefined && req.kind !== (fullCat?.kind ?? null)) ||
+    req.level === 2 ||
+    parentEditRequested
+  )) {
+    return c.json({ error: 'Category has child categories, cannot change its kind or parent' }, 409);
+  }
+
+  const resolvedParent = parentEditRequested
+    ? await resolveCategoryParent(
+        db, userId, req.kind ?? (fullCat?.kind as string | null) ?? null,
+        req.parent_sync_id, req.parent_name, categorySyncId,
+      )
+    : { parentSyncId: (fullCat?.parent_sync_id as string | null) ?? null, parentName: (fullCat?.parent_name as string | null) ?? null };
+  const effectiveLevel = resolvedParent.parentSyncId ? 2 : (req.level ?? fullCat?.level ?? null);
+
   // sync_changes + projection 同事务原子写入（db.batch，原 try/catch 回删补偿不再需要）
   const fullPayload = fullCat ? safeJsonStringify({
       syncId: categorySyncId,
       name: req.name ?? fullCat.name,
       kind: req.kind ?? fullCat.kind,
-      level: req.level ?? fullCat.level,
+      level: effectiveLevel,
       sortOrder: req.sort_order ?? fullCat.sort_order,
       icon: req.icon ?? fullCat.icon,
       iconType: req.icon_type ?? fullCat.icon_type,
       customIconPath: req.custom_icon_path ?? fullCat.custom_icon_path,
       iconCloudFileId: req.icon_cloud_file_id ?? fullCat.icon_cloud_file_id,
       iconCloudSha256: req.icon_cloud_sha256 ?? fullCat.icon_cloud_sha256,
-      parentName: req.parent_name ?? fullCat.parent_name,
+      parentName: resolvedParent.parentName,
+      parentSyncId: resolvedParent.parentSyncId,
     }) : safeJsonStringify({
-      syncId: categorySyncId, name: req.name, kind: req.kind, level: req.level ?? null, sortOrder: req.sort_order ?? null,
+      syncId: categorySyncId, name: req.name, kind: req.kind, level: effectiveLevel, sortOrder: req.sort_order ?? null,
       icon: req.icon ?? null, iconType: req.icon_type ?? null, customIconPath: req.custom_icon_path ?? null,
       iconCloudFileId: req.icon_cloud_file_id ?? null, iconCloudSha256: req.icon_cloud_sha256 ?? null,
-      parentName: req.parent_name ?? null,
+      parentName: resolvedParent.parentName, parentSyncId: resolvedParent.parentSyncId,
     });
 
   // 分类是 user-global 实体(ledger_id=NULL)，用 sync_id + user_id 判断已存在（预查后按分支构建语句）
@@ -1615,26 +1653,27 @@ writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteC
   if (existing) {
     projectionStmt = db.prepare(
       `UPDATE user_category_projection SET name=?, kind=?, level=?, sort_order=?, icon=?, icon_type=?,
-       custom_icon_path=?, icon_cloud_file_id=?, icon_cloud_sha256=?, parent_name=?, source_change_id=(SELECT last_insert_rowid())
+       custom_icon_path=?, icon_cloud_file_id=?, icon_cloud_sha256=?, parent_name=?, parent_sync_id=?, source_change_id=(SELECT last_insert_rowid())
        WHERE sync_id=? AND user_id=?`
-    ).bind(req.name, req.kind, req.level ?? null, req.sort_order ?? null, req.icon ?? null,
+    ).bind(req.name ?? fullCat?.name ?? null, req.kind ?? fullCat?.kind ?? null, effectiveLevel, req.sort_order ?? null, req.icon ?? null,
       req.icon_type ?? null, req.custom_icon_path ?? null, req.icon_cloud_file_id ?? null,
-      req.icon_cloud_sha256 ?? null, req.parent_name ?? null,
+      req.icon_cloud_sha256 ?? null, resolvedParent.parentName, resolvedParent.parentSyncId,
       categorySyncId, userId);
   } else {
     projectionStmt = db.prepare(
       `INSERT INTO user_category_projection
        (sync_id, user_id, name, kind, level, sort_order,
         icon, icon_type, custom_icon_path, icon_cloud_file_id, icon_cloud_sha256,
-        parent_name, source_change_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()))`
-    ).bind(categorySyncId, userId, req.name, req.kind, req.level ?? null,
+        parent_name, parent_sync_id, source_change_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()))`
+    ).bind(categorySyncId, userId, req.name ?? null, req.kind ?? null, effectiveLevel,
       req.sort_order ?? null, req.icon ?? null, req.icon_type ?? null,
       req.custom_icon_path ?? null, req.icon_cloud_file_id ?? null,
-      req.icon_cloud_sha256 ?? null, req.parent_name ?? null);
+      req.icon_cloud_sha256 ?? null, resolvedParent.parentName, resolvedParent.parentSyncId);
   }
 
-  const batchResults = await db.batch([
+  // 改名/改 kind 级联：子分类跟新父名/父ID + 历史交易投影分类名（对齐上游 rename_cascade_category）
+  const batchStatements = [
     db.prepare(
       `INSERT INTO sync_changes
        (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
@@ -1642,7 +1681,28 @@ writeRouter.patch('/ledgers/:ledgerId/categories/:id', zValidator('json', WriteC
     )
       .bind(userId, 'category', categorySyncId, 'upsert', fullPayload, serverNow, userId),
     projectionStmt,
-  ]);
+  ];
+  if (childCount > 0 && (req.name !== undefined || req.kind !== undefined)) {
+    batchStatements.push(
+      db.prepare(
+        `UPDATE user_category_projection
+         SET parent_name = ?, parent_sync_id = ?
+         WHERE user_id = ? AND sync_id != ?
+           AND (parent_sync_id = ? OR (parent_sync_id IS NULL AND parent_name = ? AND kind = ?))`
+      ).bind(
+        req.name ?? fullCat?.name ?? null, categorySyncId, userId, categorySyncId,
+        categorySyncId, fullCat?.name ?? null, req.kind ?? fullCat?.kind ?? null,
+      ),
+    );
+  }
+  if (req.name !== undefined && fullCat && (fullCat.name ?? null) !== req.name) {
+    batchStatements.push(
+      db.prepare('UPDATE read_tx_projection SET category_name = ?, category_kind = ? WHERE user_id = ? AND category_sync_id = ?')
+        .bind(req.name, req.kind ?? fullCat.kind ?? null, userId, categorySyncId),
+    );
+  }
+
+  const batchResults = await db.batch(batchStatements);
   const newChangeId = batchResults[0].meta.last_row_id as number;
 
   await insertAuditLog({
@@ -1681,6 +1741,18 @@ writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', Write
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  // 有子分类禁止删除（对齐上游 0758b41：比允许删除并 orphan 更安全）
+  const catRow = await db.prepare(
+    'SELECT name, kind FROM user_category_projection WHERE sync_id = ? AND user_id = ?'
+  ).bind(categorySyncId, userId).first<{ name: string | null; kind: string | null }>();
+  const childCount = await db.prepare(
+    `SELECT COUNT(*) AS cnt FROM user_category_projection WHERE user_id = ? AND sync_id != ?
+     AND (parent_sync_id = ? OR (parent_sync_id IS NULL AND parent_name = ? AND kind = ?))`
+  ).bind(userId, categorySyncId, categorySyncId, catRow?.name ?? null, catRow?.kind ?? null).first<{ cnt: number }>();
+  if ((childCount?.cnt ?? 0) > 0) {
+    return c.json({ error: `Category has ${childCount!.cnt} child categories` }, 409);
   }
 
   // 清理分类图标 R2 文件（先删 projection 行，再检查引用计数）

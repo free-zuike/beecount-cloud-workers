@@ -50,7 +50,7 @@ describe('新库初始化（真实 SQLite）', () => {
       expect(tables).toContain(required);
     }
     const v = sqlite.prepare("SELECT value FROM app_metadata WHERE key = 'schema_version'").get() as { value: string };
-    expect(v.value).toBe('3');
+    expect(v.value).toBe('4');
     sqlite.close();
   });
 

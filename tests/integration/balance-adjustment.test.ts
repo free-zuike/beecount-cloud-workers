@@ -82,7 +82,7 @@ async function getSnapshotTx(txSyncId: string) {
   expect(res.status).toBe(200);
   const body = await res.json() as any;
   const content = JSON.parse(body.snapshot.payload.content);
-  return content.items.find((item: any) => item.sync_id === txSyncId);
+  return content.items.find((item: any) => item.syncId === txSyncId);
 }
 
 describe('Balance settlement', () => {
@@ -94,13 +94,13 @@ describe('Balance settlement', () => {
 
     const item = await getSnapshotTx(txSyncId);
     expect(item).toBeDefined();
-    expect(item.tx_type).toBe('income');
+    expect(item.type).toBe('income');
     expect(item.amount).toBe(12.5);
-    expect(item.category_sync_id).toBe(catSyncId);
-    expect(item.category_name).toBe('平账');
-    expect(item.category_kind).toBe('income');
-    expect(item.exclude_from_stats).toBe(false);
-    expect(item.exclude_from_budget).toBe(false);
+    expect(item.categoryId).toBe(catSyncId);
+    expect(item.categoryName).toBe('平账');
+    expect(item.categoryKind).toBe('income');
+    expect(item.excludeFromStats).toBe(false);
+    expect(item.excludeFromBudget).toBe(false);
   });
 
   it('uses a regular expense transaction and the 平账 category for negative differences', async () => {
@@ -111,12 +111,12 @@ describe('Balance settlement', () => {
 
     const item = await getSnapshotTx(txSyncId);
     expect(item).toBeDefined();
-    expect(item.tx_type).toBe('expense');
+    expect(item.type).toBe('expense');
     expect(item.amount).toBe(7.5);
-    expect(item.category_sync_id).toBe(catSyncId);
-    expect(item.category_name).toBe('平账');
-    expect(item.category_kind).toBe('expense');
-    expect(item.exclude_from_stats).toBe(false);
-    expect(item.exclude_from_budget).toBe(false);
+    expect(item.categoryId).toBe(catSyncId);
+    expect(item.categoryName).toBe('平账');
+    expect(item.categoryKind).toBe('expense');
+    expect(item.excludeFromStats).toBe(false);
+    expect(item.excludeFromBudget).toBe(false);
   });
 });

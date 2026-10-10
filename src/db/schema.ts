@@ -3,7 +3,7 @@
  * 每次变更下方 DDL（新建表/加列/索引/迁移）时必须递增，
  * 否则已初始化的库不会重放 DDL。
  */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 // 迁移失败后的重试退避：避免每次冷启动重跑全量 DDL + 数据复制，
 // 把 D1 免费版每日 10 万行写入配额瞬间烧光（曾经 1 小时烧穿）。
 const MIGRATION_RETRY_BACKOFF_MS = 30 * 60 * 1000;
@@ -842,6 +842,47 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await safeDropColumn('backup_snapshots', 'content_type');
     await safeDropColumn('backup_snapshots', 'checksum');
     await safeDropColumn('backup_snapshots', 'size');
+
+    // v4：0020 等价数据修复——回填可唯一解析的分类父级关联（幂等，上游 alembic/0020）。
+    // 仅当「同名同 kind 顶级无父的父」恰好一个时才回填；歧义/删除的不猜。
+    try {
+      await db.prepare(
+        `UPDATE user_category_projection
+         SET parent_sync_id = (
+           SELECT MIN(parent.sync_id) FROM user_category_projection parent
+           WHERE parent.user_id = user_category_projection.user_id
+             AND parent.kind = user_category_projection.kind
+             AND parent.name = user_category_projection.parent_name
+             AND parent.sync_id <> user_category_projection.sync_id
+             AND COALESCE(parent.level, 1) = 1
+             AND parent.parent_sync_id IS NULL AND parent.parent_name IS NULL
+         )
+         WHERE parent_sync_id IS NULL AND parent_name IS NOT NULL
+           AND (SELECT COUNT(*) FROM user_category_projection parent
+                WHERE parent.user_id = user_category_projection.user_id
+                  AND parent.kind = user_category_projection.kind
+                  AND parent.name = user_category_projection.parent_name
+                  AND parent.sync_id <> user_category_projection.sync_id
+                  AND COALESCE(parent.level, 1) = 1
+                  AND parent.parent_sync_id IS NULL AND parent.parent_name IS NULL) = 1`
+      ).run();
+      await db.prepare(
+        `UPDATE user_category_projection
+         SET parent_name = (
+           SELECT parent.name FROM user_category_projection parent
+           WHERE parent.user_id = user_category_projection.user_id
+             AND parent.kind = user_category_projection.kind
+             AND parent.sync_id = user_category_projection.parent_sync_id
+             AND COALESCE(parent.level, 1) = 1
+         )
+         WHERE parent_sync_id IS NOT NULL
+           AND EXISTS (SELECT 1 FROM user_category_projection parent
+                       WHERE parent.user_id = user_category_projection.user_id
+                         AND parent.kind = user_category_projection.kind
+                         AND parent.sync_id = user_category_projection.parent_sync_id
+                         AND COALESCE(parent.level, 1) = 1)`
+      ).run();
+    } catch { /* 表结构异常时跳过数据修复，不影响初始化主流程 */ }
 
     // 全部 DDL 完成后记录版本，后续冷启动直接短路
     await db.prepare(

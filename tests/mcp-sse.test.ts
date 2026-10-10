@@ -124,7 +124,7 @@ describe('MCP SSE 兼容端点', () => {
     expect(body.result?.serverInfo?.name).toBe('beecount-mcp');
   });
 
-  it('POST /mcp/messages/ tools/list 返回 18 个工具', async () => {
+  it('POST /mcp/messages/ tools/list 返回 19 个工具', async () => {
     const app = createApp();
     const res = await app.request(
       '/mcp/messages/',
@@ -142,7 +142,7 @@ describe('MCP SSE 兼容端点', () => {
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { jsonrpc: string; result?: { tools?: unknown[] } };
-    expect(body.result?.tools?.length).toBe(18);
+    expect(body.result?.tools?.length).toBe(19);
   });
 });
 

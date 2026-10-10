@@ -14,9 +14,10 @@ const EXPECTED_TOOLS: { name: string; params: string[]; required: string[] }[] =
   { name: 'get_ledger_stats', params: ['ledger_id'], required: [] },
   { name: 'get_analytics_summary', params: ['scope', 'period', 'ledger_id'], required: [] },
   { name: 'search', params: ['q', 'limit'], required: ['q'] },
-  { name: 'create_transaction', params: ['amount', 'tx_type', 'category', 'account', 'happened_at', 'time_zone', 'note', 'tags', 'ledger_id', 'currency'], required: ['amount'] },
+  { name: 'upload_attachment', params: ['file_name', 'content_base64', 'ledger_id', 'mime_type'], required: ['file_name', 'content_base64'] },
+  { name: 'create_transaction', params: ['amount', 'tx_type', 'category', 'account', 'happened_at', 'time_zone', 'note', 'tags', 'attachments', 'ledger_id', 'currency'], required: ['amount'] },
   { name: 'create_transactions', params: ['transactions', 'time_zone', 'ledger_id'], required: ['transactions'] },
-  { name: 'update_transaction', params: ['sync_id', 'amount', 'tx_type', 'category', 'account', 'happened_at', 'time_zone', 'note', 'tags'], required: ['sync_id'] },
+  { name: 'update_transaction', params: ['sync_id', 'amount', 'tx_type', 'category', 'account', 'happened_at', 'time_zone', 'note', 'tags', 'attachments'], required: ['sync_id'] },
   { name: 'delete_transaction', params: ['sync_id', 'confirm'], required: ['sync_id'] },
   { name: 'create_category', params: ['name', 'kind', 'parent_name', 'icon', 'ledger_id'], required: ['name'] },
   { name: 'update_budget', params: ['budget_id', 'amount'], required: ['budget_id', 'amount'] },
@@ -34,7 +35,7 @@ const WRITE_ENDPOINTS: Record<string, { method: string; path: string; bodyFields
 };
 
 describe('MCP Tool Definitions', () => {
-  it('should have exactly 18 tools (matching original Python)', () => {
+  it('should have exactly 19 tools (matching original Python)', () => {
     expect(TOOL_DEFS.length).toBe(EXPECTED_TOOLS.length);
   });
 
