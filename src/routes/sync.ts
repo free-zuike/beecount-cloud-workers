@@ -1126,14 +1126,9 @@ syncRouter.get('/pull', async (c) => {
       params.push(ledgerId);
     }
 
-    // 与原版对齐：过滤设备自身变更（依赖 WS 推送获取实时更新）。
-    // SQLite 三值逻辑：NULL != ? 结果为 NULL（视为 false），会把
-    // updated_by_device_id IS NULL 的变更（web 端/恢复/导入创建）误过滤掉，
-    // 导致 app 拉不到这些交易。必须显式放行 NULL。
-    if (deviceId) {
-      query += ' AND (c.updated_by_device_id IS NULL OR c.updated_by_device_id != ?)';
-      params.push(deviceId);
-    }
+    // 不在 SQL 层过滤当前设备的 change。replayAllChanges() 会分页推进 since，
+    // 若只在 since=0 放行本设备历史，第二页开始仍会永久漏掉同设备旧数据。
+    // 响应阶段对当前设备自己的 change 隐藏 device id，让 App 将其作为恢复数据幂等应用。
     
     query += ' ORDER BY c.change_id ASC LIMIT ?';
     params.push(limit + 1);
@@ -1209,7 +1204,7 @@ syncRouter.get('/pull', async (c) => {
           action: c.action,
           payload,
           updated_at: c.updated_at,
-          updated_by_device_id: c.updated_by_device_id ?? null,
+          updated_by_device_id: deviceId && c.updated_by_device_id === deviceId ? null : (c.updated_by_device_id ?? null),
           scope: c.scope || 'ledger',
         };
       }),
