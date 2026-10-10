@@ -31,6 +31,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { insertAuditLog } from '../lib/audit';
+import { categoryRoot, categorySubtreeIds, loadCategoryHierarchy } from '../lib/category-hierarchy';
 
 // ===========================
 // 辅助函数
@@ -276,8 +277,10 @@ workspaceRouter.get('/transactions.csv', async (c) => {
     params.push(accountSyncId, accountSyncId, accountSyncId);
   }
   if (categorySyncId) {
-    txQuery += ' AND category_sync_id = ?';
-    params.push(categorySyncId);
+    const categoryHierarchy = await loadCategoryHierarchy(db, userId);
+    const categoryIds = categorySubtreeIds(categoryHierarchy, categorySyncId);
+    txQuery += ` AND category_sync_id IN (${categoryIds.map(() => '?').join(',')})`;
+    params.push(...categoryIds);
   }
   if (tagSyncId) {
     txQuery += ' AND tag_sync_ids_json LIKE ? ESCAPE ?';
@@ -507,12 +510,23 @@ workspaceRouter.get('/categories', async (c) => {
 
   const catRows = await db.prepare(catQuery).bind(...catParams).all<Record<string, unknown>>();
 
-  // 预聚合每个 category 的 tx_count
+  // 预聚合每个 category 的 tx_count。子分类交易同时向所有父级 roll up；
+  // 子分类自身仍保留 direct count，不复制/改写交易。
   const txCountMap: Record<string, number> = {};
   const txCountQuery = `SELECT category_sync_id, COUNT(*) as cnt FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND category_sync_id IS NOT NULL GROUP BY category_sync_id`;
   const txCountRows = await db.prepare(txCountQuery).bind(...ledgerInternalIds).all<{ category_sync_id: string; cnt: number }>();
-  for (const r of txCountRows.results) {
-    txCountMap[r.category_sync_id] = r.cnt;
+  const categoryHierarchy = await loadCategoryHierarchy(db, filterUserId ?? userId);
+  for (const row of txCountRows.results) {
+    txCountMap[row.category_sync_id] = (txCountMap[row.category_sync_id] ?? 0) + row.cnt;
+    let currentId = row.category_sync_id;
+    const seen = new Set<string>();
+    while (!seen.has(currentId)) {
+      seen.add(currentId);
+      const parentId = categoryHierarchy.parentById.get(currentId);
+      if (!parentId) break;
+      txCountMap[parentId] = (txCountMap[parentId] ?? 0) + row.cnt;
+      currentId = parentId;
+    }
   }
 
   const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string }>();
@@ -712,6 +726,7 @@ workspaceRouter.get('/budgets', async (c) => {
   const budgetRows = await db.prepare(budgetQuery).bind(...budgetParams).all<Record<string, unknown>>();
 
   const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string }>();
+  const categoryHierarchy = await loadCategoryHierarchy(db, userId);
 
   const items = await Promise.all(budgetRows.results.map(async (row) => {
     const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
@@ -742,12 +757,17 @@ workspaceRouter.get('/budgets', async (c) => {
         periodEnd = now.toISOString();
       }
 
+      const categorySyncId = row.budget_type === 'category' ? row.category_sync_id as string | null : null;
+      const categoryIds = categorySyncId ? categorySubtreeIds(categoryHierarchy, categorySyncId) : [];
+      const categoryClause = categoryIds.length > 0
+        ? ` AND category_sync_id IN (${categoryIds.map(() => '?').join(',')})`
+        : '';
       const spentRow = await db.prepare(
-        `SELECT COALESCE(SUM(amount), 0) as total FROM read_tx_projection
+        `SELECT COALESCE(SUM(COALESCE(native_amount, amount)), 0) as total FROM read_tx_projection
          WHERE ledger_id = ? AND tx_type = 'expense'
          AND (exclude_from_budget IS NULL OR exclude_from_budget = 0)
-         AND happened_at >= ? AND happened_at < ?`
-      ).bind(ledgerId, periodStart, periodEnd).first<{ total: number }>();
+         AND happened_at >= ? AND happened_at < ?${categoryClause}`
+      ).bind(ledgerId, periodStart, periodEnd, ...categoryIds).first<{ total: number }>();
       spent = spentRow?.total ?? 0;
     } catch {
       // 计算失败不影响预算列表
@@ -757,7 +777,7 @@ workspaceRouter.get('/budgets', async (c) => {
       id: row.sync_id,
       type: row.budget_type,
       category_id: row.category_sync_id,
-      category_name: null,
+      category_name: row.category_sync_id ? categoryHierarchy.byId.get(row.category_sync_id as string)?.name ?? null : null,
       amount: row.amount,
       period: row.period,
       start_day: row.start_day,
@@ -881,7 +901,7 @@ workspaceRouter.get('/analytics', async (c) => {
   }
 
   // exclude_from_stats=true 的交易不计入收支统计（与原版对齐）
-  let txQuery = `SELECT tx_type, COALESCE(native_amount, amount) as effective_amount, happened_at, category_name FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`;
+  let txQuery = `SELECT tx_type, COALESCE(native_amount, amount) as effective_amount, happened_at, category_sync_id, category_name FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`;
   const txParams: (string | number)[] = [...ledgerInternalIds];
 
   // 计算日期范围（与原版 _analytics_range 对齐）
@@ -947,8 +967,9 @@ workspaceRouter.get('/analytics', async (c) => {
   const txRows = await db
     .prepare(txQuery)
     .bind(...txParams)
-    .all<{ tx_type: string; effective_amount: number; amount: number; happened_at: string; category_name: string | null }>();
+    .all<{ tx_type: string; effective_amount: number; amount: number; happened_at: string; category_sync_id: string | null; category_name: string | null }>();
 
+  const analyticsCategoryHierarchy = await loadCategoryHierarchy(db, filterUserId ?? userId);
   let incomeTotal = 0;
   let expenseTotal = 0;
   const seriesMap: Record<string, { expense: number; income: number }> = {};
@@ -960,6 +981,9 @@ workspaceRouter.get('/analytics', async (c) => {
 
   for (const tx of txRows.results) {
     const amt = Number(tx.effective_amount ?? tx.amount ?? 0);
+    const reportingCategoryName = categoryRoot(analyticsCategoryHierarchy, tx.category_sync_id)?.name
+      ?? tx.category_name
+      ?? 'Uncategorized';
     if (tx.tx_type === 'income') {
       incomeTotal += amt;
     } else if (tx.tx_type === 'expense') {
@@ -1009,19 +1033,19 @@ workspaceRouter.get('/analytics', async (c) => {
     if (!categoryByBucket[bucket]) {
       categoryByBucket[bucket] = {};
     }
-    if (!categoryMap[tx.category_name ?? 'Uncategorized']) {
-      categoryMap[tx.category_name ?? 'Uncategorized'] = { expense: 0, income: 0, count: 0 };
+    if (!categoryMap[reportingCategoryName]) {
+      categoryMap[reportingCategoryName] = { expense: 0, income: 0, count: 0 };
     }
 
     if (tx.tx_type === 'income') {
       seriesMap[bucket].income += amt;
-      categoryMap[tx.category_name ?? 'Uncategorized'].income += amt;
+      categoryMap[reportingCategoryName].income += amt;
     } else if (tx.tx_type === 'expense') {
       seriesMap[bucket].expense += amt;
-      categoryMap[tx.category_name ?? 'Uncategorized'].expense += amt;
-      categoryByBucket[bucket][tx.category_name ?? 'Uncategorized'] = (categoryByBucket[bucket][tx.category_name ?? 'Uncategorized'] ?? 0) + amt;
+      categoryMap[reportingCategoryName].expense += amt;
+      categoryByBucket[bucket][reportingCategoryName] = (categoryByBucket[bucket][reportingCategoryName] ?? 0) + amt;
     }
-    categoryMap[tx.category_name ?? 'Uncategorized'].count += 1;
+    categoryMap[reportingCategoryName].count += 1;
   }
 
   const series = Object.entries(seriesMap)

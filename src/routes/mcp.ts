@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import { serverLogger } from '../lib/logger';
 import { randomUUID } from 'crypto';
 import { createAccessToken } from '../auth';
+import { categoryIdsByExactName, categoryRoot, categorySubtreeIds, loadCategoryHierarchy } from '../lib/category-hierarchy';
 
 function nowUtc(): string { return new Date().toISOString(); }
 async function hashToken(t: string): Promise<string> {
@@ -41,7 +42,7 @@ interface ToolDef { name: string; description: string; inputSchema: Record<strin
 export const TOOL_DEFS: ToolDef[] = [
   { name: 'list_ledgers', description: 'List all ledgers for the authenticated BeeCount user. Returns each ledger\'s id (external_id), name, currency, and created_at. Use the returned id when calling other tools that take ledger_id.', inputSchema: { type: 'object', properties: {} } },
   { name: 'get_active_ledger', description: 'Get the user\'s primary/default ledger. Use this when the user doesn\'t specify which ledger they\'re talking about. Returns null if the user has no ledgers.', inputSchema: { type: 'object', properties: {} } },
-  { name: 'list_transactions', description: 'Query transactions with rich filters. ledger_id: Optional, uses active ledger if omitted. date_from/date_to: ISO dates (YYYY-MM-DD) or full ISO datetimes. category: Exact category name match. account: Exact account name match (matches account/from_account/to_account). min_amount/max_amount: Filter by absolute amount. q: Substring match against note. limit: Max items returned (1..200, default 50).', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' }, date_from: { type: 'string' }, date_to: { type: 'string' }, category: { type: 'string' }, account: { type: 'string' }, min_amount: { type: 'number' }, max_amount: { type: 'number' }, q: { type: 'string' }, limit: { type: 'number', default: 50 } } } },
+  { name: 'list_transactions', description: 'Query transactions with rich filters. ledger_id: Optional, uses active ledger if omitted. date_from/date_to: ISO dates (YYYY-MM-DD) or full ISO datetimes. category: Exact category name match; a top-level category includes its subcategories. account: Exact account name match (matches account/from_account/to_account). min_amount/max_amount: Filter by absolute amount. q: Substring match against note. limit: Max items returned (1..200, default 50).', inputSchema: { type: 'object', properties: { ledger_id: { type: 'string' }, date_from: { type: 'string' }, date_to: { type: 'string' }, category: { type: 'string' }, account: { type: 'string' }, min_amount: { type: 'number' }, max_amount: { type: 'number' }, q: { type: 'string' }, limit: { type: 'number', default: 50 } } } },
   { name: 'get_transaction', description: 'Get a single transaction by its sync_id (cross-ledger lookup).', inputSchema: { type: 'object', properties: { sync_id: { type: 'string' } }, required: ['sync_id'] } },
   { name: 'list_categories', description: 'List user\'s categories. kind is one of: expense, income, transfer.', inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['expense', 'income', 'transfer'] } } } },
   { name: 'list_accounts', description: 'List user\'s accounts. account_type filters by type (bank_card, credit_card, cash, ...).', inputSchema: { type: 'object', properties: { account_type: { type: 'string' } } } },
@@ -364,7 +365,17 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_TIMEZON
         const p: unknown[] = [led.id];
         if (args.date_from) { q += ' AND happened_at >= ?'; p.push(args.date_from); }
         if (args.date_to) { q += ' AND happened_at <= ?'; p.push(args.date_to + 'T23:59:59'); }
-        if (args.category) { q += ' AND category_name = ?'; p.push(args.category); }
+        if (args.category) {
+          const categoryHierarchy = await loadCategoryHierarchy(db, userId);
+          const categoryIds = categoryIdsByExactName(categoryHierarchy, args.category as string);
+          if (categoryIds.length > 0) {
+            q += ` AND category_sync_id IN (${categoryIds.map(() => '?').join(',')})`;
+            p.push(...categoryIds);
+          } else {
+            q += ' AND category_name = ?';
+            p.push(args.category);
+          }
+        }
         if (args.account) { q += ' AND (account_name = ? OR from_account_name = ? OR to_account_name = ?)'; p.push(args.account, args.account, args.account); }
         if (args.min_amount !== undefined && args.min_amount !== null) { q += ' AND ABS(amount) >= ?'; p.push(args.min_amount); }
         if (args.max_amount !== undefined && args.max_amount !== null) { q += ' AND ABS(amount) <= ?'; p.push(args.max_amount); }
@@ -476,8 +487,13 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_TIMEZON
         const items = rows.results as any[];
         const income = items.filter(x => x.tx_type === 'income').reduce((s, x) => s + (x.native_amount ?? x.amount ?? 0), 0);
         const expense = items.filter(x => x.tx_type === 'expense').reduce((s, x) => s + (x.native_amount ?? x.amount ?? 0), 0);
+        const categoryHierarchy = await loadCategoryHierarchy(db, userId);
         const catMap = new Map<string, number>();
-        items.filter(x => x.tx_type === 'expense').forEach(x => { const amt = x.native_amount ?? x.amount ?? 0; const nm = x.category_name || '(未分类)'; catMap.set(nm, (catMap.get(nm) || 0) + amt); });
+        items.filter(x => x.tx_type === 'expense').forEach(x => {
+          const amt = x.native_amount ?? x.amount ?? 0;
+          const nm = categoryRoot(categoryHierarchy, x.category_sync_id)?.name || x.category_name || '(未分类)';
+          catMap.set(nm, (catMap.get(nm) || 0) + amt);
+        });
         const topCats = [...catMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, total]) => ({ name, total: Math.round(total * 100) / 100 }));
         r = { ledger: led.name, scope, period, income: Math.round(income * 100) / 100, expense: Math.round(expense * 100) / 100, balance: Math.round((income - expense) * 100) / 100, transaction_count: items.length, top_categories: topCats.map(t => ({ name: t.name, total: Math.round((t.total as number) * 100) / 100 })) };
         break;
@@ -520,10 +536,14 @@ async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_TIMEZON
         const budgets = await db.prepare('SELECT * FROM read_budget_projection WHERE ledger_id = ?').bind(lid).all();
         const now = new Date(); const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
         const spending = await db.prepare('SELECT category_sync_id, SUM(COALESCE(native_amount, amount)) as spent FROM read_tx_projection WHERE ledger_id = ? AND tx_type = \'expense\' AND happened_at >= ? GROUP BY category_sync_id').bind(lid, monthStart).all();
-        const spentMap = new Map((spending.results as any[]).map(x => [x.category_sync_id, x.spent]));
-        const totalExpense = (spending.results as any[]).reduce((s, x) => s + (x.spent || 0), 0);
+        const spentMap = new Map<string, number>((spending.results as any[]).map(x => [x.category_sync_id, Number(x.spent || 0)]));
+        const totalExpense = (spending.results as any[]).reduce((s, x) => s + Number(x.spent || 0), 0);
+        const categoryHierarchy = await loadCategoryHierarchy(db, userId);
         r = (budgets.results as any[]).map(b => {
-          const spent = (b.budget_type === 'total' || !b.category_sync_id) ? totalExpense : (spentMap.get(b.category_sync_id) || 0);
+          const spent = (b.budget_type === 'total' || !b.category_sync_id)
+            ? totalExpense
+            : categorySubtreeIds(categoryHierarchy, b.category_sync_id as string)
+                .reduce((sum, categoryId) => sum + (spentMap.get(categoryId) || 0), 0);
           const pct = b.amount > 0 ? Math.round((spent / b.amount) * 1000) / 10 : 0;
           return { id: b.sync_id, type: b.budget_type || 'total', amount: b.amount, spent, remaining: Math.max(0, b.amount - spent), percent_used: pct, exceeded: pct > 100 };
         });

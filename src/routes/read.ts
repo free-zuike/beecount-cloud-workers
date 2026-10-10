@@ -22,6 +22,7 @@
 import { Hono } from 'hono';
 
 import { normalizeTransactionAccounts } from '../lib/transaction-normalization';
+import { categorySubtreeIds, loadCategoryHierarchy } from '../lib/category-hierarchy';
 import { serverLogger } from '../lib/logger';
 import { z } from 'zod';
 
@@ -536,8 +537,10 @@ readRouter.get('/workspace/transactions', async (c) => {
     bindings.push(txType);
   }
   if (categorySyncId) {
-    query += ' AND rt.category_sync_id = ?';
-    bindings.push(categorySyncId);
+    const categoryHierarchy = await loadCategoryHierarchy(db, userId);
+    const categoryIds = categorySubtreeIds(categoryHierarchy, categorySyncId);
+    query += ` AND rt.category_sync_id IN (${categoryIds.map(() => '?').join(',')})`;
+    bindings.push(...categoryIds);
   }
   if (accountSyncId) {
     // Account detail must include both ordinary transactions and transfers.
@@ -1530,9 +1533,9 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
   const nextMonth = formatDate(periodEnd);
 
   const budgets = await db
-    .prepare('SELECT sync_id, category_sync_id, amount, period FROM read_budget_projection WHERE ledger_id = ?')
+    .prepare('SELECT sync_id, budget_type, category_sync_id, amount, period FROM read_budget_projection WHERE ledger_id = ?')
     .bind(ledger.id)
-    .all<{ sync_id: string; category_sync_id: string | null; amount: number; period: string }>();
+    .all<{ sync_id: string; budget_type: string; category_sync_id: string | null; amount: number; period: string }>();
 
   const usage: Array<{
     budget_id: string;
@@ -1541,18 +1544,13 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
     spent_amount: number;
     period: string;
   }> = [];
+  const categoryHierarchy = await loadCategoryHierarchy(db, userId);
 
   for (const b of budgets.results) {
     let spent = 0;
-    if (b.category_sync_id) {
-      // 子分类展开：查找所有子分类（用 parent_sync_id 匹配，与原版 _expand_category_to_children 对齐）
-      const categorySyncIds: string[] = [b.category_sync_id];
-      const children = await db
-        .prepare('SELECT sync_id FROM user_category_projection WHERE user_id = ? AND parent_sync_id = ?')
-        .bind(userId, b.category_sync_id)
-        .all<{ sync_id: string }>();
-      categorySyncIds.push(...children.results.map(c => c.sync_id));
-
+    if (b.budget_type === 'category' && b.category_sync_id) {
+      // Parent budgets cover the full category subtree; child budgets remain child-only.
+      const categorySyncIds = categorySubtreeIds(categoryHierarchy, b.category_sync_id);
       const placeholders = categorySyncIds.map(() => '?').join(',');
       const row = await db
         .prepare(`SELECT COALESCE(SUM(COALESCE(native_amount, amount)), 0) as total FROM read_tx_projection

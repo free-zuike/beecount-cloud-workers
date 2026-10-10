@@ -319,8 +319,8 @@ export type WorkspaceCategory = ReadCategory & {
   ledger_name: string | null
   created_by_user_id: string | null
   created_by_email: string | null
-  // 服务端按 category_sync_id 聚合的笔数,跨所有账本累加(跟 dedup 后的展
-  // 示口径一致)。None = 历史接口未提供。
+  // 服务端分类笔数:子分类为自身 direct count;顶级分类为自身 + 全部后代
+  // 的 roll-up count。跨当前查询账本范围累加。None = 历史接口未提供。
   tx_count?: number | null
 }
 

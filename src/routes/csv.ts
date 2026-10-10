@@ -13,6 +13,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
+import { categorySubtreeIds, loadCategoryHierarchy } from '../lib/category-hierarchy';
 
 type Bindings = { DB: D1Database };
 type Variables = { userId: string };
@@ -177,8 +178,10 @@ csvRouter.get('/workspace/transactions.csv', zValidator('query', ExportQuerySche
     txParams.push(`%"${q.tag_sync_id}"%`);
   }
   if (q.category_sync_id) {
-    txQuery += ' AND tx.category_sync_id = ?';
-    txParams.push(q.category_sync_id);
+    const categoryHierarchy = await loadCategoryHierarchy(db, userId);
+    const categoryIds = categorySubtreeIds(categoryHierarchy, q.category_sync_id);
+    txQuery += ` AND tx.category_sync_id IN (${categoryIds.map(() => '?').join(',')})`;
+    txParams.push(...categoryIds);
   }
   if (q.account_sync_id) {
     txQuery += ' AND (tx.account_sync_id = ? OR tx.from_account_sync_id = ? OR tx.to_account_sync_id = ?)';
