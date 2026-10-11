@@ -384,7 +384,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     serverLogger.info('src.routers.sync', '[SYNC] ledgerMap keys:', Object.keys(ledgerMap));
 
     // ====================== 优化2：批量获取现有变更（分更小的批次） ======================
-    const existingChangeMap = new Map<string, { change_id: number; updated_at: string; updated_by_device_id: string | null }>();
+    const existingChangeMap = new Map<string, { change_id: number; updated_at: string; updated_by_device_id: string | null; action: string }>();
     
     if (changes.length > 0) {
       // 准备有效的变更查询参数
@@ -408,7 +408,7 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         const batch = batches[batchIdx];
         if (batch.length === 0) continue;
 
-        let query = `SELECT ledger_id, entity_type, entity_sync_id, change_id, updated_at, updated_by_device_id FROM sync_changes WHERE (`;
+        let query = `SELECT ledger_id, entity_type, entity_sync_id, change_id, updated_at, updated_by_device_id, action FROM sync_changes WHERE (`;
         const params: (string | number)[] = [];
         
         for (let i = 0; i < batch.length; i++) {
@@ -423,12 +423,13 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         const existingChanges = await db
           .prepare(query)
           .bind(...params)
-          .all<{ ledger_id: string; entity_type: string; entity_sync_id: string; change_id: number; updated_at: string; updated_by_device_id: string | null }>();
+          .all<{ ledger_id: string; entity_type: string; entity_sync_id: string; change_id: number; updated_at: string; updated_by_device_id: string | null; action: string }>();
         
         serverLogger.info('src.routers.sync', '[SYNC] Batch', batchIdx + 1, 'found', existingChanges.results.length, 'changes');
         for (const change of existingChanges.results) {
           const key = `${change.ledger_id}:${change.entity_type}:${change.entity_sync_id}`;
-          existingChangeMap.set(key, change);
+          const prev = existingChangeMap.get(key);
+          if (!prev || change.change_id > prev.change_id) existingChangeMap.set(key, change);
         }
       }
     }
@@ -444,7 +445,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
     for (let i = 0; i < userGlobalEntries.length; i += 30) {
       const batch = userGlobalEntries.slice(i, i + 30);
       if (batch.length === 0) continue;
-      let q = `SELECT entity_type, entity_sync_id, change_id, updated_at, updated_by_device_id FROM sync_changes WHERE scope = 'user' AND user_id = ? AND (`;
+      let q = `SELECT entity_type, entity_sync_id, change_id, updated_at, updated_by_device_id, action FROM sync_changes WHERE scope = 'user' AND user_id = ? AND (`;
       const p: (string | number)[] = [userId];
       for (let j = 0; j < batch.length; j++) {
         if (j > 0) q += ' OR ';
@@ -452,10 +453,11 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         p.push(batch[j].entity_type, batch[j].entity_sync_id);
       }
       q += ')';
-      const rows = await db.prepare(q).bind(...p).all<{ entity_type: string; entity_sync_id: string; change_id: number; updated_at: string; updated_by_device_id: string | null }>();
+      const rows = await db.prepare(q).bind(...p).all<{ entity_type: string; entity_sync_id: string; change_id: number; updated_at: string; updated_by_device_id: string | null; action: string }>();
       for (const r of rows.results) {
         const key = `user:${userId}:${r.entity_type}:${r.entity_sync_id}`;
-        existingChangeMap.set(key, r);
+        const prev = existingChangeMap.get(key);
+        if (!prev || r.change_id > prev.change_id) existingChangeMap.set(key, r);
       }
     }
     serverLogger.info('src.routers.sync', '[SYNC] existingChangeMap size after user-global:', existingChangeMap.size);
@@ -556,6 +558,33 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         }
 
         const latestChange = existingChangeMap.get(key);
+
+        // Tombstone dominance: 删除后的同一 sync_id 不允许普通 upsert 复活。
+        // 正常重新创建实体会生成新的 sync_id；允许旧设备用更晚 updated_at
+        // 覆盖 delete 会导致已清理账户/分类/交易被离线设备重新污染云端。
+        if (latestChange?.action === 'delete' && change.action === 'upsert') {
+          rejected++;
+          conflictCount++;
+          serverLogger.info('src.routers.sync', '[SYNC] REJECTED - tombstone resurrection:', change.entity_type, change.entity_sync_id, 'delete_change_id:', latestChange.change_id);
+          const conflictSample = {
+            reason: 'tombstone_resurrection_rejected',
+            ledgerId: change.ledger_id,
+            entityType: change.entity_type,
+            entitySyncId: change.entity_sync_id,
+            existingChangeId: latestChange.change_id,
+          };
+          if (conflictList.length < 20) conflictList.push(conflictSample);
+          conflictAuditStmts.push(
+            db.prepare(
+              `INSERT INTO audit_logs (user_id, ledger_id, action, metadata_json)
+               VALUES (?, ?, 'sync_push', ?)`
+            ).bind(
+              userId, isUserGlobal ? null : (ledgerRowId ?? null),
+              safeJsonStringify({ entityType: 'sync_conflict', entityId: null, details: conflictSample, level: 'INFO', logger: null }),
+            ),
+          );
+          continue;
+        }
 
         const incomingTuple = { ts: clampedUpdatedAt.getTime(), deviceId };
         let existingTuple: { ts: number; deviceId: string; changeId: number } | null = null;
@@ -712,7 +741,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           processedChanges.push({ change, ledgerRow, newChangeId: changeId });
           // 更新冲突 map：同批内后续重复实体按幂等跳过（对齐原版 flush 语义）
           if (lwwKey) {
-            existingChangeMap.set(lwwKey, { change_id: changeId, updated_at: lwwTs, updated_by_device_id: lwwDevice });
+            existingChangeMap.set(lwwKey, { change_id: changeId, updated_at: lwwTs, updated_by_device_id: lwwDevice, action: change.action });
           }
         }
 
