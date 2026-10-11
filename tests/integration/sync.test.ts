@@ -196,6 +196,59 @@ describe('Sync - Pull', () => {
     expect(typeof body.has_more).toBe('boolean');
   });
 
+  it('should include same-device history when rebuilding from since=0', async () => {
+    const txSyncId = crypto.randomUUID();
+    const pushRes = await env.app.request('/api/v1/sync/push', {
+      method: 'POST',
+      headers: pushHeaders(),
+      body: JSON.stringify({
+        device_id: TEST_DEVICE_ID,
+        changes: [{
+          ledger_id: ledgerId,
+          entity_type: 'transaction',
+          entity_sync_id: txSyncId,
+          action: 'upsert',
+          payload: { tx_type: 'expense', amount: 12.34, happened_at: '2025-01-15T10:30:00.000Z', note: 'same-device rebuild' },
+          updated_at: new Date().toISOString(),
+        }],
+      }),
+    });
+    expect(pushRes.status).toBe(200);
+
+    const pullRes = await env.app.request(`/api/v1/sync/pull?device_id=${TEST_DEVICE_ID}&since=0`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(pullRes.status).toBe(200);
+    const body = await pullRes.json() as any;
+    const replayed = body.changes.find((c: any) => c.entity_sync_id === txSyncId);
+    expect(replayed).toBeDefined();
+    expect(replayed.updated_by_device_id).toBeNull();
+  });
+
+  it('should keep same-device history replayable after the cursor advances', async () => {
+    const txSyncId = crypto.randomUUID();
+    await env.app.request('/api/v1/sync/push', {
+      method: 'POST', headers: pushHeaders(),
+      body: JSON.stringify({ device_id: TEST_DEVICE_ID, changes: [{
+        ledger_id: ledgerId, entity_type: 'transaction', entity_sync_id: txSyncId, action: 'upsert',
+        payload: { type: 'expense', amount: 1, happenedAt: '2025-01-15T10:30:00.000Z' },
+        updated_at: new Date().toISOString(),
+      }] }),
+    });
+    const stored = getTable(env.db, 'sync_changes').find((row: any) => row.entity_sync_id === txSyncId);
+    const storedChangeId = Number(stored?.change_id ?? 0);
+    expect(storedChangeId).toBeGreaterThan(1);
+
+    const pullRes = await env.app.request(`/api/v1/sync/pull?device_id=${TEST_DEVICE_ID}&since=${storedChangeId - 1}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(pullRes.status).toBe(200);
+    const body = await pullRes.json() as any;
+    const replayed = body.changes.find((c: any) => c.entity_sync_id === txSyncId);
+    expect(replayed).toBeDefined();
+    expect(replayed.updated_by_device_id).toBeNull();
+  });
+
   it('should return empty when no new changes', async () => {
     const res = await env.app.request(`/api/v1/sync/pull?device_id=${TEST_DEVICE_ID}&since=999999999`, {
       headers: { Authorization: `Bearer ${token}` },
