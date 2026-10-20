@@ -63,16 +63,14 @@ type AmountProps = {
    */
   sign?: 'auto' | 'always' | 'never'
   /**
-   * 数字是否做"上下翻页"(odometer 滚轮)动画 —— 每个数字位垂直滚动到目标值,
-   * 非数字字符(¥ / 万 / k·M / 小数点 / 正负号)保持不动。先用 renderAmount 算出
-   * 终值字符串再逐位滚动,因此业务格式完整保留,也不会跨"万"档位时抖动。
+   * 是否对完整终值文本做位移淡入。DOM 只包含最终金额，复制、读屏与视觉值一致。
    * 默认 false —— 仅在仪表盘大数字等高价值位置显式开启,列表/表格保持安静。
    * 自动尊重 prefers-reduced-motion(命中时直接展示终值,不滚动)。
    */
   animate?: boolean
-  /** 翻滚时长(秒),默认 0.6。 */
+  /** 淡入时长(秒),默认 0.6。 */
   animateDuration?: number
-  /** 首次翻滚前的延迟(秒),默认 0 —— 用于"卡片先入场、数字再滚动"的编排;后续数值变化不受影响,立即滚。 */
+  /** 淡入前的延迟(秒),默认 0。 */
   animateDelay?: number
 }
 
@@ -117,39 +115,19 @@ export function Amount({
   if (shouldRoll) {
     return (
       <span className={classes}>
-        <AnimatedAmountText text={text} duration={animateDuration} delay={animateDelay} />
+        <RollingNumber text={text} duration={animateDuration} delay={animateDelay} />
       </span>
     )
   }
   return <span className={classes}>{text}</span>
 }
 
-/**
- * 动画金额只保留一个最终文本节点。旧 odometer 实现为每个数字位渲染 0-9
- * 十个节点,视觉上虽然裁剪,但复制文本/无障碍树/WebView 文本提取会把这些内部
- * 数字全部暴露出来。这里改成整段金额的轻微淡入+上移,DOM textContent 永远就是
- * 用户实际看到的最终金额。key=text 让金额变化时重新触发一次短动画。
- */
-function AnimatedAmountText({
-  text,
-  duration,
-  delay
-}: {
-  text: string
-  duration: number
-  delay: number
-}) {
-  return (
-    <motion.span
-      key={text}
-      initial={{ opacity: 0, y: '0.2em' }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration, delay, ease: [0.16, 1, 0.3, 1] }}
-      style={{ display: 'inline-block', whiteSpace: 'nowrap' }}
-    >
-      {text}
-    </motion.span>
-  )
+/** A single text node keeps copied and accessible amounts identical to the visual value. */
+function RollingNumber({ text, duration, delay }: { text: string; duration: number; delay: number }) {
+  return <motion.span key={text}
+    style={{ display: 'inline-block', whiteSpace: 'nowrap' }}
+    initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+    transition={{ duration, delay }}>{text}</motion.span>
 }
 
 function renderAmount({

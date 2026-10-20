@@ -1739,4 +1739,194 @@ readRouter.get('/debug/sync-changes', async (c) => {
   return c.json({ changes: changes.results });
 });
 
+// ---------------------------------------------------------------------------
+// GET /read/workspace/attachments - 票据墙：当前账本附件按文件去重分页
+// （对齐上游 read/attachment_gallery.py 的 GalleryAttachmentPageOut 契约）
+// ---------------------------------------------------------------------------
+type GalleryRef = {
+  file_key: string;
+  cloud_file_id: string | null;
+  ref: Record<string, unknown>;
+  original_name: string | null;
+  file_name: string | null;
+  sync_id: string;
+  ledger_external_id: string;
+  happened_at: string;
+  note: string | null;
+  category_name: string | null;
+  category_sync_id: string | null;
+  amount: number;
+  tx_type: string;
+  currency_code: string | null;
+  native_amount: number | null;
+  account_name: string | null;
+};
+
+readRouter.get('/workspace/attachments', async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+
+  const ledgerExternalId = c.req.query('ledger_id') ?? null;
+  const q = c.req.query('q') ?? null;
+  const categorySyncId = c.req.query('category_sync_id') ?? null;
+  const dateFrom = c.req.query('date_from') ?? null;
+  const dateTo = c.req.query('date_to') ?? null;
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '40', 10), 100);
+  const offset = Math.max(parseInt(c.req.query('offset') ?? '0', 10), 0);
+
+  if (!ledgerExternalId) {
+    return c.json({ items: [], total: 0, transaction_total: 0, limit, offset });
+  }
+
+  // 账本访问校验（支持共享账本，与 /workspace/transactions 同口径）
+  let ledger = await db
+    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
+    .bind(userId, ledgerExternalId)
+    .first<{ id: string; external_id: string }>();
+  if (!ledger) {
+    ledger = await db
+      .prepare('SELECT l.id, l.external_id FROM ledgers l JOIN ledger_members lm ON l.id = lm.ledger_id WHERE lm.user_id = ? AND l.external_id = ?')
+      .bind(userId, ledgerExternalId)
+      .first<{ id: string; external_id: string }>();
+  }
+  if (!ledger) {
+    return c.json({ items: [], total: 0, transaction_total: 0, limit, offset });
+  }
+
+  // 拉取该账本全部带附件的交易（票据墙默认全量，账本级数据量可控）
+  let query = `SELECT sync_id, happened_at, note, category_name, category_sync_id, amount, tx_type,
+                      currency_code, native_amount, account_name, attachments_json
+               FROM read_tx_projection
+               WHERE ledger_id = ? AND attachments_json IS NOT NULL AND attachments_json != ''`;
+  const bindings: (string | number)[] = [ledger.id];
+  if (dateFrom) { query += ' AND happened_at >= ?'; bindings.push(dateFrom); }
+  if (dateTo) { query += ' AND happened_at < ?'; bindings.push(dateTo); }
+  if (categorySyncId) { query += ' AND category_sync_id = ?'; bindings.push(categorySyncId); }
+  query += ' ORDER BY happened_at DESC';
+  const txs = await db.prepare(query).bind(...bindings).all<{
+    sync_id: string; happened_at: string; note: string | null; category_name: string | null;
+    category_sync_id: string | null; amount: number; tx_type: string; currency_code: string | null;
+    native_amount: number | null; account_name: string | null; attachments_json: string;
+  }>();
+
+  // 在应用层展开 attachments_json 数组（对齐上游 json_each 展开语义）
+  const refs: GalleryRef[] = [];
+  for (const tx of txs.results) {
+    let atts: unknown;
+    try { atts = JSON.parse(tx.attachments_json); } catch { continue; }
+    if (!Array.isArray(atts)) continue;
+    atts.forEach((raw, index) => {
+      if (!raw || typeof raw !== 'object') return;
+      const att = raw as Record<string, unknown>;
+      const cloudFileId = typeof att.cloudFileId === 'string' && att.cloudFileId.trim() ? att.cloudFileId.trim() : null;
+      const originalName = typeof att.originalName === 'string' ? att.originalName : null;
+      const fileName = typeof att.fileName === 'string' ? att.fileName : null;
+      const fileKey = cloudFileId ?? `local:${tx.sync_id}:${index}`;
+      refs.push({
+        file_key: fileKey,
+        cloud_file_id: cloudFileId,
+        ref: att,
+        original_name: originalName,
+        file_name: fileName,
+        sync_id: tx.sync_id,
+        ledger_external_id: ledger!.external_id,
+        happened_at: tx.happened_at,
+        note: tx.note,
+        category_name: tx.category_name,
+        category_sync_id: tx.category_sync_id,
+        amount: Number(tx.amount || 0),
+        tx_type: tx.tx_type,
+        currency_code: tx.currency_code,
+        native_amount: tx.native_amount,
+        account_name: tx.account_name,
+      });
+    });
+  }
+
+  // q 搜索：对齐上游对 original_name/file_name/note/category_name/account_name/amount 的 ilike
+  let filtered = refs;
+  if (q && q.trim()) {
+    const pattern = q.trim().toLowerCase();
+    filtered = filtered.filter((r) => {
+      const amountStr = String(r.amount);
+      return [r.original_name, r.file_name, r.note, r.category_name, r.account_name]
+        .concat(amountStr)
+        .some((v) => v !== null && v !== undefined && String(v).toLowerCase().includes(pattern));
+    });
+  }
+
+  // 按 file_key 去重分组，取最近 happened_at
+  const byKey = new Map<string, GalleryRef>();
+  for (const r of filtered) {
+    const existing = byKey.get(r.file_key);
+    if (!existing || r.happened_at > existing.happened_at) byKey.set(r.file_key, r);
+  }
+  const keys = [...byKey.keys()].sort((a, b) => {
+    const ha = byKey.get(a)!.happened_at;
+    const hb = byKey.get(b)!.happened_at;
+    return ha === hb ? (a < b ? -1 : a > b ? 1 : 0) : (ha < hb ? 1 : -1);
+  });
+  const total = keys.length;
+  const transactionTotal = new Set(filtered.map((r) => r.sync_id)).size;
+  const pageKeys = keys.slice(offset, offset + limit);
+  if (pageKeys.length === 0) {
+    return c.json({ items: [], total, transaction_total: transactionTotal, limit, offset });
+  }
+
+  // 页面内全部关联交易（一次查询）
+  const pageRefs = filtered.filter((r) => pageKeys.includes(r.file_key));
+  const cloudIds = [...new Set(pageRefs.map((r) => r.cloud_file_id).filter((v): v is string => Boolean(v)))];
+  const stored = new Map<string, { mime_type: string | null }>();
+  if (cloudIds.length > 0) {
+    const placeholders = cloudIds.map(() => '?').join(',');
+    const rows = await db.prepare(
+      `SELECT id, mime_type FROM attachment_files
+       WHERE id IN (${placeholders}) AND ledger_id = ? AND attachment_kind = 'transaction'`
+    ).bind(...cloudIds, ledger.id).all<{ id: string; mime_type: string | null }>();
+    for (const row of rows.results) stored.set(row.id, row);
+  }
+
+  const seen = new Set<string>();
+  const pageTxSyncIds = new Set<string>();
+  for (const r of pageRefs) {
+    const key = `${r.file_key}:${r.sync_id}`;
+    if (!seen.has(key)) { seen.add(key); pageTxSyncIds.add(r.sync_id); }
+  }
+
+  const items = pageKeys.map((key) => {
+    const head = byKey.get(key)!;
+    const related = pageRefs.filter((r) => r.file_key === key);
+    const txSeen = new Set<string>();
+    const transactions: Record<string, unknown>[] = [];
+    for (const r of related) {
+      if (txSeen.has(r.sync_id)) continue;
+      txSeen.add(r.sync_id);
+      transactions.push({
+        id: r.sync_id,
+        ledger_id: r.ledger_external_id,
+        note: r.note,
+        category_name: r.category_name,
+        category_id: r.category_sync_id,
+        amount: r.amount,
+        tx_type: r.tx_type,
+        currency_code: r.currency_code,
+        native_amount: r.native_amount,
+        happened_at: r.happened_at,
+      });
+    }
+    const file = head.cloud_file_id ? stored.get(head.cloud_file_id) : undefined;
+    const status = !head.cloud_file_id ? 'pending' : file ? 'ready' : 'missing';
+    return {
+      key,
+      attachment: head.ref,
+      happened_at: head.happened_at,
+      mime_type: file?.mime_type ?? null,
+      status,
+      transactions,
+    };
+  });
+
+  return c.json({ items, total, transaction_total: transactionTotal, limit, offset });
+});
+
 export default readRouter;

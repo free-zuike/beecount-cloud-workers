@@ -10,6 +10,7 @@ import {
   type WorkspaceTransaction,
 } from '@beecount/api-client'
 
+import { useAttachmentPreview } from '../context/AttachmentPreviewContext'
 import { useAttachmentCache } from '../context/AttachmentCacheContext'
 import { useAuth } from '../context/AuthContext'
 import { useLedgers } from '../context/LedgersContext'
@@ -51,7 +52,8 @@ export function GlobalEntityDialogs() {
   const navigate = useNavigate()
   const { token } = useAuth()
   const { activeLedgerId, currentLedger, currency: activeCurrency } = useLedgers()
-  const { previewMap: iconPreviewByFileId } = useAttachmentCache()
+  const { previewMap: iconPreviewByFileId, resolvePreview } = useAttachmentCache()
+  const previewAttachment = useAttachmentPreview()
 
   // 4 个独立 state — 互不影响,可同时打开(不太可能但理论支持)
   const [tx, setTx] = useState<WorkspaceTransaction | null>(null)
@@ -99,11 +101,11 @@ export function GlobalEntityDialogs() {
   }, [token])
 
   const loadAccountTxs = useCallback(
-    async (accountSyncId: string, scope: DetailScope, offset: number) => {
+    async (accountName: string, scope: DetailScope, offset: number) => {
       setAccountLoading(true)
       try {
         const page = await fetchWorkspaceTransactions(token, {
-          accountSyncId,
+          accountName,
           ledgerId: scope === 'current' ? activeLedgerId || undefined : undefined,
           limit: DETAIL_PAGE_SIZE,
           offset,
@@ -128,7 +130,7 @@ export function GlobalEntityDialogs() {
       setAccountTxs([])
       setAccountTotal(0)
       setAccountOffset(0)
-      void loadAccountTxs(acc.id, defaultScope, 0)
+      void loadAccountTxs(acc.name, defaultScope, 0)
       // 同时拉一份 tags 字典(如还没拉)
       if (tagsDict.length === 0) {
         void fetchWorkspaceTags(token, { limit: 500 }).then(setTagsDict).catch(() => undefined)
@@ -143,7 +145,7 @@ export function GlobalEntityDialogs() {
       setAccountTxs([])
       setAccountTotal(0)
       setAccountOffset(0)
-      void loadAccountTxs(account.id, next, 0)
+      void loadAccountTxs(account.name, next, 0)
     },
     [account, accountScope, loadAccountTxs],
   )
@@ -329,10 +331,13 @@ export function GlobalEntityDialogs() {
         offset={accountOffset}
         loading={accountLoading}
         tags={tagsDict}
+        onPreviewAttachment={previewAttachment}
+        resolveAttachmentPreviewUrl={ref => resolvePreview(ref.cloudFileId || '')}
         onClose={() => setAccount(null)}
-        onLoadMore={(accountId, off) => void loadAccountTxs(accountId, accountScope, off)}
+        onLoadMore={(name, off) => void loadAccountTxs(name, accountScope, off)}
       />
       <CategoryDetailDialog
+        onPreviewAttachment={previewAttachment}
         category={category}
         scope={categoryScope}
         onScopeChange={handleCategoryScopeChange}
@@ -362,6 +367,8 @@ export function GlobalEntityDialogs() {
         loading={tagLoading}
         tags={tagsDict}
         tagStatsById={{}}
+        onPreviewAttachment={previewAttachment}
+        resolveAttachmentPreviewUrl={ref => resolvePreview(ref.cloudFileId || '')}
         onClose={() => setTag(null)}
         onLoadMore={(syncId, off) => void loadTagTxs(syncId, tagScope, off)}
       />

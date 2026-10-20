@@ -9,7 +9,7 @@ vi.mock('@beecount/ui', async (importOriginal) => ({
   useT: () => (key: string) => key === 'common.total' ? '合计' : key === 'common.unit.10k' ? '万' : key,
 }))
 
-function group(type: string, label: string, value: number): AssetGroup {
+function group(type: string, label: string, value: number, negativeAssetTotal = 0): AssetGroup {
   return {
     type,
     label,
@@ -17,16 +17,18 @@ function group(type: string, label: string, value: number): AssetGroup {
     isLiability: false,
     rows: [],
     subtotals: [{ currency: 'CNY', value }],
+    positiveAssetTotal: Math.max(value, 0),
+    negativeAssetTotal: Math.min(value, 0) !== 0 ? negativeAssetTotal : undefined,
   }
 }
 
 describe('Accounts asset composition', () => {
-  it('uses signed asset total and does not turn negative asset balances into positive slices', () => {
+  it('uses positive asset total and does not net off negative balances (对齐上游 #128)', () => {
     const html = renderToStaticMarkup(
       <AssetsCompositionMini
         groups={[
           group('bank_card', '银行卡', 100),
-          group('alipay', '支付宝', -20),
+          group('alipay', '支付宝', -20, -20),
           group('wechat', '微信', 20),
         ]}
         currency="CNY"
@@ -34,8 +36,10 @@ describe('Accounts asset composition', () => {
       />,
     )
 
-    // Signed assets: 100 - 20 + 20 = 100. The old abs() bug displayed 140.
-    expect(html).toContain('¥100.00')
+    // Positive positions: 100 + 20 = 120. Negative asset groups are offsets
+    // reported separately, not netted against the composition total.
+    expect(html).toContain('¥120.00')
+    expect(html).not.toContain('¥100.00')
     expect(html).not.toContain('¥140.00')
     // Negative asset groups are offsets, not positive composition slices.
     expect(html).toContain('银行卡')
@@ -44,5 +48,7 @@ describe('Accounts asset composition', () => {
     // Percentages are based only on displayed positive slices: 100 / 120 and 20 / 120.
     expect(html).toContain('83.3%')
     expect(html).toContain('16.7%')
+    // Negative assets reported as a footnote.
+    expect(html).toContain('accounts.negativeAssets')
   })
 })

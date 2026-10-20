@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import {
@@ -22,7 +22,6 @@ import { useLedgers } from '../../context/LedgersContext'
 import { usePageCache } from '../../context/PageDataCacheContext'
 import { useSyncRefresh } from '../../context/SyncSocketContext'
 import { setAppBadge } from '../../lib/pwa-badge'
-import { mergeOverviewAccounts } from '../../lib/overviewAccounts'
 import { dispatchOpenDetailCategory } from '../../lib/txDialogEvents'
 
 /**
@@ -98,14 +97,16 @@ export function OverviewPage() {
   const loadAccountsAndTags = useCallback(async () => {
     if (!activeLedgerId) return
     try {
-      const [globalAccounts, ledgerAccounts, tg] = await Promise.all([
-        // 真实当前余额：账户是 user-global，必须与资产页使用相同的全局口径。
-        fetchWorkspaceAccounts(token, { limit: 500 }),
-        // 当前账本活动：仅用于 tx_count / income_total / expense_total。
+      const [a, globalAccounts, tg] = await Promise.all([
         fetchWorkspaceAccounts(token, { ledgerId: activeLedgerId, limit: 500 }),
+        fetchWorkspaceAccounts(token, { limit: 500 }),
         fetchWorkspaceTags(token, { ledgerId: activeLedgerId, limit: 500 }),
       ])
-      setAccounts(mergeOverviewAccounts(globalAccounts, ledgerAccounts))
+      const balances = new Map(globalAccounts.map((row) => [row.id, row]))
+      setAccounts(a.flatMap((row) => {
+        const full = balances.get(row.id)
+        return full ? [{ ...row, balance: full.balance, currency: full.currency }] : []
+      }))
       setTags(tg)
     } catch {
       // dashboard 静默降级

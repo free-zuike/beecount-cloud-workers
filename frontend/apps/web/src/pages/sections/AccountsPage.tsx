@@ -64,6 +64,7 @@ import { useSyncRefresh } from '../../context/SyncSocketContext'
 import { localizeError } from '../../i18n/errors'
 import { useLedgerWrite } from '../../app/useLedgerWrite'
 
+const VALUATION_ACCOUNT_TYPES = new Set(['real_estate', 'vehicle', 'investment', 'insurance', 'social_fund', 'loan'])
 const ACCOUNT_DETAIL_PAGE_SIZE = 20
 const BALANCE_SETTLEMENT_CATEGORY_NAME = '平账'
 
@@ -73,6 +74,7 @@ type BalanceAdjustmentDraft = {
   current: number
   difference: number | null
   step: 'input' | 'choice'
+  overpayment: boolean
 }
 
 // 资产汇总卡内「构成 / 走势」tab 的设备级持久化(key/类型见 assetViewPrefs)。
@@ -231,7 +233,7 @@ export function AccountsPage() {
       return false
     }
     const initialBalanceNum = Number(form.initial_balance || 0)
-    if (!Number.isFinite(initialBalanceNum)) {
+    if (!Number.isFinite(initialBalanceNum) || (form.account_type === 'credit_card' && initialBalanceNum < 0)) {
       toast.error(t('accounts.error.balanceInvalid'), t('notice.error'))
       return false
     }
@@ -239,25 +241,30 @@ export function AccountsPage() {
     // 走 onFormChange 切换类型时已经清空,这里再 guard 一次。
     const billingDayNum =
       form.account_type === 'credit_card' && form.billing_day.trim()
-        ? Math.round(Number(form.billing_day))
+        ? Number(form.billing_day)
         : null
-    if (billingDayNum !== null && (!Number.isFinite(billingDayNum) || billingDayNum < 1 || billingDayNum > 31)) {
+    if (billingDayNum !== null && (!Number.isInteger(billingDayNum) || billingDayNum < 1 || billingDayNum > 31)) {
       toast.error(t('accounts.error.billingDayInvalid'), t('notice.error'))
       return false
     }
     const paymentDueDayNum =
       form.account_type === 'credit_card' && form.payment_due_day.trim()
-        ? Math.round(Number(form.payment_due_day))
+        ? Number(form.payment_due_day)
         : null
-    if (paymentDueDayNum !== null && (!Number.isFinite(paymentDueDayNum) || paymentDueDayNum < 1 || paymentDueDayNum > 31)) {
+    if (paymentDueDayNum !== null && (!Number.isInteger(paymentDueDayNum) || paymentDueDayNum < 1 || paymentDueDayNum > 31)) {
       toast.error(t('accounts.error.paymentDueDayInvalid'), t('notice.error'))
       return false
     }
     const creditLimitRaw = form.credit_limit.trim()
     const creditLimitNum =
       form.account_type === 'credit_card' && creditLimitRaw ? Number(creditLimitRaw) : null
-    if (creditLimitNum !== null && (!Number.isFinite(creditLimitNum) || creditLimitNum < 0)) {
+    if (creditLimitNum !== null && (!Number.isFinite(creditLimitNum) || creditLimitNum <= 0)) {
       toast.error(t('accounts.error.creditLimitInvalid'), t('notice.error'))
+      return false
+    }
+    const editing = rows.find((row) => row.id === form.editingId)
+    if (editing && (editing.tx_count ?? 0) > 0 && editing.currency !== form.currency) {
+      toast.error(t('accounts.error.currencyLocked'), t('notice.error'))
       return false
     }
     try {
@@ -267,7 +274,7 @@ export function AccountsPage() {
         name: trimmedName,
         account_type: form.account_type || null,
         currency: form.currency || null,
-        initial_balance: initialBalanceNum,
+        ...(!form.editingId || VALUATION_ACCOUNT_TYPES.has(form.account_type) ? { initial_balance: form.account_type === 'credit_card' && form.credit_balance_state === 'debt' ? -initialBalanceNum : initialBalanceNum } : {}),
         // 扩展字段:non-credit_card 类型显式传 null 清空 server 上残留的值;
         // bank_card / credit_card 才有 bank_name / card_last_four。
         note: form.note.trim() || null,
@@ -327,7 +334,8 @@ export function AccountsPage() {
     const current = workspaceRow.balance ?? workspaceRow.initial_balance ?? 0
     setBalanceAdjustment({
       row: workspaceRow,
-      target: current.toFixed(2),
+      target: (row.account_type === 'credit_card' ? Math.abs(current) : current).toFixed(2),
+      overpayment: current > 0,
       current,
       difference: null,
       step: 'input',
@@ -336,8 +344,10 @@ export function AccountsPage() {
 
   const continueBalanceAdjustment = () => {
     if (!balanceAdjustment) return
-    const target = Number(balanceAdjustment.target.trim())
-    if (!Number.isFinite(target)) {
+    const entered = Number(balanceAdjustment.target.trim())
+    const target = balanceAdjustment.row.account_type === 'credit_card'
+      ? (balanceAdjustment.overpayment ? entered : -entered) : entered
+    if (!Number.isFinite(target) || (balanceAdjustment.row.account_type === 'credit_card' && entered < 0)) {
       toast.error(t('accounts.error.balanceInvalid'), t('notice.error'))
       return
     }
@@ -352,7 +362,9 @@ export function AccountsPage() {
 
   const commitBalanceAdjustment = async (createAdjustment: boolean) => {
     if (!balanceAdjustment || balanceAdjustment.difference === null || !activeLedgerId) return
-    const target = Number(balanceAdjustment.target.trim())
+    const entered = Number(balanceAdjustment.target.trim())
+    const target = balanceAdjustment.row.account_type === 'credit_card'
+      ? (balanceAdjustment.overpayment ? entered : -entered) : entered
     try {
       // 余额可能在打开弹窗后被其它设备改过；提交前重新取快照，保证差额和
       // 基线计算使用同一份最新数据，而不是依赖弹窗打开时的旧值。
@@ -553,12 +565,12 @@ export function AccountsPage() {
           <CardContent className="space-y-3 p-5">
             <div className="min-w-0 space-y-1">
               <p className="text-xs text-muted-foreground">
-                {converted.rateDate
+                {!converted.singleCurrency
                   ? t('accounts.converted.netWorth', { currency: converted.base })
                   : t('accounts.netWorth')}
               </p>
               <div className="flex items-baseline gap-1">
-                {converted.rateDate ? (
+                {!converted.singleCurrency ? (
                   <span className="font-mono text-sm text-muted-foreground">≈</span>
                 ) : null}
                 <Amount
@@ -580,7 +592,7 @@ export function AccountsPage() {
                   {t('accounts.assets')}
                 </div>
                 <div className="mt-0.5 flex items-baseline gap-1">
-                  {converted.rateDate ? (
+                  {!converted.singleCurrency ? (
                     <span className="font-mono text-xs text-muted-foreground">≈</span>
                   ) : null}
                   <Amount
@@ -598,7 +610,7 @@ export function AccountsPage() {
                   {t('accounts.liabilities')}
                 </div>
                 <div className="mt-0.5 flex items-baseline gap-1">
-                  {converted.rateDate ? (
+                  {!converted.singleCurrency ? (
                     <span className="font-mono text-xs text-muted-foreground">≈</span>
                   ) : null}
                   <Amount
@@ -642,19 +654,19 @@ export function AccountsPage() {
                   currency={converted.base}
                   showCurrency
                   embedded
-                  approx={Boolean(converted.rateDate)}
+                  approx={!converted.singleCurrency}
                 />
               ) : null}
             </div>
 
             {/* 脚注 + 详情:仅多币种折算态出现(单币种 rateDate 为空,
                 既无汇率脚注也无分币种明细可看)。 */}
-            {converted.rateDate ? (
+            {!converted.singleCurrency ? (
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 pt-1">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                  <span className="text-[11px] text-muted-foreground">
+                  {converted.rateDate ? <span className="text-[11px] text-muted-foreground">
                     {t('accounts.converted.footnote', { date: converted.rateDate })}
-                  </span>
+                  </span> : null}
                   {converted.missing.length > 0 ? (
                     <span className="text-[11px] text-amber-600 dark:text-amber-500">
                       {t('accounts.converted.missing', {
@@ -686,7 +698,10 @@ export function AccountsPage() {
             name: row.name,
             account_type: row.account_type || '',
             currency: row.currency || '',
-            initial_balance: String(row.initial_balance ?? 0),
+            initial_balance: String(row.account_type === 'credit_card'
+              ? Math.abs(rows.find((a) => a.id === row.id)?.balance ?? row.initial_balance ?? 0)
+              : rows.find((a) => a.id === row.id)?.balance ?? row.initial_balance ?? 0),
+            credit_balance_state: (rows.find((a) => a.id === row.id)?.balance ?? row.initial_balance ?? 0) > 0 ? 'overpayment' : 'debt',
             note: row.note ?? '',
             credit_limit: row.credit_limit !== null && row.credit_limit !== undefined
               ? String(row.credit_limit)
@@ -746,7 +761,15 @@ export function AccountsPage() {
                     })}
                   </div>
                   <div className="space-y-1">
-                    <Label>{t('accounts.balance.adjust.target')}</Label>
+                    <Label>{balanceAdjustment.row.account_type === 'credit_card'
+                      ? t(balanceAdjustment.overpayment ? 'accounts.credit.overpayment' : 'accounts.bankcard.currentOwed')
+                      : t('accounts.balance.adjust.target')}</Label>
+                    {balanceAdjustment.row.account_type === 'credit_card' ? <div className="flex gap-2">
+                      <Button variant={!balanceAdjustment.overpayment ? 'default' : 'outline'}
+                        onClick={() => setBalanceAdjustment({ ...balanceAdjustment, overpayment: false })}>{t('accounts.bankcard.currentOwed')}</Button>
+                      <Button variant={balanceAdjustment.overpayment ? 'default' : 'outline'}
+                        onClick={() => setBalanceAdjustment({ ...balanceAdjustment, overpayment: true })}>{t('accounts.credit.overpayment')}</Button>
+                    </div> : null}
                     <Input
                       autoFocus
                       inputMode="decimal"

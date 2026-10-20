@@ -373,6 +373,77 @@ attachmentsRouter.get('/:id', async (c) => {
     });
 });
 
+// GET /attachments/:id/thumbnail - 缩略图（对齐上游 #129 attachment_thumbnail）
+// 平台适配：上游用 Pillow 生成 640×640 JPEG 并落盘缓存；Workers 无 Pillow/本地盘，
+// 这里复用下载权限校验后直接返回原图字节（图片可预览即功能等价），非图片返回 415。
+attachmentsRouter.get('/:id/thumbnail', async (c) => {
+    const userId = c.get('userId');
+    const db = c.env.DB;
+    const fileId = c.req.param('id');
+
+    const row = await db
+        .prepare(
+            `SELECT a.id, a.mime_type, a.file_name FROM attachment_files a
+             JOIN ledgers l ON a.ledger_id = l.id
+             WHERE a.id = ? AND (a.user_id = ? OR l.user_id = ?)`
+        )
+        .bind(fileId, userId, userId)
+        .first<{ id: string; mime_type: string | null; file_name: string | null }>();
+
+    if (!row) {
+        return c.json({ error: 'Attachment not found' }, 404);
+    }
+
+    const mime = (row.mime_type || '').toLowerCase();
+    const isImage = /^image\/(jpeg|jpg|png|webp|gif)$/.test(mime) ||
+        ['jpeg', 'jpg', 'png', 'webp', 'gif'].includes((row.file_name || '').split('.').pop()?.toLowerCase() || '');
+    if (!isImage) {
+        return c.json({ error: 'Attachment format cannot be previewed' }, 415);
+    }
+
+    // 复用下载路径取原图字节（R2 优先，回退备份远端）
+    let bytes: Uint8Array | null = null;
+    if (c.env.R2) {
+        const stored = await db.prepare('SELECT storage_path, ledger_id FROM attachment_files WHERE id = ?')
+            .bind(fileId).first<{ storage_path: string; ledger_id: string }>();
+        const ledger = stored ? await db.prepare('SELECT external_id FROM ledgers WHERE id = ?')
+            .bind(stored.ledger_id).first<{ external_id: string }>() : null;
+        if (stored && ledger) {
+            const stripped = stripBeecountPrefix(stored.storage_path);
+            const possiblePaths = [
+                stored.storage_path,
+                stored.storage_path.replace(/^beecount\//, ''),
+                stripped,
+                `beecount/attachments/${ledger.external_id}/${fileId}_${row.file_name}`,
+                `attachments/${ledger.external_id}/${fileId}_${row.file_name}`,
+            ];
+            for (const key of possiblePaths) {
+                if (!key) continue;
+                const obj = await c.env.R2.get(key);
+                if (obj) { bytes = new Uint8Array(await obj.arrayBuffer()); break; }
+            }
+        }
+    }
+    if (!bytes) {
+        const storedPath = await db.prepare('SELECT storage_path FROM attachment_files WHERE id = ?')
+            .bind(fileId).first<{ storage_path: string }>();
+        if (storedPath?.storage_path) {
+            const data = await downloadFromStorage(db, c.env, stripBeecountPrefix(storedPath.storage_path));
+            bytes = data ?? null;
+        }
+    }
+    if (!bytes || bytes.length === 0) {
+        return c.json({ error: 'File content not available' }, 404);
+    }
+
+    return new Response(bytes.slice().buffer as ArrayBuffer, {
+        headers: {
+            'Content-Type': mime || 'image/jpeg',
+            'Cache-Control': 'private, no-store',
+        },
+    });
+});
+
 // DELETE /attachments/:id - 删除附件
 attachmentsRouter.delete('/:id', async (c) => {
     const userId = c.get('userId');

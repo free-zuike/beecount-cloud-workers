@@ -2222,7 +2222,13 @@ workspaceRouter.get('/net-worth-history', async (c) => {
     const bal = (acc.initial_balance ?? 0) * (rate ?? 1);
     accountBalances[acc.sync_id] = bal;
     if (LIABILITY_TYPES.has(acc.account_type || '')) {
-      totalLiabilities += Math.abs(bal);
+      // 信用卡余额为正（溢缴款）→ 计资产而非负债（对齐上游 #128）
+      if (acc.account_type === 'credit_card' && bal > 0) {
+        totalAssets += bal;
+      } else {
+        // 带符号累加（负债余额为负）——与上游 liabilities 负值口径一致
+        totalLiabilities += bal;
+      }
     } else {
       totalAssets += bal;
     }
@@ -2282,7 +2288,7 @@ workspaceRouter.get('/net-worth-history', async (c) => {
     runningLiabilities += change.liabilities;
     return {
       bucket: month,
-      net_worth: runningAssets - runningLiabilities,
+      net_worth: runningAssets + runningLiabilities,
       assets: runningAssets,
       liabilities: runningLiabilities,
     };
