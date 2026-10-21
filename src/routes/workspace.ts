@@ -401,26 +401,61 @@ workspaceRouter.get('/accounts', async (c) => {
   // 获取当前用户信息（用于 created_by_user_id/created_by_email）
   const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string }>();
 
+  // 跨账本聚合(对齐原版 workspace.py 的 main_stats/transfer_from/transfer_to 三条 GROUP BY,
+  // 取代旧实现"逐账户一条全账本 SUM"的 N+1;账户维度读 amount 原币,与原版一致)
+  const plh = ledgerInternalIds.map(() => '?').join(',');
+
+  const mainStats = await db.prepare(`
+    SELECT account_sync_id,
+           COUNT(*) as cnt,
+           COALESCE(SUM(CASE WHEN tx_type = 'income' THEN amount ELSE 0 END), 0) as income,
+           COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN amount ELSE 0 END), 0) as expense
+    FROM read_tx_projection
+    WHERE ledger_id IN (${plh}) AND account_sync_id IS NOT NULL
+      AND tx_type IN ('income','expense')
+    GROUP BY account_sync_id
+  `).bind(...ledgerInternalIds).all<{ account_sync_id: string; cnt: number; income: number; expense: number }>();
+
+  const transferFrom = await db.prepare(`
+    SELECT from_account_sync_id as account_sync_id, COUNT(*) as cnt, COALESCE(SUM(amount), 0) as amt
+    FROM read_tx_projection
+    WHERE ledger_id IN (${plh}) AND tx_type = 'transfer' AND from_account_sync_id IS NOT NULL
+    GROUP BY from_account_sync_id
+  `).bind(...ledgerInternalIds).all<{ account_sync_id: string; cnt: number; amt: number }>();
+
+  const transferTo = await db.prepare(`
+    SELECT to_account_sync_id as account_sync_id, COUNT(*) as cnt, COALESCE(SUM(amount), 0) as amt
+    FROM read_tx_projection
+    WHERE ledger_id IN (${plh}) AND tx_type = 'transfer' AND to_account_sync_id IS NOT NULL
+    GROUP BY to_account_sync_id
+  `).bind(...ledgerInternalIds).all<{ account_sync_id: string; cnt: number; amt: number }>();
+
+  // 合并 per-account 统计：income/expense 类型计入收支,转账影响计入 movement(与原版 stats dict 同逻辑)
+  const stats: Record<string, { count: number; income: number; expense: number; movement: number }> = {};
+  for (const r of mainStats.results) {
+    stats[r.account_sync_id] = { count: Number(r.cnt), income: Number(r.income), expense: Number(r.expense), movement: Number(r.income) - Number(r.expense) };
+  }
+  for (const r of transferFrom.results) {
+    const b = stats[r.account_sync_id] ??= { count: 0, income: 0, expense: 0, movement: 0 };
+    b.count += Number(r.cnt);
+    b.movement -= Number(r.amt);
+  }
+  for (const r of transferTo.results) {
+    const b = stats[r.account_sync_id] ??= { count: 0, income: 0, expense: 0, movement: 0 };
+    b.count += Number(r.cnt);
+    b.movement += Number(r.amt);
+  }
+
   const items = [];
   for (const row of acctRows.results) {
     const ledExtId = ''; // user-global 不挂账本
     const accountSyncId = row.sync_id as string;
     const initialBalance = (row.initial_balance as number) ?? 0;
-
-    // 按账户币种统计（与 read.ts 一致）；native_amount 是账本本位币快照。
-    const txStats = await db.prepare(`
-      SELECT 
-        COALESCE(SUM(CASE WHEN tx_type = 'expense' AND account_sync_id = ? THEN amount ELSE 0 END), 0) as expense_in,
-        COALESCE(SUM(CASE WHEN tx_type = 'income' AND account_sync_id = ? THEN amount ELSE 0 END), 0) as income_in,
-        COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND from_account_sync_id = ? THEN amount ELSE 0 END), 0) as expense_transfer,
-        COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND to_account_sync_id = ? THEN amount ELSE 0 END), 0) as income_transfer,
-        COUNT(CASE WHEN account_sync_id = ? OR from_account_sync_id = ? OR to_account_sync_id = ? THEN 1 END) as tx_count
-      FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')})
-    `).bind(accountSyncId, accountSyncId, accountSyncId, accountSyncId, accountSyncId, accountSyncId, accountSyncId, ...ledgerInternalIds).first<{ expense_in: number; income_in: number; expense_transfer: number; income_transfer: number; tx_count: number }>();
-
-    const incomeTotal = (txStats?.income_in ?? 0) + (txStats?.income_transfer ?? 0);
-    const expenseTotal = (txStats?.expense_in ?? 0) + (txStats?.expense_transfer ?? 0);
-    const balance = initialBalance + incomeTotal - expenseTotal;
+    const bucket = stats[accountSyncId];
+    // income_total/expense_total 仅统计 income/expense 类型交易(对齐原版);转账收支影响进 balance
+    const incomeTotal = bucket?.income ?? 0;
+    const expenseTotal = bucket?.expense ?? 0;
+    const balance = initialBalance + (bucket?.movement ?? 0);
 
     items.push({
       id: accountSyncId,
@@ -440,7 +475,7 @@ workspaceRouter.get('/accounts', async (c) => {
       bank_name: row.bank_name,
       card_last_four: row.card_last_four,
       hidden: Boolean(row.hidden),
-      tx_count: txStats?.tx_count ?? 0,
+      tx_count: bucket?.count ?? 0,
       income_total: incomeTotal,
       expense_total: expenseTotal,
       balance,

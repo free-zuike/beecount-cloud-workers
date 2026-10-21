@@ -128,8 +128,10 @@ describe('Account balances use account-currency amounts', () => {
       from_account_sync_id: 'sender', to_account_sync_id: 'recipient',
     });
     const accounts = await expectBalances({ sender: 900, recipient: 300 });
-    expect(accounts.find(a => a.id === 'sender')).toMatchObject({ expense_total: 100, income_total: 0, tx_count: 1 });
-    expect(accounts.find(a => a.id === 'recipient')).toMatchObject({ income_total: 100, expense_total: 0, tx_count: 1 });
+    // 对齐原版 workspace.py:转账不计入 income_total/expense_total(仅 income/expense 类型),
+    // 转账影响只进 balance 与 tx_count;金额仍用原币(非 native_amount 快照)
+    expect(accounts.find(a => a.id === 'sender')).toMatchObject({ expense_total: 0, income_total: 0, tx_count: 1 });
+    expect(accounts.find(a => a.id === 'recipient')).toMatchObject({ income_total: 0, expense_total: 0, tx_count: 1 });
   });
 
   it('preserves initial balances when there are no transactions', async () => {

@@ -37,6 +37,9 @@ function nowUtc(): string {
   return new Date().toISOString();
 }
 
+/** 在线判定窗口(毫秒)——对齐原版 config.device_online_window_minutes=10(本地曾误用 5 分钟) */
+const DEVICE_ONLINE_WINDOW_MS = 10 * 60 * 1000;
+
 // ===========================
 // Schema 定义
 // ===========================
@@ -139,7 +142,7 @@ adminRouter.get('/health', async (c) => {
     // 查询在线用户数（5分钟内有活动视为在线）
     let onlineCount = 0;
     try {
-      const onlineThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const onlineThreshold = new Date(Date.now() - DEVICE_ONLINE_WINDOW_MS).toISOString();
       const onlineResult = await db
         .prepare(`SELECT COUNT(DISTINCT user_id) as count 
                   FROM devices 
@@ -517,7 +520,7 @@ adminRouter.get('/devices', async (c) => {
   }
   const onlineOnly = c.req.query('online_only') === 'true';
   if (onlineOnly) {
-    const onlineThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const onlineThreshold = new Date(Date.now() - DEVICE_ONLINE_WINDOW_MS).toISOString();
     whereClause += ' AND d.last_seen_at > ?';
     bindParams.push(onlineThreshold);
   }
@@ -545,7 +548,7 @@ adminRouter.get('/devices', async (c) => {
       user_email: string;
     }>();
 
-  const onlineThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const onlineThreshold = new Date(Date.now() - DEVICE_ONLINE_WINDOW_MS).toISOString();
 
   if (view === 'sessions') {
     const items = rows.results.map((row) => ({
@@ -612,7 +615,7 @@ adminRouter.get('/devices', async (c) => {
 adminRouter.get('/devices/online', async (c) => {
   const db = c.env.DB;
 
-  const onlineThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const onlineThreshold = new Date(Date.now() - DEVICE_ONLINE_WINDOW_MS).toISOString();
 
   const result = await db
     .prepare(
@@ -627,7 +630,7 @@ adminRouter.get('/devices/online', async (c) => {
   return c.json({
     total_online: result?.total_online ?? 0,
     unique_users: result?.unique_users ?? 0,
-    online_threshold_seconds: 300,
+    online_threshold_seconds: DEVICE_ONLINE_WINDOW_MS / 1000,
   });
 });
 
