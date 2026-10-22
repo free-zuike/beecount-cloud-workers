@@ -68,4 +68,11 @@ export const WRITE_PATH_TABLES = `
   CREATE TABLE user_category_projection (sync_id TEXT PRIMARY KEY, user_id TEXT, name TEXT, kind TEXT, level INTEGER, sort_order INTEGER, icon TEXT, icon_type TEXT, custom_icon_path TEXT, icon_cloud_file_id TEXT, icon_cloud_sha256 TEXT, parent_name TEXT, parent_sync_id TEXT, source_change_id INTEGER DEFAULT 0);
   CREATE TABLE user_tag_projection (sync_id TEXT PRIMARY KEY, user_id TEXT, name TEXT, color TEXT, source_change_id INTEGER);
   CREATE TABLE audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ledger_id TEXT, action TEXT, metadata_json TEXT, created_at TEXT);
+  CREATE TABLE user_profiles (user_id TEXT PRIMARY KEY, primary_currency TEXT, display_name TEXT, avatar_file_id TEXT, avatar_version INTEGER);
+  CREATE TABLE sync_push_idempotency (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, device_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL, response_json TEXT NOT NULL,
+    created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+    UNIQUE(user_id, device_id, idempotency_key)
+  );
 `;

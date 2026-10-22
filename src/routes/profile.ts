@@ -36,7 +36,7 @@ const ProfilePatchSchema = z.object({
   theme_primary_color: z.string().nullable().optional(),
   appearance: z.record(z.unknown()).nullable().optional(),
   ai_config: z.record(z.unknown()).nullable().optional(),
-  primary_currency: z.string().nullable().optional(),
+  primary_currency: z.string().regex(/^[A-Za-z]{3,8}$/).nullable().optional(),
 });
 
 profileRouter.get('/me', async (c) => {
@@ -60,7 +60,23 @@ profileRouter.get('/me', async (c) => {
 });
 
 // PATCH /me
-profileRouter.patch('/me', zValidator('json', ProfilePatchSchema), async (c) => {
+// 校验失败返回 422 + FastAPI VALIDATION_ERROR 格式(对齐原版 Pydantic 422)
+profileRouter.patch('/me', zValidator('json', ProfilePatchSchema, (result, c) => {
+  if (result.success) return;
+  return c.json({
+    error: {
+      code: 'VALIDATION_ERROR',
+      message: 'Request validation failed',
+      request_id: c.req.header('cf-ray') || '',
+    },
+    detail: 'Request validation failed',
+    validation: result.error.issues.map(i => ({
+      loc: ['body', ...i.path.map(p => String(p))],
+      msg: i.message,
+      type: 'value_error',
+    })),
+  }, 422);
+}), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const body = c.req.valid('json');

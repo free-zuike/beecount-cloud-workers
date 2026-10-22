@@ -16,7 +16,7 @@ beforeEach(() => {
     CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT);
     CREATE TABLE ledgers (id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, name TEXT, currency TEXT, month_start_day INTEGER DEFAULT 1);
     CREATE TABLE ledger_members (ledger_id TEXT, user_id TEXT, role TEXT);
-    CREATE TABLE sync_changes (change_id INTEGER PRIMARY KEY, ledger_id TEXT, entity_type TEXT, action TEXT);
+    CREATE TABLE sync_changes (change_id INTEGER PRIMARY KEY, user_id TEXT, ledger_id TEXT, entity_type TEXT, action TEXT, scope TEXT);
     CREATE TABLE user_account_projection (
       sync_id TEXT PRIMARY KEY, user_id TEXT, name TEXT, account_type TEXT, currency TEXT, initial_balance REAL,
       note TEXT, credit_limit REAL, billing_day INTEGER, payment_due_day INTEGER, bank_name TEXT, card_last_four TEXT,

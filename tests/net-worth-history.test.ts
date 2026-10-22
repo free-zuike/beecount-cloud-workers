@@ -40,6 +40,11 @@ const TABLES = `
     user_id TEXT, sync_id TEXT, base_currency TEXT, quote_currency TEXT, rate TEXT,
     PRIMARY KEY (user_id, sync_id)
   );
+  CREATE TABLE sync_changes (
+    change_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ledger_id TEXT, entity_type TEXT,
+    entity_sync_id TEXT, action TEXT, payload_json TEXT, updated_at TEXT,
+    updated_by_user_id TEXT, updated_by_device_id TEXT, scope TEXT
+  );
 `;
 
 const SECRET = 'test-secret';

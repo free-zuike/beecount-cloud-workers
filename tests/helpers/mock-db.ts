@@ -530,7 +530,11 @@ class InMemoryDB {
 
   private parseWhereClause(sql: string): string | null {
     const whereMatch = sql.match(/WHERE\s+(.+?)(?:\s+ORDER\s+BY|\s+LIMIT|\s+GROUP\s+BY|\s+OFFSET|$)/is);
-    return whereMatch ? whereMatch[1].trim() : null;
+    if (!whereMatch) return null;
+    // mock 不模拟软删 tombstone:剥离 "AND NOT EXISTS(...)" 子句(视作恒真),
+    // 与 handleInsertSelect 的既有处理一致;软删语义由真实 SQLite 测试覆盖
+    const stripped = whereMatch[1].replace(/\s+AND\s+NOT EXISTS[\s\S]*?\)\s*$/is, '').trim();
+    return stripped || null;
   }
 
   private matchesWhere(row: Row, where: string, params: unknown[], paramIdx: { current: number }): boolean {

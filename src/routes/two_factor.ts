@@ -351,6 +351,12 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
     return c.json({ error: 'Invalid or expired challenge token.' }, 401);
   }
   const userId = challengeResult.userId;
+  // 对齐原版：继续 challenge token 里的 client_type claim
+  let challengeClientType: string | undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(challenge_token.split('.')[1], 'base64url').toString()) as Record<string, unknown>;
+    if (typeof payload.client_type === 'string') challengeClientType = payload.client_type;
+  } catch { /* 旧 challenge 无 client_type 时保持不带 */ }
 
   const user = await db
     .prepare('SELECT id, is_enabled, totp_enabled, totp_secret_encrypted, email FROM users WHERE id = ?')
@@ -405,7 +411,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
 
   // 生成真正的签名 JWT access token
   const tokenScopes = ['app_write'];
-  const accessToken = await createAccessToken(user.id, jwtSecret, tokenScopes);
+  const accessToken = await createAccessToken(user.id, jwtSecret, tokenScopes, 3600, 'access', challengeClientType);
 
   // 使用与 login 相同的 upsertDevice 逻辑，避免重复创建设备记录
   const resolvedDeviceId = await upsertDevice(
@@ -415,7 +421,7 @@ twoFactorRouter.post('/verify', zValidator('json', TwoFAVerifySchema), async (c)
 
   // 创建 refresh token + 清理旧 token 同事务原子写入（对齐原版单 commit）
   const refreshExpiresIn = 30 * 24 * 60 * 60;
-  const refreshTokenValue = await createAccessToken(user.id, jwtSecret, tokenScopes, refreshExpiresIn, 'refresh');
+  const refreshTokenValue = await createAccessToken(user.id, jwtSecret, tokenScopes, refreshExpiresIn, 'refresh', challengeClientType);
   const refreshTokenHash = Array.from(new Uint8Array(await sha256(new TextEncoder().encode(refreshTokenValue)))).map(b => b.toString(16).padStart(2, '0')).join('');
   const refreshExpiresAt = new Date(Date.now() + refreshExpiresIn * 1000);
   const refreshTokenId = randomUUID();

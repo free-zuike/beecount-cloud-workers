@@ -41,6 +41,7 @@ import type { RetrievedChunk } from '../services/rag-index';
 import { serverLogger } from '../lib/logger';
 import { parseSafeExternalHttpsUrl, readResponseBodyLimited } from '../lib/external-url';
 import { bytesToBase64 } from '../lib/base64';
+import { buildAskMessages, buildParseTxImageMessages, buildParseTxTextMessages } from '../services/ai/prompts';
 
 function nowUtc(): string {
   return new Date().toISOString();
@@ -107,7 +108,7 @@ function findProvider(config: AiConfig, kind: 'text' | 'vision'): AiProvider | n
 const _REQUIRED_KEYS = new Set(['model', 'messages', 'stream']);
 const _MAX_PARAM_STRIPS = 3;
 
-function _rejectedParam(payload: Record<string, unknown>, statusCode: number, body: string): string | null {
+export function _rejectedParam(payload: Record<string, unknown>, statusCode: number, body: string): string | null {
   if (statusCode < 400) return null;
   // 1) 结构化: {"error": {"param": "temperature", ...}}
   try {
@@ -158,7 +159,7 @@ async function _postChatAdaptive(
 /**
  * 通用 AI API 调用（JSON 模式）
  */
-async function callAiChatJson(
+export async function callAiChatJson(
   baseUrl: string,
   apiKey: string,
   model: string,
@@ -320,7 +321,7 @@ const _ISO_CURRENCY_RE = /^[A-Z]{3}$/;
  * 唯一例外是裸 `$` → USD（实测 LLM 常把「45 美元」识别成 "$"；A$/C$/S$/HK$
  * 这些歧义写法提示本身就会带前缀）。`¥` 不映射 —— CNY 与 JPY 都写裸 ¥，
  * 猜错是 ~20 倍金额差，宁可退回账本主币种。 */
-function normalizeCurrency(raw: unknown): string {
+export function normalizeCurrency(raw: unknown): string {
   if (typeof raw !== 'string') return '';
   const code = raw.trim().toUpperCase();
   if (code === '$') return 'USD';
@@ -331,7 +332,7 @@ class SchemaInvalidError extends Error {}
 
 /** 严格校验 LLM 输出：必须是 `{"tx_drafts": [...]}`。对齐原版 —— 不静默
  * 兼容其它结构（顶层 array / items key 等），兼容会让 prompt 漂移。 */
-function normalizeDrafts(result: unknown): Array<Record<string, unknown>> {
+export function normalizeDrafts(result: unknown): Array<Record<string, unknown>> {
   if (typeof result !== 'object' || result === null || Array.isArray(result)) {
     throw new SchemaInvalidError(
       `expected JSON object with \`tx_drafts\` key, got ${result === null ? 'null' : Array.isArray(result) ? 'array' : typeof result}`
@@ -438,16 +439,6 @@ async function loadLedgerContext(
   return { categories: [...selectableCats].sort(), accounts, ledgerCurrency };
 }
 
-/** CURRENCY_HINT 提示行（对齐原版 _format_currency_hint）：报主币种；
- * 有外币账户时额外列出。 */
-function formatCurrencyHint(accounts: Array<[string, string | null]>, ledgerCurrency: string): string {
-  const base = (ledgerCurrency || 'CNY').trim().toUpperCase();
-  const others = [...new Set(accounts.map(([, c]) => c).filter((c): c is string => !!c && c !== base))].sort();
-  let line = `账本主币种:${base}`;
-  if (others.length) line += `;账本内已有外币账户:${others.join('、')}`;
-  return line;
-}
-
 // ===========================
 // Schema 定义
 // ===========================
@@ -468,7 +459,7 @@ const AiTestProviderSchema = z.object({
   provider: z.union([
     z.string(),
     z.object({
-      id: z.string(),
+      id: z.string().optional(),
       apiKey: z.string(),
       baseUrl: z.string(),
       textModel: z.string().optional(),
@@ -528,51 +519,6 @@ aiRouter.get('/docs-index/status', async (c) => {
 // 流程：解析 chat provider → 索引可用性 → embed 用户问题 → top-K 检索 →
 //       拼 prompt → 流式 chat → SSE chunk/sources/done
 // ---------------------------------------------------------------------------
-
-const _SYSTEM_ZH = `你是 BeeCount(蜜蜂记账)的助手,只基于下面提供的「相关文档」回答用户的问题。
-
-规则:
-1. **必须用中文回答**,即使相关文档是英文也要翻译成中文输出。
-2. 文档里没明确说的,直接回答「文档里没找到相关说明」,不要编造、不要发挥。
-3. 答案要简洁直接 — 步骤类问题给编号步骤;概念类问题用一两句话解释。
-4. 不要在答案末尾列引用来源(系统会自动贴)。
-5. 不要在中文输出里夹杂英文短语,除非是专有名词(如 PIN / 2FA)。
-6. 如果用户问跟 BeeCount / 记账无关,就说「这个问题不在我能回答的范围内」。`;
-
-const _SYSTEM_EN = `You are the assistant for BeeCount, a personal finance app. Answer ONLY based on the
-"Relevant Docs" provided below.
-
-Rules:
-1. **You MUST answer in English**, even if the relevant docs are in Chinese — translate
-   them to English in your reply.
-2. If the docs don't clearly say something, answer "Sorry, the docs don't cover this"
-   instead of making things up.
-3. Be concise. Step-by-step for how-to questions; one or two sentences for concept questions.
-4. Don't list source references at the end (the system appends them automatically).
-5. Don't mix Chinese characters into English output unless quoting a UI label that exists
-   only in Chinese.
-6. If the user asks something unrelated to BeeCount / personal finance, reply "That's outside
-   what I can answer".`;
-
-function buildAskMessages(query: string, chunks: RetrievedChunk[], lang: string): Array<{ role: string; content: string }> {
-  const system = lang.startsWith('zh') ? _SYSTEM_ZH : _SYSTEM_EN;
-  const parts: string[] = [];
-  chunks.forEach((c, i) => {
-    let header = `### [${i + 1}] ${c.chunk.doc_title}`;
-    if (c.chunk.section) header += ` — ${c.chunk.section}`;
-    parts.push(`${header}\n${c.chunk.content.trim()}`);
-  });
-  const docsBlock = parts.length > 0
-    ? parts.join('\n\n')
-    : (lang.startsWith('zh') ? '(没找到相关文档)' : '(no relevant docs found)');
-  const userContent = lang.startsWith('zh')
-    ? `## 相关文档\n\n${docsBlock}\n\n## 用户问题\n\n${query}`
-    : `## Relevant Docs\n\n${docsBlock}\n\n## User Question\n\n${query}`;
-  return [
-    { role: 'system', content: system },
-    { role: 'user', content: userContent },
-  ];
-}
 
 function sseEvent(eventType: string, data: unknown): string {
   return `data: ${JSON.stringify({ type: eventType, ...(typeof data === 'object' && data !== null ? data : { value: data }) })}\n\n`;
@@ -731,35 +677,18 @@ aiRouter.post('/parse-tx-image', async (c) => {
   // 4. 取 ledger 上下文（categories + accounts 带币种 + 本位币）
   const { categories, accounts, ledgerCurrency } = await loadLedgerContext(db, userId, ledgerId);
 
-  // 5. 拼 prompt（多币种：schema 含 currency + CURRENCY_HINT 上下文）
+  // 5. 拼 prompt（多币种：schema 含 currency + CURRENCY_HINT 上下文；支持用户
+  //    自定义模板 ai_config_json.parseTxImagePrompt，对齐原版 get_user_custom_prompt）
   const imageDataUrl = `data:${mime};base64,${bytesToBase64(imageBytes)}`;
-  const systemPrompt = `你是一个专业的记账助手。请分析图片中的内容，提取交易信息。
-
-请返回 JSON 格式：
-{"tx_drafts": [{"type": "expense|income|transfer", "amount": 金额数字, "category_name": "分类名", "account_name": "账户名", "from_account_name": "转账转出账户", "to_account_name": "转账转入账户", "happened_at": "YYYY-MM-DD", "note": "备注", "currency": "币种", "tags": ["标签"], "confidence": "high|medium|low"}]}
-
-${formatCurrencyHint(accounts, ledgerCurrency)}
-账本可用类目:${categories.length ? categories.join(', ') : '(无 — category_name 留空)'}
-账本可用账户:${accounts.length ? accounts.map(([name, ccy]) => ccy ? `${name}(${ccy})` : name).join(', ') : '(无 — account_name 留空)'}
-
-规则：
-- 金额必须是数字，不是字符串
-- 如果是支出，返回 type: "expense"；收入 "income"；转账 "transfer"
-- currency 必须是 3 位大写 ISO 4217 代码(不要填货币符号或中文名)：美元/$ → USD,日元/円 → JPY,欧元/€ → EUR,英镑/£ → GBP,港币 → HKD,新台币 → TWD,韩元 → KRW,泰铢 → THB
-- 与账本主币种(${ledgerCurrency})相同时 currency 留 ""；图片里出现任何外币说法(中文名/符号/代码都算)就必须填，别漏
-- 例:「花了 45 美元」→ "USD"；「1200 日元」→ "JPY"；「星巴克 $6.5」→ "USD"
-- 如果无法识别，返回空的 tx_drafts 数组`;
-
-  const messages: Array<{ role: string; content: string | Array<unknown> }> = [
-    { role: 'system', content: systemPrompt },
-    {
-      role: 'user',
-      content: [
-        { type: 'text', text: '请分析这张图片提取交易信息。' },
-        { type: 'image_url', image_url: { url: imageDataUrl } },
-      ],
-    },
-  ];
+  const messages = buildParseTxImageMessages({
+    categories,
+    accounts,
+    ledgerCurrency,
+    now: new Date(),
+    locale,
+    imageDataUrl,
+    customPromptTemplate: (aiConfig as Record<string, unknown>).parseTxImagePrompt as string | null,
+  });
 
   // 6. 调 vision LLM
   let drafts: Array<Record<string, unknown>>;
@@ -840,27 +769,16 @@ aiRouter.post('/parse-tx-text', zValidator('json', AiParseTxTextSchema), async (
   // 取 ledger 上下文（categories + accounts 带币种 + 本位币）
   const { categories, accounts, ledgerCurrency } = await loadLedgerContext(db, userId, req.ledger_id);
 
-  const systemPrompt = `你是一个专业的记账助手。请分析用户的文字描述，提取交易信息。
-
-请返回 JSON 格式：
-{"tx_drafts": [{"type": "expense|income|transfer", "amount": 金额数字, "category_name": "分类名", "account_name": "账户名", "from_account_name": "转账转出账户", "to_account_name": "转账转入账户", "happened_at": "YYYY-MM-DD", "note": "备注", "currency": "币种", "tags": ["标签"], "confidence": "high|medium|low"}]}
-
-${formatCurrencyHint(accounts, ledgerCurrency)}
-账本可用类目:${categories.length ? categories.join(', ') : '(无 — category_name 留空)'}
-账本可用账户:${accounts.length ? accounts.map(([name, ccy]) => ccy ? `${name}(${ccy})` : name).join(', ') : '(无 — account_name 留空)'}
-
-规则：
-- 金额必须是数字，不是字符串
-- 尝试识别支出/收入/转账
-- 如果金额不明确，根据语境推断
-- currency 必须是 3 位大写 ISO 4217 代码(不要填货币符号或中文名)：美元/$ → USD,日元/円 → JPY,欧元/€ → EUR,英镑/£ → GBP,港币 → HKD,新台币 → TWD,韩元 → KRW,泰铢 → THB
-- 与账本主币种(${ledgerCurrency})相同时 currency 留 ""；原文出现任何外币说法(中文名/符号/代码都算)就必须填，别漏
-- 例:「花了 45 美元」→ "USD"；「1200 日元」→ "JPY"；「星巴克 $6.5」→ "USD"`;
-
-  const messages: Array<{ role: string; content: string }> = [
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: `${req.text}\n\nlocale: ${locale}` },
-  ];
+  // 拼 prompt（对齐原版 build_parse_tx_text_messages；支持 ai_config_json.parseTxTextPrompt）
+  const messages = buildParseTxTextMessages({
+    text: req.text,
+    categories,
+    accounts,
+    ledgerCurrency,
+    now: new Date(),
+    locale,
+    customPromptTemplate: (aiConfig as Record<string, unknown>).parseTxTextPrompt as string | null,
+  });
 
   try {
     const content = await callAiChatJson(
@@ -972,8 +890,8 @@ async function _testSpeech(baseUrl: string, apiKey: string, model: string, timeo
 
   const data = await response.json() as { text?: string };
   // 静音 WAV 转录返回空 text 是正常的（没有语音内容），不代表 API 有问题。
-  // 返回成功消息证明 API 连通。
-  return (data.text || '').trim() || '(silence accepted, API connected)';
+  // 对齐原版：返回 (text or "").strip()，空也算成功。
+  return (data.text || '').trim();
 }
 
 // 64×64 红色 JPEG 测试图（对齐原版 test_samples.py）
@@ -1038,6 +956,11 @@ function checkRateLimit(userId: string): boolean {
   return true;
 }
 
+/** 测试用：清空速率限制窗口（对齐上游 fixture _RATE_WINDOWS.clear()） */
+export function resetRateLimitsForTest(): void {
+  _rateWindows.clear();
+}
+
 // ---------------------------------------------------------------------------
 // POST /ai/test-provider - 测试 AI provider 连通性
 // ---------------------------------------------------------------------------
@@ -1051,7 +974,7 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
   const req = c.req.valid('json');
   const startTime = Date.now();
 
-  // 速率限制：单用户 60s 内最多 30 次（对齐原版 Python _check_rate_limit）
+  // 速率限制：单用户 60s 内最多 30 次（对齐原版 Python _check_rate_limit，429）
   if (!checkRateLimit(userId)) {
     return c.json({
       success: false,
@@ -1059,7 +982,7 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
       error_message: '测试过于频繁，请 1 分钟后再试',
       latency_ms: Date.now() - startTime,
       preview: '',
-    });
+    }, 429);
   }
 
   let apiKey = req.api_key ?? '';
@@ -1072,14 +995,14 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
   if (typeof req.provider === 'object' && req.provider !== null) {
     // provider 是对象，直接使用其中的配置
     const providerObj = req.provider as {
-      id: string;
+      id?: string;
       apiKey: string;
       baseUrl: string;
       textModel?: string;
       visionModel?: string;
       audioModel?: string;
     };
-    providerId = providerObj.id;
+    providerId = providerObj.id || 'unknown';
     apiKey = apiKey || providerObj.apiKey;
     baseUrl = baseUrl || providerObj.baseUrl;
     
@@ -1157,20 +1080,10 @@ aiRouter.post('/test-provider', zValidator('json', AiTestProviderSchema), async 
       content = await callAiChatJson(baseUrl, apiKey, model, messages, 10000, false, 16);
     }
     
-    if (!content || content.trim().length === 0) {
-      return c.json({
-        success: false,
-        error_code: 'AI_TEST_EMPTY_RESPONSE',
-        error_message: 'AI provider returned empty response',
-        latency_ms: Date.now() - startTime,
-        preview: '',
-      });
-    }
-
     return c.json({
       success: true,
       latency_ms: Date.now() - startTime,
-      preview: content || 'Connection successful',
+      preview: content.slice(0, 200),
     });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Connection failed';

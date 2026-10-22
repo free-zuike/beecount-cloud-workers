@@ -287,25 +287,30 @@ readRouter.get('/ledgers', async (c) => {
   if (ledgerIds.length > 0) {
     const placeholders = ledgerIds.map(() => '?').join(',');
 
-    // 1. 批量查软删除
+    // 1. 批量查软删除:按「最新 ledger_snapshot 动作」判定(删后重建的账本不应被误隐藏,
+    //   对齐上游 _is_ledger_deleted)
     const tombstoneRows = await db.prepare(
-      `SELECT ledger_id, action FROM sync_changes
-       WHERE entity_type = 'ledger_snapshot' AND action = 'delete'
-       AND ledger_id IN (${placeholders})
-       GROUP BY ledger_id`
+      `SELECT ledger_id, action FROM sync_changes sc
+       WHERE entity_type = 'ledger_snapshot'
+         AND ledger_id IN (${placeholders})
+         AND change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                          WHERE sc2.ledger_id = sc.ledger_id AND sc2.entity_type = 'ledger_snapshot')`
     ).bind(...ledgerIds).all<{ ledger_id: string; action: string }>();
-    const tombstoneSet = new Set(tombstoneRows.results.map(r => r.ledger_id));
+    const tombstoneSet = new Set(
+      tombstoneRows.results.filter(r => r.action === 'delete').map(r => r.ledger_id)
+    );
 
-    // 2. 批量查收支汇总
+    // 2. 批量查收支汇总(对齐上游 _projection_totals:tx_count 含标记笔,
+    //   income/expense 排除标记笔,balance_all 含标记笔,native_amount 回退 amount)
     const totalsRows = await db.prepare(
       `SELECT ledger_id,
               COUNT(*) as tx_count,
-              COALESCE(SUM(CASE WHEN tx_type = 'income' THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as income_total,
-              COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as expense_total
+              COALESCE(SUM(CASE WHEN tx_type = 'income' AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false) THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as income_total,
+              COALESCE(SUM(CASE WHEN tx_type = 'expense' AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false) THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as expense_total,
+              COALESCE(SUM(CASE WHEN tx_type = 'income' THEN COALESCE(native_amount, amount) WHEN tx_type = 'expense' THEN -COALESCE(native_amount, amount) ELSE 0 END), 0) as balance_all
        FROM read_tx_projection WHERE ledger_id IN (${placeholders})
-       AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)
        GROUP BY ledger_id`
-    ).bind(...ledgerIds).all<{ ledger_id: string; tx_count: number; income_total: number; expense_total: number }>();
+    ).bind(...ledgerIds).all<{ ledger_id: string; tx_count: number; income_total: number; expense_total: number; balance_all: number }>();
     const totalsMap = new Map(totalsRows.results.map(r => [r.ledger_id, r]));
 
     // 3. 批量查成员数
@@ -329,7 +334,7 @@ readRouter.get('/ledgers', async (c) => {
         transaction_count: totals?.tx_count ?? 0,
         income_total: totals?.income_total ?? 0,
         expense_total: totals?.expense_total ?? 0,
-        balance: (totals?.income_total ?? 0) - (totals?.expense_total ?? 0),
+        balance: totals?.balance_all ?? 0,
         exported_at: now,
         updated_at: now,
         role: (ledger.role || 'owner') as 'owner' | 'editor' | 'viewer',
@@ -471,7 +476,7 @@ readRouter.get('/workspace/transactions', async (c) => {
   const amountMax = c.req.query('amount_max') ? Number(c.req.query('amount_max')) : null;
   const dateFrom = c.req.query('date_from') ?? null;
   const dateTo = c.req.query('date_to') ?? null;
-  const limit = Math.min(parseInt(c.req.query('limit') ?? '200', 10), 5000);
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '20', 10), 2000); // 对齐上游默认 20
   const offset = parseInt(c.req.query('offset') ?? '0', 10);
 
   serverLogger.info('src.routers.read', '[READ] /workspace/transactions called, ledgerId:', ledgerId, 'dateFrom:', dateFrom, 'dateTo:', dateTo, 'limit:', limit, 'offset:', offset);
@@ -482,14 +487,28 @@ readRouter.get('/workspace/transactions', async (c) => {
   const bindings: (string | number)[] = [];
 
   if (ledgerId) {
-    // 支持共享账本 — 与原版 _visible_workspace_ledgers 对齐
+    // 支持共享账本 — 与原版 _visible_workspace_ledgers 对齐(排除软删账本)
     let ledger = await db
-      .prepare('SELECT id FROM ledgers WHERE user_id = ? AND external_id = ?')
+      .prepare(`SELECT id FROM ledgers WHERE user_id = ? AND external_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM sync_changes sc
+          WHERE sc.ledger_id = ledgers.id AND sc.entity_type = 'ledger_snapshot'
+            AND sc.action = 'delete'
+            AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                                WHERE sc2.ledger_id = ledgers.id AND sc2.entity_type = 'ledger_snapshot')
+        )`)
       .bind(userId, ledgerId)
       .first<{ id: string }>();
     if (!ledger) {
       ledger = await db
-        .prepare('SELECT l.id FROM ledgers l JOIN ledger_members lm ON l.id = lm.ledger_id WHERE lm.user_id = ? AND l.external_id = ?')
+        .prepare(`SELECT l.id FROM ledgers l JOIN ledger_members lm ON l.id = lm.ledger_id WHERE lm.user_id = ? AND l.external_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM sync_changes sc
+            WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
+              AND sc.action = 'delete'
+              AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                                  WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
+          )`)
         .bind(userId, ledgerId)
         .first<{ id: string }>();
     }
@@ -503,11 +522,25 @@ readRouter.get('/workspace/transactions', async (c) => {
     query += ' WHERE rt.user_id = ?';
     bindings.push(userId);
 
-    // 无 ledgerId 过滤时，查询用户可访问的所有账本
+    // 无 ledgerId 过滤时，查询用户可访问的所有账本(排除软删)
     const accessibleIds = await db.prepare(
       `SELECT l.id FROM ledgers l WHERE l.user_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM sync_changes sc
+           WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
+             AND sc.action = 'delete'
+             AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                                 WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
+         )
        UNION
-       SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?`
+       SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM sync_changes sc
+           WHERE sc.ledger_id = lm.ledger_id AND sc.entity_type = 'ledger_snapshot'
+             AND sc.action = 'delete'
+             AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                                 WHERE sc2.ledger_id = lm.ledger_id AND sc2.entity_type = 'ledger_snapshot')
+         )`
     ).bind(userId, userId).all<{ id: string }>();
     if (accessibleIds.results.length === 0) {
       return c.json({ items: [], total: 0, limit, offset });
@@ -573,7 +606,7 @@ readRouter.get('/workspace/transactions', async (c) => {
     bindings.push(pattern, pattern, pattern);
   }
 
-  query += ' ORDER BY rt.happened_at DESC LIMIT ? OFFSET ?';
+  query += ' ORDER BY rt.happened_at DESC, rt.tx_index DESC LIMIT ? OFFSET ?'; // 对齐上游二级排序
   bindings.push(limit, offset);
 
   const rows = await db.prepare(query).bind(...bindings).all<Record<string, unknown>>();
@@ -583,24 +616,77 @@ readRouter.get('/workspace/transactions', async (c) => {
   const countBindings = bindings.slice(0, -2); // 去掉最后的 limit 和 offset
   const totalResult = await db.prepare(`SELECT COUNT(*) as cnt FROM (${countQuery})`).bind(...countBindings).first<{ cnt: number }>();
 
+  // 共享账本 §7:收集创建者/编辑者 + 账本 owner,一次查 users/user_profiles(对齐上游 user_info_map)
+  const txLedgerIds = [...new Set(rows.results.map((r) => r.ledger_id as string).filter(Boolean))];
+  const actorUids = new Set<string>();
+  for (const r of rows.results) {
+    if (r.created_by_user_id) actorUids.add(r.created_by_user_id as string);
+    if (r.last_edited_by_user_id) actorUids.add(r.last_edited_by_user_id as string);
+  }
+  const ledgerInfoMap = new Map<string, { external_id: string; name: string | null; owner_uid: string }>();
+  const userInfoMap = new Map<string, { email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number | null }>();
+  const changeIdMap = new Map<string, number>();
+
+  if (txLedgerIds.length > 0) {
+    const ph = txLedgerIds.map(() => '?').join(',');
+    const ledgerRows = await db
+      .prepare(`SELECT id, external_id, name, user_id FROM ledgers WHERE id IN (${ph})`)
+      .bind(...txLedgerIds)
+      .all<{ id: string; external_id: string; name: string | null; user_id: string }>();
+    for (const l of ledgerRows.results) {
+      ledgerInfoMap.set(l.id, { external_id: l.external_id, name: l.name, owner_uid: l.user_id });
+      if (l.user_id) actorUids.add(l.user_id);
+    }
+
+    if (actorUids.size > 0) {
+      const ph2 = [...actorUids].map(() => '?').join(',');
+      const userRows = await db
+        .prepare(`SELECT u.id, u.email, p.display_name, p.avatar_file_id, p.avatar_version
+                   FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id
+                   WHERE u.id IN (${ph2})`)
+        .bind(...actorUids)
+        .all<{ id: string; email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number | null }>();
+      for (const u of userRows.results) {
+        userInfoMap.set(u.id, { email: u.email, display_name: u.display_name, avatar_file_id: u.avatar_file_id, avatar_version: u.avatar_version });
+      }
+    }
+
+    // 每账本最新 change_id(上游 per-tx last_change_id)
+    const cidRows = await db
+      .prepare(`SELECT ledger_id, MAX(change_id) as m FROM sync_changes WHERE ledger_id IN (${ph}) GROUP BY ledger_id`)
+      .bind(...txLedgerIds)
+      .all<{ ledger_id: string; m: number }>();
+    for (const r of cidRows.results) changeIdMap.set(r.ledger_id, r.m);
+  }
+
+  const avatarUrl = (uid: string | null | undefined, u: { avatar_file_id: string | null; avatar_version: number | null } | undefined): string | null =>
+    uid && u?.avatar_file_id ? `/api/v1/profile/avatar/${uid}?v=${u.avatar_version ?? 0}` : null;
+
   const items = rows.results.map((row) => {
     const tagIds = safeJsonParse<string[]>(row.tag_sync_ids_json as string | null) ?? [];
     const attachments = safeJsonParse<Array<Record<string, unknown>>>(
       row.attachments_json as string | null
     ) ?? [];
+    const ledgerId = row.ledger_id as string;
+    const info = ledgerInfoMap.get(ledgerId);
+    const creatorUid = (row.created_by_user_id as string) || info?.owner_uid || null;
+    const editorUid = (row.last_edited_by_user_id as string) || creatorUid;
+    const creator = creatorUid ? userInfoMap.get(creatorUid) : undefined;
+    const editor = editorUid ? userInfoMap.get(editorUid) : undefined;
 
     return {
-      id: (row.id as string) || (row.sync_id as string),
-      sync_id: row.sync_id as string,
-      ledger_id: (row.ledger_external_id as string) || (row.ledger_id as string),
+      id: row.sync_id as string,
+      tx_index: (row.tx_index as number) ?? 0,
       tx_type: row.tx_type as string,
       amount: row.amount as number,
       currency_code: (row.currency_code as string) ?? null,
       native_amount: (row.native_amount as number) ?? null,
       happened_at: row.happened_at as string,
       note: row.note as string | null,
+      tags: (row.tags_csv as string) ?? null,
       tags_list: parseTagsCsv(row.tags_csv as string | null),
-      attachments: attachments,
+      tag_ids: tagIds,
+      attachments,
       account_id: (row.account_sync_id as string) ?? null,
       account_name: row.account_name as string | null,
       from_account_id: (row.from_account_sync_id as string) ?? null,
@@ -608,16 +694,23 @@ readRouter.get('/workspace/transactions', async (c) => {
       to_account_id: (row.to_account_sync_id as string) ?? null,
       to_account_name: row.to_account_name as string | null,
       category_id: (row.category_sync_id as string) ?? null,
-      category_sync_id: row.category_sync_id as string | null,
       category_name: row.category_name as string | null,
       category_kind: row.category_kind as string | null,
-      created_at: row.created_at as string,
-      created_by: row.created_by as string | null,
-      created_by_user_id: row.created_by_user_id as string | null,
-      created_by_avatar_url: null,
-      updated_at: row.updated_at as string,
       exclude_from_stats: !!(row.exclude_from_stats),
       exclude_from_budget: !!(row.exclude_from_budget),
+      last_change_id: changeIdMap.get(ledgerId) ?? 0,
+      ledger_id: info?.external_id ?? (row.ledger_external_id as string) ?? ledgerId,
+      ledger_name: info?.name ?? null,
+      created_by_user_id: creatorUid,
+      created_by_email: creator?.email ?? null,
+      created_by_display_name: creator?.display_name ?? null,
+      created_by_avatar_url: avatarUrl(creatorUid, creator),
+      created_by_avatar_version: creator?.avatar_file_id ? (creator.avatar_version ?? 0) : null,
+      last_edited_by_user_id: editorUid,
+      last_edited_by_email: editor?.email ?? null,
+      last_edited_by_display_name: editor?.display_name ?? null,
+      last_edited_by_avatar_url: avatarUrl(editorUid, editor),
+      last_edited_by_avatar_version: editor?.avatar_file_id ? (editor.avatar_version ?? 0) : null,
     };
   });
 
@@ -716,11 +809,11 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
     .first<{ role: string }>();
   const userRole = ledger.user_id === userId ? 'owner' : (memberRow?.role ?? 'owner');
 
-  // 检查软删除
+  // 检查软删除(取最新 ledger_snapshot 动作;删后重建的账本不应被误判为已删)
   const tombstone = await db
     .prepare(
       `SELECT action FROM sync_changes
-       WHERE ledger_id = ? AND entity_type = 'ledger_snapshot' AND action = 'delete'
+       WHERE ledger_id = ? AND entity_type = 'ledger_snapshot'
        ORDER BY change_id DESC LIMIT 1`
     )
     .bind(ledger.id)
@@ -736,22 +829,24 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
     .bind(ledger.id)
     .first<{ max_id: number | null }>();
 
-  // 汇总统计
+  // 汇总统计(对齐上游 _projection_totals:tx_count 含标记笔,
+  // income/expense 排除标记笔,balance_all 含标记笔,native_amount 回退 amount)
   const totals = await db
     .prepare(
       `SELECT
          COUNT(*) as tx_count,
-         COALESCE(SUM(CASE WHEN tx_type = 'income' THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as income_total,
-         COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as expense_total
+         COALESCE(SUM(CASE WHEN tx_type = 'income' AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false) THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as income_total,
+         COALESCE(SUM(CASE WHEN tx_type = 'expense' AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false) THEN COALESCE(native_amount, amount) ELSE 0 END), 0) as expense_total,
+         COALESCE(SUM(CASE WHEN tx_type = 'income' THEN COALESCE(native_amount, amount) WHEN tx_type = 'expense' THEN -COALESCE(native_amount, amount) ELSE 0 END), 0) as balance_all
        FROM read_tx_projection
-       WHERE ledger_id = ?
-       AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`
+       WHERE ledger_id = ?`
     )
     .bind(ledger.id)
     .first<{
       tx_count: number;
       income_total: number;
       expense_total: number;
+      balance_all: number;
     }>();
 
   // 计算成员数
@@ -769,7 +864,7 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
     transaction_count: totals?.tx_count ?? 0,
     income_total: totals?.income_total ?? 0,
     expense_total: totals?.expense_total ?? 0,
-    balance: (totals?.income_total ?? 0) - (totals?.expense_total ?? 0),
+    balance: totals?.balance_all ?? 0,
     exported_at: now,
     updated_at: now,
     role: userRole as 'owner' | 'editor' | 'viewer',
@@ -839,7 +934,7 @@ readRouter.get('/ledgers/:ledgerExternalId/stats', async (c) => {
         .first<{ cnt: number }>(),
       db
         .prepare(
-          `SELECT COUNT(DISTINCT sha256) as cnt FROM attachment_files
+          `SELECT COUNT(*) as cnt FROM attachment_files
            WHERE ledger_id = ? AND attachment_kind = 'transaction'`
         )
         .bind(ledger.id)
@@ -889,7 +984,7 @@ readRouter.get('/ledgers/:ledgerExternalId/stats', async (c) => {
     ledgerIds.length > 0
       ? db
           .prepare(
-            `SELECT COUNT(DISTINCT a.sha256) as cnt FROM attachment_files a
+            `SELECT COUNT(*) as cnt FROM attachment_files a
              WHERE a.ledger_id IN (${ledgerIds.map(() => '?').join(',')}) AND a.attachment_kind = 'transaction'`
           )
           .bind(...ledgerIds)
@@ -897,8 +992,8 @@ readRouter.get('/ledgers/:ledgerExternalId/stats', async (c) => {
       : Promise.resolve({ cnt: 0 }),
     db
       .prepare(
-        `SELECT COUNT(*) as cnt FROM user_category_projection
-         WHERE user_id = ? AND icon_cloud_file_id IS NOT NULL AND icon_cloud_file_id != ''`
+        `SELECT COUNT(*) as cnt FROM attachment_files
+         WHERE user_id = ? AND attachment_kind = 'category_icon'`
       )
       .bind(userId)
       .first<{ cnt: number }>(),
@@ -997,19 +1092,6 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
 
   serverLogger.info('src.routers.read', '[READ] Found ledger:', ledger.id, ledger.name, 'external_id:', ledger.external_id);
 
-  // 先检查数据库中实际有什么数据
-  const allLedgers = await db
-    .prepare('SELECT id, external_id, name FROM ledgers WHERE user_id = ?')
-    .bind(userId)
-    .all<{ id: string; external_id: string; name: string | null }>();
-  serverLogger.info('src.routers.read', '[READ] All user ledgers:', JSON.stringify(allLedgers.results));
-
-  const allTx = await db
-    .prepare('SELECT ledger_id, sync_id, tx_type, amount FROM read_tx_projection WHERE ledger_id = ?')
-    .bind(ledger.id)
-    .all<{ ledger_id: string; sync_id: string; tx_type: string; amount: number }>();
-  serverLogger.info('src.routers.read', '[READ] All transactions for ledger_id:', ledger.id, JSON.stringify(allTx.results));
-
   // 构建查询
   let ledgerTxQuery = 'SELECT * FROM read_tx_projection WHERE ledger_id = ?';
   const ledgerTxBindings: (string | number)[] = [ledger.id];
@@ -1028,7 +1110,7 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
     ledgerTxBindings.push(startAt);
   }
   if (endAt) {
-    ledgerTxQuery += ' AND happened_at < ?';
+    ledgerTxQuery += ' AND happened_at <= ?'; // 对齐上游 ledgers.py:274(含边界)
     ledgerTxBindings.push(endAt);
   }
 
@@ -1082,6 +1164,14 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
     serverLogger.info('src.routers.read', '[READ] Error getting owner info:', err);
   }
 
+  // 账本级最新 change_id(对齐上游 _get_latest_change_id,作为前端缓存失效 key;
+  // 不能用行内 source_change_id,否则账户 A 变更后其他交易的缓存 key 不失效)
+  const ledgerMaxChange = await db
+    .prepare('SELECT COALESCE(MAX(change_id), 0) as max_id FROM sync_changes WHERE ledger_id = ?')
+    .bind(ledger.id)
+    .first<{ max_id: number }>();
+  const ledgerLastChangeId = ledgerMaxChange?.max_id ?? 0;
+
   const result: ReadTransactionOut[] = rows.results.map((row) => {
     const tagIds = safeJsonParse<string[]>(row.tag_sync_ids_json as string | null) ?? [];
     const attachments = safeJsonParse<Array<Record<string, unknown>>>(
@@ -1112,13 +1202,15 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
       attachments,
       exclude_from_stats: Boolean(row.exclude_from_stats),
       exclude_from_budget: Boolean(row.exclude_from_budget),
-      last_change_id: (row.source_change_id as number) ?? 0,
+      last_change_id: ledgerLastChangeId,
       ledger_id: ledger.external_id,
       ledger_name: ledger.name,
       created_by_user_id: ownerInfo.id,
       created_by_email: ownerInfo.email,
       created_by_display_name: ownerInfo.display_name,
-      created_by_avatar_url: ownerInfo.avatar_file_id,
+      created_by_avatar_url: ownerInfo.avatar_file_id
+        ? `/api/v1/profile/avatar/${ownerInfo.id}?v=${ownerInfo.avatar_version ?? 0}`
+        : null,
       created_by_avatar_version: ownerInfo.avatar_version,
     };
   });
@@ -1187,29 +1279,44 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
     .all<Record<string, unknown>>();
 
   const result: ReadAccountOut[] = [];
-  for (const row of rows.results) {
+  const rowsList = rows.results;
+
+  // 单账本聚合:3 条 GROUP BY 取代逐账户循环查询(N+1)。
+  // 账户维度读 amount 原币(与 workspace/accounts 同口径);转账影响分别按 from/to 计入
+  const mainStats = await db.prepare(`
+    SELECT account_sync_id,
+           COALESCE(SUM(CASE WHEN tx_type = 'income' THEN amount ELSE 0 END), 0) as income,
+           COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN amount ELSE 0 END), 0) as expense
+    FROM read_tx_projection
+    WHERE ledger_id = ? AND account_sync_id IS NOT NULL AND tx_type IN ('income','expense')
+    GROUP BY account_sync_id
+  `).bind(ledger.id).all<{ account_sync_id: string; income: number; expense: number }>();
+
+  const transferFrom = await db.prepare(`
+    SELECT from_account_sync_id as account_sync_id, COALESCE(SUM(amount), 0) as amt
+    FROM read_tx_projection
+    WHERE ledger_id = ? AND tx_type = 'transfer' AND from_account_sync_id IS NOT NULL
+    GROUP BY from_account_sync_id
+  `).bind(ledger.id).all<{ account_sync_id: string; amt: number }>();
+
+  const transferTo = await db.prepare(`
+    SELECT to_account_sync_id as account_sync_id, COALESCE(SUM(amount), 0) as amt
+    FROM read_tx_projection
+    WHERE ledger_id = ? AND tx_type = 'transfer' AND to_account_sync_id IS NOT NULL
+    GROUP BY to_account_sync_id
+  `).bind(ledger.id).all<{ account_sync_id: string; amt: number }>();
+
+  const txMap: Record<string, { income: number; expense: number; transferIn: number; transferOut: number }> = {};
+  for (const r of mainStats.results) txMap[r.account_sync_id] = { income: Number(r.income), expense: Number(r.expense), transferIn: 0, transferOut: 0 };
+  for (const r of transferFrom.results) (txMap[r.account_sync_id] ??= { income: 0, expense: 0, transferIn: 0, transferOut: 0 }).transferOut += Number(r.amt);
+  for (const r of transferTo.results) (txMap[r.account_sync_id] ??= { income: 0, expense: 0, transferIn: 0, transferOut: 0 }).transferIn += Number(r.amt);
+
+  for (const row of rowsList) {
     const accountSyncId = row.sync_id as string;
     const initialBalance = (row.initial_balance as number) ?? 0;
+    const tx = txMap[accountSyncId] ?? { income: 0, expense: 0, transferIn: 0, transferOut: 0 };
 
-    // 计算该账户关联的交易总额
-    const txTotals = await db
-      .prepare(
-        `SELECT
-           COALESCE(SUM(CASE WHEN tx_type = 'income' AND account_sync_id = ? THEN amount ELSE 0 END), 0) as income_in,
-           COALESCE(SUM(CASE WHEN tx_type = 'expense' AND account_sync_id = ? THEN amount ELSE 0 END), 0) as expense_in,
-           COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND to_account_sync_id = ? THEN amount ELSE 0 END), 0) as income_transfer,
-           COALESCE(SUM(CASE WHEN tx_type = 'transfer' AND from_account_sync_id = ? THEN amount ELSE 0 END), 0) as expense_transfer
-         FROM read_tx_projection
-         WHERE ledger_id = ?`
-      )
-      .bind(accountSyncId, accountSyncId, accountSyncId, accountSyncId, ledger.id)
-      .first<{ income_in: number; expense_in: number; income_transfer: number; expense_transfer: number }>();
-
-    const balance = initialBalance
-      + (txTotals?.income_in ?? 0)
-      - (txTotals?.expense_in ?? 0)
-      + (txTotals?.income_transfer ?? 0)
-      - (txTotals?.expense_transfer ?? 0);
+    const balance = initialBalance + tx.income - tx.expense + tx.transferIn - tx.transferOut;
 
     result.push({
       id: accountSyncId,
@@ -1440,7 +1547,8 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets', async (c) => {
 
   const catNameMap: Record<string, string> = {};
   catRows.results.forEach((r) => {
-    catNameMap[r.sync_id] = r.name;
+    // 对齐上游:同 sync_id 脏数据取第一份且 strip
+    if (catNameMap[r.sync_id] === undefined) catNameMap[r.sync_id] = (r.name ?? '').trim();
   });
 
   // 查询预算
@@ -1531,9 +1639,20 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
   const nextMonth = formatDate(periodEnd);
 
   const budgets = await db
-    .prepare('SELECT sync_id, category_sync_id, amount, period FROM read_budget_projection WHERE ledger_id = ?')
+    .prepare('SELECT sync_id, budget_type, category_sync_id, amount, period FROM read_budget_projection WHERE ledger_id = ?')
     .bind(ledger.id)
-    .all<{ sync_id: string; category_sync_id: string | null; amount: number; period: string }>();
+    .all<{ sync_id: string; budget_type: string | null; category_sync_id: string | null; amount: number; period: string }>();
+
+  // 与原版 list_budgets_usage 同款脏数据去重：(budget_type, category_sync_id) 维度，
+  // sync_id 字典序最大胜出；usage 与 list_budgets 必须用同一份 budget 才一致
+  const dedup = new Map<string, typeof budgets.results[0]>();
+  for (const b of budgets.results) {
+    const btype = b.budget_type || 'total';
+    if (btype === 'category' && !b.category_sync_id) continue;
+    const key = `${btype}:${b.category_sync_id || ''}`;
+    const cur = dedup.get(key);
+    if (!cur || cur.sync_id < b.sync_id) dedup.set(key, b);
+  }
 
   const usage: Array<{
     budget_id: string;
@@ -1543,7 +1662,7 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
     period: string;
   }> = [];
 
-  for (const b of budgets.results) {
+  for (const b of dedup.values()) {
     let spent = 0;
     if (b.category_sync_id) {
       // 子分类展开：查找所有子分类（用 parent_sync_id 匹配，与原版 _expand_category_to_children 对齐）
@@ -1578,7 +1697,7 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
       budget_id: b.sync_id,
       category_id: b.category_sync_id,
       budget_amount: b.amount,
-      spent_amount: spent,
+      spent_amount: Math.abs(spent), // 对齐原版 ledgers.py: used=abs(used)
       period: b.period,
     });
   }
@@ -1677,7 +1796,7 @@ readRouter.get('/exchange-rate-overrides', async (c) => {
     base_currency: r.base_currency,
     quote_currency: r.quote_currency,
     rate: r.rate,
-    updated_at: r.updated_at,
+    updated_at: r.updated_at ? new Date(r.updated_at).toISOString() : null, // 对齐上游 _utc_iso
   })));
 });
 
@@ -1692,34 +1811,78 @@ readRouter.get('/exchange-rates', async (c) => {
   }
 
   const db = c.env.DB;
+  const env = c.env as unknown as Record<string, string | undefined>;
+  // 对齐上游 config:exchange_rate_proxy_enabled 默认 true;EXCHANGE_RATE_CACHE_TTL_HOURS 默认 12
+  if (env.EXCHANGE_RATE_PROXY_ENABLED === 'false') {
+    return c.json({ error: 'Exchange rate proxy disabled' }, 404);
+  }
+  const ttlMs = (parseInt(env.EXCHANGE_RATE_CACHE_TTL_HOURS ?? '12', 10) || 12) * 3600 * 1000;
+  const b = base.toUpperCase();
+  const now = Date.now();
+
+  const parsePayload = (raw: unknown): Record<string, string> => {
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') return parsed as Record<string, string>;
+      } catch { /* fallthrough */ }
+    } else if (raw && typeof raw === 'object') {
+      return raw as Record<string, string>;
+    }
+    return {};
+  };
+
+  // 缓存优先(对齐上游 fetcher.get_rates:TTL 内直接返回,不 hit 外网)
+  const cached = await db
+    .prepare('SELECT base_currency, rate_date, source, payload_json, fetched_at FROM exchange_rate_cache WHERE base_currency = ?')
+    .bind(b)
+    .first<{ base_currency: string; rate_date: string; source: string; payload_json: unknown; fetched_at: string }>();
+
+  const fresh = !!cached && !!cached.fetched_at && now - new Date(cached.fetched_at).getTime() < ttlMs;
+
+  if (cached && fresh) {
+    return c.json({
+      base: b,
+      rate_date: cached.rate_date,
+      source: cached.source,
+      fetched_at: cached.fetched_at,
+      stale: false,
+      rates: parsePayload(cached.payload_json),
+    });
+  }
 
   try {
-    // 从外部 API 获取汇率
-    const response = await fetch(`https://api.exchangerate-api.com/v4/latest/${base}`);
-    if (!response.ok) {
-      return c.json({ error: 'Failed to fetch rates' }, 502);
-    }
+    const response = await fetch(`https://api.exchangerate-api.com/v4/latest/${b}`);
+    if (!response.ok) throw new Error(`upstream status ${response.status}`);
     const data = await response.json() as { rates: Record<string, number>; date: string };
-
+    const fetchedAt = new Date().toISOString();
     const ratesJson = JSON.stringify(data.rates);
-    // 缓存到数据库（与原版 ExchangeRateCache 对齐）
     await db.prepare(
       `INSERT OR REPLACE INTO exchange_rate_cache (base_currency, rate_date, source, payload_json, fetched_at)
        VALUES (?, ?, 'exchangerate-api.com', ?, ?)`
-    ).bind(base.toUpperCase(), data.date, ratesJson, new Date().toISOString()).run();
+    ).bind(b, data.date, ratesJson, fetchedAt).run();
 
     return c.json({
-      base: base.toUpperCase(),
+      base: b,
       rate_date: data.date,
       source: 'exchangerate-api.com',
-      fetched_at: new Date().toISOString(),
+      fetched_at: fetchedAt,
       stale: false,
-      rates: Object.fromEntries(
-        Object.entries(data.rates).map(([k, v]) => [k, String(v)])
-      ),
+      rates: Object.fromEntries(Object.entries(data.rates).map(([k, v]) => [k, String(v)])),
     });
-  } catch (error) {
-    return c.json({ error: 'Exchange rate fetch failed' }, 502);
+  } catch {
+    // 上游失败:有过期缓存 → stale=true 返回旧数据(对齐上游);无缓存 → 503
+    if (cached) {
+      return c.json({
+        base: b,
+        rate_date: cached.rate_date,
+        source: cached.source,
+        fetched_at: cached.fetched_at,
+        stale: true,
+        rates: parsePayload(cached.payload_json),
+      });
+    }
+    return c.json({ error: 'Exchange rate fetch failed' }, 503);
   }
 });
 

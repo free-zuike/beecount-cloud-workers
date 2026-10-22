@@ -172,7 +172,8 @@ export async function createAccessToken(
   secret: string,
   scopes: string[] = ['app_write'],
   expiresIn: number = 3600,
-  tokenType: string = 'access'
+  tokenType: string = 'access',
+  clientType?: string
 ): Promise<string> {
   const header = JSON.stringify({ alg: JWT_ALG, typ: 'JWT' });
   const payload: Record<string, unknown> = {
@@ -185,6 +186,10 @@ export async function createAccessToken(
   // 对齐原版：只有 scopes 非空时才写入 payload（2FA challenge token 不含 scopes）
   if (scopes.length > 0) {
     payload.scopes = scopes;
+  }
+  // 对齐原版：client_type claim（app / web）
+  if (clientType) {
+    payload.client_type = clientType;
   }
   const payloadStr = JSON.stringify(payload);
   const headerB64 = base64urlEncode(header);
@@ -199,11 +204,12 @@ export async function createRefreshToken(
   deviceId: string,
   db: D1Database,
   scopes: string[] = ['app_write'],
-  jwtSecret: string = ''
+  jwtSecret: string = '',
+  clientType?: string
 ): Promise<{ id: string; token: string; expiresAt: Date }> {
   // 与原版对齐：refresh token 也是 JWT（type=refresh），不是随机 UUID
   const expiresIn = 30 * 24 * 60 * 60; // 30 天
-  const token = await createAccessToken(userId, jwtSecret, scopes, expiresIn, 'refresh');
+  const token = await createAccessToken(userId, jwtSecret, scopes, expiresIn, 'refresh', clientType);
   const tokenHash = uint8ArrayToHex(await sha256(new TextEncoder().encode(token)));
   const expiresAt = new Date(Date.now() + expiresIn * 1000);
   const id = randomUUID();
@@ -341,8 +347,10 @@ export async function validateSignedToken(
 export async function validateAccessToken(
   token: string,
   secret: string
-): Promise<{ userId: string } | { expired: true } | null> {
+): Promise<{ userId: string; scopes: string[]; clientType?: string } | { expired: true } | null> {
   const result = await validateSignedToken(token, secret, 'access');
   if (!result || 'expired' in result) return result;
-  return { userId: result.userId };
+  // scopes 缺省(无 scopes claim)按客户端默认回退:app_write(对齐上游 get_current_scopes 缺省)
+  const scopes = Array.isArray(result.scopes) && result.scopes.length > 0 ? result.scopes : ['app_write'];
+  return { userId: result.userId, scopes };
 }

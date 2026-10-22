@@ -83,5 +83,7 @@ export const authMiddleware = async (c: any, next: Next) => {
 
   c.set('userId', userId);
   c.set('deviceId', deviceId ?? null);
+  // scopes 供 scope 门禁中间件使用(对齐上游 get_current_scopes)
+  c.set('scopes', validationResult.scopes ?? ['app_write']);
   return next();
 };

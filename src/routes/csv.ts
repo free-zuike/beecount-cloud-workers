@@ -23,7 +23,7 @@ const csvRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 // CSV 辅助（对齐原版 _csv_field / _sanitize_filename）
 // ===========================
 
-function csvField(value: unknown): string {
+export function csvField(value: unknown): string {
   if (value === null || value === undefined) return '';
   const s = String(value);
   if (s === '') return '';
@@ -31,17 +31,17 @@ function csvField(value: unknown): string {
   return s;
 }
 
-function sanitizeFilename(name: string | null, maxLen = 64): string {
+export function sanitizeFilename(name: string | null, maxLen = 64): string {
   const safe = (name ?? '').replace(/[\\/:*?"<>|\r\n]/g, '_').trim() || 'ledger';
   return safe.replace(/^[ .]+|[ .]+$/g, '').slice(0, maxLen) || 'ledger';
 }
 
-function tagsList(raw: string | null): string[] {
+export function tagsList(raw: string | null): string[] {
   if (!raw) return [];
   return raw.split(',').map(t => t.trim()).filter(Boolean);
 }
 
-function attachmentNames(raw: string | null): string[] {
+export function attachmentNames(raw: string | null): string[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -54,7 +54,7 @@ function attachmentNames(raw: string | null): string[] {
   }
 }
 
-function normalizeLang(lang: string | null): string {
+export function normalizeLang(lang: string | null): string {
   if (!lang) return 'en';
   const s = lang.trim().toLowerCase().replace(/_/g, '-');
   if (s.startsWith('zh-tw') || ['zh-hant', 'zh-hk', 'zh-mo'].includes(s)) return 'zh-TW';
@@ -66,13 +66,13 @@ function normalizeLang(lang: string | null): string {
 // 多语言表头 / 类型标签（对齐原版 _CSV_HEADERS_BY_LANG）
 // ===========================
 
-const CSV_HEADERS: Record<string, string[]> = {
+export const CSV_HEADERS: Record<string, string[]> = {
   'zh-CN': ['类型', '分类', '二级分类', '金额', '币种', '账户', '转出账户', '转入账户', '备注', '时间', '标签', '附件'],
   'zh-TW': ['類型', '分類', '二級分類', '金額', '幣種', '帳戶', '轉出帳戶', '轉入帳戶', '備註', '時間', '標籤', '附件'],
   'en':    ['Type', 'Category', 'Subcategory', 'Amount', 'Currency', 'Account', 'From Account', 'To Account', 'Note', 'Time', 'Tags', 'Attachments'],
 };
 
-const TX_TYPE_LABELS: Record<string, Record<string, string>> = {
+export const TX_TYPE_LABELS: Record<string, Record<string, string>> = {
   'zh-CN': { income: '收入', expense: '支出', transfer: '转账' },
   'zh-TW': { income: '收入', expense: '支出', transfer: '轉帳' },
   'en':    { income: 'Income', expense: 'Expense', transfer: 'Transfer' },
@@ -113,14 +113,22 @@ csvRouter.get('/workspace/transactions.csv', zValidator('query', ExportQuerySche
   const headers = CSV_HEADERS[langKey];
   const typeLabels = TX_TYPE_LABELS[langKey];
 
-  // 1. 查询可见账本（含共享账本，与原版 _visible_workspace_ledgers 对齐）
+  // 1. 查询可见账本（含共享账本，与原版 _visible_workspace_ledgers 对齐；
+  //   ledgers 表无 deleted_at 列，软删用 ledger_snapshot tombstone 排除）
   let ledgerQuery = `
     SELECT l.id, l.external_id, l.name, l.currency, l.user_id
     FROM ledgers l
-    INNER JOIN ledger_members lm ON lm.ledger_id = l.id
-    WHERE lm.user_id = ? AND l.deleted_at IS NULL
+    LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
+    WHERE (l.user_id = ? OR lm.user_id = ?)
+      AND NOT EXISTS (
+        SELECT 1 FROM sync_changes sc
+        WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
+          AND sc.action = 'delete'
+          AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                              WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
+      )
   `;
-  const ledgerParams: string[] = [userId];
+  const ledgerParams: string[] = [userId, userId, userId];
   if (q.ledger_id) {
     ledgerQuery += ' AND l.external_id = ?';
     ledgerParams.push(q.ledger_id);
@@ -253,7 +261,8 @@ csvRouter.get('/workspace/transactions.csv', zValidator('query', ExportQuerySche
       if (!isNaN(d.getTime())) {
         const local = new Date(d.getTime() + tzOffset * 60000);
         const pad = (n: number) => String(n).padStart(2, '0');
-        timeStr = `  ${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())}  `;
+        // 纯算术偏移后取 UTC 字段(对齐上游 datetime+timedelta 语义,避免依赖运行时区)
+        timeStr = `  ${local.getUTCFullYear()}-${pad(local.getUTCMonth() + 1)}-${pad(local.getUTCDate())} ${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}:${pad(local.getUTCSeconds())}  `;
       }
     }
 

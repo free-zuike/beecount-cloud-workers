@@ -4,6 +4,7 @@ import { cors } from 'hono/cors';
 import { initializeDatabase, SCHEMA_VERSION } from './db/schema';
 import { APP_VERSION, APP_NAME } from './version';
 import { authMiddleware } from './middleware/auth';
+import { scopeGuard } from './middleware/scope';
 import { validateAccessToken } from './auth';
 import { spaMiddleware } from './middleware/spa';
 import { processBackupSchedule } from './services/backup-scheduler';
@@ -207,24 +208,22 @@ app.get('/metrics', (c) => {
 // Cursor / Cline）连接前会探测此端点。我们只有静态 PAT、无 OAuth server，
 // 所以声明 authorization_servers=[] + bearer header，让客户端走 Bearer 鉴权。
 // 该端点必须存在且是可解析 JSON，否则 SDK 握手会因 schema 不匹配报错。
+export function oauthProtectedResourceJson(base: string): Record<string, unknown> {
+  return {
+    resource: `${base}/api/v1/mcp`,
+    authorization_servers: [],
+    bearer_methods_supported: ['header'],
+    resource_documentation: 'https://github.com/free-zuike/beecount-cloud-workers',
+  };
+}
 app.get('/.well-known/oauth-protected-resource', (c) => {
   const base = new URL(c.req.url).origin;
-  return c.json({
-    resource: `${base}/api/v1/mcp`,
-    authorization_servers: [],
-    bearer_methods_supported: ['header'],
-    resource_documentation: 'https://github.com/free-zuike/beecount-cloud-workers',
-  });
+  return c.json(oauthProtectedResourceJson(base));
 });
 // 部分 SDK 会按 oauth-protected-resource/<resource_path> 形式探测，同样返回
-app.get('/.well-known/oauth-protected-resource/{path:path}', (c) => {
+app.get('/.well-known/oauth-protected-resource/*', (c) => {
   const base = new URL(c.req.url).origin;
-  return c.json({
-    resource: `${base}/api/v1/mcp`,
-    authorization_servers: [],
-    bearer_methods_supported: ['header'],
-    resource_documentation: 'https://github.com/free-zuike/beecount-cloud-workers',
-  });
+  return c.json(oauthProtectedResourceJson(base));
 });
 
 // ---- 公共路由（无需鉴权）----
@@ -417,6 +416,14 @@ app.use('/backup/*', authMiddleware);
 app.use('/sys-config/*', authMiddleware);
 app.use('/export/*', authMiddleware);
 
+// ---- Scope 门禁(对齐上游 require_scopes;默认宽松 ALLOW_APP_RW_SCOPES=true 与生产一致) ----
+app.use('/api/v1/read/*', scopeGuard);
+app.use('/read/*', scopeGuard);
+app.use('/api/v1/write/*', scopeGuard);
+app.use('/write/*', scopeGuard);
+app.use('/api/v1/devices/*', scopeGuard);
+app.use('/devices/*', scopeGuard);
+
 // ---- 受保护路由 ----
 app.route('/api/v1/sync', syncRouter);
 app.route('/api/v1/read', readRouter);
@@ -498,6 +505,7 @@ app.get('/', async (c) => {
 app.use('*', spaMiddleware);
 
 export { BeeCountDO };
+export { app };
 
 export default {
   async fetch(request: Request, env: Bindings, ctx: ExecutionContext): Promise<Response> {

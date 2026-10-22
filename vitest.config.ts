@@ -11,6 +11,7 @@ export default defineConfig({
     alias: {
       // Workers 专属模块在 vitest(node) 下不存在 —— 用测试 shim 模拟
       'cloudflare:sockets': path.resolve(__dirname, 'tests/shims/cloudflare-sockets.ts'),
+      'cloudflare:workers': path.resolve(__dirname, 'tests/shims/cloudflare-workers.ts'),
     },
   },
 });

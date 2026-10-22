@@ -323,7 +323,10 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
 
 
     // ====================== 优化1：批量预加载账本 ======================
-    const ledgerExternalIds = [...new Set(changes.filter(c => c.ledger_id).map(c => c.ledger_id as string))];
+    // user-global 类型(account/category/tag/exchange_rate_override)即使误带
+    // ledger_id 也不应触发账本自动创建(对齐原版 push.py 路径分流)
+    const USER_GLOBAL_TYPES_FOR_FILTER = ['category', 'account', 'tag', 'exchange_rate_override'];
+    const ledgerExternalIds = [...new Set(changes.filter(c => c.ledger_id && !USER_GLOBAL_TYPES_FOR_FILTER.includes(c.entity_type)).map(c => c.ledger_id as string))];
     serverLogger.info('src.routers.sync', '[SYNC] ledgerExternalIds:', ledgerExternalIds);
     const ledgerMap: Record<string, { id: string; user_id: string; external_id: string }> = {};
     
@@ -522,10 +525,11 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         if (change.entity_type === 'attachment') {
           continue;
         }
-        // user-global 实体：category/account/tag 可以不依附 ledger
+        // user-global 实体：category/account/tag/exchange_rate_override 按类型
+        // 无条件走 user-scope（对齐原版 push.py:49，老客户端误填 ledger_id 也忽略）
         const USER_GLOBAL_LEDGER_SENTINEL = '__user_global__';
 const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override'];
-        const isUserGlobal = USER_GLOBAL_TYPES.includes(change.entity_type) && !change.ledger_id;
+        const isUserGlobal = USER_GLOBAL_TYPES.includes(change.entity_type);
 
         const changeUpdatedAt = toUtcDate(change.updated_at);
         const maxAllowed = new Date(new Date(serverNow).getTime() + 5000);
@@ -1773,7 +1777,7 @@ async function applyUserChangeToProjection(
       payment_due_day: paymentDueDay ?? existingRow?.payment_due_day ?? null,
       bank_name: bankName ?? existingRow?.bank_name ?? null,
       card_last_four: cardLastFour ?? existingRow?.card_last_four ?? null,
-      hidden: (payload as any).hidden ?? existingRow?.hidden ?? null,
+      hidden: (payload as any).hidden ?? existingRow?.hidden ?? 0,
     };
 
     if (existingRow) {
@@ -1825,13 +1829,27 @@ async function applyUserChangeToProjection(
         .bind(entity_sync_id, userId).first<{ name: string | null }>();
       const oldName = prevRow?.name;
       if (oldName && oldName !== newName) {
-        // 按 tag_sync_ids_json 精确匹配
+        // 对齐上游 rename_cascade_tag：两条查询取并集——
+        // 1) tag_sync_ids_json 精确引用了该 tag sync_id (mobile/web 完整数据)
+        // 2) tags_csv 包含旧名称但 tag_sync_ids_json 为空 (legacy/不完整数据,issue #5)
         const likePattern = `%"${entity_sync_id}"%`;
+        const likeName = `%${oldName}%`;
         const txRows = await db.prepare(
           `SELECT ledger_id, sync_id, tags_csv FROM read_tx_projection
            WHERE user_id = ? AND tag_sync_ids_json LIKE ?`
         ).bind(userId, likePattern).all<{ ledger_id: string; sync_id: string; tags_csv: string | null }>();
-        for (const tx of txRows.results) {
+        const nameOnlyRows = await db.prepare(
+          `SELECT ledger_id, sync_id, tags_csv FROM read_tx_projection
+           WHERE user_id = ? AND tags_csv LIKE ? AND tag_sync_ids_json IS NULL`
+        ).bind(userId, likeName).all<{ ledger_id: string; sync_id: string; tags_csv: string | null }>();
+        // 去重合并(理论上不重叠,防御性)
+        const seen = new Set<string>();
+        const allRows: Array<{ ledger_id: string; sync_id: string; tags_csv: string | null }> = [];
+        for (const row of [...txRows.results, ...nameOnlyRows.results]) {
+          const key = `${row.ledger_id}:${row.sync_id}`;
+          if (!seen.has(key)) { seen.add(key); allRows.push(row); }
+        }
+        for (const tx of allRows) {
           if (!tx.tags_csv) continue;
           const parts = tx.tags_csv.split(',').map(p => p.trim());
           const replaced = parts.map(p => p === oldName ? newName : p);
@@ -1872,20 +1890,32 @@ async function applyUserChangeToProjection(
       ).bind(entity_sync_id, userId, merged.name, merged.color, change.change_id ?? 0).run();
     }
   } else if (entity_type === 'exchange_rate_override') {
-    // delete 在函数顶部统一处理；这里只有 upsert
+    // delete 在函数顶部统一处理；这里只有 upsert。
+    // 对齐原版 sync_applier：按主键 (user_id, sync_id) merge 后 upsert —— 同
+    // sync_id 更新该行、不同 sync_id 同币对两行共存（App 端按币对收敛）。
     const payload = change.payload;
-    const baseCurrency = (payload as any).baseCurrency ?? '';
-    const quoteCurrency = (payload as any).quoteCurrency ?? '';
-    const rate = (payload as any).rate ?? 1;
-    const updatedAt = (payload as any).updatedAt ?? new Date().toISOString();
-    const existing = await db.prepare('SELECT base_currency FROM user_exchange_rate_projection WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-      .bind(userId, baseCurrency, quoteCurrency).first();
-    if (existing) {
-      await db.prepare('UPDATE user_exchange_rate_projection SET rate = ?, updated_at = ?, source_change_id = ? WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-        .bind(String(rate), updatedAt, change.change_id ?? 0, userId, baseCurrency, quoteCurrency).run();
+    const existingRow = await db.prepare(
+      'SELECT base_currency, quote_currency, rate, updated_at FROM user_exchange_rate_projection WHERE user_id = ? AND sync_id = ?'
+    ).bind(userId, entity_sync_id).first<{ base_currency: string | null; quote_currency: string | null; rate: string | null; updated_at: string | null }>();
+    // merge 语义：payload 非 None 字段叠加，缺失字段从 existing 补齐（对齐 _merge_from_spec）
+    const mergedBase = (payload as any).baseCurrency !== undefined && (payload as any).baseCurrency !== null
+      ? String((payload as any).baseCurrency) : (existingRow?.base_currency ?? '');
+    const mergedQuote = (payload as any).quoteCurrency !== undefined && (payload as any).quoteCurrency !== null
+      ? String((payload as any).quoteCurrency) : (existingRow?.quote_currency ?? '');
+    const mergedRate = (payload as any).rate !== undefined && (payload as any).rate !== null
+      ? String((payload as any).rate) : (existingRow?.rate ?? '');
+    const mergedUpdatedAt = (payload as any).updatedAt !== undefined && (payload as any).updatedAt !== null
+      ? String((payload as any).updatedAt) : (existingRow?.updated_at ?? new Date().toISOString());
+    // 对齐上游 projection.upsert_exchange_rate_override：缺字段直接跳过，币对大写归一
+    const baseCurrency = mergedBase.toUpperCase();
+    const quoteCurrency = mergedQuote.toUpperCase();
+    if (!entity_sync_id || !baseCurrency || !quoteCurrency || mergedRate === '') return;
+    if (existingRow) {
+      await db.prepare('UPDATE user_exchange_rate_projection SET base_currency = ?, quote_currency = ?, rate = ?, updated_at = ?, source_change_id = ? WHERE user_id = ? AND sync_id = ?')
+        .bind(baseCurrency, quoteCurrency, mergedRate, mergedUpdatedAt, change.change_id ?? 0, userId, entity_sync_id).run();
     } else {
       await db.prepare('INSERT INTO user_exchange_rate_projection (user_id, sync_id, base_currency, quote_currency, rate, updated_at, source_change_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .bind(userId, entity_sync_id, baseCurrency, quoteCurrency, String(rate), updatedAt, change.change_id ?? 0).run();
+        .bind(userId, entity_sync_id, baseCurrency, quoteCurrency, mergedRate, mergedUpdatedAt, change.change_id ?? 0).run();
     }
   }
 }
@@ -1923,7 +1953,11 @@ async function applyChangeToProjection(
     const payload = change.payload as Record<string, unknown>;
     const name = (payload.ledgerName ?? payload.ledger_name ?? payload.name ?? null) as string | null;
     const currency = (payload.currency ?? null) as string | null;
-    const monthStartDay = (payload.monthStartDay ?? payload.month_start_day ?? null) as number | null;
+    // 对齐原版 test_ledger_month_start_day.py：仅 number 生效（bool 忽略）、clamp 1-28
+    const rawMsd = payload.monthStartDay ?? payload.month_start_day ?? null;
+    const monthStartDay = typeof rawMsd === 'number' && Number.isFinite(rawMsd)
+      ? Math.min(Math.max(Math.trunc(rawMsd), 1), 28)
+      : null;
 
     // 只要有任一字段就更新 ledgers 表
     if (name || currency || monthStartDay) {
@@ -2088,19 +2122,42 @@ async function applyChangeToProjection(
           native_amount: (payload as any).nativeAmount ?? existingTx?.native_amount ?? null,
         };
 
-        // 与原版 _sync_native_amount_after_merge 对齐：amount 改变时等比缩放 nativeAmount
+        // 与原版 _sync_native_amount_after_merge 对齐：amount 改变时联动 nativeAmount
+        // - 同币种(native==amount,隐含汇率 1)→ native 跟随新 amount
+        // - 外币(native != amount)→ 按隐含汇率等比缩放(保持记账时汇率)
+        // - old_amount == 0 无法推汇率 → 退化 = 新 amount(1:1)
+        // - amount 未变 → 保留旧折算(merge 已补,不动)
         if (existingTx && (payload as any).amount !== undefined && (payload as any).nativeAmount === undefined) {
           const oldAmount = Number(existingTx.amount ?? 0);
           const oldNative = Number(existingTx.native_amount ?? 0);
           const newAmount = Number(txMerged.amount);
-          if (oldAmount !== 0 && oldNative !== oldAmount && newAmount !== oldAmount) {
-            txMerged.native_amount = oldNative / oldAmount * newAmount;
+          if (oldAmount !== 0 && newAmount !== oldAmount) {
+            txMerged.native_amount = oldNative === oldAmount ? newAmount : oldNative / oldAmount * newAmount;
           }
         }
 
         // 与原版 transaction_normalization 对齐：按交易类型清空无效账户列，
         // 防 partial merge 恢复旧转账关联（新建与合并都经过）。
         normalizeTransactionAccounts(txMerged.tx_type as string, txMerged as TxAccountColumns);
+
+        // #41 对齐上游：只带账户名不带 accountId 时，按用户级唯一同名补全 account_sync_id
+        //（同名歧义/无此账户 → 保持 NULL）
+        const resolveAccountIdByName = async (name: string | null | undefined): Promise<string | null | undefined> => {
+          if (!name) return undefined;
+          const rows = await db.prepare(
+            `SELECT sync_id FROM user_account_projection WHERE user_id = ? AND name = ? LIMIT 2`
+          ).bind(userId, name).all<{ sync_id: string }>();
+          return rows.results.length === 1 ? rows.results[0].sync_id : null;
+        };
+        if (!txMerged.account_sync_id && txMerged.account_name) {
+          txMerged.account_sync_id = (await resolveAccountIdByName(txMerged.account_name as string)) ?? null;
+        }
+        if (!txMerged.from_account_sync_id && txMerged.from_account_name) {
+          txMerged.from_account_sync_id = (await resolveAccountIdByName(txMerged.from_account_name as string)) ?? null;
+        }
+        if (!txMerged.to_account_sync_id && txMerged.to_account_name) {
+          txMerged.to_account_sync_id = (await resolveAccountIdByName(txMerged.to_account_name as string)) ?? null;
+        }
 
         await db
           .prepare(

@@ -23,6 +23,7 @@ import { z } from 'zod';
 import { uploadToStorage, downloadFromStorage, deleteFromStorage } from '../lib/storage-adapter';
 import { randomUUID } from 'crypto';
 import { insertAuditLog } from '../lib/audit';
+import { idempotencyMiddleware } from '../lib/idempotency';
 
 // ===========================
 // 辅助函数
@@ -70,13 +71,14 @@ const BatchTransactionCreateSchema = z.object({
   auto_ai_tag: z.boolean().default(true),
   extra_tag_name: z.string().nullable().optional(),
   attach_image_id: z.string().nullable().optional(),
+  locale: z.string().default('zh'),
   device_id: z.string().optional(),
 });
 
 const BatchTransactionDeleteSchema = z.object({
   ledger_id: z.string().optional(),
   base_change_id: z.number().int().min(0).default(0),
-  tx_ids: z.array(z.string()),
+  tx_ids: z.array(z.string()).max(200),
   device_id: z.string().optional(),
 });
 
@@ -177,24 +179,51 @@ function mergeSharedAttachment(
   return [shared];
 }
 
-const batchWriteRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
+/** tags 字段归一为 string[]（兼容 string | array 两种输入） */
+function splitTags(tags: unknown): string[] {
+  if (Array.isArray(tags)) return tags.filter((t): t is string => typeof t === 'string' && !!t.trim());
+  if (typeof tags === 'string' && tags.trim()) {
+    return tags.split(/[,，、;；]/).map(t => t.trim()).filter(Boolean);
+  }
+  return [];
+}
 
-// ---------------------------------------------------------------------------
-// POST /write/transactions/batch - 批量创建交易
-// ---------------------------------------------------------------------------
+/** 对齐原版 _AI_TAG_BY_LOCALE：zh → AI记账 / zh-TW → AI記帳 / en → AI */
+function aiTagNameByLocale(locale: string): string {
+  const norm = (locale || 'zh').toLowerCase().replace('_', '-');
+  if (norm.startsWith('zh-tw') || ['zh-hant', 'zh-hk', 'zh-mo'].includes(norm)) return 'AI記帳';
+  if (norm.startsWith('zh')) return 'AI记账';
+  return 'AI';
+}
 
-batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransactionCreateSchema), async (c) => {
-  const db = c.env.DB;
-  const userId = c.get('userId');
+/**
+ * 对齐原版 _resolve_or_make_ai_tag_name：先 lookup 同用户已有含 AI 的 tag
+ * （跨 ledger user-global）→ 命中复用其名；没命中按 locale 起名。
+ */
+async function resolveOrMakeAiTagName(db: D1Database, userId: string, locale: string): Promise<string> {
+  const rows = await db
+    .prepare('SELECT name FROM user_tag_projection WHERE user_id = ? AND name LIKE ?')
+    .bind(userId, '%AI%')
+    .all<{ name: string | null }>();
+  for (const r of rows.results) {
+    if (r.name && r.name.toUpperCase().includes('AI')) return r.name;
+  }
+  return aiTagNameByLocale(locale);
+}
+
+/**
+ * 批量创建核心（对齐原版 transactions_batch.py）：
+ * 1. attach_image_id → 转正式 attachment（已有 consumeAiImageAsAttachment）
+ * 2. auto_ai_tag + extra_tag_name → auto_tag_names
+ * 3. ensure 所有用到的 tag 名字在 user_tag_projection 有实体，得 name→sync_id map
+ *    （tx.tags 名字 + auto tags；新建的 tag 也发 sync_changes + 写投影）
+ * 4. 每笔 tx：tags_csv = 合并后的名字、tag_sync_ids_json = 反查 sync_id（issue #5）
+ */
+async function runBatchCreate(c: any, ledgerExternalId: string): Promise<Response> {
+  const db = c.env.DB as D1Database;
+  const userId = c.get('userId') as string;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
-
-  // ledger_id 可以来自 body 或 URL path
-  const ledgerIdFromPath = c.req.param('ledgerId');
-  const ledgerExternalId = req.ledger_id || ledgerIdFromPath;
-  if (!ledgerExternalId) {
-    return c.json({ error: 'ledger_id is required' }, 400);
-  }
 
   const ledger = await db
     .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
@@ -205,10 +234,47 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
   const deviceId = req.device_id || c.req.header('X-Device-ID') || 'unknown';
   const createdSyncIds: string[] = [];
   let maxChangeId = 0;
+
   // B2 共享附件：consume ai_image_cache 转正式 attachment（一次性）→ 每笔 tx 挂同一份
   const sharedAttachment = req.attach_image_id
     ? await consumeAiImageAsAttachment(db, c.env, userId, ledger, req.attach_image_id)
     : null;
+
+  // 自动 tag（AI 记账 + extra_tag_name）
+  const autoTagNames: string[] = [];
+  if (req.auto_ai_tag) autoTagNames.push(await resolveOrMakeAiTagName(db, userId, req.locale || 'zh'));
+  if (req.extra_tag_name) autoTagNames.push(req.extra_tag_name);
+
+  // name → sync_id map（已有 tag + 需要新建的 tag 实体）
+  const tagNameToSyncId = new Map<string, string>();
+  const existingTags = await db
+    .prepare('SELECT sync_id, name FROM user_tag_projection WHERE user_id = ?')
+    .bind(userId)
+    .all<{ sync_id: string; name: string | null }>();
+  for (const t of existingTags.results) {
+    if (t.name) tagNameToSyncId.set(t.name, t.sync_id);
+  }
+
+  const neededNames = new Set<string>(autoTagNames);
+  for (const tx of req.transactions) {
+    for (const t of splitTags(tx.tags)) neededNames.add(t);
+  }
+  for (const name of neededNames) {
+    if (tagNameToSyncId.has(name)) continue;
+    const tagSyncId = randomUUID();
+    // tag 是 user-global：sync_changes 用 scope='user'，投影写 user_tag_projection
+    await db.batch([
+      db.prepare(
+        `INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+         VALUES (?, ?, 'tag', ?, 'upsert', ?, ?, ?, ?, 'user')`
+      ).bind(userId, ledger.id, tagSyncId, JSON.stringify({ syncId: tagSyncId, name }), serverNow, userId, deviceId),
+      db.prepare(
+        `INSERT OR REPLACE INTO user_tag_projection (sync_id, user_id, name, source_change_id)
+         VALUES (?, ?, ?, (SELECT last_insert_rowid()))`
+      ).bind(tagSyncId, userId, name),
+    ]);
+    tagNameToSyncId.set(name, tagSyncId);
+  }
 
   for (const tx of req.transactions) {
     const txSyncId = randomUUID();
@@ -246,6 +312,12 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
       to_account_name: tx.to_account_name ?? null,
     });
 
+    // 合并 auto tags（LLM 已识别的 tags + 自动加的 AI 记账 / 图片记账），去重保序
+    const userTags = splitTags(tx.tags);
+    const mergedTags = [...userTags, ...autoTagNames.filter(t => t && !userTags.includes(t))];
+    const tagIds = mergedTags.map(n => tagNameToSyncId.get(n)).filter((v): v is string => !!v);
+    const attachments = mergeSharedAttachment(tx.attachments, sharedAttachment);
+
     const payload: Record<string, unknown> = {
       syncId: txSyncId,
       type: txType,
@@ -256,9 +328,9 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
       accountId: txAccountCols.account_sync_id,
       fromAccountId: txAccountCols.from_account_sync_id,
       toAccountId: txAccountCols.to_account_sync_id,
-      tags: tx.tags || null,
-      tagIds: tx.tag_ids || null,
-      attachments: mergeSharedAttachment(tx.attachments, sharedAttachment),
+      tags: mergedTags.length ? mergedTags : null,
+      tagIds: tagIds.length ? tagIds : null,
+      attachments,
       updatedByUserId: userId,
       createdByUserId: userId,
     };
@@ -286,9 +358,9 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
           txAccountCols.account_sync_id, txAccountCols.account_name,
           txAccountCols.from_account_sync_id, txAccountCols.from_account_name,
           txAccountCols.to_account_sync_id, txAccountCols.to_account_name,
-          tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null,
-          tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null,
-          mergeSharedAttachment(tx.attachments, sharedAttachment) ? safeJsonStringify(mergeSharedAttachment(tx.attachments, sharedAttachment)) : null,
+          mergedTags.length ? mergedTags.join(',') : null,
+          tagIds.length ? safeJsonStringify(tagIds) : null,
+          attachments ? safeJsonStringify(attachments) : null,
           0,
           tx.exclude_from_stats != null ? (tx.exclude_from_stats ? 1 : 0) : null,
           tx.exclude_from_budget != null ? (tx.exclude_from_budget ? 1 : 0) : null,
@@ -309,14 +381,33 @@ batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransaction
     new_change_id: maxChangeId,
     server_timestamp: serverNow,
     created_sync_ids: createdSyncIds,
-    attachment_id: null,
+    attachment_id: sharedAttachment?.cloudFileId ?? null,
   });
+}
+
+const batchWriteRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
+
+// Idempotency-Key 幂等中间件（对齐上游 _prepare_write，batch create/delete 端点）。
+batchWriteRouter.use('*', idempotencyMiddleware);
+
+// ---------------------------------------------------------------------------
+// POST /write/transactions/batch - 批量创建交易
+// ---------------------------------------------------------------------------
+
+batchWriteRouter.post('/transactions/batch', zValidator('json', BatchTransactionCreateSchema), async (c) => {
+  const ledgerIdFromPath = c.req.param('ledgerId');
+  const req = c.req.valid('json');
+  const ledgerExternalId = req.ledger_id || ledgerIdFromPath;
+  if (!ledgerExternalId) {
+    return c.json({ error: 'ledger_id is required' }, 400);
+  }
+  return runBatchCreate(c, ledgerExternalId);
 });
 
 const batchDeleteHandler = async (c: any) => {
   serverLogger.info('app', '[BATCH] batchDeleteHandler matched, url:', c.req.url);
   const userId = c.get('userId');
-  const db = c.env.DB;
+  const db = c.env.DB as D1Database;
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
@@ -348,13 +439,31 @@ const batchDeleteHandler = async (c: any) => {
   }
 
   const deviceId = req.device_id ?? 'batch-write';
-  let deletedCount = 0;
   const deletedIds: string[] = [];
+  const failed: Array<{ tx_id: string; reason: string }> = [];
   const stmts: any[] = [];
   const deleteIndices: number[] = [];
+  const processedTxIds: string[] = [];
+
+  // 对齐上游:只处理本账本投影中已存在的 tx_id,不存在的报 not_found(跨账本同理)
+  const existingSet = new Set<string>();
+  for (let i = 0; i < req.tx_ids.length; i += 500) {
+    const chunk = req.tx_ids.slice(i, i + 500);
+    const placeholders = chunk.map(() => '?').join(',');
+    const rows = await db.prepare(
+      `SELECT sync_id FROM read_tx_projection WHERE ledger_id = ? AND sync_id IN (${placeholders})`
+    ).bind(ledgerId, ...chunk).all<{ sync_id: string }>();
+    for (const r of rows.results) existingSet.add(r.sync_id);
+  }
 
   for (const txSyncId of req.tx_ids) {
+    if (!existingSet.has(txSyncId)) {
+      failed.push({ tx_id: txSyncId, reason: 'not_found' });
+      continue;
+    }
     const insertIdx = stmts.length;
+    deleteIndices.push(insertIdx);
+    processedTxIds.push(txSyncId);
     stmts.push(
       db.prepare(
         `INSERT INTO sync_changes
@@ -384,10 +493,8 @@ const batchDeleteHandler = async (c: any) => {
 
   for (let j = 0; j < deleteIndices.length; j++) {
     const idx = deleteIndices[j];
-    const result = allResults[idx];
-    if (result.meta.changes > 0) {
-      deletedCount++;
-      deletedIds.push(req.tx_ids[j]);
+    if (allResults[idx].meta.changes > 0) {
+      deletedIds.push(processedTxIds[j]);
     }
   }
 
@@ -398,7 +505,7 @@ const batchDeleteHandler = async (c: any) => {
 
   await insertAuditLog({
     db, userId, ledgerId, action: 'batch_delete', entityType: 'transaction',
-    details: { count: deletedCount, ids: deletedIds },
+    details: { count: deletedIds.length, ids: deletedIds },
   });
 
   return c.json({
@@ -407,7 +514,7 @@ const batchDeleteHandler = async (c: any) => {
     new_change_id: (latestCursor as { max_id: number | null } | null)?.max_id ?? 0,
     server_timestamp: serverNow,
     deleted_tx_ids: deletedIds,
-    failed: [],
+    failed,
   });
 };
 
@@ -425,65 +532,10 @@ batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch/delete', zValidator
 // POST /write/ledgers/:ledgerId/transactions/batch - 批量创建交易（前端路径别名）
 // ---------------------------------------------------------------------------
 batchWriteRouter.post('/ledgers/:ledgerId/transactions/batch', zValidator('json', BatchTransactionCreateSchema), async (c) => {
-  const db = c.env.DB;
-  const userId = c.get('userId');
   const req = c.req.valid('json');
-  const serverNow = nowUtc();
-  const ledgerIdFromPath = c.req.param('ledgerId');
-  const ledgerExternalId = req.ledger_id || ledgerIdFromPath;
+  const ledgerExternalId = req.ledger_id || c.req.param('ledgerId');
   if (!ledgerExternalId) return c.json({ error: 'ledger_id is required' }, 400);
-
-  const ledger = await db
-    .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ? AND external_id = ?')
-    .bind(userId, ledgerExternalId)
-    .first<{ id: string; external_id: string }>();
-  if (!ledger) return c.json({ error: 'Ledger not found' }, 404);
-
-  const deviceId = req.device_id || c.req.header('X-Device-ID') || 'unknown';
-  const createdSyncIds: string[] = [];
-  let maxChangeId = 0;
-  // B2 共享附件：consume ai_image_cache 转正式 attachment（一次性）→ 每笔 tx 挂同一份
-  const sharedAttachment = req.attach_image_id
-    ? await consumeAiImageAsAttachment(db, c.env, userId, ledger, req.attach_image_id)
-    : null;
-
-  for (const tx of req.transactions) {
-    const txSyncId = randomUUID();
-    const txType = tx.tx_type || 'expense';
-    let categorySyncId: string | null = tx.category_id || null;
-    if (tx.category_name && !categorySyncId) {
-      const cat = await db.prepare('SELECT sync_id FROM user_category_projection WHERE user_id = ? AND name = ? AND kind = ? LIMIT 1').bind(userId, tx.category_name, tx.category_kind || txType).first<{ sync_id: string }>();
-      if (cat) categorySyncId = cat.sync_id;
-    }
-    let accountSyncId: string | null = tx.account_id || null;
-    if (tx.account_name && !accountSyncId) {
-      const acc = await db.prepare('SELECT sync_id FROM user_account_projection WHERE user_id = ? AND name = ? LIMIT 1').bind(userId, tx.account_name).first<{ sync_id: string }>();
-      if (acc) accountSyncId = acc.sync_id;
-    }
-
-    // 与原版 transaction_normalization 对齐：按交易类型清空无效账户字段
-    // （transfer 只用 from/to；expense/income 只用一个账户），防 partial merge
-    // 恢复旧转账关联——投影与同步 payload 同口径。
-    const txAccountCols = normalizeTransactionAccounts(txType, {
-      account_sync_id: accountSyncId,
-      account_name: tx.account_name ?? null,
-      from_account_sync_id: tx.from_account_id ?? null,
-      from_account_name: tx.from_account_name ?? null,
-      to_account_sync_id: tx.to_account_id ?? null,
-      to_account_name: tx.to_account_name ?? null,
-    });
-
-    const payload: Record<string, unknown> = { syncId: txSyncId, type: txType, amount: tx.amount, happenedAt: tx.happened_at, note: tx.note || null, categoryId: categorySyncId, accountId: txAccountCols.account_sync_id, fromAccountId: txAccountCols.from_account_sync_id, toAccountId: txAccountCols.to_account_sync_id, tags: tx.tags || null, attachments: mergeSharedAttachment(tx.attachments, sharedAttachment), updatedByUserId: userId, createdByUserId: userId };
-    const batchResults = await db.batch([
-      db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope) VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, ?, ?, 'ledger')`).bind(userId, ledger.id, txSyncId, JSON.stringify(payload), serverNow, userId, deviceId),
-      db.prepare(`INSERT OR REPLACE INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, category_name, category_kind, account_sync_id, account_name, from_account_sync_id, from_account_name, to_account_sync_id, to_account_name, tags_csv, tag_sync_ids_json, attachments_json, tx_index, source_change_id, exclude_from_stats, exclude_from_budget, created_by_user_id, last_edited_by_user_id, currency_code, native_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_insert_rowid()), ?, ?, ?, ?, ?, ?)`).bind(ledger.id, txSyncId, userId, txType, tx.amount, tx.happened_at, tx.note || null, categorySyncId, tx.category_name || null, tx.category_kind || null, txAccountCols.account_sync_id, txAccountCols.account_name, txAccountCols.from_account_sync_id, txAccountCols.from_account_name, txAccountCols.to_account_sync_id, txAccountCols.to_account_name, tx.tags ? (Array.isArray(tx.tags) ? tx.tags.join(',') : String(tx.tags)) : null, tx.tag_ids ? safeJsonStringify(tx.tag_ids) : null, mergeSharedAttachment(tx.attachments, sharedAttachment) ? safeJsonStringify(mergeSharedAttachment(tx.attachments, sharedAttachment)) : null, 0, tx.exclude_from_stats != null ? (tx.exclude_from_stats ? 1 : 0) : null, tx.exclude_from_budget != null ? (tx.exclude_from_budget ? 1 : 0) : null, userId, userId, tx.currency_code ?? tx.currencyCode ?? null, tx.native_amount ?? tx.nativeAmount ?? null),
-    ]);
-    const changeId = batchResults[0].meta.last_row_id as number;
-    maxChangeId = Math.max(maxChangeId, changeId);
-    createdSyncIds.push(txSyncId);
-  }
-
-  return c.json({ ledger_id: ledgerExternalId, base_change_id: req.base_change_id || 0, new_change_id: maxChangeId, server_timestamp: serverNow, created_sync_ids: createdSyncIds, attachment_id: null });
+  return runBatchCreate(c, ledgerExternalId);
 });
 
 export default batchWriteRouter;

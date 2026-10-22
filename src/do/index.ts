@@ -147,6 +147,16 @@ export class BeeCountDO extends DurableObject<BackupPackEnv> {
     if (path.endsWith('/import/save')) {
       const { token, data } = await request.json<{ token: string; data: unknown }>();
       const now = Date.now();
+      // 单 user 一个 active token：新上传驱逐旧 token（对齐原版 cache.save_token_data）
+      const session = data as { userId?: string };
+      if (session?.userId) {
+        const activeKey = `import_active:${session.userId}`;
+        const prevToken = await this.ctx.storage.get<string | null>(activeKey);
+        if (prevToken && prevToken !== token) {
+          await this.ctx.storage.delete(`import:${prevToken}`);
+        }
+        await this.ctx.storage.put(activeKey, token);
+      }
       const entry = { data, createdAt: now, expiresAt: now + 30 * 60 * 1000 };
       await this.ctx.storage.put(`import:${token}`, entry);
       // 30分钟后清理

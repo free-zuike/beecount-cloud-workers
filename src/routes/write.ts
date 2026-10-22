@@ -36,6 +36,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { insertAuditLog } from '../lib/audit';
 import { deleteFromStorage } from '../lib/storage-adapter';
+import { idempotencyMiddleware } from '../lib/idempotency';
 
 /** 空串/undefined/null 统一归一为 null —— 对齐原版：无值字段是 NULL 而非空字符串 */
 function nullOr(v: unknown): unknown {
@@ -43,6 +44,60 @@ function nullOr(v: unknown): unknown {
   if (s == null) return null;
   if (typeof v === 'string' && s.trim() === '') return null;
   return v;
+}
+
+/** 从 attachments 数组提取 cloudFileId（对齐上游 file_ids 提取） */
+function collectCloudFileIds(attachments: unknown): string[] {
+  if (!Array.isArray(attachments)) return [];
+  const ids: string[] = [];
+  for (const a of attachments) {
+    if (a && typeof a === 'object' && typeof (a as Record<string, unknown>).cloudFileId === 'string') {
+      ids.push((a as Record<string, unknown>).cloudFileId as string);
+    }
+  }
+  return ids;
+}
+
+/**
+ * 无引用附件 GC（对齐原版 gc_orphan_attachments）：对给定 fileId 逐个检查——
+ * 仍被本账本任何 tx 的 attachments_json 引用（cloudFileId 或 sha_<sha>.jpg）则保留；
+ * 否则删 R2/远端文件 + 删 attachment_files 行。best-effort，失败不影响主流程。
+ */
+async function gcOrphanAttachmentsByFileIds(
+  db: D1Database,
+  env: { R2?: R2Bucket },
+  ledger: { id: string },
+  fileIds: string[],
+): Promise<void> {
+  try {
+    const attRows = await db.prepare(
+      'SELECT id, storage_path, sha256 FROM attachment_files WHERE ledger_id = ? AND attachment_kind = ?'
+    ).bind(ledger.id, 'transaction').all<{ id: string; storage_path: string; sha256: string | null }>();
+    for (const fid of fileIds) {
+      const att = attRows.results.find(r => r.id === fid);
+      if (!att) continue;
+      // 检查是否仍被其他 tx 的 attachments_json 引用（用 INSTR 替代 LIKE 避免 SQLite 模式复杂度限制）
+      // 按 ledger 而不是 user 扫 —— 对齐原版 _fileid_still_referenced_in_ledger：
+      // 共享账本里 Editor 上传的附件 user_id=Editor，但投影行可能挂在 owner user_id 下，
+      // 按 user 过滤会漏判 → 误删共享附件。
+      // Web 端用 cloudFileId 引用，Flutter App 端用 fileName（sha_<sha256>.jpg），同时检查
+      const patNoSpace = `"cloudFileId":"${fid}"`;
+      const patWithSpace = `"cloudFileId": "${fid}"`;
+      const shaPat = att.sha256 ? `sha_${att.sha256}.jpg` : null;
+      const stillReferenced = await db.prepare(
+        `SELECT COUNT(*) as cnt FROM read_tx_projection
+         WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0${shaPat ? ' OR INSTR(attachments_json, ?) > 0' : ''})`
+      ).bind(ledger.id, patNoSpace, patWithSpace, ...(shaPat ? [shaPat] : [])).first<{ cnt: number }>();
+      if (stillReferenced && stillReferenced.cnt > 0) continue;
+      // 无其他引用，安全删除（统一入口：覆盖 R2 + WebDAV/S3/B2/FTP/SFTP 所有远端）
+      if (att.storage_path) {
+        try { await deleteFromStorage(db, env, att.storage_path.replace(/^beecount\//, '')); } catch {}
+      }
+      await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fid).run();
+    }
+  } catch (err) {
+    serverLogger.warn('src.routers.write', `[WRITE] gc_orphan_attachments failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 // ===========================
@@ -160,7 +215,14 @@ async function findLedger(db: D1Database, userId: string, ledgerId: string): Pro
   const row = await db.prepare(
     `SELECT l.id, l.external_id FROM ledgers l
      JOIN ledger_members lm ON l.id = lm.ledger_id
-     WHERE l.external_id = ? AND lm.user_id = ?`
+     WHERE l.external_id = ? AND lm.user_id = ?
+       AND NOT EXISTS (
+         SELECT 1 FROM sync_changes sc
+         WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
+           AND sc.action = 'delete'
+           AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                               WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
+       )`
   ).bind(ledgerId, userId).first<{ id: string; external_id: string }>();
   return row ?? null;
 }
@@ -364,6 +426,33 @@ type Variables = {
 
 const writeRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
+// Idempotency-Key 幂等中间件（对齐上游 _prepare_write）：只对带 key 的幂等端点生效，
+// 同 key 同 payload 重放 → replay 第一次响应；哈希不同 → 409。
+writeRouter.use('*', idempotencyMiddleware);
+
+// STRICT_BASE_CHANGE_ID 开关(默认关,对齐上游 test_write_no_strict_base):
+// 关闭时忽略 base_change_id 过期(移动端 fullPush 抬高 latest 不会导致 web 重试 409);
+// 开启时 base_change_id 落后于账本最新 change_id → 409。对不含 base_change_id 的端点跳过。
+writeRouter.use('*', async (c, next) => {
+  const strict = (c.env as any)?.STRICT_BASE_CHANGE_ID === 'true' || process.env.STRICT_BASE_CHANGE_ID === 'true';
+  if (!strict) return next();
+
+  const m = c.req.path.match(/\/ledgers\/([^/]+)\//);
+  const ledgerExt = m ? decodeURIComponent(m[1]) : undefined;
+  if (!ledgerExt) return next();
+  const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body || typeof body.base_change_id !== 'number') return next();
+
+  const db = c.env.DB;
+  const led = await db.prepare('SELECT id FROM ledgers WHERE external_id = ?').bind(ledgerExt).first<{ id: string }>();
+  if (!led) return next();
+  const latest = await db.prepare('SELECT MAX(change_id) AS m FROM sync_changes WHERE ledger_id = ?').bind(led.id).first<{ m: number | null }>();
+  if ((body.base_change_id as number) < (latest?.m ?? 0)) {
+    return c.json({ error: 'base_change_id is stale, reload and retry' }, 409);
+  }
+  return next();
+});
+
 // ---------------------------------------------------------------------------
 // POST /write/ledgers - 创建账本
 // ---------------------------------------------------------------------------
@@ -416,10 +505,10 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
   
   const batchResults = await db.batch([
     db.prepare(
-      `INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO ledgers (id, user_id, external_id, name, currency, month_start_day, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-      .bind(ledgerId, userId, ledgerExternalId, req.ledger_name, req.currency, serverNow),
+      .bind(ledgerId, userId, ledgerExternalId, req.ledger_name, req.currency, req.month_start_day ?? 1, serverNow),
     // 与原版对齐：创建者自动 owner（否则 ledger_members 找不到成员）
     db.prepare(
       `INSERT INTO ledger_members (ledger_id, user_id, role, joined_at)
@@ -469,7 +558,18 @@ writeRouter.post('/ledgers', zValidator('json', WriteLedgerCreateSchema), async 
 /**
  * 更新账本元信息（名称、货币）
  */
-writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaUpdateSchema), async (c) => {
+writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaUpdateSchema, (result, c) => {
+  if (result.success) return;
+  return c.json({
+    error: { code: 'VALIDATION_ERROR', message: 'Request validation failed', request_id: c.req.header('cf-ray') || '' },
+    detail: 'Request validation failed',
+    validation: result.error.issues.map(i => ({
+      loc: ['body', ...i.path.map(p => String(p))],
+      msg: i.message,
+      type: 'value_error',
+    })),
+  }, 422);
+}), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const ledgerId = c.req.param('ledgerId');
@@ -615,35 +715,7 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
   // 清理附件记录和 R2 文件（检查是否仍被其他 tx 引用，与原版 gc_orphan_attachments 对齐）
   // 附件清理依赖删除后投影的引用检查 + R2 文件无法事务化，保持 best-effort
   // （对齐原版 file_ops 在 commit 后执行；共享附件被其他交易引用时自动保留）
-  try {
-    for (const fid of fileIdsToClean) {
-      const att = attRows.results.find(r => r.id === fid);
-      if (!att) continue;
-
-      // 检查是否仍被其他 tx 的 attachments_json 引用（用 INSTR 替代 LIKE 避免 SQLite 模式复杂度限制）
-      // 按 ledger 而不是 user 扫 —— 对齐原版 _fileid_still_referenced_in_ledger：
-      // 共享账本里 Editor 上传的附件 user_id=Editor，但投影行可能挂在 owner user_id 下，
-      // 按 user 过滤会漏判 → 误删共享附件。
-      // Web 端用 cloudFileId 引用，Flutter App 端用 fileName（sha_<sha256>.jpg），同时检查
-      const patNoSpace = `"cloudFileId":"${fid}"`;
-      const patWithSpace = `"cloudFileId": "${fid}"`;
-      const shaPat = att.sha256 ? `sha_${att.sha256}.jpg` : null;
-      const stillReferenced = await db.prepare(
-        `SELECT COUNT(*) as cnt FROM read_tx_projection
-         WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0${shaPat ? ' OR INSTR(attachments_json, ?) > 0' : ''})`
-      ).bind(ledger.id, patNoSpace, patWithSpace, ...(shaPat ? [shaPat] : [])).first<{ cnt: number }>();
-
-      if (stillReferenced && stillReferenced.cnt > 0) continue;
-
-      // 无其他引用，安全删除（统一入口：覆盖 R2 + WebDAV/S3/B2/FTP/SFTP 所有远端）
-      if (att.storage_path) {
-        try { await deleteFromStorage(db, c.env, att.storage_path.replace(/^beecount\//, '')); } catch {}
-      }
-      await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fid).run();
-    }
-  } catch (err) {
-    serverLogger.warn('src.routers.write', `[WRITE] gc_orphan_attachments failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
-  }
+  if (fileIdsToClean.length) await gcOrphanAttachmentsByFileIds(db, c.env, ledger, fileIdsToClean);
 
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'delete', entityType: 'transaction', entityId: txSyncId,
@@ -694,12 +766,13 @@ writeRouter.delete('/ledgers/:ledgerId', async (c) => {
   }
 
   // 全量 DB 写在一个事务里（tombstone + 投影清空 + 成员 + 附件 + 历史 + 游标，对齐原版单 commit）
+  const deviceId = c.req.header('X-Device-ID') || 'web-console';
   const batchResults = await db.batch([
     db.prepare(
-      `INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ledger')`
     )
-      .bind(userId, ledger.id, 'ledger_snapshot', ledger.external_id, 'delete', '{}', serverNow, userId),
+      .bind(userId, ledger.id, 'ledger_snapshot', ledger.external_id, 'delete', '{}', serverNow, userId, deviceId),
     db.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id),
     db.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').bind(ledger.id),
     db.prepare('DELETE FROM ledger_members WHERE ledger_id = ? AND user_id != ?').bind(ledger.id, userId),
@@ -747,11 +820,25 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
   if (!ledger && req.ledger_id) {
     ledger = await findLedger(db, userId, req.ledger_id);
   }
-  
-  // 如果没有指定账本或找不到，使用用户的第一个账本
+
+  // 显式指定了账本但找不到(不存在或已软删)→ 404,不静默 fallback(对齐上游 B2:写软删账本 404 且不复活)
+  if (!ledger && (urlLedgerId || req.ledger_id)) {
+    return c.json({ error: 'Ledger not found or has been deleted' }, 404);
+  }
+
+  // 未指定账本时,回退到用户的第一个账本(排除软删)
   if (!ledger) {
     ledger = await db
-      .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
+      .prepare(`SELECT id, external_id FROM ledgers l
+        WHERE user_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM sync_changes sc
+            WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
+              AND sc.action = 'delete'
+              AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                                  WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
+          )
+        LIMIT 1`)
       .bind(userId)
       .first<{ id: string; external_id: string }>();
   }
@@ -818,6 +905,25 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     to_account_sync_id: req.to_account_id ?? null,
     to_account_name: req.to_account_name ?? null,
   });
+
+  // #41 对齐上游：只带账户名不带 accountId 时，按用户级唯一同名补全 account_sync_id
+  //（同名歧义/无此账户 → 保持 NULL）
+  const resolveAccountIdByName = async (name: string | null | undefined): Promise<string | null | undefined> => {
+    if (!name) return undefined;
+    const rows = await db.prepare(
+      `SELECT sync_id FROM user_account_projection WHERE user_id = ? AND name = ? LIMIT 2`
+    ).bind(userId, name).all<{ sync_id: string }>();
+    return rows.results.length === 1 ? rows.results[0].sync_id : null;
+  };
+  if (!txAccountCols.account_sync_id && txAccountCols.account_name) {
+    txAccountCols.account_sync_id = (await resolveAccountIdByName(txAccountCols.account_name)) ?? null;
+  }
+  if (!txAccountCols.from_account_sync_id && txAccountCols.from_account_name) {
+    txAccountCols.from_account_sync_id = (await resolveAccountIdByName(txAccountCols.from_account_name)) ?? null;
+  }
+  if (!txAccountCols.to_account_sync_id && txAccountCols.to_account_name) {
+    txAccountCols.to_account_sync_id = (await resolveAccountIdByName(txAccountCols.to_account_name)) ?? null;
+  }
 
   // sync_changes + projection 同事务原子写入（db.batch = SQL transaction，
     // 任一失败整批回滚，无需手动回删 sync_changes）
@@ -1310,6 +1416,14 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   if (req.exclude_from_stats !== undefined) newPayload.excludeFromStats = req.exclude_from_stats;
   if (req.exclude_from_budget !== undefined) newPayload.excludeFromBudget = req.exclude_from_budget;
 
+  // 附件 diff：被剔除的 fileId 在 commit 后触发 GC（对齐原版 upsert_tx prev/new 差集）
+  let removedAttachmentIds: string[] = [];
+  if (req.attachments !== undefined) {
+    const prevIds = collectCloudFileIds(existingPayload.attachments);
+    const newIds = collectCloudFileIds(req.attachments);
+    removedAttachmentIds = prevIds.filter(id => !newIds.includes(id));
+  }
+
   // 多币种联动折算（与原版 rescale_native_amount 对齐）：
   // item有nativeAmount且payload未显式传native_amount → 按隐含汇率等比缩放
   if (req.amount !== undefined && req.native_amount === undefined && 'nativeAmount' in existingPayload) {
@@ -1363,6 +1477,9 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   ]);
 
   const newChangeId = batchResults[0].meta.last_row_id as number;
+
+  // 附件 diff 触发的 GC（best-effort，commit 后执行；共享附件被其他交易引用时保留）
+  if (removedAttachmentIds.length) await gcOrphanAttachmentsByFileIds(db, c.env, ledger, removedAttachmentIds);
 
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'update', entityType: 'transaction', entityId: txSyncId,
@@ -1755,6 +1872,15 @@ writeRouter.delete('/ledgers/:ledgerId/categories/:id', zValidator('json', Write
     return c.json({ error: `Category has ${childCount!.cnt} child categories` }, 409);
   }
 
+  // 分类被交易引用禁止删除(对齐上游:防止 orphan category 污染)
+  const txRef = await db.prepare(
+    `SELECT COUNT(*) AS cnt FROM read_tx_projection
+     WHERE user_id = ? AND (category_sync_id = ? OR (category_name = ? AND category_kind = ?))`
+  ).bind(userId, categorySyncId, catRow?.name ?? null, catRow?.kind ?? null).first<{ cnt: number }>();
+  if ((txRef?.cnt ?? 0) > 0) {
+    return c.json({ error: `Category is referenced by ${txRef!.cnt} transactions` }, 409);
+  }
+
   // 清理分类图标 R2 文件（先删 projection 行，再检查引用计数）
   const catIcon = await db.prepare(
     'SELECT icon_cloud_file_id FROM user_category_projection WHERE sync_id = ? AND user_id = ?'
@@ -1905,6 +2031,15 @@ writeRouter.post('/ledgers/:ledgerId/budgets', zValidator('json', WriteBudgetCre
     createdByUserId: userId,
     updatedByUserId: userId,
   };
+
+  // 对齐上游：total 预算唯一,重复创建拒绝
+  if (req.type === 'total') {
+    const dup = await db.prepare('SELECT sync_id FROM read_budget_projection WHERE ledger_id = ? AND budget_type = ? LIMIT 1')
+      .bind(ledger.id, 'total').first();
+    if (dup) {
+      return c.json({ error: 'Total budget already exists' }, 400);
+    }
+  }
 
   // sync_changes + projection 同事务原子写入
   const batchResults = await db.batch([
@@ -2329,29 +2464,42 @@ writeRouter.put('/exchange-rate-overrides', zValidator('json', ExchangeRateSchem
   const { base_currency, quote_currency, rate } = c.req.valid('json');
   const serverNow = nowUtc();
 
-  // 与原版一致：更新时复用现有 sync_id，新建时生成新 UUID
+  // 对齐上游:币对大小写归一；rate 必须是 (0, 1e9) 的有限正数；base != quote(422)
+  const base = String(base_currency).trim().toUpperCase();
+  const quote = String(quote_currency).trim().toUpperCase();
+  const rateNum = typeof rate === 'number' ? rate : parseFloat(String(rate));
+  if (!Number.isFinite(rateNum) || rateNum <= 0 || rateNum >= 1e9) {
+    return c.json({ error: 'rate must be a positive finite number below 1e9' }, 422);
+  }
+  if (base === quote) {
+    return c.json({ error: 'base_currency and quote_currency must differ' }, 422);
+  }
+
+  // 与原版一致：更新时复用现有 sync_id（币对大小写不敏感），新建时生成新 UUID
   const existingPair = await db.prepare('SELECT sync_id FROM user_exchange_rate_projection WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-    .bind(userId, base_currency, quote_currency).first<{ sync_id: string }>();
+    .bind(userId, base, quote).first<{ sync_id: string }>();
   const syncId = existingPair?.sync_id || randomUUID();
   // sync_changes + 投影同事务原子写入
-  const existing = await db.prepare('SELECT base_currency FROM user_exchange_rate_projection WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-    .bind(userId, base_currency, quote_currency).first();
+  // 对齐原版 apply_user_change_to_projection：按 (user_id, sync_id) upsert，
+  // 同币对双 sync_id 共存时只更新 existing 那一行，不波及其它行
+  const existing = await db.prepare('SELECT sync_id FROM user_exchange_rate_projection WHERE user_id = ? AND sync_id = ?')
+    .bind(userId, syncId).first<{ sync_id: string }>();
   const batchResults = await db.batch([
     db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
     VALUES (?, NULL, 'exchange_rate_override', ?, 'upsert', ?, ?, ?, 'web-console', 'user')`)
-      .bind(userId, syncId, JSON.stringify({ syncId, baseCurrency: base_currency, quoteCurrency: quote_currency, rate: String(rate), updatedAt: serverNow }), serverNow, userId),
+      .bind(userId, syncId, JSON.stringify({ syncId, baseCurrency: base, quoteCurrency: quote, rate: String(rate), updatedAt: serverNow }), serverNow, userId),
     existing
-      ? db.prepare('UPDATE user_exchange_rate_projection SET rate = ?, updated_at = ? WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-        .bind(String(rate), serverNow, userId, base_currency, quote_currency)
+      ? db.prepare('UPDATE user_exchange_rate_projection SET rate = ?, updated_at = ? WHERE user_id = ? AND sync_id = ?')
+        .bind(String(rate), serverNow, userId, syncId)
       : db.prepare('INSERT INTO user_exchange_rate_projection (user_id, sync_id, base_currency, quote_currency, rate, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(userId, syncId, base_currency, quote_currency, String(rate), serverNow),
+        .bind(userId, syncId, base, quote, String(rate), serverNow),
   ]);
   const changeId = batchResults[0].meta.last_row_id as number;
 
   // WS 广播
   await broadcastExchangeRateOverride(c, userId, changeId).catch(() => {});
 
-  return c.json({ sync_id: syncId, base_currency, quote_currency, rate: String(rate) });
+  return c.json({ sync_id: syncId, base_currency: base, quote_currency: quote, rate: String(rate) });
 });
 
 // 广播汇率覆盖变更到当前用户
@@ -2388,26 +2536,32 @@ writeRouter.delete('/exchange-rate-overrides', async (c) => {
     return c.json({ error: 'base_currency and quote_currency are required' }, 400);
   }
 
-  const syncId = randomUUID();
+  const base = String(baseCurrency).trim().toUpperCase();
+  const quote = String(quoteCurrency).trim().toUpperCase();
 
   // 查询现有记录的 sync_id，用于 delete 的 entity_sync_id（与原版一致：App 按 syncId 匹配删除）
   const existingRow = await db.prepare('SELECT sync_id FROM user_exchange_rate_projection WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-    .bind(userId, baseCurrency, quoteCurrency).first<{ sync_id: string }>();
-  const deleteSyncId = existingRow?.sync_id || syncId;
+    .bind(userId, base, quote).first<{ sync_id: string }>();
+  // 对齐上游：删除不存在的币对 → 404
+  if (!existingRow) {
+    return c.json({ error: 'Exchange rate override not found' }, 404);
+  }
+  const deleteSyncId = existingRow.sync_id;
 
   const delResult = await db.batch([
     db.prepare(`INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope)
     VALUES (?, NULL, 'exchange_rate_override', ?, 'delete', ?, ?, ?, 'web-console', 'user')`)
       .bind(userId, deleteSyncId, '{}', serverNow, userId),
-    db.prepare('DELETE FROM user_exchange_rate_projection WHERE user_id = ? AND base_currency = ? AND quote_currency = ?')
-      .bind(userId, baseCurrency, quoteCurrency),
+    // 对齐原版：只删 existing 那一行（按 sync_id），同币对其它 sync_id 行保留
+    db.prepare('DELETE FROM user_exchange_rate_projection WHERE user_id = ? AND sync_id = ?')
+      .bind(userId, deleteSyncId),
   ]);
   const delChangeId = delResult[0].meta.last_row_id as number;
 
   // WS 广播
   await broadcastExchangeRateOverride(c, userId, delChangeId).catch(() => {});
 
-  return c.json({ sync_id: syncId, base_currency: baseCurrency, quote_currency: quoteCurrency, rate: null });
+  return c.json({ sync_id: deleteSyncId, base_currency: base, quote_currency: quote, rate: null });
 });
 
 export default writeRouter;

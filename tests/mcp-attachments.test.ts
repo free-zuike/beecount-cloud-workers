@@ -17,7 +17,7 @@ const ATTACH_TABLES = `
   );
   CREATE TABLE mcp_call_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, pat_id TEXT, pat_prefix TEXT, pat_name TEXT,
-    tool_name TEXT, status TEXT, error_message TEXT, args_summary TEXT, duration_ms INTEGER, called_at TEXT
+    tool_name TEXT, status TEXT, error_message TEXT, args_summary TEXT, duration_ms INTEGER, client_ip TEXT, called_at TEXT
   );
 `;
 
@@ -194,13 +194,14 @@ describe('upload_attachment (execTool 集成)', () => {
     expect(out.status).toBe('ledger_not_found');
   });
 
-  it('does not leak file content into the call log summary', async () => {
+  it('args_summary 不泄漏 note/text 自由文本(对齐上游 _summarize_args)', async () => {
     await callUpload({ file_name: 'secret.png', content_base64: toBase64(new TextEncoder().encode('TOP-SECRET-BYTES')) });
     const log = sqlite.prepare('SELECT args_summary FROM mcp_call_logs WHERE tool_name = ? ORDER BY id DESC LIMIT 1').get('upload_attachment');
-    const keys = JSON.parse(log.args_summary);
-    expect(keys).toContain('file_name');
-    expect(keys).toContain('content_base64');
-    expect(log.args_summary).not.toContain('secret.png');
+    // args_summary 是 k=v 逗号分隔字符串(JSON 序列化结果,非 JSON 对象)
+    expect(typeof log.args_summary).toBe('string');
+    expect(log.args_summary).toContain('file_name=secret.png');
+    expect(log.args_summary).toContain('content_base64=');
+    // 原始文件字节绝不进入日志
     expect(log.args_summary).not.toContain('TOP-SECRET-BYTES');
   });
 });

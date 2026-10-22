@@ -62,12 +62,40 @@ export const TOOL_DEFS: ToolDef[] = [
   { name: 'parse_and_create_from_text', description: 'Have BeeCount AI parse free-form natural-language text into a transaction. Useful when the user gives a sentence like "上午星巴克花了 38" and you want BeeCount\'s own AI prompt + ledger context to do the heavy lifting. Requires the user to have configured an AI chat provider in their profile.', inputSchema: { type: 'object', properties: { text: { type: 'string' }, ledger_id: { type: 'string' } }, required: ['text'] } },
 ];
 
+// 上游 _summarize_args 等价:args_summary 用 k=v、join ', ',跳过敏感字段
+// (note/text/None),单字段 str 截 29 字符 + '…'(共 30),list/tuple → [n],
+// dict → {...n},总长 ≤200(截 199 + '…');全跳过/空 → null。
+export function summarizeArgs(args: Record<string, unknown> | undefined | null): string | null {
+  if (!args) return null;
+  const SENSITIVE = new Set(['note', 'text']);
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(args)) {
+    if (SENSITIVE.has(k)) continue;
+    if (v === null || v === undefined) continue;
+    let shown: string;
+    if (typeof v === 'string') {
+      shown = v.length <= 30 ? v : v.slice(0, 29) + '…';
+    } else if (Array.isArray(v)) {
+      shown = `[${v.length}]`;
+    } else if (typeof v === 'object') {
+      shown = `{...${Object.keys(v).length}}`;
+    } else {
+      shown = String(v);
+    }
+    parts.push(`${k}=${shown}`);
+  }
+  if (parts.length === 0) return null;
+  let out = parts.join(', ');
+  if (out.length > 200) out = out.slice(0, 199) + '…';
+  return out;
+}
+
 // ===========================
 // 工具执行
 // ===========================
 
 // 软删除检查：最新 ledger_snapshot 为 delete 则视为已软删（原版 _is_ledger_deleted）
-async function isLedgerDeleted(db: D1Database, ledgerId: string): Promise<boolean> {
+export async function isLedgerDeleted(db: D1Database, ledgerId: string): Promise<boolean> {
   const row = await db.prepare(`SELECT action FROM sync_changes WHERE ledger_id = ? AND entity_type = 'ledger_snapshot' AND action = 'delete' ORDER BY change_id DESC LIMIT 1`).bind(ledgerId).first<{ action: string }>();
   return row?.action === 'delete';
 }
@@ -100,7 +128,7 @@ async function buildCurrencyFields(db: D1Database, userId: string, ledgerBase: s
   return { currency_code: cc, native_amount: native };
 }
 
-async function resolveLedger(db: D1Database, userId: string, ledgerId?: string | null): Promise<{ id: string; external_id: string; name: string; currency: string | null } | null> {
+export async function resolveLedger(db: D1Database, userId: string, ledgerId?: string | null): Promise<{ id: string; external_id: string; name: string; currency: string | null } | null> {
   if (ledgerId) {
     const led = await db.prepare(`SELECT l.id, l.external_id, l.name, l.currency FROM ledgers l LEFT JOIN ledger_members lm ON l.id = lm.ledger_id WHERE (l.user_id = ? OR lm.user_id = ?) AND l.external_id = ?`).bind(userId, userId, ledgerId).first<{ id: string; external_id: string; name: string; currency: string | null }>();
     if (!led) return null;
@@ -115,7 +143,7 @@ async function resolveLedger(db: D1Database, userId: string, ledgerId?: string |
 }
 
 // B5: 多账本写操作歧义拒绝 — 不指定 ledger_id 且有多个账本时返回候选列表（原版行为）
-async function resolveWriteLedger(db: D1Database, userId: string, ledgerId?: string | null): Promise<{ ledger: { id: string; external_id: string; name: string; currency: string | null } | null; status: any }> {
+export async function resolveWriteLedger(db: D1Database, userId: string, ledgerId?: string | null): Promise<{ ledger: { id: string; external_id: string; name: string; currency: string | null } | null; status: any }> {
   if (ledgerId) {
     const led = await resolveLedger(db, userId, ledgerId);
     if (!led) return { ledger: null, status: { status: 'ledger_not_found', message: `Ledger not found or has been deleted: ${ledgerId}`, ledger_id: ledgerId } };
@@ -407,7 +435,7 @@ async function createTxViaWriteRouter(
   };
 }
 
-export async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_TIMEZONE?: string; TZ?: string; R2?: R2Bucket }, baseUrl: string, userId: string, scopes: string[], name: string, args: Record<string, unknown>, patId: string, patPrefix: string, patName: string): Promise<{ content: { type: string; text: string }[] }> {
+export async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_TIMEZONE?: string; TZ?: string; R2?: R2Bucket }, baseUrl: string, userId: string, scopes: string[], name: string, args: Record<string, unknown>, patId: string, patPrefix: string, patName: string, clientIp?: string | null): Promise<{ content: { type: string; text: string }[] }> {
   const t = Date.now();
   const isWrite = ['create_transaction', 'update_transaction', 'delete_transaction', 'create_category', 'update_budget', 'create_transactions', 'parse_and_create_from_text', 'upload_attachment'].includes(name);
   if (isWrite && !scopes.includes('mcp:write')) throw new Error('PAT missing required scope: mcp:write');
@@ -815,11 +843,11 @@ export async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_
       default: throw new Error(`Unknown tool: ${name}`);
     }
     const d = Date.now() - t;
-    try { await db.prepare(`INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, args_summary, duration_ms, called_at) VALUES (?, ?, ?, ?, ?, 'ok', ?, ?, ?)`).bind(userId, patId, patPrefix, patName, name, JSON.stringify(Object.keys(args)), d, nowUtc()).run(); } catch (e) { serverLogger.error('src.routers.mcp', `Failed to log MCP call: ${(e as Error).message}`); }
+    try { await db.prepare(`INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, args_summary, duration_ms, client_ip, called_at) VALUES (?, ?, ?, ?, ?, 'ok', ?, ?, ?, ?)`).bind(userId, patId, patPrefix, patName, name, summarizeArgs(args), d, clientIp ?? null, nowUtc()).run(); } catch (e) { serverLogger.error('src.routers.mcp', `Failed to log MCP call: ${(e as Error).message}`); }
     return { content: [{ type: 'text', text: JSON.stringify(r) }] };
   } catch (err) {
     const d = Date.now() - t;
-    try { await db.prepare(`INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, error_message, args_summary, duration_ms, called_at) VALUES (?, ?, ?, ?, ?, 'error', ?, ?, ?, ?)`).bind(userId, patId, patPrefix, patName, name, (err as Error).message, JSON.stringify(Object.keys(args)), d, nowUtc()).run(); } catch (e) { serverLogger.error('src.routers.mcp', `Failed to log MCP error call: ${(e as Error).message}`); }
+    try { await db.prepare(`INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, error_message, args_summary, duration_ms, client_ip, called_at) VALUES (?, ?, ?, ?, ?, 'error', ?, ?, ?, ?, ?)`).bind(userId, patId, patPrefix, patName, name, (err as Error).message, summarizeArgs(args), d, clientIp ?? null, nowUtc()).run(); } catch (e) { serverLogger.error('src.routers.mcp', `Failed to log MCP error call: ${(e as Error).message}`); }
     throw err; // 抛出异常，由 JSON-RPC 处理层转为 error 响应
   }
 }
@@ -901,7 +929,7 @@ async function jsonRpcHandler(c: any) {
     if (method === 'tools/call') {
       const p = (params || {}) as { name?: string; arguments?: Record<string, unknown> };
       if (!p.name) return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32602, message: 'Tool name required' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
-      const result = await execTool(db, c.env, baseUrl, userId, patScopes, p.name, p.arguments || {}, patId, patPrefix, patName);
+      const result = await execTool(db, c.env, baseUrl, userId, patScopes, p.name, p.arguments || {}, patId, patPrefix, patName, c.req.header('CF-Connecting-IP'));
       return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', ...result, _meta: { 'io.modelcontextprotocol/serverInfo': SERVER_INFO } } }), { headers: { 'Content-Type': 'application/json' } });
     }
     if (method === 'ping') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete' } }), { headers: { 'Content-Type': 'application/json' } });
@@ -948,7 +976,7 @@ router.post('/tools/call', async (c) => {
   let body: any; try { body = await c.req.json(); } catch { return new Response(JSON.stringify({ error: 'Invalid JSON' }), { status: 400, headers: { 'Content-Type': 'application/json' } }); }
   if (!body?.name) return new Response(JSON.stringify({ error: 'Tool name required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   try {
-    const result = await execTool(db, c.env, baseUrl, userId, patScopes, body.name, body.arguments || {}, patId, patPrefix, patName);
+    const result = await execTool(db, c.env, baseUrl, userId, patScopes, body.name, body.arguments || {}, patId, patPrefix, patName, c.req.header('CF-Connecting-IP'));
     return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });
   } catch (e) { return new Response(JSON.stringify({ error: (e as Error).message }), { status: 500, headers: { 'Content-Type': 'application/json' } }); }
 });

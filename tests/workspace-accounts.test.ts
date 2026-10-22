@@ -32,6 +32,11 @@ const TABLES = `
     exclude_from_stats BOOLEAN DEFAULT 0, native_amount REAL,
     PRIMARY KEY (ledger_id, sync_id)
   );
+  CREATE TABLE sync_changes (
+    change_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ledger_id TEXT, entity_type TEXT,
+    entity_sync_id TEXT, action TEXT, payload_json TEXT, updated_at TEXT,
+    updated_by_user_id TEXT, updated_by_device_id TEXT, scope TEXT
+  );
 `;
 
 const SECRET = 'test-secret';
@@ -55,11 +60,13 @@ function buildApp(db: D1Database) {
 
 interface AccItem {
   id: string;
+  name: string;
   income_total: number;
   expense_total: number;
   tx_count: number;
   balance: number;
   initial_balance: number;
+  last_change_id: number;
 }
 
 async function fetchAccounts(app: Hono<any>, db: D1Database, token: string, qs = ''): Promise<AccItem[]> {
@@ -90,6 +97,8 @@ describe('workspace/accounts 聚合(对齐原版 3 条 GROUP BY)', () => {
         ('lg1', 't2', 'u1', 'expense',    20, '2026-01-02T00:00:00Z', 'acc-a', NULL, NULL),
         ('lg1', 't3', 'u1', 'transfer',   30, '2026-01-03T00:00:00Z', NULL, 'acc-a', 'acc-b'),
         ('lg1', 't4', 'u1', 'income',     10, '2026-01-04T00:00:00Z', 'acc-b', NULL, NULL);
+      INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, scope)
+      VALUES ('u1', 'lg1', 'account', 'acc-a', 'update', 'user');
     `);
     const app = buildApp(db);
     const token = await createAccessToken('u1', SECRET, ['app_write']);
@@ -115,6 +124,59 @@ describe('workspace/accounts 聚合(对齐原版 3 条 GROUP BY)', () => {
     expect(m['acc-c'].expense_total).toBe(0);
     expect(m['acc-c'].tx_count).toBe(0);
     expect(m['acc-c'].balance).toBe(50);
+
+    // last_change_id = 用户级 account 变更 max change_id(对齐原版),所有账户统一
+    expect(m['acc-a'].last_change_id).toBe(1);
+    expect(m['acc-b'].last_change_id).toBe(1);
+    expect(m['acc-c'].last_change_id).toBe(1);
+  });
+
+  it('name 去空白、跳过空名账户', async () => {
+    const { sqlite, db } = createRealDb();
+    sqlite.exec(TABLES);
+    sqlite.exec(`
+      INSERT INTO users (id, email, password_hash, is_enabled) VALUES ('u1', 'trim@x.com', 'x', 1);
+      INSERT INTO ledgers (id, external_id, user_id, name) VALUES ('lg1', 'lg1', 'u1', '账本');
+      INSERT INTO user_account_projection (sync_id, user_id, name, account_type, initial_balance)
+      VALUES ('acc-a', 'u1', '  钱包  ', 'bank_card', 100), ('acc-b', 'u1', '', 'bank_card', 200), ('acc-c', 'u1', '  ', 'bank_card', 300);
+    `);
+    const app = buildApp(db);
+    const token = await createAccessToken('u1', SECRET, ['app_write']);
+    const items = await fetchAccounts(app, db, token);
+
+    // acc-b/acc-c 空名被跳过;acc-a 名字去空白
+    expect(items).toHaveLength(1);
+    expect(items[0].id).toBe('acc-a');
+    expect(items[0].name).toBe('钱包');
+  });
+
+  it('排除软删账本:最新 ledger_snapshot 动作为 delete 的账本交易不计入聚合', async () => {
+    const { sqlite, db } = createRealDb();
+    sqlite.exec(TABLES);
+    sqlite.exec(`
+      INSERT INTO users (id, email, password_hash, is_enabled) VALUES ('u1', 'softdel@x.com', 'x', 1);
+      INSERT INTO ledgers (id, external_id, user_id, name) VALUES
+        ('lg1', 'lg1', 'u1', '活跃账本'), ('lg2', 'lg2', 'u1', '已软删账本');
+      INSERT INTO user_account_projection (sync_id, user_id, name, account_type, initial_balance)
+      VALUES ('acc-a', 'u1', '共用账户', 'bank_card', 100);
+      INSERT INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, account_sync_id)
+      VALUES
+        ('lg1', 't1', 'u1', 'income', 50, '2026-01-01T00:00:00Z', 'acc-a'),
+        ('lg2', 't2', 'u1', 'income', 80, '2026-01-02T00:00:00Z', 'acc-a');
+      -- lg1 最新动作为 upsert(活跃);lg2 最新动作为 delete(软删)
+      INSERT INTO sync_changes (user_id, ledger_id, entity_type, entity_sync_id, action, scope) VALUES
+        ('u1', 'lg1', 'ledger_snapshot', 'lg1', 'upsert', 'ledger'),
+        ('u1', 'lg2', 'ledger_snapshot', 'lg2', 'upsert', 'ledger'),
+        ('u1', 'lg2', 'ledger_snapshot', 'lg2', 'delete', 'ledger');
+    `);
+    const app = buildApp(db);
+    const token = await createAccessToken('u1', SECRET, ['app_write']);
+    const items = await fetchAccounts(app, db, token);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].id).toBe('acc-a');
+    expect(items[0].income_total).toBe(50);  // 仅活跃账本 lg1;软删账本 lg2 的 80 不计入
+    expect(items[0].balance).toBe(150);
   });
 
   it('跨账本聚合;传 ledger_id 只算该账本', async () => {

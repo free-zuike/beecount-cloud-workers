@@ -187,6 +187,8 @@ importRouter.post('/upload', async (c) => {
 
     // 读取前端的 target_ledger_id（原版 Python 支持从 formData 获取）
     const formTargetLedgerId = (formData.get('target_ledger_id') as string) || null;
+    // 客户端本地时区相对 UTC 的分钟偏移（东为正，UTC+8 = 480）— issue #314
+    const formTzOffset = (formData.get('tz_offset_minutes') as string) || null;
 
     const isXlsx = fileName.toLowerCase().endsWith('.xlsx') ||
       (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04);
@@ -232,6 +234,13 @@ importRouter.post('/upload', async (c) => {
 
     if (importData.rows.length > 50000) {
       return c.json({ error: 'Too many rows (max 50000)', error_code: 'IMPORT_TOO_MANY_ROWS', limit_rows: 50000 }, 413);
+    }
+
+    // 把客户端时区偏移写进 suggested_mapping — sample_transactions / 后续
+    // preview / execute 全程继承（对齐原版 endpoints.py upload）
+    if (formTzOffset !== null && formTzOffset !== '') {
+      const tzNum = Number(formTzOffset);
+      if (Number.isFinite(tzNum)) importData.suggestedMapping.tzOffsetMinutes = tzNum;
     }
 
     const token = randomUUID();
@@ -366,8 +375,8 @@ importRouter.post('/:token/preview', zValidator('json', ImportPreviewSchema), as
   const req = c.req.valid('json');
 
   const session = await getSession(c.env, userId, token);
-  if (!session) return c.json({ error: 'Import token not found or expired', error_code: 'IMPORT_TOKEN_EXPIRED' }, 404);
-  if (session.status === 'cancelled') return c.json({ error: 'Import cancelled' }, 400);
+  if (!session) return c.json({ error: 'Import token not found or expired', error_code: 'IMPORT_TOKEN_EXPIRED' }, 410);
+  if (session.status === 'cancelled') return c.json({ error: 'Import token not found or expired', error_code: 'IMPORT_TOKEN_EXPIRED' }, 410);
 
   const mapping = req.mapping ? mappingToInternal(req.mapping as Record<string, unknown>) : session.mapping;
   const targetLedgerId = req.target_ledger_id ?? session.targetLedgerId;
@@ -708,13 +717,15 @@ importRouter.delete('/:token', async (c) => {
   const userId = c.get('userId');
   const token = c.req.param('token');
 
+  // 对齐原版 cancel_token:删除 token,返回 cancelled 布尔
   const session = await getSession(c.env, userId, token);
+  let cancelled = false;
   if (session) {
-    session.status = 'cancelled';
-    await saveSession(c.env, userId, session);
+    await deleteSession(c.env, userId, token);
+    cancelled = true;
   }
 
-  return c.json({ ok: true });
+  return c.json({ cancelled });
 });
 
 export default importRouter;

@@ -78,10 +78,10 @@ beforeEach(() => {
     token: 'imp-1', userId: 'user-1', fileName: 't.csv',
     data: {
       sourceFormat: 'generic',
-      headers: ['type', 'amount', 'date', 'account', 'from', 'to'],
+      headers: ['type', 'amount', 'date', 'account', 'from', 'to', 'category'],
       rows: [
-        { rowNumber: 1, cells: { type: 'transfer', amount: '500', date: '2025-01-15', from: 'A 户', to: 'B 户' }, rawLine: 'a' },
-        { rowNumber: 2, cells: { type: 'expense', amount: '66', date: '2025-01-16', account: '现金' }, rawLine: 'b' },
+        { rowNumber: 1, cells: { type: 'transfer', amount: '500', date: '2025-01-15', from: 'A 户', to: 'B 户', category: '转账' }, rawLine: 'a' },
+        { rowNumber: 2, cells: { type: 'expense', amount: '66', date: '2025-01-16', account: '现金', category: '餐饮' }, rawLine: 'b' },
       ],
       suggestedMapping: makeDefaultMapping(),
       parseWarnings: [],
@@ -90,6 +90,7 @@ beforeEach(() => {
       ...makeDefaultMapping(),
       txType: 'type', amount: 'amount', happenedAt: 'date',
       fromAccountName: 'from', toAccountName: 'to', accountName: 'account',
+      categoryName: 'category',
     },
     targetLedgerId: 'ledger-1', dedupStrategy: 'insert_all', autoTagNames: [],
     status: 'previewed', createdAt: '2025-01-01T00:00:00Z', expiresAt: '2099-01-01T00:00:00Z',

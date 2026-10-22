@@ -31,6 +31,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { insertAuditLog } from '../lib/audit';
+import { CSV_HEADERS, TX_TYPE_LABELS, normalizeLang, tagsList, attachmentNames, csvField, sanitizeFilename } from './csv';
 
 // ===========================
 // 辅助函数
@@ -59,6 +60,82 @@ const ANOMALY_DEVIATION_MULT = 1.2;
 const ANOMALY_DEVIATION_ABS = 200;
 const ANOMALY_TOP_ATTRIBUTIONS = 2;
 
+/**
+ * 分析周期范围的 month_start_day 契约(移植上游 read/_shared.py _analytics_range)。
+ * 周期按起始月命名:"2026-06"(msd=10) = 本地 2026-06-10 ~ 2026-07-10。
+ * 年 = [当年1月周期起点, 次年1月周期起点)。默认 month_start_day=1 行为不变。
+ */
+export function analyticsRange(
+  scope: string,
+  period: string | null,
+  tzOffsetMinutes: number,
+  monthStartDay: number,
+  now: Date = new Date(),
+): { startAt: string | null; endAt: string | null; normalizedPeriod: string | null } {
+  if (scope === 'all') return { startAt: null, endAt: null, normalizedPeriod: null };
+
+  let normalized = period;
+  if (scope === 'month') {
+    if (!normalized) {
+      const localNow = new Date(now.getTime() + tzOffsetMinutes * 60000);
+      let targetYear = localNow.getUTCFullYear();
+      let targetMonth = localNow.getUTCMonth() + 1;
+      if (localNow.getUTCDate() < monthStartDay) {
+        if (targetMonth === 1) { targetYear--; targetMonth = 12; }
+        else targetMonth--;
+      }
+      normalized = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
+    }
+    const [yearStr, monthStr] = normalized.split('-');
+    const year = parseInt(yearStr, 10);
+    const month = parseInt(monthStr, 10);
+    if (year && month) {
+      const startAt = new Date(Date.UTC(year, month - 1, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000).toISOString();
+      const endAt = new Date(Date.UTC(year, month, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000).toISOString();
+      return { startAt, endAt, normalizedPeriod: normalized };
+    }
+    return { startAt: null, endAt: null, normalizedPeriod: normalized };
+  }
+
+  // scope === 'year'
+  if (!normalized) {
+    const localNow = new Date(now.getTime() + tzOffsetMinutes * 60000);
+    let targetYear = localNow.getUTCFullYear();
+    if (localNow.getUTCMonth() === 0 && localNow.getUTCDate() < monthStartDay) targetYear--;
+    normalized = String(targetYear);
+  }
+  const year = parseInt(normalized, 10);
+  if (year) {
+    const startAt = new Date(Date.UTC(year, 0, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000).toISOString();
+    const endAt = new Date(Date.UTC(year + 1, 0, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000).toISOString();
+    return { startAt, endAt, normalizedPeriod: normalized };
+  }
+  return { startAt: null, endAt: null, normalizedPeriod: normalized };
+}
+
+/**
+ * 分析分桶键(移植上游 read/_shared.py _bucket_key):
+ * month scope 按日分桶(YYYY-MM-DD,与起始日无关);year/all 按月分桶且按
+ * month_start_day 切桶。tz_offset 先应用到本地再切。
+ */
+export function bucketKey(
+  scope: string,
+  iso: string,
+  tzOffsetMinutes: number,
+  monthStartDay: number,
+): string {
+  const localDate = new Date(new Date(iso).getTime() + tzOffsetMinutes * 60000);
+  if (scope === 'month') {
+    return `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}-${String(localDate.getUTCDate()).padStart(2, '0')}`;
+  }
+  if (localDate.getUTCDate() < monthStartDay) {
+    const prevMonth = localDate.getUTCMonth() === 0 ? 11 : localDate.getUTCMonth() - 1;
+    const prevYear = localDate.getUTCMonth() === 0 ? localDate.getUTCFullYear() - 1 : localDate.getUTCFullYear();
+    return `${prevYear}-${String(prevMonth + 1).padStart(2, '0')}`;
+  }
+  return `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
 function median(arr: number[]): number {
   if (arr.length === 0) return 0;
   const sorted = [...arr].sort((a, b) => a - b);
@@ -66,7 +143,7 @@ function median(arr: number[]): number {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
-function computeAnomalyMonths(
+export function computeAnomalyMonths(
   series: Array<{ bucket: string; expense: number; income: number; balance: number }>,
   categoryByBucket: Record<string, Record<string, number>>
 ): Array<{
@@ -213,129 +290,157 @@ workspaceRouter.get('/transactions.csv', async (c) => {
   if (!ledgerId) {
     return c.json({ error: 'ledger_id is required' }, 400);
   }
-  const tzOffsetMinutes = parseInt(c.req.query('tz_offset_minutes') ?? '0', 10);
-  const tzMs = tzOffsetMinutes * 60 * 1000;
+  const langKey = normalizeLang(c.req.query('lang') ?? null);
+  const headers = CSV_HEADERS[langKey];
+  const typeLabels = TX_TYPE_LABELS[langKey];
 
-  const ledger = await db
-    .prepare('SELECT id, name FROM ledgers WHERE user_id = ? AND external_id = ?')
+  // 账本可见性:owner / member,排除软删(对齐上游 _visible_workspace_ledgers)
+  const softDeleteCond = `NOT EXISTS (
+    SELECT 1 FROM sync_changes sc
+    WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
+      AND sc.action = 'delete'
+      AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                          WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
+  )`;
+  let ledger = await db
+    .prepare(`SELECT l.id, l.external_id, l.name, l.currency FROM ledgers l
+      WHERE l.user_id = ? AND l.external_id = ? AND ${softDeleteCond}`)
     .bind(userId, ledgerId)
-    .first<{ id: string; name: string | null }>();
-
+    .first<{ id: string; external_id: string; name: string | null; currency: string | null }>();
+  if (!ledger) {
+    ledger = await db
+      .prepare(`SELECT l.id, l.external_id, l.name, l.currency FROM ledgers l
+        JOIN ledger_members lm ON l.id = lm.ledger_id
+        WHERE lm.user_id = ? AND l.external_id = ? AND ${softDeleteCond}`)
+      .bind(userId, ledgerId)
+      .first<{ id: string; external_id: string; name: string | null; currency: string | null }>();
+  }
   if (!ledger) {
     return c.json({ error: 'Ledger not found or access denied' }, 404);
   }
 
-  let txQuery = 'SELECT * FROM read_tx_projection WHERE ledger_id = ?';
-  const params: (string | number)[] = [ledger.id];
-
+  const tzOffset = parseInt(c.req.query('tz_offset_minutes') ?? '0', 10) || 0;
   const dateFrom = c.req.query('date_from');
   const dateTo = c.req.query('date_to');
-  const categoryName = c.req.query('category_name');
-  const accountName = c.req.query('account_name');
+
+  // 查询(单账本;子分类 JOIN 提供二级分类,对齐上游 CSV 12 列)
+  let txQuery = `SELECT tx.*, cp.level AS cat_level, cp.parent_name AS cat_parent_name
+    FROM read_tx_projection tx
+    LEFT JOIN user_category_projection cp ON cp.user_id = tx.user_id AND cp.sync_id = tx.category_sync_id
+    WHERE tx.ledger_id = ?`;
+  const params: (string | number)[] = [ledger.id];
+
   const txType = c.req.query('tx_type');
-  const q = c.req.query('q');
-  const accountSyncId = c.req.query('account_sync_id');
-  const categorySyncId = c.req.query('category_sync_id');
-  const tagSyncId = c.req.query('tag_sync_id');
-  const amountMin = c.req.query('amount_min') ? Number(c.req.query('amount_min')) : null;
-  const amountMax = c.req.query('amount_max') ? Number(c.req.query('amount_max')) : null;
-
-  if (txType) {
-    txQuery += ' AND tx_type = ?';
-    params.push(txType);
-  }
-
-  if (categoryName) {
-    txQuery += ' AND category_name LIKE ?';
-    params.push(`%${categoryName}%`);
-  }
-
+  if (txType) { txQuery += ' AND tx.tx_type = ?'; params.push(txType); }
+  const accountName = c.req.query('account_name');
   if (accountName) {
-    txQuery += ' AND (account_name LIKE ? OR from_account_name LIKE ? OR to_account_name LIKE ?)';
-    const pattern = `%${accountName}%`;
-    params.push(pattern, pattern, pattern);
+    txQuery += ' AND (tx.account_name LIKE ? OR tx.from_account_name LIKE ? OR tx.to_account_name LIKE ?)';
+    params.push(`%${accountName}%`, `%${accountName}%`, `%${accountName}%`);
+  }
+  const q = c.req.query('q');
+  const txIds = c.req.queries('tx_ids');
+  // tx_ids 优先:按 sync_id 精确过滤并忽略其它过滤器(对齐上游 workspace.py export_workspace_transactions_csv)
+  if (txIds && txIds.length > 0) {
+    const placeholders = txIds.map(() => '?').join(',');
+    txQuery += ` AND tx.sync_id IN (${placeholders})`;
+    params.push(...txIds);
+  } else {
+    if (q) {
+      txQuery += ' AND (tx.note LIKE ? OR tx.category_name LIKE ? OR tx.account_name LIKE ? OR tx.from_account_name LIKE ? OR tx.to_account_name LIKE ? OR tx.tags_csv LIKE ?)';
+      params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+    }
+    const tagSyncId = c.req.query('tag_sync_id');
+    if (tagSyncId) { txQuery += ' AND tx.tag_sync_ids_json LIKE ?'; params.push(`%"${tagSyncId}"%`); }
+    const categorySyncId = c.req.query('category_sync_id');
+    if (categorySyncId) { txQuery += ' AND tx.category_sync_id = ?'; params.push(categorySyncId); }
+    const accountSyncId = c.req.query('account_sync_id');
+    if (accountSyncId) {
+      txQuery += ' AND (tx.account_sync_id = ? OR tx.from_account_sync_id = ? OR tx.to_account_sync_id = ?)';
+      params.push(accountSyncId, accountSyncId, accountSyncId);
+    }
+    const txSyncId = c.req.query('tx_sync_id');
+    if (txSyncId) { txQuery += ' AND tx.sync_id = ?'; params.push(txSyncId); }
+    const amountMin = c.req.query('amount_min');
+    if (amountMin !== undefined && amountMin !== null && amountMin !== '') {
+      const v = Number(amountMin);
+      if (Number.isFinite(v)) { txQuery += ' AND tx.amount >= ?'; params.push(v); }
+    }
+    const amountMax = c.req.query('amount_max');
+    if (amountMax !== undefined && amountMax !== null && amountMax !== '') {
+      const v = Number(amountMax);
+      if (Number.isFinite(v)) { txQuery += ' AND tx.amount <= ?'; params.push(v); }
+    }
+    if (dateFrom) { txQuery += ' AND tx.happened_at >= ?'; params.push(dateFrom); }
+    if (dateTo) { txQuery += ' AND tx.happened_at < ?'; params.push(dateTo); }
   }
 
-  if (dateFrom) {
-    txQuery += ' AND happened_at >= ?';
-    params.push(dateFrom);
-  }
-
-  if (dateTo) {
-    txQuery += ' AND happened_at <= ?';
-    params.push(dateTo + 'T23:59:59.999Z');
-  }
-
-  if (q) {
-    txQuery += ' AND (note LIKE ? OR category_name LIKE ? OR account_name LIKE ? OR from_account_name LIKE ? OR to_account_name LIKE ? OR tags_csv LIKE ?)';
-    const like = `%${q}%`;
-    params.push(like, like, like, like, like, like);
-  }
-  if (accountSyncId) {
-    txQuery += ' AND (account_sync_id = ? OR from_account_sync_id = ? OR to_account_sync_id = ?)';
-    params.push(accountSyncId, accountSyncId, accountSyncId);
-  }
-  if (categorySyncId) {
-    txQuery += ' AND category_sync_id = ?';
-    params.push(categorySyncId);
-  }
-  if (tagSyncId) {
-    txQuery += ' AND tag_sync_ids_json LIKE ? ESCAPE ?';
-    const escapedTag = tagSyncId.replace(/%/g, '\\%').replace(/_/g, '\\_');
-    params.push(`%"${escapedTag}"%`, '\\');
-  }
-  if (amountMin !== null && Number.isFinite(amountMin)) {
-    txQuery += ' AND amount >= ?';
-    params.push(amountMin);
-  }
-  if (amountMax !== null && Number.isFinite(amountMax)) {
-    txQuery += ' AND amount <= ?';
-    params.push(amountMax);
-  }
-
-  txQuery += ' ORDER BY happened_at DESC, tx_index DESC';
-
+  txQuery += ' ORDER BY tx.happened_at DESC, tx.tx_index DESC';
   const txRows = await db.prepare(txQuery).bind(...params).all<Record<string, unknown>>();
 
-  function escapeCsvField(field: string | number | null): string {
-    if (field === null || field === undefined) return '';
-    const str = String(field);
-    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
-      return '"' + str.replace(/"/g, '""') + '"';
-    }
-    return str;
-  }
-
-  const header = ['日期', '时间', '类型', '金额', '币种', '账户', '分类', '标签', '备注'];
-  const rows = [header.join(',')];
-
+  // 生成 12 列行(对齐原版 workspace.py export_workspace_transactions_csv)
+  const rows: string[] = [];
   for (const tx of txRows.results) {
-    // 应用时区偏移到本地时间（与原版对齐）
-    const utcDate = new Date(String(tx.happened_at ?? ''));
-    const localDate = new Date(utcDate.getTime() + tzMs);
-    const date = localDate.toISOString().slice(0, 10);
-    const time = localDate.toISOString().slice(11, 19);
-    const txTypeVal = String(tx.tx_type ?? '');
-    const amount = String(tx.amount ?? 0);
-    const currency = String(tx.currency_code ?? '');
-    const account = String(tx.account_name ?? tx.from_account_name ?? '');
-    const category = String(tx.category_name ?? '');
-    const tags = String(tx.tags_csv ?? '');
-    const note = String(tx.note ?? '');
-
-    rows.push(
-      [date, time, txTypeVal, amount, currency, account, category, tags, note].map(escapeCsvField).join(',')
-    );
+    const isTransfer = tx.tx_type === 'transfer';
+    const catLevel = tx.cat_level as number | null;
+    const catParentName = tx.cat_parent_name as string | null;
+    let categoryCol = '';
+    let subCategoryCol = '';
+    if (!isTransfer) {
+      if (catLevel === 2 && catParentName) {
+        categoryCol = catParentName;
+        subCategoryCol = String(tx.category_name ?? '');
+      } else {
+        categoryCol = String(tx.category_name ?? '');
+      }
+    }
+    const typeLabel = typeLabels[String(tx.tx_type ?? '')] ?? String(tx.tx_type ?? '');
+    const amount = tx.amount != null ? Number(tx.amount).toFixed(2) : '';
+    const currency = String((tx.currency_code as string | null) ?? ledger.currency ?? 'CNY').toUpperCase();
+    const happenedAt = tx.happened_at as string | null;
+    let timeStr = '';
+    if (happenedAt) {
+      const d = new Date(happenedAt);
+      if (!isNaN(d.getTime())) {
+        const local = new Date(d.getTime() + tzOffset * 60000);
+        const pad = (n: number) => String(n).padStart(2, '0');
+        // 纯算术偏移后取 UTC 字段(对齐上游 datetime+timedelta 语义,避免依赖运行时区)
+        timeStr = `  ${local.getUTCFullYear()}-${pad(local.getUTCMonth() + 1)}-${pad(local.getUTCDate())} ${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}:${pad(local.getUTCSeconds())}  `;
+      }
+    }
+    const row = [
+      csvField(typeLabel),
+      csvField(categoryCol),
+      csvField(subCategoryCol),
+      amount,
+      csvField(currency),
+      csvField(isTransfer ? '' : (tx.account_name as string)),
+      csvField(isTransfer ? (tx.from_account_name as string) : ''),
+      csvField(isTransfer ? (tx.to_account_name as string) : ''),
+      csvField(tx.note as string),
+      csvField(timeStr),
+      csvField(tagsList(tx.tags_csv as string | null).join(',')),
+      csvField(attachmentNames(tx.attachments_json as string | null).join(',')),
+    ].join(',');
+    rows.push(row);
   }
 
-  const csvContent = '\uFEFF' + rows.join('\r\n');
-  const fileName = `${ledger.name || ledgerId}_transactions_${new Date().toISOString().slice(0, 10)}.csv`;
+  const csvContent = '\uFEFF' + headers.join(',') + '\r\n' + rows.join('\r\n');
+  const now = new Date();
+  const periodFrom = dateFrom ? dateFrom.slice(0, 10) : 'all';
+  const periodTo = dateTo ? dateTo.slice(0, 10) : 'all';
+  const periodSegment = !dateFrom && !dateTo
+    ? `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
+    : `${periodFrom}_${periodTo}`;
+  const filename = `beecount-${sanitizeFilename(ledger.name)}-${periodSegment}.csv`;
+  const asciiFilename = filename.replace(/[^\x20-\x7e]/g, '_');
+  const encodedFilename = encodeURIComponent(filename);
 
   return new Response(csvContent, {
     status: 200,
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="${fileName}"`,
+      'Content-Disposition': `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodedFilename}`,
+      'Cache-Control': 'no-store',
     },
   });
 });
@@ -356,7 +461,14 @@ workspaceRouter.get('/accounts', async (c) => {
   // 含共享账本
   let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
     LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-    WHERE (l.user_id = ? OR lm.user_id = ?)`;
+    WHERE (l.user_id = ? OR lm.user_id = ?)
+      AND NOT EXISTS (
+        SELECT 1 FROM sync_changes sc
+        WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
+          AND sc.action = 'delete'
+          AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                              WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
+      )`;
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
@@ -400,6 +512,13 @@ workspaceRouter.get('/accounts', async (c) => {
 
   // 获取当前用户信息（用于 created_by_user_id/created_by_email）
   const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string }>();
+
+  // 用户级 account 变更 max change_id(前端缓存失效 key,对齐原版 workspace.py:633-640)
+  const targetUserId = filterUserId ?? userId;
+  const accountLastChange = await db.prepare(
+    "SELECT COALESCE(MAX(change_id), 0) as last FROM sync_changes WHERE user_id = ? AND scope = 'user' AND entity_type = 'account'"
+  ).bind(targetUserId).first<{ last: number }>();
+  const accountLastChangeId = accountLastChange?.last ?? 0;
 
   // 跨账本聚合(对齐原版 workspace.py 的 main_stats/transfer_from/transfer_to 三条 GROUP BY,
   // 取代旧实现"逐账户一条全账本 SUM"的 N+1;账户维度读 amount 原币,与原版一致)
@@ -448,6 +567,10 @@ workspaceRouter.get('/accounts', async (c) => {
 
   const items = [];
   for (const row of acctRows.results) {
+    // 对齐原版 workspace.py:650-652:trim 空白并跳过空名账户
+    const name = String(row.name ?? '').trim();
+    if (!name) continue;
+
     const ledExtId = ''; // user-global 不挂账本
     const accountSyncId = row.sync_id as string;
     const initialBalance = (row.initial_balance as number) ?? 0;
@@ -459,11 +582,11 @@ workspaceRouter.get('/accounts', async (c) => {
 
     items.push({
       id: accountSyncId,
-      name: row.name,
+      name,
       account_type: row.account_type,
       currency: row.currency,
       initial_balance: initialBalance,
-      last_change_id: row.source_change_id,
+      last_change_id: accountLastChangeId, // 用户级 max change_id(原版缓存失效 key)
       ledger_id: ledExtId,
       ledger_name: null,
       created_by_user_id: currentUser?.id ?? null,
@@ -501,7 +624,14 @@ workspaceRouter.get('/categories', async (c) => {
   // 含共享账本
   let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
     LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-    WHERE (l.user_id = ? OR lm.user_id = ?)`;
+    WHERE (l.user_id = ? OR lm.user_id = ?)
+      AND NOT EXISTS (
+        SELECT 1 FROM sync_changes sc
+        WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
+          AND sc.action = 'delete'
+          AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                              WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
+      )`;
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
@@ -552,30 +682,37 @@ workspaceRouter.get('/categories', async (c) => {
 
   const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string }>();
 
+  // 用户级 category 变更 max change_id(前端缓存失效 key,对齐上游)
+  const catLastChange = await db.prepare(
+    "SELECT COALESCE(MAX(change_id), 0) as last FROM sync_changes WHERE user_id = ? AND scope = 'user' AND entity_type = 'category'"
+  ).bind(filterUserId ?? userId).first<{ last: number }>();
+  const catLastChangeId = catLastChange?.last ?? 0;
+
   const items = catRows.results.map((row) => {
     const ledExtId = ''; // user-global 不挂账本
+    const name = String(row.name ?? '').trim();
+    if (!name) return null; // 对齐上游:跳过空名分类
 
     return {
       id: row.sync_id,
-      name: row.name,
-      kind: row.kind,
-      level: row.level,
-      sort_order: row.sort_order,
+      name,
+      kind: (row.kind as string) || 'expense',
+      level: (row.level as number) ?? 1,
+      sort_order: (row.sort_order as number) ?? 0,
       icon: row.icon,
       icon_type: row.icon_type,
       custom_icon_path: row.custom_icon_path,
       icon_cloud_file_id: row.icon_cloud_file_id,
       icon_cloud_sha256: row.icon_cloud_sha256,
       parent_name: row.parent_name,
-      parent_sync_id: row.parent_sync_id ?? null,
-      last_change_id: row.source_change_id,
+      last_change_id: catLastChangeId,
       ledger_id: ledExtId,
       ledger_name: null,
       created_by_user_id: currentUser?.id ?? null,
       created_by_email: currentUser?.email ?? null,
       tx_count: txCountMap[row.sync_id as string] ?? 0,
     };
-  });
+  }).filter((x): x is NonNullable<typeof x> => x !== null);
 
   return c.json(items);
 });
@@ -596,7 +733,14 @@ workspaceRouter.get('/tags', async (c) => {
   // 含共享账本
   let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
     LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-    WHERE (l.user_id = ? OR lm.user_id = ?)`;
+    WHERE (l.user_id = ? OR lm.user_id = ?)
+      AND NOT EXISTS (
+        SELECT 1 FROM sync_changes sc
+        WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
+          AND sc.action = 'delete'
+          AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                              WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
+      )`;
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
@@ -606,10 +750,7 @@ workspaceRouter.get('/tags', async (c) => {
 
   const ledgers = await db.prepare(ledgerQuery).bind(...ledgerParams).all<{ id: string; external_id: string; name: string | null }>();
 
-  if (ledgers.results.length === 0) {
-    return c.json([]);
-  }
-
+  // 无账本时标签仍返回(上游允许 user-global 标签独立存在,stats 为空集)
   const ledgerInternalIds = ledgers.results.map((l) => l.id);
   const ledgerMeta: Record<string, { external_id: string; name: string | null }> = {};
   ledgers.results.forEach((l) => {
@@ -642,13 +783,13 @@ workspaceRouter.get('/tags', async (c) => {
   const tagRowsForStats = await db.prepare(`SELECT sync_id, name FROM user_tag_projection WHERE user_id = ?`).bind(userId).all<{ sync_id: string; name: string }>();
   const tagSyncIds = tagRowsForStats.results.map(r => r.sync_id);
 
-  if (tagSyncIds.length > 0) {
-    // 单次扫描所有交易（与原版对齐）
+  if (ledgerInternalIds.length > 0 && tagSyncIds.length > 0) {
+    // 单次扫描所有交易(与原版对齐;exclude_from_stats = false 排除 NULL 行)
     const allTxRows = await db.prepare(
       `SELECT sync_id, tx_type, COALESCE(native_amount, amount) as effective_amount, tag_sync_ids_json, tags_csv 
        FROM read_tx_projection 
        WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) 
-       AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`
+       AND exclude_from_stats = false`
     ).bind(...ledgerInternalIds).all<{ sync_id: string; tx_type: string; effective_amount: number; tag_sync_ids_json: string | null; tags_csv: string | null }>();
 
     // 初始化所有 tag 统计
@@ -656,18 +797,18 @@ workspaceRouter.get('/tags', async (c) => {
       tagStats[tagId] = { tx_count: 0, expense_total: 0, income_total: 0 };
     }
 
-    // 遍历交易匹配 tag（主匹配：tag_sync_ids_json，回退：tags_csv 名称匹配）
+    // 遍历交易匹配 tag(主匹配:tag_sync_ids_json,回退:tags_csv 名称不区分大小写)
     for (const tx of allTxRows.results) {
       for (const tagRow of tagRowsForStats.results) {
         let matched = false;
-        // 主匹配：tag_sync_ids_json 包含该 tag sync_id
+        // 主匹配:tag_sync_ids_json 包含该 tag sync_id
         if (tx.tag_sync_ids_json && tx.tag_sync_ids_json.includes(`"${tagRow.sync_id}"`)) {
           matched = true;
         }
-        // 回退匹配：tags_csv 包含该 tag name（与原版对齐）
+        // 回退匹配:tags_csv 包含该 tag name(对齐上游 lower)
         if (!matched && tx.tags_csv && tagRow.name) {
-          const tagNames = tx.tags_csv.split(',').map((s: string) => s.trim());
-          if (tagNames.includes(tagRow.name)) {
+          const tagNames = tx.tags_csv.split(',').map((s: string) => s.trim().toLowerCase());
+          if (tagNames.includes(tagRow.name.toLowerCase())) {
             matched = true;
           }
         }
@@ -682,15 +823,23 @@ workspaceRouter.get('/tags', async (c) => {
 
   const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string }>();
 
+  // 用户级 tag 变更 max change_id(前端缓存失效 key,对齐上游)
+  const tagLastChange = await db.prepare(
+    "SELECT COALESCE(MAX(change_id), 0) as last FROM sync_changes WHERE user_id = ? AND scope = 'user' AND entity_type = 'tag'"
+  ).bind(filterUserId ?? userId).first<{ last: number }>();
+  const tagLastChangeId = tagLastChange?.last ?? 0;
+
   const items = tagRows.results.map((row) => {
     const ledExtId = ''; // user-global 不挂账本
+    const name = String(row.name ?? '').trim();
+    if (!name) return null; // 对齐上游:跳过空名 tag
     const stats = tagStats[row.sync_id as string] ?? { tx_count: 0, expense_total: 0, income_total: 0 };
 
     return {
       id: row.sync_id,
-      name: row.name,
+      name,
       color: row.color,
-      last_change_id: row.source_change_id,
+      last_change_id: tagLastChangeId,
       ledger_id: ledExtId,
       ledger_name: null,
       created_by_user_id: currentUser?.id ?? null,
@@ -699,7 +848,7 @@ workspaceRouter.get('/tags', async (c) => {
       expense_total: stats.expense_total,
       income_total: stats.income_total,
     };
-  });
+  }).filter((x): x is NonNullable<typeof x> => x !== null);
 
   return c.json(items);
 });
@@ -719,7 +868,14 @@ workspaceRouter.get('/budgets', async (c) => {
   // 含共享账本
   let ledgerQuery = `SELECT DISTINCT l.id, l.external_id, l.name FROM ledgers l
     LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-    WHERE (l.user_id = ? OR lm.user_id = ?)`;
+    WHERE (l.user_id = ? OR lm.user_id = ?)
+      AND NOT EXISTS (
+        SELECT 1 FROM sync_changes sc
+        WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
+          AND sc.action = 'delete'
+          AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                              WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
+      )`;
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
@@ -749,13 +905,43 @@ workspaceRouter.get('/budgets', async (c) => {
 
   const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first<{ id: string; email: string }>();
 
-  const items = await Promise.all(budgetRows.results.map(async (row) => {
+  // 与 per-ledger list_budgets 同款去重:(budget_type, category_sync_id) 维度,sync_id 字典序最大胜出;
+  // category 预算缺 category_sync_id 视为脏数据跳过
+  const dedup = new Map<string, Record<string, unknown>>();
+  for (const b of budgetRows.results) {
+    const btype = (b.budget_type as string) || 'total';
+    if (btype === 'category' && !b.category_sync_id) continue;
+    const key = `${btype}:${(b.category_sync_id as string) || ''}`;
+    const cur = dedup.get(key);
+    if (!cur || (cur.sync_id as string) < (b.sync_id as string)) dedup.set(key, b);
+  }
+  const deduped = [...dedup.values()];
+
+  // 一次收集分类名 + 子分类映射(避免每预算各查一次)
+  const catIds = [...new Set(deduped.map((b) => b.category_sync_id as string).filter(Boolean))];
+  const catNameMap: Record<string, string> = {};
+  const childMap: Record<string, string[]> = {};
+  if (catIds.length > 0) {
+    const ph = catIds.map(() => '?').join(',');
+    const catRows = await db
+      .prepare(`SELECT sync_id, name, parent_sync_id FROM user_category_projection WHERE user_id = ? AND sync_id IN (${ph})`)
+      .bind(userId, ...catIds)
+      .all<{ sync_id: string; name: string | null; parent_sync_id: string | null }>();
+    for (const r of catRows.results) {
+      if (r.name) catNameMap[r.sync_id] = r.name.trim();
+      if (r.parent_sync_id) (childMap[r.parent_sync_id] ??= []).push(r.sync_id);
+    }
+  }
+
+  const items = await Promise.all(deduped.map(async (row) => {
     const ledExtId = ledgerMeta[row.ledger_id as string]?.external_id ?? '';
     const budgetPeriod = row.period as string;
     const budgetStartDay = (row.start_day as number) || 1;
     const ledgerId = row.ledger_id as string;
+    const budgetType = (row.budget_type as string) || 'total';
+    const categorySyncId = (row.category_sync_id as string) || null;
 
-    // 计算预算已用金额（对齐原版：按周期汇总支出）
+    // 计算预算已用金额(对齐原版:按周期汇总支出;多币种折本位币 native_amount 回退 amount)
     let spent = 0;
     try {
       const now = new Date();
@@ -778,22 +964,31 @@ workspaceRouter.get('/budgets', async (c) => {
         periodEnd = now.toISOString();
       }
 
-      const spentRow = await db.prepare(
-        `SELECT COALESCE(SUM(amount), 0) as total FROM read_tx_projection
+      let spentQuery = `SELECT COALESCE(SUM(COALESCE(native_amount, amount)), 0) as total FROM read_tx_projection
          WHERE ledger_id = ? AND tx_type = 'expense'
          AND (exclude_from_budget IS NULL OR exclude_from_budget = 0)
-         AND happened_at >= ? AND happened_at < ?`
-      ).bind(ledgerId, periodStart, periodEnd).first<{ total: number }>();
-      spent = spentRow?.total ?? 0;
+         AND happened_at >= ? AND happened_at < ?`;
+      const spentParams: (string | number)[] = [ledgerId, periodStart, periodEnd];
+
+      if (budgetType === 'category' && categorySyncId) {
+        // 父分类预算自动覆盖子分类支出(与 per-ledger budgets/usage 同口径)
+        const ids = [categorySyncId, ...(childMap[categorySyncId] ?? [])];
+        const ph = ids.map(() => '?').join(',');
+        spentQuery += ` AND category_sync_id IN (${ph})`;
+        spentParams.push(...ids);
+      }
+
+      const spentRow = await db.prepare(spentQuery).bind(...spentParams).first<{ total: number }>();
+      spent = Math.abs(spentRow?.total ?? 0);
     } catch {
       // 计算失败不影响预算列表
     }
 
     return {
       id: row.sync_id,
-      type: row.budget_type,
-      category_id: row.category_sync_id,
-      category_name: null,
+      type: budgetType,
+      category_id: categorySyncId,
+      category_name: categorySyncId ? (catNameMap[categorySyncId] ?? null) : null,
       amount: row.amount,
       period: row.period,
       start_day: row.start_day,
@@ -823,7 +1018,14 @@ workspaceRouter.get('/ledger-counts', async (c) => {
   // 含共享账本
   let ledgerQuery = `SELECT DISTINCT l.id FROM ledgers l
     LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-    WHERE (l.user_id = ? OR lm.user_id = ?)`;
+    WHERE (l.user_id = ? OR lm.user_id = ?)
+      AND NOT EXISTS (
+        SELECT 1 FROM sync_changes sc
+        WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
+          AND sc.action = 'delete'
+          AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                              WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
+      )`;
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
@@ -856,9 +1058,12 @@ workspaceRouter.get('/ledger-counts', async (c) => {
 
   let daysSinceFirstTx = 0;
   if (firstAt) {
+    // 对齐上游 workspace.py:956-959:按 UTC 日历日差(非 24h 整除)
     const firstDate = new Date(firstAt);
     const now = new Date();
-    daysSinceFirstTx = Math.floor((now.getTime() - firstDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    const firstDayUtc = Date.UTC(firstDate.getUTCFullYear(), firstDate.getUTCMonth(), firstDate.getUTCDate());
+    const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    daysSinceFirstTx = Math.floor((todayUtc - firstDayUtc) / (1000 * 60 * 60 * 24)) + 1;
   }
 
   return c.json({
@@ -887,7 +1092,14 @@ workspaceRouter.get('/analytics', async (c) => {
   // 含共享账本
   let ledgerQuery = `SELECT DISTINCT l.id FROM ledgers l
     LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-    WHERE (l.user_id = ? OR lm.user_id = ?)`;
+    WHERE (l.user_id = ? OR lm.user_id = ?)
+      AND NOT EXISTS (
+        SELECT 1 FROM sync_changes sc
+        WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
+          AND sc.action = 'delete'
+          AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                              WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
+      )`;
   const ledgerParams: string[] = [userId, userId, userId];
 
   if (ledgerId) {
@@ -920,64 +1132,11 @@ workspaceRouter.get('/analytics', async (c) => {
   let txQuery = `SELECT tx_type, COALESCE(native_amount, amount) as effective_amount, happened_at, category_name FROM read_tx_projection WHERE ledger_id IN (${ledgerInternalIds.map(() => '?').join(',')}) AND (exclude_from_stats IS NULL OR exclude_from_stats = 0 OR exclude_from_stats = false)`;
   const txParams: (string | number)[] = [...ledgerInternalIds];
 
-  // 计算日期范围（与原版 _analytics_range 对齐）
-  let startAt: string | null = null;
-  let endAt: string | null = null;
-  let normalizedPeriod: string | null = null;
-
-  if (scope === 'all') {
-    // scope=all 不设日期范围
-  } else if (scope === 'month') {
-    if (period) {
-      normalizedPeriod = period;
-    } else {
-      // 默认当前周期（与原版对齐）
-      const now = new Date();
-      const localNow = new Date(now.getTime() + tzOffsetMinutes * 60000);
-      const localDay = localNow.getUTCDate();
-      let targetYear = localNow.getUTCFullYear();
-      let targetMonth = localNow.getUTCMonth() + 1;
-      if (localDay < monthStartDay) {
-        // 还没到起始日，归上个月周期
-        if (targetMonth === 1) { targetYear--; targetMonth = 12; }
-        else { targetMonth--; }
-      }
-      normalizedPeriod = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
-    }
-    const [yearStr, monthStr] = normalizedPeriod.split('-');
-    const year = parseInt(yearStr, 10);
-    const month = parseInt(monthStr, 10);
-    if (year && month) {
-      const localStart = new Date(Date.UTC(year, month - 1, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000);
-      const localEnd = new Date(Date.UTC(year, month, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000);
-      startAt = localStart.toISOString();
-      endAt = localEnd.toISOString();
-      txQuery += ' AND happened_at >= ? AND happened_at < ?';
-      txParams.push(startAt, endAt);
-    }
-  } else if (scope === 'year') {
-    if (period) {
-      normalizedPeriod = period;
-    } else {
-      // 默认当前年份（与原版对齐）
-      const now = new Date();
-      const localNow = new Date(now.getTime() + tzOffsetMinutes * 60000);
-      let targetYear = localNow.getUTCFullYear();
-      // 1月里还没到起始日时归上一年度周期
-      if (localNow.getUTCMonth() === 0 && localNow.getUTCDate() < monthStartDay) {
-        targetYear--;
-      }
-      normalizedPeriod = String(targetYear);
-    }
-    const year = parseInt(normalizedPeriod, 10);
-    if (year) {
-      const localStart = new Date(Date.UTC(year, 0, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000);
-      const localEnd = new Date(Date.UTC(year + 1, 0, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000);
-      startAt = localStart.toISOString();
-      endAt = localEnd.toISOString();
-      txQuery += ' AND happened_at >= ? AND happened_at < ?';
-      txParams.push(startAt, endAt);
-    }
+  // 计算日期范围（移植原版 _analytics_range + month_start_day 契约）
+  const { startAt, endAt, normalizedPeriod } = analyticsRange(scope, period, tzOffsetMinutes, monthStartDay);
+  if (startAt && endAt) {
+    txQuery += ' AND happened_at >= ? AND happened_at < ?';
+    txParams.push(startAt, endAt);
   }
 
   const txRows = await db
@@ -1002,35 +1161,9 @@ workspaceRouter.get('/analytics', async (c) => {
       expenseTotal += amt;
     }
 
-    const date = new Date(tx.happened_at);
-    // 应用时区偏移后再切桶（与原版 _bucket_key 对齐）
-    const localDate = new Date(date.getTime() + tzOffsetMinutes * 60000);
-    let bucket: string;
-
-    if (scope === 'month') {
-      // 月度分析用日粒度（YYYY-MM-DD），与原版对齐
-      bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}-${String(localDate.getUTCDate()).padStart(2, '0')}`;
-    } else if (scope === 'year') {
-      // 年度分析用月粒度，且按 month_start_day 切桶（与原版对齐）
-      if (localDate.getUTCDate() < monthStartDay) {
-        // 日期在 start_day 之前，归入上月
-        const prevMonth = localDate.getUTCMonth() === 0 ? 11 : localDate.getUTCMonth() - 1;
-        const prevYear = localDate.getUTCMonth() === 0 ? localDate.getUTCFullYear() - 1 : localDate.getUTCFullYear();
-        bucket = `${prevYear}-${String(prevMonth + 1).padStart(2, '0')}`;
-      } else {
-        bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}`;
-      }
-    } else {
-      // scope=all 用月度桶（与原版 _bucket_key 对齐：scope != "month" 时走月逻辑）
-      const localDate = new Date(date.getTime() + tzOffsetMinutes * 60000);
-      if (localDate.getUTCDate() < monthStartDay) {
-        const prevMonth = localDate.getUTCMonth() === 0 ? 11 : localDate.getUTCMonth() - 1;
-        const prevYear = localDate.getUTCMonth() === 0 ? localDate.getUTCFullYear() - 1 : localDate.getUTCFullYear();
-        bucket = `${prevYear}-${String(prevMonth + 1).padStart(2, '0')}`;
-      } else {
-        bucket = `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}`;
-      }
-    }
+    const localDate = new Date(new Date(tx.happened_at).getTime() + tzOffsetMinutes * 60000);
+    // 分桶（移植原版 _bucket_key：month 日粒度/year+all 月粒度按 msd 切桶）
+    const bucket = bucketKey(scope, tx.happened_at, tzOffsetMinutes, monthStartDay);
 
     // distinct_days 用时区调整后的日期
     distinctDays.add(localDate.toISOString().slice(0, 10));
@@ -1095,7 +1228,12 @@ workspaceRouter.get('/analytics', async (c) => {
     series,
     category_ranks: categoryRanks,
     anomaly_months: anomalyMonths,
-    range: { scope, metric, period, start_at: null, end_at: null },
+    range: {
+      scope, metric, period,
+      // 对齐原版 WorkspaceAnalyticsRangeOut:end_at 取上一秒(含首尾 -1s)
+      start_at: startAt,
+      end_at: endAt ? new Date(new Date(endAt).getTime() - 1000).toISOString() : null,
+    },
   });
 });
 
@@ -1624,16 +1762,29 @@ workspaceRouter.get('/ledgers/:id/members', async (c) => {
 
   const members = await db
     .prepare(`
-      SELECT lm.user_id, lm.role, lm.joined_at, u.email
+      SELECT lm.user_id, lm.role, lm.joined_at, lm.invited_by, u.email,
+             p.display_name, p.avatar_file_id, p.avatar_version
       FROM ledger_members lm
       JOIN users u ON lm.user_id = u.id
+      LEFT JOIN user_profiles p ON p.user_id = u.id
       WHERE lm.ledger_id = ?
       ORDER BY lm.joined_at ASC
     `)
     .bind(ledger.id)
-    .all<{ user_id: string; role: string; joined_at: string; email: string }>();
+    .all<{ user_id: string; role: string; joined_at: string; invited_by: string | null; email: string; display_name: string | null; avatar_file_id: string | null; avatar_version: number | null }>();
 
-  return c.json(members.results);
+  // 对齐上游 MemberOut:补齐 display_name/invited_by_user_id/is_self/avatar_*
+  return c.json(members.results.map((m) => ({
+    user_id: m.user_id,
+    email: m.email,
+    display_name: m.display_name,
+    role: m.role,
+    joined_at: m.joined_at,
+    invited_by_user_id: m.invited_by,
+    is_self: m.user_id === userId,
+    avatar_url: m.avatar_file_id ? `/api/v1/profile/avatar/${m.user_id}?v=${m.avatar_version ?? 0}` : null,
+    avatar_version: m.avatar_version ?? 0,
+  })));
 });
 
 // ===========================================================================
@@ -1770,7 +1921,8 @@ workspaceRouter.delete('/ledgers/:id/members/:memberUserId', async (c) => {
     }
   } catch {}
 
-  return c.json({ success: true });
+  // 对齐原版：踢成员成功返回 204 No Content（前端 removeLedgerMember 只看 res.ok）
+  return new Response(null, { status: 204 });
 });
 
 // ===========================================================================
@@ -1905,6 +2057,16 @@ workspaceRouter.get('/ledgers/:id/member-stats', zValidator('query', MemberStats
     roleByUid[m.user_id] = m.role;
   }
 
+  // 已退成员:账本内出现过的 created_by_user_id 即使不在 ledger_members 也纳入,
+  // 角色标 'removed'(对齐上游 member_stats)
+  const txCreatorRows = await db
+    .prepare('SELECT DISTINCT created_by_user_id FROM read_tx_projection WHERE ledger_id = ? AND created_by_user_id IS NOT NULL')
+    .bind(ledger.id)
+    .all<{ created_by_user_id: string }>();
+  for (const r of txCreatorRows.results) {
+    allUserIds.add(r.created_by_user_id);
+  }
+
   // 查询用户信息
   const uidList = [...allUserIds];
   const userInfo: Record<string, { email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number }> = {};
@@ -2003,7 +2165,8 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
 
   const role = await getUserRoleInLedger(db, ledger.id, userId);
   if (!role) {
-    return c.json({ error: 'Access denied' }, 403);
+    // 对齐上游:非成员 404(不泄露账本存在性)
+    return c.json({ error: 'Ledger not found' }, 404);
   }
 
   const ownerId = ledger.user_id;
@@ -2014,7 +2177,7 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
               icon_cloud_file_id, icon_cloud_sha256, parent_name, parent_sync_id
        FROM user_category_projection
        WHERE user_id = ? AND sync_id IS NOT NULL AND sync_id != ''
-       ORDER BY kind, sort_order, LOWER(name) ASC`
+       ORDER BY kind, sort_order IS NULL, sort_order, LOWER(name) ASC`
     )
     .bind(ownerId)
     .all<{ sync_id: string; name: string | null; kind: string | null; level: number | null; sort_order: number | null; icon: string | null; icon_type: string | null; icon_cloud_file_id: string | null; icon_cloud_sha256: string | null; parent_name: string | null; parent_sync_id: string | null }>();
@@ -2041,6 +2204,7 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
     .all<{ sync_id: string; name: string | null; color: string | null }>();
 
   return c.json({
+    owner_user_id: ownerId,
     categories: ownerCategories.results.map((cat) => ({
       sync_id: cat.sync_id,
       name: cat.name,
@@ -2053,7 +2217,6 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
       icon_cloud_sha256: cat.icon_cloud_sha256,
       parent_name: cat.parent_name,
       parent_sync_id: cat.parent_sync_id,
-      updated_at: new Date().toISOString(),
     })),
     accounts: ownerAccounts.results.map((acct) => ({
       sync_id: acct.sync_id,
@@ -2067,13 +2230,11 @@ workspaceRouter.get('/ledgers/:id/shared-resources', async (c) => {
       payment_due_day: acct.payment_due_day,
       bank_name: acct.bank_name,
       card_last_four: acct.card_last_four,
-      updated_at: new Date().toISOString(),
     })),
     tags: ownerTags.results.map((tag) => ({
       sync_id: tag.sync_id,
       name: tag.name,
       color: tag.color,
-      updated_at: new Date().toISOString(),
     })),
   });
 });
@@ -2182,7 +2343,14 @@ workspaceRouter.get('/net-worth-history', async (c) => {
   const ledgers = await db
     .prepare(`SELECT DISTINCT l.id, l.external_id, l.currency FROM ledgers l
       LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
-      WHERE (l.user_id = ? OR lm.user_id = ?)${ledgerId ? ' AND (l.external_id = ? OR l.id = ?)' : ''}`)
+      WHERE (l.user_id = ? OR lm.user_id = ?)
+        AND NOT EXISTS (
+          SELECT 1 FROM sync_changes sc
+          WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
+            AND sc.action = 'delete'
+            AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
+                                WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
+        )${ledgerId ? ' AND (l.external_id = ? OR l.id = ?)' : ''}`)
     .bind(userId, userId, userId, ...(ledgerId ? [ledgerId, ledgerId] : []))
     .all<{ id: string; external_id: string; currency: string }>();
 
