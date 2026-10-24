@@ -988,10 +988,13 @@ export async function uploadPreparedBackup(
 
   const uploadResults = await Promise.allSettled(
     effectiveConfigs.map(async ({ remoteId, config }) => {
-      progressFn?.('uploading', { remoteId });
+      // 对齐上游 runner on_progress：uploading 带字节数与远端名（前端进度条实时显示大小）。
+      // 受平台限制无逐块进度回调，bytesTransferred 先置 0、bytesTotal=备份包大小（上传完成时跳满）。
+      progressFn?.('uploading', { remoteId, bytesTransferred: 0, bytesTotal: backupBytes.length, speed: 0 });
       try {
         const result = await uploadBackupToRemote(backupBytes, encrypted, config, userId, logWrap, filenameSuffix);
         logWrap(`[Backup] Remote ${remoteId}: ${result.ok ? 'success' : 'failed'} ${result.message}`);
+        progressFn?.('uploading', { remoteId, bytesTransferred: result.ok ? backupBytes.length : 0, bytesTotal: backupBytes.length, speed: 0 });
         return { remoteId, ...result };
       } catch (err) {
         const msg = (err as Error).message;

@@ -31,8 +31,6 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
     const logFn = (msg: string) => {
       const line = `[${new Date().toISOString()}] ${msg}`;
       logLines.push(line);
-      // 对齐上游：不逐行广播日志（Workflow 重放会重放顶层副作用导致重复）；
-      // 详情页只读 backup_runs.log_text，实时进度走 backup_progress 事件。
     };
     /** 将当前日志写入 DB，备份过程中刷新详情页可见逐步更新的日志 */
     const flushLogs = async () => {
@@ -177,14 +175,24 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
                   db, runId, userId, ledgerId, effectiveConfigs,
                   this.env.R2, logFn, idx === 0 ? retentionDays : undefined,
                   (phase, meta) => {
-                    // 对齐上游 runner：uploading 阶段带 remoteName/remoteId（前端进度条显示远端）
+                    // 对齐上游 runner：uploading 阶段带 remoteName/remoteId/字节数（前端进度条显示远端与大小）
                     const m: Record<string, unknown> = { type: 'backup_progress', phase, runId };
-                    const remoteId = (meta as { remoteId?: string } | undefined)?.remoteId;
+                    const metaObj = (meta ?? {}) as Record<string, unknown>;
+                    const remoteId = typeof metaObj.remoteId === 'string' ? metaObj.remoteId : undefined;
                     if (remoteId) {
                       const rc = effectiveConfigs.find(r => r.remoteId === remoteId);
                       m.remoteId = remoteId;
                       m.remoteName = rc?.config?.name || remoteId;
+                      // 对齐上游 runner.py:342：开始 push → target 转 running
+                      if (phase === 'uploading') {
+                        db.prepare(
+                          `UPDATE backup_run_targets SET status = 'running' WHERE run_id = ? AND remote_id = ?`
+                        ).bind(runId, remoteId).run().catch(() => {});
+                      }
                     }
+                    if (typeof metaObj.bytesTransferred === 'number') m.bytesTransferred = metaObj.bytesTransferred;
+                    if (typeof metaObj.bytesTotal === 'number') m.bytesTotal = metaObj.bytesTotal;
+                    if (typeof metaObj.speed === 'number') m.speed = metaObj.speed;
                     broadcast(m).catch(() => {});
                   },
                   bytes, f.encrypted, suffix,
@@ -201,8 +209,8 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
               messages.push(r.message);
             }
 
-            // 对齐上游 BackupRunTarget：每个远端独立状态（运行中可见，完成按各自结果更新）。
-            // 预建（Workflow 重放/重试幂等：已存在则跳过）。
+            // 对齐上游 BackupRunTarget：每远端独立子状态（pending → running → succeeded/failed）。
+            // 预建 pending（Workflow 重放/重试幂等：已存在则跳过）。
             for (const rc of effectiveConfigs) {
               const exist = await db.prepare(
                 'SELECT id FROM backup_run_targets WHERE run_id = ? AND remote_id = ?'
@@ -210,7 +218,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
               if (!exist) {
                 await db.prepare(
                   `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at)
-                   VALUES (?, ?, 'running', ?)`
+                   VALUES (?, ?, 'pending', ?)`
                 ).bind(runId, rc.remoteId, new Date().toISOString()).run();
               }
             }
