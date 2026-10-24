@@ -6,6 +6,7 @@
  */
 
 import type { CleanupRecord, CleanupResult } from './types';
+import { deleteFromStorage } from '../../lib/storage-adapter';
 
 /**
  * 清理孤立数据记录。按 type 分发清理操作，与原版 _dispatch 对齐。
@@ -118,7 +119,7 @@ async function clearBudgetCategory(db: D1Database, record: CleanupRecord): Promi
   ).bind(ledgerId, syncId).run();
 }
 
-/** B1: 删 AttachmentFile 行（同事务）+ R2 对象（best-effort），对齐原版 _delete_attachment_with_file */
+/** B1: 删 AttachmentFile 行（同事务）+ 物理对象（best-effort），对齐原版 _delete_attachment_with_file */
 async function deleteAttachmentWithFile(
   db: D1Database,
   record: CleanupRecord,
@@ -129,9 +130,12 @@ async function deleteAttachmentWithFile(
     'SELECT storage_path FROM attachment_files WHERE id = ?'
   ).bind(record.row_id).first<{ storage_path: string }>();
   await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(record.row_id).run();
-  if (att?.storage_path && r2) {
+  if (att?.storage_path) {
     try {
-      await r2.delete(att.storage_path);
+      // 统一删除入口：storage-adapter 内部加 beecount/ 前缀并覆盖 R2 + 所有远端，
+      // 与 write.ts / sync.ts 的 GC 一致（直接 r2.delete(storage_path) 会因前缀
+      // 不匹配而漏删实际对象，产生「R2 有对象无行」残留）。
+      await deleteFromStorage(db, { R2: r2 }, att.storage_path.replace(/^beecount\//, ''));
     } catch {
       // R2 unlink 失败不阻塞（对齐原版 warn 不抛）
     }

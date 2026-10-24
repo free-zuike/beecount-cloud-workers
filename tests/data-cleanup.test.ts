@@ -264,7 +264,7 @@ describe('cleaner(移植上游 test_data_cleanup.py)', () => {
     expect(report2.db_orphans.some(r => r.type === 'tx_missing_category')).toBe(false);
   });
 
-  it('clean B1:删 DB 行 + R2 对象', async () => {
+  it('clean B1:删 DB 行 + R2 对象(带 beecount/ 前缀,与 storage-adapter 实际 key 一致)', async () => {
     seedUserLedger();
     addAttachment({ id: 'att-orphan', file_name: 'orphan.png', storage_path: 'attachments/orphan.png' });
     const deleted: string[] = [];
@@ -279,6 +279,8 @@ describe('cleaner(移植上游 test_data_cleanup.py)', () => {
     const result = await clean(db, records as any, r2);
     expect(result.success_count).toBe(records.length);
     expect(sqlite.prepare('SELECT 1 FROM attachment_files WHERE id = ?').get('att-orphan')).toBeUndefined();
+    // 统一删除入口加 beecount/ 前缀：直接 r2.delete(storage_path) 会漏删实际对象
+    expect(deleted).toContain('beecount/attachments/orphan.png');
   });
 
   it('clean B4:剥离 broken attachments,保留有效项与 tx 本体', async () => {
