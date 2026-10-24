@@ -176,6 +176,8 @@ export interface BackupResult {
   backupSize?: number;
   backupPath?: string;
   attachmentsUploaded?: number;
+  /** 每个远端的上传结果（对齐上游 BackupRunTarget 独立状态；Workflow 据此更新 targets） */
+  targets?: Array<{ remoteId: string; ok: boolean; message: string; bytes: number }>;
 }
 
 // ===========================
@@ -987,9 +989,15 @@ export async function uploadPreparedBackup(
   const uploadResults = await Promise.allSettled(
     effectiveConfigs.map(async ({ remoteId, config }) => {
       progressFn?.('uploading', { remoteId });
-      const result = await uploadBackupToRemote(backupBytes, encrypted, config, userId, logWrap, filenameSuffix);
-      logWrap(`[Backup] Remote ${remoteId}: ${result.ok ? 'success' : 'failed'} ${result.message}`);
-      return { remoteId, ...result };
+      try {
+        const result = await uploadBackupToRemote(backupBytes, encrypted, config, userId, logWrap, filenameSuffix);
+        logWrap(`[Backup] Remote ${remoteId}: ${result.ok ? 'success' : 'failed'} ${result.message}`);
+        return { remoteId, ...result };
+      } catch (err) {
+        const msg = (err as Error).message;
+        logWrap(`[Backup] Remote ${remoteId}: failed ${msg}`);
+        return { remoteId, ok: false, message: msg };
+      }
     })
   );
 
@@ -1070,6 +1078,12 @@ export async function uploadPreparedBackup(
     backupSize: backupBytes.length,
     backupPath: backupPath || undefined,
     attachmentsUploaded: 0,
+    targets: uploadResults.map((r) => {
+      if (r.status === 'fulfilled') {
+        return { remoteId: r.value.remoteId, ok: r.value.ok, message: r.value.message, bytes: backupBytes.length };
+      }
+      return { remoteId: '', ok: false, message: String(r.reason), bytes: 0 };
+    }),
   };
 }
 

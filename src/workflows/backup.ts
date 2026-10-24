@@ -176,12 +176,22 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
                 const result = await uploadPreparedBackup(
                   db, runId, userId, ledgerId, effectiveConfigs,
                   this.env.R2, logFn, idx === 0 ? retentionDays : undefined,
-                  (phase) => { broadcast({ type: 'backup_progress', phase, runId }).catch(() => {}); },
+                  (phase, meta) => {
+                    // 对齐上游 runner：uploading 阶段带 remoteName/remoteId（前端进度条显示远端）
+                    const m: Record<string, unknown> = { type: 'backup_progress', phase, runId };
+                    const remoteId = (meta as { remoteId?: string } | undefined)?.remoteId;
+                    if (remoteId) {
+                      const rc = effectiveConfigs.find(r => r.remoteId === remoteId);
+                      m.remoteId = remoteId;
+                      m.remoteName = rc?.config?.name || remoteId;
+                    }
+                    broadcast(m).catch(() => {});
+                  },
                   bytes, f.encrypted, suffix,
                 );
-                return { ok: result.success, path: result.backupPath, message: `${suffix || 'default'}: ${result.message}` };
+                return { ok: result.success, path: result.backupPath, message: `${suffix || 'default'}: ${result.message}`, targets: result.targets ?? [] };
               } catch (e) {
-                return { ok: false, message: `${f.r2Key}: ${(e as Error).message}` };
+                return { ok: false, message: `${f.r2Key}: ${(e as Error).message}`, targets: [] };
               }
             }));
             for (const r of results) {
@@ -189,6 +199,36 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
               if (r.path && !firstPath) firstPath = r.path;
               if (!r.ok) allSuccess = false;
               messages.push(r.message);
+            }
+
+            // 对齐上游 BackupRunTarget：每个远端独立状态（运行中可见，完成按各自结果更新）。
+            // 预建（Workflow 重放/重试幂等：已存在则跳过）。
+            for (const rc of effectiveConfigs) {
+              const exist = await db.prepare(
+                'SELECT id FROM backup_run_targets WHERE run_id = ? AND remote_id = ?'
+              ).bind(runId, rc.remoteId).first();
+              if (!exist) {
+                await db.prepare(
+                  `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at)
+                   VALUES (?, ?, 'running', ?)`
+                ).bind(runId, rc.remoteId, new Date().toISOString()).run();
+              }
+            }
+            // 汇总每个远端两次归档（主 + -json）的结果：任一失败 → 该远端 failed
+            const perRemote = new Map<string, { ok: boolean; message: string; bytes: number }>();
+            for (const r of results) {
+              for (const t of r.targets ?? []) {
+                const cur = perRemote.get(t.remoteId);
+                if (!cur || (!t.ok && cur.ok)) perRemote.set(t.remoteId, t);
+              }
+            }
+            const targetsFinishedAt = new Date().toISOString();
+            for (const [remoteId, t] of perRemote) {
+              await db.prepare(
+                `UPDATE backup_run_targets
+                 SET status = ?, finished_at = ?, bytes_transferred = ?, error_message = ?
+                 WHERE run_id = ? AND remote_id = ?`
+              ).bind(t.ok ? 'succeeded' : 'failed', targetsFinishedAt, t.bytes, t.ok ? null : t.message, runId, remoteId).run();
             }
             return {
               success: allSuccess,
@@ -216,18 +256,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
             backupResult.backupPath?.split('/').pop() || null,
             backupResult.success ? null : backupResult.message, logLines.join('\n'), runId).run();
 
-      // 3. 每个远端创建 backup_run_targets 记录
-      for (const rc of effectiveConfigs) {
-        try {
-          await db.prepare(
-            `INSERT INTO backup_run_targets (run_id, remote_id, status, started_at, finished_at, bytes_transferred, error_message)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          ).bind(runId, rc.remoteId, finalStatus, serverNow, finishedAt,
-                backupResult.backupSize || null, backupResult.success ? null : backupResult.message).run();
-        } catch { /* ignore */ }
-      }
-
-      // 4. 广播最终状态
+      // 3. 广播最终状态
       await broadcast({ type: 'backup_status', status: finalStatus, runId, scheduleId: scheduleId ?? undefined });
 
       // 5. 更新调度最后状态
