@@ -89,7 +89,10 @@ export function AdminBackupPage() {
   const [schedules, setSchedules] = useState<BackupSchedule[]>([])
   const [runs, setRuns] = useState<BackupRun[]>([])
   const [liveProgress, setLiveProgress] = useState<LiveProgress | null>(null)
-  const [liveLog, setLiveLog] = useState<string[]>([])
+  // 对齐上游：备份日志仅从 run.log_text（DB）读取，无实时日志流（避免
+  // Workflow 重放重发广播导致详情日志重复）。
+  // (removed) backup_log 实时日志流：Workflow 重放会重发广播导致日志重复，
+  // 详情弹窗已对齐上游只显示 DB log_text（干净）。
 
   // Restore 相关 state
   const [restoreRun, setRestoreRun] = useState<BackupRun | null>(null)
@@ -155,7 +158,6 @@ export function AdminBackupPage() {
   useSyncEvent('backup_status', (event) => {
     const data = event as { status?: string }
     setLiveProgress(null)
-    setLiveLog([])
     if (data.status) {
       if (data.status === 'succeeded') {
         notifySuccess(t('backup.notice.runSucceeded'))
@@ -166,13 +168,6 @@ export function AdminBackupPage() {
       }
     }
     void refreshRuns()
-  })
-
-  useSyncEvent('backup_log', (event) => {
-    const data = event as { log?: string; runId?: number }
-    if (data.log) {
-      setLiveLog(prev => [...prev, data.log!])
-    }
   })
 
   // Restore 进度事件
@@ -405,7 +400,6 @@ export function AdminBackupPage() {
               <BackupRunsPanel
                 runs={runs}
                 liveProgress={liveProgress}
-                liveLog={liveLog}
                 onDownloadConfig={onDownloadConfig}
                 onRestoreRun={(run) => void onRestoreRun(run)}
               />

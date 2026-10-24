@@ -31,7 +31,8 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
     const logFn = (msg: string) => {
       const line = `[${new Date().toISOString()}] ${msg}`;
       logLines.push(line);
-      broadcast({ type: 'backup_log', log: line, runId }).catch(() => {});
+      // 对齐上游：不逐行广播日志（Workflow 重放会重放顶层副作用导致重复）；
+      // 详情页只读 backup_runs.log_text，实时进度走 backup_progress 事件。
     };
     /** 将当前日志写入 DB，备份过程中刷新详情页可见逐步更新的日志 */
     const flushLogs = async () => {

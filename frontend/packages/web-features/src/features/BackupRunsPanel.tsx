@@ -23,7 +23,6 @@ type LiveProgress = {
 type Props = {
   runs: BackupRun[]
   liveProgress: LiveProgress | null
-  liveLog: string[]
   onDownloadConfig: () => Promise<void>
   /** 点某个 run 的「准备恢复」按钮 — 触发 restore guide dialog。 */
   onRestoreRun?: (run: BackupRun) => void
@@ -62,7 +61,6 @@ function fmtDuration(start: string, end: string | null): string {
 export function BackupRunsPanel({
   runs,
   liveProgress,
-  liveLog,
   onDownloadConfig,
   onRestoreRun,
 }: Props) {
@@ -317,13 +315,13 @@ export function BackupRunsPanel({
                 </div>
               ) : null}
 
-              {detailRun.log_text || liveLog.length > 0 ? (
+              {detailRun.log_text ? (
                 <div className="space-y-1">
                   <div className="text-muted-foreground">
                     {t('backup.runs.detail.log')}
                   </div>
                   <pre className="max-h-64 overflow-auto rounded bg-muted/40 p-2 font-mono text-[10px]">
-                    {detailRun.log_text}{liveLog.length > 0 ? '\n' + liveLog.join('\n') : ''}
+                    {detailRun.log_text}
                   </pre>
                 </div>
               ) : null}
