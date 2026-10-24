@@ -145,12 +145,11 @@ async function consumeAiImageAsAttachment(
   const mime = cacheRow!.mime_type || 'image/jpeg';
   const fileExt = mime.includes('png') ? '.png' : mime.includes('webp') ? '.webp' : mime.includes('gif') ? '.gif' : '.jpg';
   const r2Key = `attachments/${ledger.external_id}/${fileId}_screenshot${fileExt}`;
-  if (env.R2) {
-    await env.R2.put(r2Key, imageBytes, { httpMetadata: { contentType: mime } });
-  } else {
-    const uploadResult = await uploadToStorage(db, env, r2Key, imageBytes, mime);
-    if (!uploadResult.ok) { /* 附件上传失败不阻断主流程 */ }
-  }
+  // 统一存储入口（R2 优先 + 远端回退，storage-adapter 自动加 beecount/ 前缀）——
+  // 直接 env.R2.put(r2Key) 会存无前缀 key，与其余附件不一致，且清理入口
+  // （deleteFromStorage 加前缀）删不到 → 残留对象。
+  const uploadResult = await uploadToStorage(db, env, r2Key, imageBytes, mime);
+  if (!uploadResult.ok) { /* 附件上传失败不阻断主流程 */ }
   // 删缓存 + 插附件同事务原子写入
   await db.batch([
     db.prepare('DELETE FROM ai_image_cache WHERE image_id = ?').bind(attachImageId),
@@ -160,8 +159,17 @@ async function consumeAiImageAsAttachment(
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'transaction', ?)`
     ).bind(fileId, ledger.id, userId, sha256, cacheRow!.size_bytes, mime, `screenshot${fileExt}`, r2Key, nowUtc()),
   ]);
+  // 并发去重兜底：同 sha 并发写入时统一返回最早行（对齐上传端点 canonical）
+  const canonical = await db
+    .prepare(
+      `SELECT id FROM attachment_files
+       WHERE sha256 = ? AND ledger_id = ? AND attachment_kind = 'transaction'
+       ORDER BY created_at ASC, id ASC LIMIT 1`
+    )
+    .bind(sha256, ledger.id)
+    .first<{ id: string }>();
   return {
-    cloudFileId: fileId,
+    cloudFileId: canonical?.id ?? fileId,
     fileName: `screenshot${fileExt}`,
     mimeType: mime,
     sha256,
