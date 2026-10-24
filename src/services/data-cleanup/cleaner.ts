@@ -60,6 +60,11 @@ export async function clean(
           // _delete_attachment_with_file：DB 行删除是事实，R2 unlink 失败不阻塞。
           await deleteAttachmentWithFile(db, record, r2);
           break;
+        case 'attachment_dup_ref':
+          // B5: 同内容重复引用——把引用迁移到保留行（写 sync_changes 让设备收敛）
+          // 后删除次行 + R2 对象。
+          await consolidateDupRef(db, record, r2);
+          break;
         case 'attachment_file_missing':
           // B2: R2 对象已丢，只删 DB 行
           await deleteAttachmentRowOnly(db, record);
@@ -138,6 +143,68 @@ async function deleteAttachmentWithFile(
       await deleteFromStorage(db, { R2: r2 }, att.storage_path.replace(/^beecount\//, ''));
     } catch {
       // R2 unlink 失败不阻塞（对齐原版 warn 不抛）
+    }
+  }
+}
+
+/** B5: 同 sha 多行被引用——把引用次行的交易迁移到保留行，写 sync_changes 让
+ * 设备端收敛（payload 只含 attachments，apply 是 merge 语义，其余字段继承），
+ * 再删次行 + R2 对象（内容同 sha，由保留行对象承载，无数据丢失）。 */
+async function consolidateDupRef(
+  db: D1Database,
+  record: CleanupRecord,
+  r2?: R2Bucket,
+): Promise<void> {
+  const dupId = record.row_id;
+  if (!dupId) throw new Error('attachment_dup_ref record 缺 row_id');
+  const extra = record.extra || {};
+  const ledgerId = String(extra.ledger_id || '');
+  const keepId = String(extra.keep_id || '');
+  if (!ledgerId || !keepId) throw new Error('attachment_dup_ref record 缺 ledger_id/keep_id');
+
+  const txs = await db.prepare(
+    `SELECT sync_id, user_id, attachments_json FROM read_tx_projection
+     WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0)`
+  ).bind(ledgerId, `"cloudFileId":"${dupId}"`, `"cloudFileId": "${dupId}"`)
+    .all<{ sync_id: string; user_id: string; attachments_json: string }>();
+
+  for (const tx of txs.results) {
+    let atts: unknown;
+    try { atts = JSON.parse(tx.attachments_json); } catch { continue; }
+    if (!Array.isArray(atts)) continue;
+    let changed = false;
+    for (const a of atts) {
+      if (a && typeof a === 'object' && (a as Record<string, unknown>).cloudFileId === dupId) {
+        (a as Record<string, unknown>).cloudFileId = keepId;
+        changed = true;
+      }
+    }
+    if (!changed) continue;
+
+    const newJson = JSON.stringify(atts);
+    const payload = JSON.stringify({ attachments: atts });
+    const now = new Date().toISOString();
+    await db.batch([
+      db.prepare(
+        'UPDATE read_tx_projection SET attachments_json = ? WHERE ledger_id = ? AND sync_id = ?'
+      ).bind(newJson, ledgerId, tx.sync_id),
+      db.prepare(
+        `INSERT INTO sync_changes
+         (user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_user_id, scope)
+         VALUES (?, ?, 'transaction', ?, 'upsert', ?, ?, NULL, ?, 'ledger')`
+      ).bind(tx.user_id, ledgerId, tx.sync_id, payload, now, tx.user_id),
+    ]);
+  }
+
+  const att = await db.prepare(
+    'SELECT storage_path FROM attachment_files WHERE id = ?'
+  ).bind(dupId).first<{ storage_path: string }>();
+  await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(dupId).run();
+  if (att?.storage_path) {
+    try {
+      await deleteFromStorage(db, { R2: r2 }, att.storage_path.replace(/^beecount\//, ''));
+    } catch {
+      // 对象删除失败不阻塞（内容同 sha，保留行对象仍在）
     }
   }
 }

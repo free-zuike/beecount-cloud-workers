@@ -17,7 +17,8 @@ export type OrphanType =
   | 'attachment_no_ref'          // B1: AttachmentFile 行无 tx/category 引用
   | 'attachment_file_missing'    // B2: storage_path 指向的 R2 对象不存在
   | 'disk_file_no_row'           // B3: R2 有对象但 attachment_files 无行
-  | 'tx_ref_broken_attachment';  // B4: tx.attachments_json 引用 fileId 不存在
+  | 'tx_ref_broken_attachment'   // B4: tx.attachments_json 引用 fileId 不存在
+  | 'attachment_dup_ref'         // B5(本地新增): 同 sha 多行且多行被引用——次行引用迁移到保留行后删除
 
 export interface OrphanRecord {
   type: OrphanType;

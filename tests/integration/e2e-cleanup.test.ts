@@ -16,7 +16,7 @@ describe('data-cleanup e2e', () => {
       CREATE TABLE user_tag_projection (sync_id TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT, color TEXT, source_change_id INTEGER DEFAULT 0, PRIMARY KEY (user_id, sync_id));
       CREATE TABLE read_budget_projection (ledger_id TEXT, sync_id TEXT NOT NULL, user_id TEXT NOT NULL, budget_type TEXT, category_sync_id TEXT, amount REAL, period TEXT, start_day INTEGER, enabled INTEGER DEFAULT 1, source_change_id INTEGER DEFAULT 0);
       CREATE TABLE read_tx_projection (ledger_id TEXT, sync_id TEXT NOT NULL, user_id TEXT NOT NULL, tx_type TEXT NOT NULL, amount REAL DEFAULT 0, happened_at TEXT NOT NULL, note TEXT, category_sync_id TEXT, account_sync_id TEXT, from_account_sync_id TEXT, to_account_sync_id TEXT, category_name TEXT, account_name TEXT, from_account_name TEXT, to_account_name TEXT, attachments_json TEXT, source_change_id INTEGER DEFAULT 0);
-      CREATE TABLE attachment_files (id TEXT PRIMARY KEY, user_id TEXT, size_bytes INTEGER, file_name TEXT, storage_path TEXT NOT NULL, attachment_kind TEXT DEFAULT 'transaction', sha256 TEXT);
+      CREATE TABLE attachment_files (id TEXT PRIMARY KEY, ledger_id TEXT, user_id TEXT, size_bytes INTEGER, file_name TEXT, storage_path TEXT NOT NULL, attachment_kind TEXT DEFAULT 'transaction', sha256 TEXT);
     `);
 
     class S {

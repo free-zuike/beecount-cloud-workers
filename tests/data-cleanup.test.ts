@@ -309,4 +309,50 @@ describe('cleaner(移植上游 test_data_cleanup.py)', () => {
     expect(result.success_count).toBe(0);
     expect(result.failures).toEqual([]);
   });
+
+  it('scan/clean B5:同 sha 多行被引用 → 迁移引用+写 sync_changes+删次行', async () => {
+    seedUserLedger();
+    addAttachment({ id: 'dup-A', sha256: 'SSS', storage_path: 'attachments/a.png' });
+    addAttachment({ id: 'dup-B', sha256: 'SSS', storage_path: 'attachments/b.png' });
+    addTx({ sync_id: 'tx-keep', attachments_json: JSON.stringify([{ cloudFileId: 'dup-A', fileName: 'sha_SSS.jpg' }]) });
+    addTx({ sync_id: 'tx-move', attachments_json: JSON.stringify([{ cloudFileId: 'dup-B', fileName: 'sha_SSS.jpg' }]) });
+
+    const report = await scanAll(db);
+    const recs = report.file_orphans.filter(r => r.type === 'attachment_dup_ref');
+    expect(recs).toHaveLength(1);
+    expect(recs[0].row_id).toBe('dup-B');
+    expect(recs[0].extra?.keep_id).toBe('dup-A');
+
+    const deleted: string[] = [];
+    const r2 = {
+      head: async () => null,
+      list: async () => ({ objects: [], truncated: false }),
+      delete: async (k: string) => { deleted.push(k); },
+    } as unknown as R2Bucket;
+    const result = await clean(db, recs as any, r2);
+    expect(result.success_count).toBe(1);
+    expect(result.failures).toEqual([]);
+
+    // 交易引用迁移到保留行；保留行交易不受影响
+    const moved = JSON.parse(String((sqlite.prepare("SELECT attachments_json FROM read_tx_projection WHERE sync_id = 'tx-move'").get() as any).attachments_json)) as Array<{ cloudFileId: string }>;
+    expect(moved[0].cloudFileId).toBe('dup-A');
+    const kept = JSON.parse(String((sqlite.prepare("SELECT attachments_json FROM read_tx_projection WHERE sync_id = 'tx-keep'").get() as any).attachments_json)) as Array<{ cloudFileId: string }>;
+    expect(kept[0].cloudFileId).toBe('dup-A');
+    // 次行删除、保留行保留
+    expect(sqlite.prepare('SELECT 1 FROM attachment_files WHERE id = ?').get('dup-B')).toBeUndefined();
+    expect(sqlite.prepare('SELECT 1 FROM attachment_files WHERE id = ?').get('dup-A')).toBeDefined();
+    // sync_changes 写入（merge payload、scope=ledger、device NULL 放行）
+    const ch = sqlite.prepare("SELECT * FROM sync_changes WHERE entity_sync_id = 'tx-move'").get() as any;
+    expect(ch).toBeDefined();
+    expect(ch.scope).toBe('ledger');
+    expect(ch.updated_by_device_id).toBeNull();
+    expect(ch.action).toBe('upsert');
+    const pl = JSON.parse(ch.payload_json);
+    expect(pl.attachments[0].cloudFileId).toBe('dup-A');
+    // R2 对象删除（统一入口带 beecount/ 前缀）
+    expect(deleted).toContain('beecount/attachments/b.png');
+    // 重扫无重复引用
+    const report2 = await scanAll(db);
+    expect(report2.file_orphans.some(r => r.type === 'attachment_dup_ref')).toBe(false);
+  });
 });

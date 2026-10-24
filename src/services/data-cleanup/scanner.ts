@@ -375,6 +375,52 @@ async function scanTxRefBrokenAttachment(db: D1Database): Promise<OrphanRecord[]
   return orphans;
 }
 
+/**
+ * B5 — 同 sha 多行且组内多个行被交易引用（去重上线前的历史脏数据）。
+ * 每个次行生成一条记录，cleaner 把引用迁移到保留行（最早被引用行）后删除。
+ * 组内零引用行归 B1（attachment_no_ref）处理，不在这里重复列出。
+ */
+async function scanAttachmentDupRef(db: D1Database): Promise<OrphanRecord[]> {
+  const groups = await db.prepare(
+    `SELECT ledger_id, sha256 FROM attachment_files
+     WHERE attachment_kind = 'transaction'
+     GROUP BY ledger_id, sha256 HAVING COUNT(*) > 1`
+  ).all<{ ledger_id: string; sha256: string }>();
+
+  const orphans: OrphanRecord[] = [];
+  for (const g of groups.results) {
+    const rows = await db.prepare(
+      `SELECT id, file_name, sha256, created_at FROM attachment_files
+       WHERE ledger_id = ? AND sha256 = ? AND attachment_kind = 'transaction'
+       ORDER BY created_at ASC, id ASC`
+    ).bind(g.ledger_id, g.sha256).all<{ id: string; file_name: string | null; sha256: string | null; created_at: string }>();
+
+    const referenced: Array<{ id: string; file_name: string | null }> = [];
+    for (const row of rows.results) {
+      const still = await isAttachmentStillReferenced({
+        db,
+        fileId: row.id,
+        sha256: row.sha256,
+        scope: { ledgerId: g.ledger_id },
+      });
+      if (still) referenced.push({ id: row.id, file_name: row.file_name });
+    }
+    if (referenced.length <= 1) continue; // 至多一个被引用行 → 其余走 B1
+
+    const keep = referenced[0];
+    for (const dup of referenced.slice(1)) {
+      orphans.push({
+        type: 'attachment_dup_ref' as const,
+        row_id: dup.id,
+        title: `附件重复引用 ${dup.file_name ?? dup.id.slice(0, 12)}`,
+        subtitle: `同 sha 多行:引用将迁移到 ${keep.id.slice(0, 8)}… 后删除本行`,
+        extra: { ledger_id: g.ledger_id, keep_id: keep.id },
+      });
+    }
+  }
+  return orphans;
+}
+
 // ---------------------------------------------------------------------------
 // scanAll — 与原版 scan_all() 对齐，聚合返回
 // ---------------------------------------------------------------------------
@@ -402,6 +448,7 @@ export async function scanAll(db: D1Database, r2?: R2Bucket): Promise<ScanReport
     ...(await scanAttachmentFileMissing(db, r2)),
     ...(await scanDiskFileNoRow(db, r2)),
     ...(await scanTxRefBrokenAttachment(db)),
+    ...(await scanAttachmentDupRef(db)),
   );
 
   let totalSizeBytes = 0;
