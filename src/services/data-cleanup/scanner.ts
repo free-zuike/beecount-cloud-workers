@@ -10,6 +10,7 @@
  */
 
 import type { OrphanRecord, ScanReport } from './types';
+import { isAttachmentStillReferenced } from '../../lib/attachment-reference';
 
 // ---------------------------------------------------------------------------
 // A 类：DB 引用断链（实体引用已删） — 与原版 scanner.py A 类对齐
@@ -211,26 +212,14 @@ async function scanAttachmentNoRef(db: D1Database): Promise<OrphanRecord[]> {
   const orphans: OrphanRecord[] = [];
   for (const row of rows.results) {
     // 判定是否仍被引用（对齐原版 _fileid_still_referenced：tx 的 attachments_json
-    // 两种空格变体 + category 图标的 icon_cloud_file_id；INSTR 避免 LIKE 模式复杂度限制）
-    const patNoSpace = `"cloudFileId":"${row.id}"`;
-    const patWithSpace = `"cloudFileId": "${row.id}"`;
-    // App 端（Flutter）attachments_json 用 fileName（sha 哈希）而非 cloudFileId，
-    // 格式：{"fileName":"sha_<sha256>.jpg"}，需同时检查
-    const shaPat = row.sha256 ? `sha_${row.sha256}.jpg` : null;
-    const txHit = await db.prepare(
-      `SELECT COUNT(*) as cnt FROM read_tx_projection
-       WHERE user_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0${shaPat ? ' OR INSTR(attachments_json, ?) > 0' : ''})`
-    ).bind(row.user_id, patNoSpace, patWithSpace, ...(shaPat ? [shaPat] : [])).first<{ cnt: number }>();
-
-    let stillReferenced = txHit && txHit.cnt > 0;
-    if (!stillReferenced) {
-      const catHit = await db.prepare(
-        `SELECT COUNT(*) as cnt FROM user_category_projection
-         WHERE user_id = ? AND icon_cloud_file_id = ?`
-      ).bind(row.user_id, row.id).first<{ cnt: number }>();
-      stillReferenced = catHit && catHit.cnt > 0;
-    }
-
+    // 按 cloudFileId 精确匹配 + category 图标；同 sha 冗余行的保护见 helper 注释）
+    const stillReferenced = await isAttachmentStillReferenced({
+      db,
+      fileId: row.id,
+      sha256: row.sha256,
+      scope: { userId: row.user_id },
+      checkCategoryIcon: true,
+    });
     if (stillReferenced) continue;
 
     orphans.push({

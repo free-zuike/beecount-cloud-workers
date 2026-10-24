@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { insertAuditLog } from '../lib/audit';
 import { deleteFromStorage } from '../lib/storage-adapter';
+import { isAttachmentStillReferenced } from '../lib/attachment-reference';
 
 const CODE_VERSION = 'v1.3-projection-fix';
 
@@ -2040,14 +2041,13 @@ async function applyChangeToProjection(
           if (!attFile) continue;
 
           // 是否仍被本 ledger 下其他交易引用（共享附件保留）
-          const patNoSpace = `"cloudFileId":"${fileId}"`;
-          const patWithSpace = `"cloudFileId": "${fileId}"`;
-          const shaPat = attFile.sha256 ? `sha_${attFile.sha256}.jpg` : null;
-          const stillReferenced = await db.prepare(
-            `SELECT COUNT(*) as cnt FROM read_tx_projection
-             WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0${shaPat ? ' OR INSTR(attachments_json, ?) > 0' : ''})`
-          ).bind(ledgerId, patNoSpace, patWithSpace, ...(shaPat ? [shaPat] : [])).first<{ cnt: number }>();
-          if (stillReferenced && stillReferenced.cnt > 0) continue;
+          const stillReferenced = await isAttachmentStillReferenced({
+            db,
+            fileId,
+            sha256: attFile.sha256,
+            scope: { ledgerId },
+          });
+          if (stillReferenced) continue;
 
           if (attFile.storage_path) {
             // 统一删除入口：覆盖 R2 + WebDAV/S3/B2/FTP/SFTP 所有远端 + 前缀/旧路径兼容
@@ -2062,14 +2062,15 @@ async function applyChangeToProjection(
             "SELECT id, storage_path, sha256 FROM attachment_files WHERE sha256 = ? AND attachment_kind = 'transaction' LIMIT 1"
           ).bind(sha).first<{ id: string; storage_path: string; sha256: string | null }>();
           if (!attFile) continue;
-          // 检查是否仍被其他交易引用
-          const shaPat = `sha_${sha}.jpg`;
-          const stillReferenced = await db.prepare(
-            `SELECT COUNT(*) as cnt FROM read_tx_projection
-             WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0)`
-          ).bind(ledgerId, `"cloudFileId":"${attFile.id}"`, `"cloudFileId": "${attFile.id}"`, shaPat).first<{ cnt: number }>();
-          // 注意：这里同时检查了 cloudFileId（web 端）和 shaPat（Flutter 端）
-          if (stillReferenced && stillReferenced.cnt > 0) continue;
+          // 检查是否仍被其他交易引用（cloudFileId 主判据；该 sha 单行时 fileName 引用也计入，
+          // 多行冗余时只按 cloudFileId 判定，残缺「仅 fileName」引用整组保留）
+          const stillReferenced = await isAttachmentStillReferenced({
+            db,
+            fileId: attFile.id,
+            sha256: attFile.sha256 ?? sha,
+            scope: { ledgerId },
+          });
+          if (stillReferenced) continue;
           if (attFile.storage_path) {
             // 统一删除入口：覆盖 R2 + WebDAV/S3/B2/FTP/SFTP 所有远端 + 前缀/旧路径兼容
             await deleteFromStorage(db, { R2: r2 }, attFile.storage_path.replace(/^beecount\//, ''));

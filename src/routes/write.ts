@@ -36,6 +36,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { insertAuditLog } from '../lib/audit';
 import { deleteFromStorage } from '../lib/storage-adapter';
+import { isAttachmentStillReferenced } from '../lib/attachment-reference';
 import { idempotencyMiddleware } from '../lib/idempotency';
 
 /** 空串/undefined/null 统一归一为 null —— 对齐原版：无值字段是 NULL 而非空字符串 */
@@ -59,8 +60,8 @@ function collectCloudFileIds(attachments: unknown): string[] {
 }
 
 /**
- * 无引用附件 GC（对齐原版 gc_orphan_attachments）：对给定 fileId 逐个检查——
- * 仍被本账本任何 tx 的 attachments_json 引用（cloudFileId 或 sha_<sha>.jpg）则保留；
+ * 无引用附件 GC（对齐原版 gc_orphan_attachments_for_ledger）：对给定 fileId 逐个检查——
+ * 仍被本账本任何 tx 的 attachments_json 引用（cloudFileId）则保留；
  * 否则删 R2/远端文件 + 删 attachment_files 行。best-effort，失败不影响主流程。
  */
 async function gcOrphanAttachmentsByFileIds(
@@ -76,19 +77,16 @@ async function gcOrphanAttachmentsByFileIds(
     for (const fid of fileIds) {
       const att = attRows.results.find(r => r.id === fid);
       if (!att) continue;
-      // 检查是否仍被其他 tx 的 attachments_json 引用（用 INSTR 替代 LIKE 避免 SQLite 模式复杂度限制）
       // 按 ledger 而不是 user 扫 —— 对齐原版 _fileid_still_referenced_in_ledger：
       // 共享账本里 Editor 上传的附件 user_id=Editor，但投影行可能挂在 owner user_id 下，
       // 按 user 过滤会漏判 → 误删共享附件。
-      // Web 端用 cloudFileId 引用，Flutter App 端用 fileName（sha_<sha256>.jpg），同时检查
-      const patNoSpace = `"cloudFileId":"${fid}"`;
-      const patWithSpace = `"cloudFileId": "${fid}"`;
-      const shaPat = att.sha256 ? `sha_${att.sha256}.jpg` : null;
-      const stillReferenced = await db.prepare(
-        `SELECT COUNT(*) as cnt FROM read_tx_projection
-         WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0${shaPat ? ' OR INSTR(attachments_json, ?) > 0' : ''})`
-      ).bind(ledger.id, patNoSpace, patWithSpace, ...(shaPat ? [shaPat] : [])).first<{ cnt: number }>();
-      if (stillReferenced && stillReferenced.cnt > 0) continue;
+      const stillReferenced = await isAttachmentStillReferenced({
+        db,
+        fileId: fid,
+        sha256: att.sha256,
+        scope: { ledgerId: ledger.id },
+      });
+      if (stillReferenced) continue;
       // 无其他引用，安全删除（统一入口：覆盖 R2 + WebDAV/S3/B2/FTP/SFTP 所有远端）
       if (att.storage_path) {
         try { await deleteFromStorage(db, env, att.storage_path.replace(/^beecount\//, '')); } catch {}
