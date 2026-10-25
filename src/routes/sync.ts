@@ -25,6 +25,7 @@ import { randomUUID } from 'crypto';
 import { insertAuditLog } from '../lib/audit';
 import { deleteFromStorage } from '../lib/storage-adapter';
 import { isAttachmentStillReferenced } from '../lib/attachment-reference';
+import { healBrokenTxUpserts } from '../lib/tx-heal';
 
 const CODE_VERSION = 'v1.3-projection-fix';
 
@@ -1113,6 +1114,19 @@ syncRouter.get('/pull', async (c) => {
        SELECT lm.ledger_id FROM ledger_members lm WHERE lm.user_id = ?`
     ).bind(userId, userId).all<{ id: string }>();
     const accessibleLedgerIds = accessibleLedgerRows.results.map(r => r.id);
+
+    // 自愈：修复补写缺字段的坏交易变更（payload 缺 amount 的 transaction upsert）。
+    // 设备端覆盖式应用坏变更会把 amount/日期清成默认值（#B5 事故）；此处补写完整
+    // payload 变更，设备端正常同步即覆盖恢复，无需任何手动操作。幂等：补写后该
+    // 实体的最新 upsert 已完整，不再命中。
+    try {
+      const healed = await healBrokenTxUpserts(db, accessibleLedgerIds);
+      if (healed > 0) {
+        serverLogger.info('src.routers.sync', `[SYNC] /sync/pull healed ${healed} broken tx changes (B5 compensation)`);
+      }
+    } catch (err) {
+      serverLogger.error('src.routers.sync', '[SYNC] /sync/pull healBrokenTxUpserts error (non-fatal):', err);
+    }
 
     let query = `
       SELECT c.change_id, c.entity_type, c.entity_sync_id, c.action, c.payload_json, c.updated_at, c.updated_by_device_id, c.scope, l.external_id as ledger_id

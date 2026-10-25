@@ -7,6 +7,7 @@
 
 import type { CleanupRecord, CleanupResult } from './types';
 import { deleteFromStorage } from '../../lib/storage-adapter';
+import { buildTxUpsertPayload, TX_PROJECTION_COLS, type TxProjectionRow } from '../../lib/tx-upsert-payload';
 
 /**
  * 清理孤立数据记录。按 type 分发清理操作，与原版 _dispatch 对齐。
@@ -148,8 +149,9 @@ async function deleteAttachmentWithFile(
 }
 
 /** B5: 同 sha 多行被引用——把引用次行的交易迁移到保留行，写 sync_changes 让
- * 设备端收敛（payload 只含 attachments，apply 是 merge 语义，其余字段继承），
- * 再删次行 + R2 对象（内容同 sha，由保留行对象承载，无数据丢失）。 */
+ * 设备端收敛（payload 必须含完整交易字段：设备端是覆盖式应用，只写 attachments
+ * 会把 amount/happenedAt 等清成默认值——见 #B5 补偿事故），再删次行 + R2 对象
+ * （内容同 sha，由保留行对象承载，无数据丢失）。 */
 async function consolidateDupRef(
   db: D1Database,
   record: CleanupRecord,
@@ -163,10 +165,11 @@ async function consolidateDupRef(
   if (!ledgerId || !keepId) throw new Error('attachment_dup_ref record 缺 ledger_id/keep_id');
 
   const txs = await db.prepare(
-    `SELECT sync_id, user_id, attachments_json FROM read_tx_projection
+    `SELECT ${TX_PROJECTION_COLS}
+     FROM read_tx_projection
      WHERE ledger_id = ? AND (INSTR(attachments_json, ?) > 0 OR INSTR(attachments_json, ?) > 0)`
   ).bind(ledgerId, `"cloudFileId":"${dupId}"`, `"cloudFileId": "${dupId}"`)
-    .all<{ sync_id: string; user_id: string; attachments_json: string }>();
+    .all<TxProjectionRow>();
 
   for (const tx of txs.results) {
     let atts: unknown;
@@ -182,7 +185,11 @@ async function consolidateDupRef(
     if (!changed) continue;
 
     const newJson = JSON.stringify(atts);
-    const payload = JSON.stringify({ attachments: atts });
+    // 完整 payload（与 write 路由交易 upsert 结构一致），设备端覆盖式应用不会丢字段。
+    // 注意：先把迁移后的 attachments_json 写回行，共享构造函数基于行字段生成 payload，
+    // 否则 payload 里仍是已删除次行的 cloudFileId（断链）。
+    tx.attachments_json = newJson;
+    const payload = buildTxUpsertPayload(tx);
     const now = new Date().toISOString();
     await db.batch([
       db.prepare(

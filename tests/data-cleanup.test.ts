@@ -26,6 +26,8 @@ const DDL = `
     to_account_sync_id TEXT, to_account_name TEXT,
     tags_csv TEXT, tag_sync_ids_json TEXT, attachments_json TEXT, tx_index INTEGER DEFAULT 0,
     created_by_user_id TEXT, last_edited_by_user_id TEXT, source_change_id INTEGER DEFAULT 0,
+    exclude_from_stats INTEGER, exclude_from_budget INTEGER,
+    currency_code TEXT, native_amount REAL,
     PRIMARY KEY (ledger_id, sync_id)
   );
   CREATE TABLE read_budget_projection (ledger_id TEXT, sync_id TEXT, user_id TEXT, budget_type TEXT, category_sync_id TEXT, amount REAL, period TEXT, start_day INTEGER, enabled INTEGER DEFAULT 1, PRIMARY KEY (ledger_id, sync_id));
@@ -316,6 +318,12 @@ describe('cleaner(移植上游 test_data_cleanup.py)', () => {
     addAttachment({ id: 'dup-B', sha256: 'SSS', storage_path: 'attachments/b.png' });
     addTx({ sync_id: 'tx-keep', attachments_json: JSON.stringify([{ cloudFileId: 'dup-A', fileName: 'sha_SSS.jpg' }]) });
     addTx({ sync_id: 'tx-move', attachments_json: JSON.stringify([{ cloudFileId: 'dup-B', fileName: 'sha_SSS.jpg' }]) });
+    // 补全 tx-move 投影字段：B5 写完整 payload 时必须携带这些字段（设备端覆盖式应用）
+    sqlite.prepare(
+      `UPDATE read_tx_projection SET amount = 12.5, happened_at = '2026-09-01T12:00:00.000Z',
+         note = '买花', category_name = '鲜花', tags_csv = '图片记账,AI记账'
+       WHERE sync_id = 'tx-move'`
+    ).run();
 
     const report = await scanAll(db);
     const recs = report.file_orphans.filter(r => r.type === 'attachment_dup_ref');
@@ -341,7 +349,8 @@ describe('cleaner(移植上游 test_data_cleanup.py)', () => {
     // 次行删除、保留行保留
     expect(sqlite.prepare('SELECT 1 FROM attachment_files WHERE id = ?').get('dup-B')).toBeUndefined();
     expect(sqlite.prepare('SELECT 1 FROM attachment_files WHERE id = ?').get('dup-A')).toBeDefined();
-    // sync_changes 写入（merge payload、scope=ledger、device NULL 放行）
+    // sync_changes 写入（完整 payload 含 amount/happenedAt——设备端覆盖式应用，缺字段会清成默认值；
+    // scope=ledger、device NULL 放行）
     const ch = sqlite.prepare("SELECT * FROM sync_changes WHERE entity_sync_id = 'tx-move'").get() as any;
     expect(ch).toBeDefined();
     expect(ch.scope).toBe('ledger');
@@ -349,6 +358,14 @@ describe('cleaner(移植上游 test_data_cleanup.py)', () => {
     expect(ch.action).toBe('upsert');
     const pl = JSON.parse(ch.payload_json);
     expect(pl.attachments[0].cloudFileId).toBe('dup-A');
+    // 完整 payload：设备端覆盖式应用不丢字段（回归 #B5 补偿事故）
+    expect(pl.amount).toBe(12.5);
+    expect(pl.happenedAt).toBe('2026-09-01T12:00:00.000Z');
+    expect(pl.note).toBe('买花');
+    expect(pl.categoryName).toBe('鲜花');
+    expect(pl.tags).toBe('图片记账,AI记账');
+    expect(pl.excludeFromStats).toBe(false);
+    expect(pl.excludeFromBudget).toBe(false);
     // R2 对象删除（统一入口带 beecount/ 前缀）
     expect(deleted).toContain('beecount/attachments/b.png');
     // 重扫无重复引用
