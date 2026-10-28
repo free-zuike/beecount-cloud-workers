@@ -212,7 +212,11 @@ export async function executeOperation(
     // 不持久化含源数据/凭据的异常文本；code 优先取 409/422 等业务错误码（对齐上游）
     const statusCode = (exc as { status_code?: number }).status_code;
     const errCode = (exc as { error_code?: string }).error_code;
-    const code = errCode ?? (exc instanceof Error ? exc.name : 'Error');
+    // 对齐上游 MCPRequestError：REVISION_CONFLICT 优先，否则 HTTP_<status>
+    const message = exc instanceof Error ? exc.message : String(exc);
+    const code = message.includes('REVISION_CONFLICT')
+      ? 'REVISION_CONFLICT'
+      : (errCode ?? (statusCode !== undefined ? `HTTP_${statusCode}` : (exc instanceof Error ? exc.name : 'Error')));
     const retryable = statusCode !== undefined
       ? (statusCode >= 500 || statusCode === 408 || statusCode === 429)
       : true;
