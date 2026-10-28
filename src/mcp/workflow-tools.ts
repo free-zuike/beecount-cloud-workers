@@ -11,7 +11,7 @@ import { requireLedger, runWrite, getAccountBalances } from './capability-tools'
 import { findOperation } from './operations';
 import { prepareTransaction, listLiveLedgers } from './transaction-service';
 import { serializeTx } from './tools/read-tools';
-import { validateImportCandidate } from './validation';
+import { validateImportCandidate, validateSourceInput } from './validation';
 import type { McpContext, LedgerInfo } from './types';
 
 export interface SourceInput {
@@ -225,6 +225,8 @@ export async function linkTransactionSource(
   c: McpContext,
   args: { ledger_id: string; sync_id: string; source: SourceInput },
 ): Promise<Record<string, unknown>> {
+  // 对齐上游 SourceInput：字段长度/定长 sha256/未知键在入口拦住
+  validateSourceInput(args.source as unknown as Record<string, unknown>, 0);
   const ledger = await requireLedger(c, args.ledger_id, { write: true });
   try {
     return await linkSource(c.db, c.userId, ledger, args.sync_id, args.source);
