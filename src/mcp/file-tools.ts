@@ -96,6 +96,9 @@ export async function attachmentBytes(
   await requireLedger(c, ledger.external_id);
   if (!bytesSource) throw new Error('Attachment storage unavailable');
   const bytes = await bytesSource(c, args.file_id);
+  // 对齐上游 attachment_bytes：读取前先按配置上限判大小
+  const maxBytes = Number(c.env?.ATTACHMENT_MAX_UPLOAD_BYTES ?? c.env?.MAX_ATTACHMENT_BYTES ?? 64 * 1024 * 1024);
+  if (bytes.length > maxBytes) throw new Error('Attachment exceeds configured size limit');
   // 大小 + sha256 双重完整性校验（原版 hashlib.sha256(raw).hexdigest() != row.sha256）
   if (bytes.length !== Number(row.size_bytes)) {
     throw new Error('Attachment integrity check failed');
