@@ -383,7 +383,8 @@ export async function updateOne(
     ledger_id: ledger.external_id,
     updated,
     ...(Object.prototype.hasOwnProperty.call(body, 'attachments') ? { attachments: body.attachments } : {}),
-    _meta: result ?? {},
+    // 对齐上游 update_one：_meta 直接是 self-call 响应（无响应时为 null，不是 {}）
+    _meta: result ?? null,
   };
   return status;
 }
@@ -664,7 +665,8 @@ async function resolveTransactionAttachmentsRef(
       fileName: `${row.id}_${row.file_name || 'attachment.bin'}`,
       originalName: row.file_name || 'attachment.bin',
       fileSize: row.size_bytes,
-      mimeType: row.mime_type ?? 'application/octet-stream',
+      // 对齐上游 attachments.resolve_transaction_attachments：mimeType 原样（无则为 null）
+      mimeType: row.mime_type ?? null,
       cloudFileId: row.id,
       cloudSha256: row.sha256,
       sortOrder: index,

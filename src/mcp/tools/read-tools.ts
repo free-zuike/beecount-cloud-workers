@@ -325,7 +325,9 @@ export async function listAccounts(
     .map(r => ({
       id: r.sync_id, name: r.name, account_type: r.account_type ?? null,
       currency: r.currency ?? null, initial_balance: Number(r.initial_balance ?? 0),
-      hidden: Boolean(r.hidden), bank_name: r.bank_name ?? null,
+      // 对齐上游 get_account_balances：hidden 原样返回（可为 null），不强制布尔化
+      hidden: r.hidden === null || r.hidden === undefined ? null : Boolean(r.hidden),
+      bank_name: r.bank_name ?? null,
       card_last_four: r.card_last_four ?? null,
       credit_limit: r.credit_limit === null || r.credit_limit === undefined ? null : Number(r.credit_limit),
       billing_day: r.billing_day ?? null, payment_due_day: r.payment_due_day ?? null,
@@ -570,8 +572,9 @@ export async function getAnalyticsSummary(
       scope,
       metric: 'expense',
       period: normalizedPeriod,
-      start_at: startAt,
-      end_at: endAt ? new Date(new Date(endAt).getTime() - 1000).toISOString() : null,
+      // 对齐上游 workspace：isoformat（+00:00），end_at 取区间末尾前一秒
+      start_at: startAt ? `${new Date(startAt).toISOString().slice(0, 19)}+00:00` : null,
+      end_at: endAt ? `${new Date(new Date(endAt).getTime() - 1000).toISOString().slice(0, 19)}+00:00` : null,
     },
     calculation: {
       currency: 'ledger base; native_amount falls back to amount',
