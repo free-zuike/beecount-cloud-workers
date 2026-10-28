@@ -419,10 +419,14 @@ function extractJson(text: string): any {
 export async function selfCall(method: string, path: string, env: { JWT_SECRET: string }, baseUrl: string, userId: string, body: any): Promise<any> {
   const token = await createAccessToken(userId, env.JWT_SECRET, ['app_write'], 60);
   const url = `${baseUrl}${path}`;
+  // FormData（parse_receipt 的 multipart）直接透传，boundary 由 fetch 自动设置
+  const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
   const res = await fetch(url, {
     method,
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-    body: JSON.stringify(body),
+    headers: isForm
+      ? { Authorization: `Bearer ${token}` }
+      : { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: isForm ? (body as unknown as FormData) : JSON.stringify(body),
   });
   if (!res.ok) {
     const text = await res.text();
