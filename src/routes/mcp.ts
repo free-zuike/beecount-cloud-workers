@@ -496,8 +496,9 @@ export async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_
         const bytes = decodeStrictBase64((args.content_base64 as string) || '');
         if (bytes.length === 0) throw new Error('file is empty');
         // 对齐原版 attachment_max_upload_bytes = 64 MiB
-        const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
-        if (bytes.length > MAX_UPLOAD_BYTES) throw new Error(`File too large (max ${MAX_UPLOAD_BYTES / 1024 / 1024} MiB)`);
+        // 对齐上游 attachment_max_upload_bytes（默认 64 MiB，可用 MAX_ATTACHMENT_BYTES 覆盖）
+        const MAX_UPLOAD_BYTES = Number((env as Record<string, unknown>).MAX_ATTACHMENT_BYTES ?? 64 * 1024 * 1024);
+        if (bytes.length > MAX_UPLOAD_BYTES) throw new Error('Attachment exceeds configured size limit');
         const { ledger: led, status: ledgerStatus } = await resolveWriteLedger(db, userId, args.ledger_id as string);
         if (ledgerStatus) { r = ledgerStatus; break; }
         if (!led) throw new Error('No ledger found');
