@@ -143,32 +143,122 @@ export async function readAttachment(c: McpContext, args: { file_id: string }): 
   return { content };
 }
 
+/**
+ * 附件画廊（对齐上游 list_attachments → routers/read/attachment_gallery.py）：
+ * 数据源是**交易里的 attachments_json 引用**，不是 attachment_files 表；
+ * 按 file_key（cloudFileId，否则 local:{sync_id}:{下标}）聚合并带上关联交易。
+ *
+ * 返回 items[{key, attachment, happened_at, mime_type, status, transactions[]}]
+ * + total（文件数）+ transaction_total（交易数）+ limit + offset
+ */
 export async function listAttachments(
   c: McpContext,
-  args: { ledger_id: string; q?: string | null; limit?: number; offset?: number },
+  args: {
+    ledger_id: string;
+    q?: string | null;
+    category_id?: string | null;
+    date_from?: string | null;
+    date_to?: string | null;
+    limit?: number;
+    offset?: number;
+    time_zone?: string | null;
+  },
 ): Promise<Record<string, unknown>> {
   const ledger = await requireLedger(c, args.ledger_id);
-  let q = 'SELECT * FROM attachment_files WHERE ledger_id = ?';
-  const p: unknown[] = [ledger.id];
-  if (args.q) { q += ' AND (file_name LIKE ? OR mime_type LIKE ?)'; p.push(`%${args.q}%`, `%${args.q}%`); }
-  const total = (await c.db.prepare(q.replace('SELECT *', 'SELECT COUNT(*) AS c')).bind(...p).first<{ c: number }>())?.c ?? 0;
-  // 对齐上游 list_attachments：limit 上限 100、offset 非负
   const limit = Math.max(1, Math.min(args.limit ?? 40, 100));
   const offset = Math.max(0, args.offset ?? 0);
-  q += ' ORDER BY created_at DESC, id LIMIT ? OFFSET ?';
-  p.push(limit, offset);
-  const rows = await c.db.prepare(q).bind(...p).all<AttachmentRow>();
-  return {
-    items: rows.results.map(r => ({
-      file_id: r.id,
-      file_name: r.file_name,
-      mime_type: r.mime_type,
-      size_bytes: Number(r.size_bytes),
-      sha256: r.sha256,
-      created_at: new Date(r.created_at).toISOString(),
-    })),
-    total,
-  };
+
+  // 引用子查询：json_each 展开 attachments_json，只保留有 fileName 的条目
+  let sql = `SELECT
+      COALESCE(NULLIF(json_extract(je.value, '$.cloudFileId'), ''), 'local:' || t.sync_id || ':' || je.key) AS file_key,
+      NULLIF(json_extract(je.value, '$.cloudFileId'), '') AS cloud_file_id,
+      je.value AS ref,
+      json_extract(je.value, '$.originalName') AS original_name,
+      json_extract(je.value, '$.fileName') AS file_name,
+      t.sync_id, t.happened_at, t.note, t.category_name, t.category_sync_id,
+      t.amount, t.tx_type, t.currency_code, t.native_amount, t.account_name
+    FROM read_tx_projection t, json_each(t.attachments_json) je
+    WHERE t.ledger_id = ? AND json_extract(je.value, '$.fileName') IS NOT NULL`;
+  const p: unknown[] = [ledger.id];
+  if (args.date_from) { sql += ' AND t.happened_at >= ?'; p.push(parseDateBoundary(args.date_from, { timeZone: args.time_zone ?? undefined }).toISOString()); }
+  if (args.date_to) { sql += ' AND t.happened_at < ?'; p.push(parseDateBoundary(args.date_to, { end: true, timeZone: args.time_zone ?? undefined }).toISOString()); }
+  if (args.category_id) { sql += ' AND t.category_sync_id = ?'; p.push(args.category_id); }
+  if (args.q && args.q.trim()) {
+    const like = `%${args.q.trim().replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
+    sql += ` AND (original_name LIKE ? ESCAPE '\\' OR file_name LIKE ? ESCAPE '\\' OR t.note LIKE ? ESCAPE '\\'
+             OR t.category_name LIKE ? ESCAPE '\\' OR t.account_name LIKE ? ESCAPE '\\' OR CAST(t.amount AS TEXT) LIKE ? ESCAPE '\\')`;
+    p.push(like, like, like, like, like, like);
+  }
+
+  const refs = await c.db.prepare(sql).bind(...p).all<Record<string, unknown>>();
+  const byKey = new Map<string, { happenedAt: string; refs: Array<Record<string, unknown>> }>();
+  const syncIds = new Set<string>();
+  for (const r of refs.results) {
+    const key = String(r.file_key ?? '');
+    const bucket = byKey.get(key) ?? { happenedAt: String(r.happened_at ?? ''), refs: [] };
+    if (String(r.happened_at ?? '') > bucket.happenedAt) bucket.happenedAt = String(r.happened_at ?? '');
+    bucket.refs.push(r);
+    byKey.set(key, bucket);
+    syncIds.add(String(r.sync_id ?? ''));
+  }
+  const total = byKey.size;
+  const transactionTotal = syncIds.size;
+
+  // 排序：最近发生时间优先，其次 file_key 升序（对齐上游）
+  const pageKeys = [...byKey.entries()]
+    .sort(([ka, a], [kb, b]) => b.happenedAt.localeCompare(a.happenedAt) || ka.localeCompare(kb))
+    .slice(offset, offset + limit)
+    .map(([k]) => k);
+
+  const cloudIds = [...new Set(pageKeys.flatMap(k => byKey.get(k)!.refs
+    .map(r => r.cloud_file_id).filter((v): v is string => typeof v === 'string' && v !== '')))];
+  const stored = new Map<string, { mime_type: string | null }>();
+  if (cloudIds.length) {
+    const rows = await c.db.prepare(
+      `SELECT id, mime_type FROM attachment_files WHERE id IN (${cloudIds.map(() => '?').join(',')})
+       AND ledger_id = ? AND attachment_kind = 'transaction'`,
+    ).bind(...cloudIds, ledger.id).all<{ id: string; mime_type: string | null }>();
+    for (const r of rows.results) stored.set(r.id, { mime_type: r.mime_type });
+  }
+
+  const items = pageKeys.map(key => {
+    const bucket = byKey.get(key)!;
+    const first = bucket.refs[0];
+    const cloudId = typeof first.cloud_file_id === 'string' && first.cloud_file_id ? first.cloud_file_id : null;
+    const file = cloudId ? stored.get(cloudId) : undefined;
+    let attachment: unknown = null;
+    try { attachment = typeof first.ref === 'string' ? JSON.parse(first.ref) : first.ref; } catch { attachment = null; }
+    const transactions: Array<Record<string, unknown>> = [];
+    const seen = new Set<string>();
+    for (const r of [...bucket.refs].sort((a, b) => String(b.happened_at ?? '').localeCompare(String(a.happened_at ?? ''))
+      || String(a.sync_id ?? '').localeCompare(String(b.sync_id ?? '')))) {
+      const sid = String(r.sync_id ?? '');
+      if (seen.has(sid)) continue;
+      seen.add(sid);
+      transactions.push({
+        id: sid,
+        ledger_id: ledger.external_id,
+        note: r.note ?? null,
+        category_name: r.category_name ?? null,
+        category_id: r.category_sync_id ?? null,
+        amount: r.amount ?? null,
+        tx_type: r.tx_type ?? null,
+        currency_code: r.currency_code ?? null,
+        native_amount: r.native_amount ?? null,
+        happened_at: r.happened_at ? `${new Date(String(r.happened_at)).toISOString().slice(0, 19)}+00:00` : null,
+      });
+    }
+    return {
+      key,
+      attachment,
+      happened_at: bucket.happenedAt ? `${new Date(bucket.happenedAt).toISOString().slice(0, 19)}+00:00` : null,
+      mime_type: file?.mime_type ?? null,
+      status: !cloudId ? 'pending' : file ? 'ready' : 'missing',
+      transactions,
+    };
+  });
+
+  return { items, total, transaction_total: transactionTotal, limit, offset };
 }
 
 export async function parseReceipt(c: McpContext, args: { file_id: string; locale?: string }): Promise<Record<string, unknown>> {
