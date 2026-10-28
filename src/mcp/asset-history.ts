@@ -47,8 +47,21 @@ export async function history(
   const ledgers = args.ledger_id
     ? [await requireLedgerLocal(c, args.ledger_id)]
     : (await listLiveLedgers(db, userId)).filter(l => l.user_id === userId);
+  // 对齐上游：空账本不早退，继续走同一套返回结构（owners 兜底为当前用户，产出空序列）
   if (ledgers.length === 0) {
-    return { ledgers: [], series: [], base_currency: null, revision: 0, coverage: {} };
+    return {
+      currency: null,
+      multi_currency: false,
+      missing_conversion_currencies: [],
+      conversion_complete: true,
+      conversion_policy: 'No base currency; series_by_currency is reported per currency without conversion',
+      valued_in_base_currency: [],
+      series: [],
+      series_by_currency: [],
+      revision: 0,
+      liability_convention: 'Liabilities are reported as positive outstanding amounts; assets are positive balances',
+      coverage: { ledger_ids: [], partial: Boolean(args.ledger_id), opening_balance_effective_date: null },
+    };
   }
   const owners = [...new Set(ledgers.map(l => l.user_id))];
   const ownersSet = owners.length > 0 ? owners : [userId];
@@ -183,20 +196,25 @@ export async function history(
     throw new Error('REVISION_CONFLICT: data changed during history calculation');
   }
 
+  // 对齐上游 asset_history 返回键集合：currency（不是 base_currency）、conversion_complete、
+  // conversion_policy、liability_convention、coverage.opening_balance_effective_date
   return {
-    ledgers: ledgers.map(l => l.external_id),
-    base_currency: base || null,
+    currency: base || null,
     multi_currency: currenciesSorted.length > 1,
     missing_conversion_currencies: missingConversion,
-    conversion_coverage: base ? [...currencies].map(cur => ({ currency: cur.toUpperCase(), rate: rates[cur.toUpperCase()] ?? null })) : [],
+    conversion_complete: missingConversion.length === 0,
+    conversion_policy: base
+      ? 'Each currency is converted with the rate for its own month; missing rates fall back to the last known rate and are listed in missing_conversion_currencies'
+      : 'No base currency; series_by_currency is reported per currency without conversion',
     valued_in_base_currency: valued,
     series: valued ?? [],
     series_by_currency: filled.map(item => ({ ...item, bucket: item.bucket })),
     revision: baseRev,
+    liability_convention: 'Liabilities are reported as positive outstanding amounts; assets are positive balances',
     coverage: {
       ledger_ids: ledgers.map(l => l.external_id),
       partial: Boolean(args.ledger_id),
-      scope: 'personal',
+      opening_balance_effective_date: filled[0]?.bucket ?? null,
     },
   };
 }
