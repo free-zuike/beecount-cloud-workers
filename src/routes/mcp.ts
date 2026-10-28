@@ -595,14 +595,25 @@ const router = new Hono<{ Bindings: { DB: D1Database; JWT_SECRET: string }; Vari
 
 async function checkAuth(c: any): Promise<Response | null> {
   const h = c.req.header('Authorization');
-  if (!h) return new Response('Authorization header required', { status: 401, headers: { 'Content-Type': 'text/plain' } });
+  // 对齐上游 auth.py：响应统一为 {"error":{"code":status,"message":detail}}
+  const reject = (code: number, detail: string) => new Response(
+    JSON.stringify({ error: { code, message: detail } }),
+    { status: code, headers: { 'Content-Type': 'application/json' } },
+  );
+  if (!h) return reject(401, 'Invalid token');
   let t: string;
-  if (h.startsWith('Bearer ')) t = h.slice(7); else return new Response('Invalid authorization format', { status: 401, headers: { 'Content-Type': 'text/plain' } });
-  if (!t.startsWith('bcmcp_')) return new Response('Invalid PAT token format', { status: 401, headers: { 'Content-Type': 'text/plain' } });
+  if (h.startsWith('Bearer ')) t = h.slice(7); else return reject(401, 'Invalid token');
+  if (!t.startsWith('bcmcp_')) return reject(401, 'Invalid token');
   const hh = await hashToken(t);
-  const p = await (c.env.DB as D1Database).prepare(`SELECT id, user_id, name, scopes_json, expires_at FROM personal_access_tokens WHERE token_hash = ? AND revoked_at IS NULL`).bind(hh).first<{ id: string; user_id: string; name: string; scopes_json: string; expires_at: string | null }>();
-  if (!p) return new Response('Invalid PAT token', { status: 401, headers: { 'Content-Type': 'text/plain' } });
-  if (p.expires_at && p.expires_at < nowUtc()) return new Response('PAT token expired', { status: 401, headers: { 'Content-Type': 'text/plain' } });
+  const p = await (c.env.DB as D1Database).prepare(
+    `SELECT id, user_id, name, scopes_json, expires_at, revoked_at FROM personal_access_tokens WHERE token_hash = ?`
+  ).bind(hh).first<{ id: string; user_id: string; name: string; scopes_json: string; expires_at: string | null; revoked_at: string | null }>();
+  if (!p) return reject(401, 'Invalid token');
+  if (p.revoked_at) return reject(401, 'Token revoked');
+  if (p.expires_at && p.expires_at < nowUtc()) return reject(401, 'Token expired');
+  // 对齐上游：账号禁用 → 403 User disabled
+  const owner = await (c.env.DB as D1Database).prepare('SELECT * FROM users WHERE id = ?').bind(p.user_id).first<Record<string, unknown>>();
+  if (owner && Number(owner.is_enabled ?? 1) === 0) return reject(403, 'User disabled');
   c.set('userId', p.user_id); c.set('patId', p.id); c.set('patPrefix', t.substring(0, 14)); c.set('patName', p.name);
   c.set('patScopes', JSON.parse(p.scopes_json || '[]'));
   const ip = c.req.header('CF-Connecting-IP') || c.req.header('x-real-ip') || 'unknown';
