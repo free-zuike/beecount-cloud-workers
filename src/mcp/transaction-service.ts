@@ -231,7 +231,7 @@ export async function createMany(
   if (prior) {
     if (prior.ledger_id !== ledger.id) throw new McpToolError('Operation ledger no longer matches');
     const outcome = await executeOperation(db, prior, userId, selfCallAdapter(c));
-    return finalizeCreateMany(outcome, ledger, opts);
+    return finalizeCreateMany(c, outcome, ledger, opts);
   }
 
   // 校验名称存在
@@ -280,7 +280,7 @@ export async function createMany(
     user_id: userId, ledger_id: ledger.id, key, kind, request: rawRequest, steps,
   });
   const outcome = await executeOperation(db, row, userId, selfCallAdapter(c));
-  return finalizeCreateMany(outcome, ledger, opts);
+  return finalizeCreateMany(c, outcome, ledger, opts);
 }
 
 /**
@@ -310,6 +310,7 @@ function validateBatchItem(item: Record<string, unknown>, index: number): void {
 }
 
 async function finalizeCreateMany(
+  c: McpContext,
   outcome: OperationOut,
   ledger: LedgerInfo,
   opts: { single?: boolean; transactions: Array<Record<string, unknown>> },
@@ -319,8 +320,18 @@ async function finalizeCreateMany(
   if (opts.single && outcome.sync_ids.length > 0) {
     const sid = outcome.sync_ids[0];
     out.sync_id = sid;
-    if (opts.transactions[0]?.attachments !== null && opts.transactions[0]?.attachments !== undefined) {
-      out.attachments = opts.transactions[0].attachments;
+    // 对齐上游 create_many(single=true)：从投影读回 amount/tx_type/happened_at/attachments
+    const row = await c.db
+      .prepare('SELECT amount, tx_type, happened_at, attachments_json FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+      .bind(ledger.id, sid)
+      .first<{ amount: number | null; tx_type: string | null; happened_at: string | null; attachments_json: string | null }>();
+    if (row) {
+      out.amount = Number(row.amount ?? 0);
+      out.tx_type = row.tx_type ?? null;
+      out.happened_at = row.happened_at ? `${new Date(row.happened_at).toISOString().slice(0, 19)}+00:00` : null;
+      if (opts.transactions[0]?.attachments !== null && opts.transactions[0]?.attachments !== undefined) {
+        try { out.attachments = JSON.parse(row.attachments_json || '[]'); } catch { out.attachments = []; }
+      }
     }
   }
   return out;
@@ -337,9 +348,17 @@ export async function updateOne(
   const raw = { ...opts };
   const body = await prepareTransaction(c, ledger, raw, { time_zone: (raw.time_zone as string | undefined) ?? null, existing });
   const path = `/api/v1/write/ledgers/${ledger.external_id}/transactions/${sync_id}`;
-  await selfCallAdapter(c)('PATCH', path, userId, body, {});
+  const result = await selfCallAdapter(c)('PATCH', path, userId, body, {});
   const updated = Object.keys(body).filter(k => k !== 'base_change_id' && k !== 'expected_revision');
-  return { sync_id, ledger_id: ledger.external_id, updated };
+  // 对齐上游 update_one：回显实际更新的字段、attachments（若本次设置）与 self-call 原始响应
+  const status: Record<string, unknown> = {
+    sync_id,
+    ledger_id: ledger.external_id,
+    updated,
+    ...(Object.prototype.hasOwnProperty.call(body, 'attachments') ? { attachments: body.attachments } : {}),
+    _meta: result ?? {},
+  };
+  return status;
 }
 
 /** 规范化单笔交易 body（对齐上游 prepare_transaction）。 */
