@@ -9,6 +9,8 @@ export interface McpContext {
   scopes?: string[];
   /** Cloud 配置时区（上游 settings.scheduler_timezone / cloud_timezone，对应 CLOUD_TIMEZONE/TZ） */
   configuredTimeZone?: string | null;
+  /** 运行环境变量（汇率上游等配置，对应上游 settings） */
+  env?: Record<string, unknown> | null;
 }
 
 export interface LedgerInfo {

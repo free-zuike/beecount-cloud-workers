@@ -7,6 +7,7 @@
  * - transaction_row / dictionary_entry：跨账本定位与字典消歧
  */
 import { uuid4, fingerprint, wallTimeCandidates } from './query-context';
+import { getRateSnapshot } from './exchange-rate';
 import { enumValue } from './validation';
 import { saveOperation, executeOperation, findOperation, type OperationOut, type OperationStep } from './operations';
 import type { McpContext, LedgerInfo } from './types';
@@ -173,6 +174,7 @@ export async function buildCurrencyFields(
   accountCurrency: string | null | undefined,
   currencyArg: string | null | undefined,
   amount: number,
+  env?: Record<string, unknown> | null,
 ): Promise<{ currency_code?: string; native_amount?: number }> {
   const base = (ledgerBase || 'CNY').trim().toUpperCase();
   const cc = ((currencyArg || accountCurrency || base) || 'CNY').trim().toUpperCase();
@@ -195,7 +197,11 @@ export async function buildCurrencyFields(
         native = x > 0 ? amount / x : amount;
       } catch { native = amount; }
     } else {
-      native = amount;
+      // 对齐上游：无缓存时走取价链（配置上游 → jsDelivr 镜像 → frankfurter），
+      // 不再静默按 1:1 折算
+      const snap = await getRateSnapshot(db, base, env);
+      const x = snap?.rates?.[cc] ?? 0;
+      native = x > 0 ? amount / x : amount;
     }
   }
   return { currency_code: cc, native_amount: native };
@@ -467,7 +473,7 @@ export async function prepareTransaction(
       body.currency_code = existing!.currency_code;
       body.native_amount = Number(existing!.native_amount) * Number(amount) / Number(existing!.amount);
     } else {
-      const cf = await buildCurrencyFields(db, userId, ledger.currency || 'CNY', accountCurrency, currency, Number(amount));
+      const cf = await buildCurrencyFields(db, userId, ledger.currency || 'CNY', accountCurrency, currency, Number(amount), c.env ?? null);
       if (cf.currency_code !== undefined) body.currency_code = cf.currency_code;
       if (cf.native_amount !== undefined) body.native_amount = cf.native_amount;
     }

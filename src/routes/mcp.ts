@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server - 手动实现 MCP Streamable HTTP 协议，对齐原版 Python 18 个工具
  */
 
@@ -573,13 +573,13 @@ export async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_
       default: {
         const registered = getRegisteredTool(name);
         if (registered) {
-          const ctx: McpContext = { db, userId, jwtSecret: env.JWT_SECRET, baseUrl, scopes, configuredTimeZone: env.CLOUD_TIMEZONE ?? env.TZ ?? null };
+          const ctx: McpContext = { db, userId, jwtSecret: env.JWT_SECRET, baseUrl, scopes, configuredTimeZone: env.CLOUD_TIMEZONE ?? env.TZ ?? null, env: env as unknown as Record<string, unknown> };
           r = await registered.handler(ctx, args);
           break;
         }
         const legacy = LEGACY_TOOLS[name];
         if (legacy) {
-          const ctx: McpContext = { db, userId, jwtSecret: env.JWT_SECRET, baseUrl, scopes, configuredTimeZone: env.CLOUD_TIMEZONE ?? env.TZ ?? null };
+          const ctx: McpContext = { db, userId, jwtSecret: env.JWT_SECRET, baseUrl, scopes, configuredTimeZone: env.CLOUD_TIMEZONE ?? env.TZ ?? null, env: env as unknown as Record<string, unknown> };
           r = await legacy(ctx, args);
           break;
         }
@@ -710,7 +710,7 @@ async function jsonRpcHandler(c: any) {
       const em = uri.match(/^beecount:\/\/exports\/([^/]+)$/);
       if (m) {
         await ensureProductionBytesSource(db, c.env);
-        const ctx: McpContext = { db, userId, jwtSecret: c.env.JWT_SECRET, baseUrl, scopes: patScopes, configuredTimeZone: c.env.CLOUD_TIMEZONE ?? c.env.TZ ?? null };
+        const ctx: McpContext = { db, userId, jwtSecret: c.env.JWT_SECRET, baseUrl, scopes: patScopes, configuredTimeZone: c.env.CLOUD_TIMEZONE ?? c.env.TZ ?? null, env: c.env as unknown as Record<string, unknown> };
         const { metadata, bytes } = await fileAttachmentBytes(ctx, { file_id: m[1] });
         return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', contents: [{ uri, mimeType: metadata.mime_type, text: Buffer.from(bytes).toString('base64') }] } }), { headers: { 'Content-Type': 'application/json' } });
       }
@@ -797,7 +797,7 @@ router.post('/internal/recurring-tick', async (c: any) => {
   if ((c.env.MCP_RECURRING_ENABLED ?? 'true') === 'false') return c.json({ skipped: true, reason: 'MCP_RECURRING_ENABLED=false' });
   const db = c.env.DB as D1Database;
   const { executeDueRules } = await import('../mcp/rule-tools');
-  const ctx: McpContext = { db, userId: '', jwtSecret: (c.env.JWT_SECRET as string) || '', baseUrl: new URL(c.req.url).origin, scopes: ['mcp:write'] };
+  const ctx: McpContext = { db, userId: '', jwtSecret: (c.env.JWT_SECRET as string) || '', baseUrl: new URL(c.req.url).origin, scopes: ['mcp:write'], env: c.env as unknown as Record<string, unknown> };
   const results = await executeDueRules(ctx, { limit: 20 });
   return c.json({ ran: results.length, results });
 });

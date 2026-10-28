@@ -75,7 +75,7 @@ export const DDL = `
   );
   CREATE TABLE user_profiles (user_id TEXT PRIMARY KEY, primary_currency TEXT, display_name TEXT);
   CREATE TABLE user_exchange_rate_projection (sync_id TEXT PRIMARY KEY, user_id TEXT, base_currency TEXT, quote_currency TEXT, rate REAL);
-  CREATE TABLE exchange_rate_cache (base_currency TEXT PRIMARY KEY, payload_json TEXT);
+  CREATE TABLE exchange_rate_cache (base_currency TEXT PRIMARY KEY, rate_date TEXT, source TEXT, payload_json TEXT, fetched_at TEXT);
   CREATE TABLE sync_cursors (user_id TEXT, device_id TEXT, ledger_external_id TEXT, last_cursor INTEGER, updated_at TEXT, PRIMARY KEY (user_id, device_id, ledger_external_id));
 `;
 
