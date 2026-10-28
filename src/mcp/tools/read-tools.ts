@@ -399,9 +399,10 @@ export async function listBudgets(
     if (!cur || String(b.sync_id) > String(cur.sync_id)) dedup.set(key, b);
   }
 
+  // 对齐上游（routers/read/ledgers.py）：分类名字典取**当前调用者**的字典
   const catRows = await db.prepare(
     'SELECT sync_id, name, parent_sync_id FROM user_category_projection WHERE user_id = ?'
-  ).bind(led.user_id).all<{ sync_id: string; name: string | null; parent_sync_id: string | null }>();
+  ).bind(c.userId).all<{ sync_id: string; name: string | null; parent_sync_id: string | null }>();
   const catName = new Map(catRows.results.map(r => [r.sync_id, (r.name ?? '').trim()]));
   const childrenOf = new Map<string, string[]>();
   for (const r of catRows.results) {
