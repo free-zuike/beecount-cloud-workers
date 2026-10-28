@@ -16,6 +16,9 @@ const contract = JSON.parse(
 
 /** 上游 Python 模块 → 本地 TS 模块 */
 const MODULE_MAP: Record<string, string> = {
+  read_tools: 'src/mcp/tools/read-tools.ts',
+  server: 'src/routes/mcp.ts',
+  auth: 'src/routes/mcp.ts',
   transaction_service: 'src/mcp/transaction-service.ts',
   analysis_tools: 'src/mcp/analysis-tools.ts',
   asset_history: 'src/mcp/asset-history.ts',
