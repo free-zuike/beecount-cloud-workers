@@ -138,7 +138,10 @@ export function parseTxDatetime(
   if (typeof value !== 'string' || !value.trim()) {
     throw new McpToolError('happened_at must be a non-empty ISO date or datetime');
   }
-  const raw = value.trim().replace(' ', 'T');
+  // 对齐上游 datetime.fromisoformat 的宽容度：去掉小数秒；+08 → +08:00
+  const raw = value.trim().replace(' ', 'T')
+    .replace(/\.\d+/, '')
+    .replace(/([+-]\d{2})$/, '$1:00');
   const hasOffset = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw);
   if (hasOffset) {
     const d = new Date(raw.replace('Z', '+00:00'));

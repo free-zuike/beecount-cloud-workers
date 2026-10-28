@@ -303,9 +303,9 @@ function parseTimeZoneArg(timeZone?: string | null): number | null {
 /** 解析部署级 Cloud 时区偏移（分钟）：环境变量 CLOUD_TIMEZONE/TZ → system_settings.timezone_offset。 */
 async function resolveCloudTzOffset(
   db: D1Database,
-  env: { CLOUD_TIMEZONE?: string; TZ?: string },
+  env: { CLOUD_TIMEZONE?: string; TZ?: string; SCHEDULER_TIMEZONE?: string },
 ): Promise<number | null> {
-  const fromEnv = parseTimeZoneArg(env.CLOUD_TIMEZONE ?? env.TZ ?? null);
+  const fromEnv = parseTimeZoneArg((env as Record<string, unknown>).SCHEDULER_TIMEZONE as string | undefined ?? env.CLOUD_TIMEZONE ?? env.TZ ?? null);
   if (fromEnv !== null) return fromEnv;
   try {
     const row = await db.prepare('SELECT value FROM system_settings WHERE key = ?')
@@ -323,7 +323,7 @@ async function resolveCloudTzOffset(
 /** 交易时间解析核心：返回 UTC ISO 字符串。导出供测试（对齐原版 datetime_utils 语义）。 */
 export async function parseTransactionDatetime(
   db: D1Database,
-  env: { CLOUD_TIMEZONE?: string; TZ?: string },
+  env: { CLOUD_TIMEZONE?: string; TZ?: string; SCHEDULER_TIMEZONE?: string },
   value?: string | null,
   timeZoneArg?: string | null,
 ): Promise<string> {
@@ -573,13 +573,13 @@ export async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_
       default: {
         const registered = getRegisteredTool(name);
         if (registered) {
-          const ctx: McpContext = { db, userId, jwtSecret: env.JWT_SECRET, baseUrl, scopes, configuredTimeZone: env.CLOUD_TIMEZONE ?? env.TZ ?? null, env: env as unknown as Record<string, unknown> };
+          const ctx: McpContext = { db, userId, jwtSecret: env.JWT_SECRET, baseUrl, scopes, configuredTimeZone: (env as Record<string, unknown>).SCHEDULER_TIMEZONE as string | undefined ?? env.CLOUD_TIMEZONE ?? env.TZ ?? null, env: env as unknown as Record<string, unknown> };
           r = await registered.handler(ctx, args);
           break;
         }
         const legacy = LEGACY_TOOLS[name];
         if (legacy) {
-          const ctx: McpContext = { db, userId, jwtSecret: env.JWT_SECRET, baseUrl, scopes, configuredTimeZone: env.CLOUD_TIMEZONE ?? env.TZ ?? null, env: env as unknown as Record<string, unknown> };
+          const ctx: McpContext = { db, userId, jwtSecret: env.JWT_SECRET, baseUrl, scopes, configuredTimeZone: (env as Record<string, unknown>).SCHEDULER_TIMEZONE as string | undefined ?? env.CLOUD_TIMEZONE ?? env.TZ ?? null, env: env as unknown as Record<string, unknown> };
           r = await legacy(ctx, args);
           break;
         }
@@ -710,7 +710,7 @@ async function jsonRpcHandler(c: any) {
       const em = uri.match(/^beecount:\/\/exports\/([^/]+)$/);
       if (m) {
         await ensureProductionBytesSource(db, c.env);
-        const ctx: McpContext = { db, userId, jwtSecret: c.env.JWT_SECRET, baseUrl, scopes: patScopes, configuredTimeZone: c.env.CLOUD_TIMEZONE ?? c.env.TZ ?? null, env: c.env as unknown as Record<string, unknown> };
+        const ctx: McpContext = { db, userId, jwtSecret: c.env.JWT_SECRET, baseUrl, scopes: patScopes, configuredTimeZone: c.env.SCHEDULER_TIMEZONE ?? c.env.CLOUD_TIMEZONE ?? c.env.TZ ?? null, env: c.env as unknown as Record<string, unknown> };
         const { metadata, bytes } = await fileAttachmentBytes(ctx, { file_id: m[1] });
         return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', contents: [{ uri, mimeType: metadata.mime_type, text: Buffer.from(bytes).toString('base64') }] } }), { headers: { 'Content-Type': 'application/json' } });
       }
@@ -824,3 +824,7 @@ router.post('/tools/call', async (c) => {
 });
 
 export default router;
+
+
+
+
