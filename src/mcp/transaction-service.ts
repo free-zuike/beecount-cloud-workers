@@ -308,10 +308,31 @@ function validateBatchItem(item: Record<string, unknown>, index: number): void {
       throw new McpToolError(`transactions[${index}] received an unknown field: ${key}`);
     }
   }
+  const bad = (key: string, expected: string) => `transactions[${index}].${key} must be ${expected}`;
   if (item.amount !== undefined && item.amount !== null) positiveAmount(item.amount);
   if (item.native_amount !== undefined && item.native_amount !== null) positiveAmount(item.native_amount);
   if (item.tx_type !== undefined && item.tx_type !== null) {
     enumValue(item.tx_type, ['expense', 'income', 'transfer'] as const, 'tx_type');
+  }
+  // 上游靠 pydantic 做强类型校验（extra=forbid + 各字段类型），这里补齐标量类型
+  for (const key of ['note', 'category', 'account', 'from_account', 'to_account',
+    'category_id', 'account_id', 'from_account_id', 'to_account_id', 'currency', 'happened_at'] as const) {
+    const v = item[key];
+    if (v !== undefined && v !== null && typeof v !== 'string') throw new McpToolError(bad(key, 'a string'));
+  }
+  for (const key of ['exclude_from_stats', 'exclude_from_budget'] as const) {
+    const v = item[key];
+    if (v !== undefined && v !== null && typeof v !== 'boolean') throw new McpToolError(bad(key, 'a boolean'));
+  }
+  if (item.tags !== undefined && item.tags !== null) {
+    if (!Array.isArray(item.tags) || item.tags.some(t => typeof t !== 'string')) {
+      throw new McpToolError(bad('tags', 'an array of strings'));
+    }
+  }
+  if (item.attachments !== undefined && item.attachments !== null) {
+    if (!Array.isArray(item.attachments) || item.attachments.some(t => typeof t !== 'string')) {
+      throw new McpToolError(bad('attachments', 'an array of file id strings'));
+    }
   }
 }
 
@@ -380,7 +401,7 @@ export async function prepareTransaction(
   const kind = (raw.tx_type as string | undefined) || (partial ? existing!.tx_type as string : 'expense');
   if (!['expense', 'income', 'transfer'].includes(kind)) throw new McpToolError('Invalid tx_type');
   const body: Record<string, unknown> = { base_change_id: 0 };
-  if (!partial || raw.tx_type !== undefined) body.tx_type = kind;
+  if (!partial || (raw.tx_type !== undefined && raw.tx_type !== null)) body.tx_type = kind;
   // 对齐上游：显式 None（null）表示"未设置"，不当成有值
   if (!partial || (raw.amount !== undefined && raw.amount !== null)) body.amount = positiveAmount(raw.amount);
   if (raw.happened_at !== undefined && raw.happened_at !== null) {
@@ -428,7 +449,8 @@ export async function prepareTransaction(
     if (source.sync_id === target.sync_id) throw new McpToolError('Transfer accounts must be different');
     const sCur = (source.currency as string | null) || ledger.currency;
     const tCur = (target.currency as string | null) || ledger.currency;
-    if ((sCur || 'CNY').toUpperCase() !== (tCur || 'CNY').toUpperCase()) {
+    // 对齐上游：原样比较（不归一化大小写），"cny" 与 "CNY" 视为不同币种
+    if ((sCur || 'CNY') !== (tCur || 'CNY')) {
       throw new McpToolError('Transfer accounts must have the same currency');
     }
     body.from_account_id = source.sync_id;
@@ -463,9 +485,13 @@ export async function prepareTransaction(
     body.tag_ids = await lookupTagSyncIds(c, ledger, tags);
   }
 
-  if (kind !== 'transfer' && (!partial || raw.amount !== undefined || raw.currency !== undefined || raw.native_amount !== undefined)) {
+  // 对齐上游：显式 null 视为未设置；空串 currency 回落到原币种（raw.get("currency") or existing）
+  const touchedCurrency = raw.amount !== undefined && raw.amount !== null
+    || raw.currency !== undefined && raw.currency !== null
+    || raw.native_amount !== undefined && raw.native_amount !== null;
+  if (kind !== 'transfer' && (!partial || touchedCurrency)) {
     const amount = (body.amount as number | undefined) ?? (partial ? existing!.amount as number : undefined);
-    const currency = (raw.currency as string | null | undefined) ?? (partial ? (existing!.currency_code as string | null | undefined) : undefined);
+    const currency = (raw.currency as string | undefined) || (partial ? (existing!.currency_code as string | null | undefined) : undefined);
     if (raw.native_amount !== undefined && raw.native_amount !== null) {
       body.currency_code = ((currency || accountCurrency || ledger.currency || 'CNY') as string).toUpperCase();
       body.native_amount = positiveAmount(raw.native_amount);
@@ -564,8 +590,13 @@ export async function validateNamesExist(
 export const MCP_DEFAULT_TAG = 'MCP';
 export const MCP_DEFAULT_TAG_COLOR = '#00BCD4';
 
+/** 对齐上游 _merge_default_tag：strip 并丢弃空串（避免 tags_csv 里出现空白项） */
 export function mergeDefaultTag(tags: string[] | null | undefined): string[] {
-  const out = [...(tags ?? [])];
+  const out: string[] = [];
+  for (const t of tags ?? []) {
+    const s = String(t ?? '').trim();
+    if (s && !out.includes(s)) out.push(s);
+  }
   if (!out.includes(MCP_DEFAULT_TAG)) out.push(MCP_DEFAULT_TAG);
   return out;
 }
@@ -576,13 +607,17 @@ export async function ensureMcpTag(c: McpContext, ledgerExternalId: string): Pro
     'SELECT sync_id FROM user_tag_projection WHERE user_id = ? AND name = ?'
   ).bind(userId, MCP_DEFAULT_TAG).first<{ sync_id: string }>();
   if (existing) return;
-  await selfCallAdapter(c)(
-    'POST',
-    `/api/v1/write/ledgers/${ledgerExternalId}/tags`,
-    userId,
-    { base_change_id: 0, name: MCP_DEFAULT_TAG, color: MCP_DEFAULT_TAG_COLOR },
-    {},
-  );
+  try {
+    await selfCallAdapter(c)(
+      'POST',
+      `/api/v1/write/ledgers/${ledgerExternalId}/tags`,
+      userId,
+      { base_change_id: 0, name: MCP_DEFAULT_TAG, color: MCP_DEFAULT_TAG_COLOR },
+      {},
+    );
+  } catch {
+    // 对齐上游 _ensure_mcp_tag：标签已存在/并发建标签时忽略，不让整批创建失败
+  }
 }
 
 export async function lookupTagSyncIds(
@@ -591,12 +626,16 @@ export async function lookupTagSyncIds(
   names: string[],
 ): Promise<string[] | null> {
   const { db } = c;
-  if (!names || names.length === 0) return null;
-  const placeholders = names.map(() => '?').join(',');
+  // 对齐上游 _lookup_tag_sync_ids：空名返回 []（不是 null）
+  if (!names || names.length === 0) return [];
+  // 按输入顺序去重（上游保持调用方顺序）
+  const wanted = [...new Set(names)];
+  const placeholders = wanted.map(() => '?').join(',');
   const rows = await db.prepare(
-    `SELECT sync_id FROM user_tag_projection WHERE user_id = ? AND name IN (${placeholders})`
-  ).bind(ledger.user_id, ...names).all<{ sync_id: string }>();
-  return rows.results.map(r => r.sync_id);
+    `SELECT name, sync_id FROM user_tag_projection WHERE user_id = ? AND name IN (${placeholders})`
+  ).bind(ledger.user_id, ...wanted).all<{ name: string; sync_id: string }>();
+  const byName = new Map(rows.results.map(r => [r.name, r.sync_id]));
+  return wanted.map(n => byName.get(n)).filter((v): v is string => Boolean(v));
 }
 
 async function resolveTransactionAttachmentsRef(
