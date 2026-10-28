@@ -11,6 +11,7 @@
 import { createHash } from 'node:crypto';
 import { requireLedger } from './capability-tools';
 import { uuid4, revision, parseDateBoundary } from './query-context';
+import { parseXlsx } from './xlsx';
 import { previewImport, type ImportCandidate } from './workflow-tools';
 import type { McpContext } from './types';
 
@@ -288,7 +289,10 @@ export async function previewImportFile(
   } catch {
     text = new TextDecoder('gbk').decode(bytes);
   }
-  const rows = parseCsv(text);
+  // 对齐上游：按扩展名/mime 选择解析器（csv/tsv → 文本解析；xlsx → 工作簿解析）
+  const isXlsx = /\.xlsx$/i.test(metadata.file_name ?? '')
+    || metadata.mime_type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const rows = isXlsx ? await parseXlsx(bytes) : parseCsv(text);
   if (rows.length < 2) throw new Error('Import file is empty or has no data rows');
   const headers = rows[0];
   const mapping = args.mapping ?? {};
