@@ -225,7 +225,7 @@ export async function listTransactions(
       ? encodeCursor({ filter: signature, revision: currentRevision, time: last.happened_at, id: last.sync_id }, jwtSecret)
       : null,
     items: pageRows.map(r => ({
-      ...serializeTx(r, categoryNames.get(r.category_sync_id ?? '') ?? null),
+      ...serializeTx(r, (r.category_name as string | null) ?? categoryNames.get(r.category_sync_id ?? '') ?? null),
       ledger_id: led.external_id,
       currency_code: r.currency_code ?? led.currency,
     })),
@@ -619,7 +619,11 @@ export async function search(
      ORDER BY happened_at DESC LIMIT ?`
   ).bind(...ledgers.map(l => l.id), ...cond.params, limit).all<TxRow>();
   const categoryNames = await loadCategoryNames(db, userId);
-  return rows.results.map(r => serializeTx(r, categoryNames.get(r.category_sync_id ?? '') ?? null));
+  // 对齐上游：优先用行内存储的 category_name（跨账本/字典不在调用方名下时也不丢）
+  return rows.results.map(r => serializeTx(
+    r,
+    (r.category_name as string | null) ?? categoryNames.get(r.category_sync_id ?? '') ?? null,
+  ));
 }
 
 
