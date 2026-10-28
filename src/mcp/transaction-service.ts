@@ -416,10 +416,12 @@ export async function prepareTransaction(
   if (!partial || (raw.tx_type !== undefined && raw.tx_type !== null)) body.tx_type = kind;
   // 对齐上游：显式 None（null）表示"未设置"，不当成有值
   if (!partial || (raw.amount !== undefined && raw.amount !== null)) body.amount = positiveAmount(raw.amount);
+  // 对齐上游：happened_at 用 isoformat（+00:00），不是 Z 结尾
   if (raw.happened_at !== undefined && raw.happened_at !== null) {
-    body.happened_at = parseTxDatetime(String(raw.happened_at), opts.time_zone, c.configuredTimeZone ?? null);
+    body.happened_at = parseTxDatetime(String(raw.happened_at), opts.time_zone, c.configuredTimeZone ?? null)
+      .replace(/Z$/, '+00:00');
   } else if (!partial) {
-    body.happened_at = new Date().toISOString();
+    body.happened_at = `${new Date().toISOString().replace(/Z$/, '+00:00')}`;
   }
   if (raw.note !== undefined && raw.note !== null) body.note = raw.note;
   // 对齐上游：创建时排除标记默认 False（写入 0 而非 NULL）；
