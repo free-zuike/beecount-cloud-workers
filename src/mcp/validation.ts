@@ -132,12 +132,21 @@ export function validateManageData(
     optionalInt(data.billing_day, 'billing_day', { ge: 1, le: 31 });
     optionalInt(data.payment_due_day, 'payment_due_day', { ge: 1, le: 31 });
     optionalString(data.card_last_four, 'card_last_four', { maxLength: 8 });
+    // 对齐上游 AccountFields 的强类型：initial_balance 为数值
+    if (data.initial_balance !== undefined && data.initial_balance !== null) {
+      const n = Number(data.initial_balance);
+      if (!Number.isFinite(n)) throw new ValidationError('initial_balance must be a finite number');
+    }
     return;
   }
   if (entity === 'categories') {
     rejectUnknownKeys(data, ['name', 'kind', 'parent_sync_id', 'parent_name', 'icon', 'sort_order'], 'category fields');
     optionalString(data.name, 'name', { minLength: 1, maxLength: 255 });
     enumValue(data.kind, ['expense', 'income', 'transfer'] as const, 'kind');
+    // 对齐上游 CategoryFields 的强类型：sort_order 为整数
+    if (data.sort_order !== undefined && data.sort_order !== null) {
+      optionalInt(data.sort_order, 'sort_order', {});
+    }
     return;
   }
   if (entity === 'tags') {
