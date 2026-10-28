@@ -574,8 +574,13 @@ export async function validateNamesExist(
       `SELECT name FROM user_category_projection WHERE user_id = ? AND name IN (${placeholders})`
     ).bind(ledger.user_id, ...[...categories]).all<{ name: string }>();
     const found = new Set(rows.results.map(r => r.name));
-    for (const name of categories) {
-      if (!found.has(name)) throw new McpToolError(`Category not found: ${name}`);
+    const missing = [...categories].filter(n => !found.has(n)).sort();
+    // 对齐上游 _validate_names_exist：一次性报全部缺失名（排序），而不是逐条报错
+    if (missing.length) {
+      throw new McpToolError(
+        `Unknown categories: ${JSON.stringify(missing).replace(/"/g, "'")}. `
+        + 'Use existing category names (call list_categories) or create them first.',
+      );
     }
   }
   if (accounts.size > 0) {
@@ -584,8 +589,13 @@ export async function validateNamesExist(
       `SELECT name FROM user_account_projection WHERE user_id = ? AND name IN (${placeholders})`
     ).bind(ledger.user_id, ...[...accounts]).all<{ name: string }>();
     const found = new Set(rows.results.map(r => r.name));
-    for (const name of accounts) {
-      if (!found.has(name)) throw new McpToolError(`Account not found: ${name}`);
+    const missing = [...accounts].filter(n => !found.has(n)).sort();
+    // 对齐上游 _validate_names_exist：一次性报全部缺失名（排序）
+    if (missing.length) {
+      throw new McpToolError(
+        `Unknown accounts: ${JSON.stringify(missing).replace(/"/g, "'")}. `
+        + 'Use existing account names (call list_accounts).',
+      );
     }
   }
 }

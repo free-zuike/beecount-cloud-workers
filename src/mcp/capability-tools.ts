@@ -434,12 +434,26 @@ export async function getAccountBalances(
 export async function listLedgerMembers(c: McpContext, args: { ledger_id: string }): Promise<Array<Record<string, unknown>>> {
   const { db } = c;
   const ledger = await requireLedger(c, args.ledger_id);
+  // 对齐上游 members.list_members：MemberOut 字段齐全 + joined_at ASC 排序
   const rows = await db.prepare(
-    `SELECT lm.user_id, lm.role, u.email FROM ledger_members lm
+    `SELECT lm.user_id, lm.role, lm.joined_at, lm.invited_by_user_id, u.email, u.display_name,
+            u.avatar_url, u.avatar_version
+     FROM ledger_members lm
      LEFT JOIN users u ON u.id = lm.user_id
-     WHERE lm.ledger_id = ?`
-  ).bind(ledger.id).all<{ user_id: string; role: string; email: string | null }>();
-  return rows.results.map(r => ({ user_id: r.user_id, role: r.role, email: r.email ?? null }));
+     WHERE lm.ledger_id = ?
+     ORDER BY lm.joined_at ASC`
+  ).bind(ledger.id).all<Record<string, unknown>>();
+  return rows.results.map(r => ({
+    user_id: r.user_id ?? null,
+    role: r.role ?? null,
+    email: (r.email as string | null) ?? '',
+    display_name: r.display_name ?? null,
+    joined_at: r.joined_at ? `${new Date(String(r.joined_at)).toISOString().slice(0, 19)}+00:00` : null,
+    invited_by_user_id: r.invited_by_user_id ?? null,
+    is_self: String(r.user_id ?? '') === c.userId,
+    avatar_url: r.avatar_url ?? null,
+    avatar_version: r.avatar_version ?? null,
+  }));
 }
 
 // get_net_worth_history 委托给 asset-history（T66 实现）
