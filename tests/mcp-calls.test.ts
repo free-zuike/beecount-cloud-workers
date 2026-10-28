@@ -43,7 +43,8 @@ const DDL = `
     duration_ms INTEGER DEFAULT 0, client_ip TEXT, called_at TEXT
   );
   CREATE TABLE ledgers (
-    id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, name TEXT, currency TEXT, created_at TEXT
+    id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, name TEXT, currency TEXT,
+    month_start_day INTEGER DEFAULT 1, created_at TEXT
   );
   CREATE TABLE ledger_members (ledger_id TEXT, user_id TEXT, role TEXT, joined_at TEXT);
   CREATE TABLE sync_changes (

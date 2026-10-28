@@ -3,7 +3,7 @@
  * 每次变更下方 DDL（新建表/加列/索引/迁移）时必须递增，
  * 否则已初始化的库不会重放 DDL。
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 // 迁移失败后的重试退避：避免每次冷启动重跑全量 DDL + 数据复制，
 // 把 D1 免费版每日 10 万行写入配额瞬间烧光（曾经 1 小时烧穿）。
 const MIGRATION_RETRY_BACKOFF_MS = 30 * 60 * 1000;
@@ -165,6 +165,66 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_call_logs_pat_id ON mcp_call_logs(pat_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_call_logs_tool_name ON mcp_call_logs(tool_name)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_call_logs_status ON mcp_call_logs(status)').run();
+
+    // ── #133 MCP 工作流（对齐原版 alembic 0021_mcp_workflows）──
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS mcp_write_operations (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        request_key TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        plan_json TEXT NOT NULL,
+        results_json TEXT NOT NULL,
+        error_json TEXT,
+        lease_id TEXT,
+        lease_until TEXT,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        CONSTRAINT uq_mcp_operation_key UNIQUE (user_id, request_key)
+      )
+    `).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_write_ops_user ON mcp_write_operations(user_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_write_ops_ledger ON mcp_write_operations(ledger_id)').run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS mcp_state_records (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        next_due_at TEXT,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+      )
+    `).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_state_user ON mcp_state_records(user_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_state_ledger ON mcp_state_records(ledger_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_state_kind ON mcp_state_records(kind)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_state_status ON mcp_state_records(status)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_state_due ON mcp_state_records(next_due_at)').run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS mcp_source_references (
+        id TEXT PRIMARY KEY,
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        tx_sync_id TEXT NOT NULL,
+        source_system TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        created_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+        CONSTRAINT uq_mcp_source_identity UNIQUE (ledger_id, source_system, source_id)
+      )
+    `).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_src_ledger ON mcp_source_references(ledger_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_src_tx ON mcp_source_references(tx_sync_id)').run();
+
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS audit_logs (

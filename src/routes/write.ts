@@ -251,6 +251,11 @@ const WriteBaseSchema = z.object({
   request_id: z.string().max(128).optional(),
 });
 
+/** 删除交易请求（expected_revision 对齐原版 _commit_write_fast_tx 乐观锁） */
+const WriteTransactionDeleteSchema = WriteBaseSchema.extend({
+  expected_revision: z.number().nullable().optional(),
+});
+
 /** 创建交易请求 */
 const WriteTransactionCreateSchema = WriteBaseSchema.extend({
   ledger_id: z.string().optional(),
@@ -302,6 +307,7 @@ const WriteTransactionUpdateSchema = WriteBaseSchema.extend({
   currencyCode: z.string().nullable().optional(),
   native_amount: z.number().nullable().optional(),
   nativeAmount: z.number().nullable().optional(),
+  expected_revision: z.number().nullable().optional(),
 });
 
 /** 创建账户请求 */
@@ -654,7 +660,7 @@ writeRouter.patch('/ledgers/:ledgerId/meta', zValidator('json', WriteLedgerMetaU
 /**
  * 删除交易
  */
-writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', WriteBaseSchema), async (c) => {
+writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', WriteTransactionDeleteSchema), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
   const txSyncId = c.req.param('id');
@@ -668,6 +674,17 @@ writeRouter.delete('/ledgers/:ledgerId/transactions/:id', zValidator('json', Wri
 
   if (!ledger) {
     return c.json({ error: 'No ledger found' }, 400);
+  }
+
+  // 修订乐观锁（对齐原版 _commit_write_fast_tx 的删除路径：#133 MCP 工作流）
+  if (req.expected_revision !== undefined && req.expected_revision !== null) {
+    const revRow = await db
+      .prepare('SELECT source_change_id FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+      .bind(ledger.id, txSyncId)
+      .first<{ source_change_id: number | null }>();
+    if (!revRow || Number(revRow.source_change_id ?? 0) !== req.expected_revision) {
+      return c.json({ error: 'REVISION_CONFLICT: transaction changed since it was read' }, 409);
+    }
   }
 
   // 先收集交易关联的附件 fileId（必须在删除投影之前读取，否则 attachments_json 消失）
@@ -1384,6 +1401,17 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
     return c.json({ error: 'Transaction not found' }, 404);
   }
 
+  // 修订乐观锁（对齐原版 _commit_write_fast_tx：#133 MCP 工作流）
+  if (req.expected_revision !== undefined && req.expected_revision !== null) {
+    const current = await db
+      .prepare('SELECT source_change_id FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?')
+      .bind(ledger.id, txSyncId)
+      .first<{ source_change_id: number | null }>();
+    if (!current || Number(current.source_change_id ?? 0) !== req.expected_revision) {
+      return c.json({ error: 'REVISION_CONFLICT: transaction changed since it was read' }, 409);
+    }
+  }
+
   const existingPayload = JSON.parse(latestChange.payload_json);
   const newPayload = { ...existingPayload };
 
@@ -1465,7 +1493,7 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
         nullOr(newPayload.accountId), nullOr(newPayload.accountName),
         nullOr(newPayload.fromAccountId), nullOr(newPayload.fromAccountName),
         nullOr(newPayload.toAccountId), nullOr(newPayload.toAccountName),
-        newPayload.tags ?? null, newPayload.tagIds ? safeJsonStringify(newPayload.tagIds) : null,
+        newPayload.tags ? (Array.isArray(newPayload.tags) ? newPayload.tags.join(',') : newPayload.tags) : null, newPayload.tagIds ? safeJsonStringify(newPayload.tagIds) : null,
         newPayload.attachments ? safeJsonStringify(newPayload.attachments) : null,
         newPayload.currencyCode ?? null, newPayload.nativeAmount ?? null,
         newPayload.excludeFromStats != null ? (newPayload.excludeFromStats ? 1 : 0) : null,

@@ -5,20 +5,20 @@ import { TOOL_DEFS, selfCall, PROTOCOL_VERSION, SUPPORTED_VERSIONS, SERVER_INFO,
 const EXPECTED_TOOLS: { name: string; params: string[]; required: string[] }[] = [
   { name: 'list_ledgers', params: [], required: [] },
   { name: 'get_active_ledger', params: [], required: [] },
-  { name: 'list_transactions', params: ['ledger_id', 'date_from', 'date_to', 'category', 'account', 'min_amount', 'max_amount', 'q', 'limit'], required: [] },
-  { name: 'get_transaction', params: ['sync_id'], required: ['sync_id'] },
-  { name: 'list_categories', params: ['kind'], required: [] },
-  { name: 'list_accounts', params: ['account_type'], required: [] },
-  { name: 'list_tags', params: [], required: [] },
+  { name: 'list_transactions', params: ['ledger_id', 'date_from', 'date_to', 'category', 'account', 'min_amount', 'max_amount', 'q', 'limit', 'cursor', 'tx_type', 'category_id', 'account_id', 'tag_id', 'time_zone'], required: [] },
+  { name: 'get_transaction', params: ['sync_id', 'ledger_id'], required: ['sync_id'] },
+  { name: 'list_categories', params: ['kind', 'ledger_id'], required: [] },
+  { name: 'list_accounts', params: ['account_type', 'ledger_id'], required: [] },
+  { name: 'list_tags', params: ['ledger_id'], required: [] },
   { name: 'list_budgets', params: ['ledger_id'], required: [] },
   { name: 'get_ledger_stats', params: ['ledger_id'], required: [] },
-  { name: 'get_analytics_summary', params: ['scope', 'period', 'ledger_id'], required: [] },
+  { name: 'get_analytics_summary', params: ['scope', 'period', 'ledger_id', 'tz_offset_minutes'], required: [] },
   { name: 'search', params: ['q', 'limit'], required: ['q'] },
   { name: 'upload_attachment', params: ['file_name', 'content_base64', 'ledger_id', 'mime_type'], required: ['file_name', 'content_base64'] },
-  { name: 'create_transaction', params: ['amount', 'tx_type', 'category', 'account', 'happened_at', 'time_zone', 'note', 'tags', 'attachments', 'ledger_id', 'currency'], required: ['amount'] },
-  { name: 'create_transactions', params: ['transactions', 'time_zone', 'ledger_id'], required: ['transactions'] },
-  { name: 'update_transaction', params: ['sync_id', 'amount', 'tx_type', 'category', 'account', 'happened_at', 'time_zone', 'note', 'tags', 'attachments'], required: ['sync_id'] },
-  { name: 'delete_transaction', params: ['sync_id', 'confirm'], required: ['sync_id'] },
+  { name: 'create_transaction', params: ['amount', 'tx_type', 'category', 'account', 'happened_at', 'time_zone', 'note', 'tags', 'attachments', 'ledger_id', 'currency', 'category_id', 'account_id', 'from_account_id', 'to_account_id', 'from_account', 'to_account', 'native_amount', 'exclude_from_stats', 'exclude_from_budget', 'idempotency_key'], required: ['amount'] },
+  { name: 'create_transactions', params: ['transactions', 'time_zone', 'ledger_id', 'idempotency_key'], required: ['transactions'] },
+  { name: 'update_transaction', params: ['sync_id', 'amount', 'tx_type', 'category', 'account', 'happened_at', 'time_zone', 'note', 'tags', 'attachments', 'ledger_id', 'expected_revision', 'category_id', 'account_id', 'from_account_id', 'to_account_id', 'from_account', 'to_account', 'currency', 'native_amount', 'exclude_from_stats', 'exclude_from_budget'], required: ['sync_id'] },
+  { name: 'delete_transaction', params: ['sync_id', 'confirm', 'ledger_id', 'expected_revision'], required: ['sync_id'] },
   { name: 'create_category', params: ['name', 'kind', 'parent_name', 'icon', 'ledger_id'], required: ['name'] },
   { name: 'update_budget', params: ['budget_id', 'amount'], required: ['budget_id', 'amount'] },
   { name: 'parse_and_create_from_text', params: ['text', 'ledger_id'], required: ['text'] },
@@ -35,14 +35,21 @@ const WRITE_ENDPOINTS: Record<string, { method: string; path: string; bodyFields
 };
 
 describe('MCP Tool Definitions', () => {
-  it('should have exactly 19 tools (matching original Python)', () => {
-    expect(TOOL_DEFS.length).toBe(EXPECTED_TOOLS.length);
+  it('should have 55 tools (19 original + 36 registered, matching #133)', () => {
+    expect(TOOL_DEFS.length).toBe(EXPECTED_TOOLS.length + 36);
   });
 
-  it('should have tools in the same order as original Python', () => {
+  it('should keep the 19 original tools in order, then registered tools', () => {
     const names = TOOL_DEFS.map(t => t.name);
     const expectedNames = EXPECTED_TOOLS.map(t => t.name);
-    expect(names).toEqual(expectedNames);
+    expect(names.slice(0, expectedNames.length)).toEqual(expectedNames);
+    // #133 新增的 36 个注册工具全部存在且无重名
+    const registered = names.slice(expectedNames.length);
+    expect(registered.length).toBe(36);
+    expect(new Set(registered).size).toBe(36);
+    for (const name of ['manage_account', 'preview_import', 'manage_recurring_rule', 'analyze_transactions', 'read_attachment', 'save_review_item', 'reconcile_account']) {
+      expect(registered).toContain(name);
+    }
   });
 
   it('each tool should have correct parameter names', () => {

@@ -1,0 +1,575 @@
+/**
+ * MCP 交易服务（对齐原版 src/mcp/transaction_service.py）。
+ *
+ * - prepare_transaction：统一规范化单笔交易（分类/标签/币种/附件/转账校验）
+ * - create_many：批量创建 1..200 条，50/批拆步骤，持久化操作计划，支持幂等键
+ * - update_one：单笔更新，保留历史结算比率，支持 expected_revision 乐观锁
+ * - transaction_row / dictionary_entry：跨账本定位与字典消歧
+ */
+import { uuid4, fingerprint, wallTimeCandidates } from './query-context';
+import { saveOperation, executeOperation, findOperation, type OperationOut, type OperationStep } from './operations';
+import type { McpContext, LedgerInfo } from './types';
+import { McpToolError } from './types';
+
+/** 正数金额校验（对齐上游 positive_amount：拒绝 boolean/NaN/Inf/<=0） */
+export function positiveAmount(value: unknown): number {
+  if (typeof value === 'boolean') {
+    throw new McpToolError('amount must be a number, not a boolean');
+  }
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new McpToolError('amount must be a positive finite number');
+  }
+  return n;
+}
+
+/** 按名/ID 解析字典项（账户/分类），歧义或不存在 → 报错（对齐上游 dictionary_entry） */
+export async function dictionaryEntry(
+  db: D1Database,
+  table: 'user_account_projection' | 'user_category_projection',
+  ownerUserId: string,
+  opts: { name?: string | null; identifier?: string | null; kind?: string | null },
+): Promise<Record<string, unknown> | null> {
+  const { name, identifier, kind } = opts;
+  if (!name && !identifier) return null;
+  const where: string[] = ['user_id = ?'];
+  const params: unknown[] = [ownerUserId];
+  if (identifier) {
+    where.push('sync_id = ?');
+    params.push(identifier);
+  } else {
+    where.push('name = ?');
+    params.push(name);
+  }
+  if (kind && table === 'user_category_projection') {
+    where.push('kind = ?');
+    params.push(kind);
+  }
+  const rows = await db.prepare(`SELECT * FROM ${table} WHERE ${where.join(' AND ')} LIMIT 3`).bind(...params).all<Record<string, unknown>>();
+  if (rows.results.length === 0) {
+    const label = table === 'user_account_projection' ? 'Account' : 'Category';
+    throw new McpToolError(`${label} not found: ${identifier || name}`);
+  }
+  if (rows.results.length !== 1) {
+    const label = table === 'user_account_projection' ? 'Account' : 'Category';
+    throw new McpToolError(`Ambiguous ${label}: ${name || identifier}; use its id`);
+  }
+  if (name && rows.results[0].name !== name) {
+    throw new McpToolError('Name and identifier refer to different entities');
+  }
+  return rows.results[0];
+}
+
+/** 跨账本定位交易（对齐上游 transaction_row），返回 [投影行, 账本] */
+export async function transactionRow(
+  db: D1Database,
+  userId: string,
+  syncId: string,
+  ledgerId?: string | null,
+): Promise<[{ [k: string]: unknown }, LedgerInfo]> {
+  const ledgers = await listLiveLedgers(db, userId, ledgerId);
+  if (ledgers.length === 0) throw new McpToolError('Transaction not found or identifier is ambiguous; specify ledger_id');
+  const placeholders = ledgers.map(() => '?').join(',');
+  const rows = await db.prepare(
+    `SELECT * FROM read_tx_projection WHERE ledger_id IN (${placeholders}) AND sync_id = ? LIMIT 3`
+  ).bind(...ledgers.map(l => l.id), syncId).all<Record<string, unknown>>();
+  if (rows.results.length !== 1) {
+    throw new McpToolError('Transaction not found or identifier is ambiguous; specify ledger_id');
+  }
+  const ledger = ledgers.find(l => l.id === rows.results[0].ledger_id)!;
+  return [rows.results[0], ledger];
+}
+
+/** 可见账本（自有 + 共享成员，排除软删），可过滤 external_id */
+export async function listLiveLedgers(
+  db: D1Database,
+  userId: string,
+  externalId?: string | null,
+): Promise<LedgerInfo[]> {
+  const own = await db.prepare(
+    'SELECT id, user_id, external_id, name, currency, month_start_day, created_at FROM ledgers WHERE user_id = ?'
+  ).bind(userId).all<LedgerInfo>();
+  const shared = await db.prepare(
+    `SELECT l.id, l.user_id, l.external_id, l.name, l.currency, l.month_start_day, l.created_at FROM ledgers l
+     JOIN ledger_members lm ON l.id = lm.ledger_id WHERE lm.user_id = ? AND l.user_id != ?`
+  ).bind(userId, userId).all<LedgerInfo>();
+  const byId = new Map<string, LedgerInfo>();
+  for (const r of [...own.results, ...shared.results]) byId.set(r.id, r);
+  const out: LedgerInfo[] = [];
+  for (const row of byId.values()) {
+    if (await isLedgerDeleted(db, row.id)) continue;
+    if (externalId && row.external_id !== externalId) continue;
+    out.push(row);
+  }
+  // 对齐上游 visible_ledgers：按 created_at 升序（"第一个账本"= 最早创建的）
+  out.sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')) || a.id.localeCompare(b.id));
+  return out;
+}
+
+async function isLedgerDeleted(db: D1Database, ledgerId: string): Promise<boolean> {
+  const row = await db.prepare(
+    `SELECT action FROM sync_changes WHERE ledger_id = ? AND entity_type = 'ledger_snapshot' AND action = 'delete' ORDER BY change_id DESC LIMIT 1`
+  ).bind(ledgerId).first<{ action: string }>();
+  return row?.action === 'delete';
+}
+
+/** ISO 日期/日期时间 → 以 UTC 分量承载的墙钟字面值（带偏移时返回 null） */
+function wallClockLiteral(raw: string): Date | null {
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m;
+  return new Date(Date.UTC(+y, +mo - 1, +d, h ? +h : 0, h ? +mi : 0, h ? +(s ?? 0) : 0));
+}
+
+/**
+ * 解析交易时间（对齐上游 parse_transaction_datetime）：
+ * - 显式偏移优先 → 直接转 UTC
+ * - 裸时间按 Cloud 配置时区（CLOUD_TIMEZONE/TZ）解释，其次才是调用方 time_zone
+ * - 两者都没有 → 报错并给出可执行指引（不静默按 UTC 猜测）
+ * - DST 回拨（歧义）/ 跳时（不存在）→ 要求给出真实偏移
+ */
+export function parseTxDatetime(
+  value: string,
+  timeZone?: string | null,
+  configuredTimeZone?: string | null,
+): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new McpToolError('happened_at must be a non-empty ISO date or datetime');
+  }
+  const raw = value.trim().replace(' ', 'T');
+  const hasOffset = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw);
+  if (hasOffset) {
+    const d = new Date(raw.replace('Z', '+00:00'));
+    if (isNaN(d.getTime())) throw new McpToolError('happened_at must be an ISO date or datetime');
+    return d.toISOString();
+  }
+  const wall = wallClockLiteral(raw);
+  if (!wall) throw new McpToolError('happened_at must be an ISO date or datetime');
+
+  const zone = (configuredTimeZone ?? '').trim() || (timeZone ?? '').trim();
+  if (!zone) {
+    throw new McpToolError(
+      'Timezone required for happened_at without an offset. Use an ISO timestamp with its actual offset (e.g. +08:00), '
+      + 'configure Cloud SCHEDULER_TIMEZONE/TZ, or pass time_zone (e.g. Asia/Shanghai) after confirming the source timezone. '
+      + 'Do not append Z to local time.',
+    );
+  }
+  const candidates = wallTimeCandidates(wall, zone);
+  if (candidates.length !== 1) {
+    const reason = candidates.length ? 'ambiguous' : 'nonexistent';
+    throw new McpToolError(
+      `happened_at is ${reason} in ${zone}; provide its actual ISO UTC offset`,
+    );
+  }
+  return candidates[0].toISOString();
+}
+
+/** 账本币种 + 账户币种 + currency 参数 → 折算字段（对齐上游 _build_currency_fields） */
+export async function buildCurrencyFields(
+  db: D1Database,
+  userId: string,
+  ledgerBase: string,
+  accountCurrency: string | null | undefined,
+  currencyArg: string | null | undefined,
+  amount: number,
+): Promise<{ currency_code?: string; native_amount?: number }> {
+  const base = (ledgerBase || 'CNY').trim().toUpperCase();
+  const cc = ((currencyArg || accountCurrency || base) || 'CNY').trim().toUpperCase();
+  if (cc === base) return {};
+  const ov = await db.prepare(
+    'SELECT rate FROM user_exchange_rate_projection WHERE user_id = ? AND base_currency = ? AND quote_currency = ?'
+  ).bind(userId, base, cc).first<{ rate: string }>();
+  let native: number | null = null;
+  if (ov) {
+    const r = parseFloat(ov.rate);
+    if (r > 0) native = amount * r;
+  }
+  if (native === null) {
+    const cache = await db.prepare('SELECT payload_json FROM exchange_rate_cache WHERE base_currency = ?').bind(base).first<{ payload_json: string }>();
+    if (cache) {
+      try {
+        const payload = JSON.parse(cache.payload_json) as Record<string, string>;
+        const raw = payload[cc] ?? payload[cc.toLowerCase()];
+        const x = parseFloat(raw ?? '');
+        native = x > 0 ? amount / x : amount;
+      } catch { native = amount; }
+    } else {
+      native = amount;
+    }
+  }
+  return { currency_code: cc, native_amount: native };
+}
+
+/** 批量创建交易（对齐上游 create_many）。返回与上游一致的结构。 */
+export async function createMany(
+  c: McpContext,
+  opts: {
+    transactions: Array<Record<string, unknown>>;
+    ledger_id?: string | null;
+    time_zone?: string | null;
+    idempotency_key?: string | null;
+    single?: boolean;
+  },
+): Promise<Record<string, unknown>> {
+  const { db, userId } = c;
+  const transactions = opts.transactions;
+  if (!Array.isArray(transactions) || transactions.length === 0 || transactions.length > 200) {
+    throw new McpToolError('transactions must contain 1..200 entries');
+  }
+  const rawRequest = { transactions, ledger_id: opts.ledger_id ?? null, time_zone: opts.time_zone ?? null, single: opts.single ?? false };
+  const key = opts.idempotency_key || uuid4();
+  if (typeof key !== 'string' || !key.trim() || key.length > 128) {
+    throw new McpToolError('idempotency_key must be a non-empty string of at most 128 characters');
+  }
+  const kind = opts.single ? 'create_transaction' : 'create_transactions';
+
+  const prior = await findOperation(db, { user_id: userId, key, request: rawRequest, kind, ledger_id: null });
+  const { ledger, status } = await resolveWriteLedger(c, opts.ledger_id);
+  if (status) return status;
+  if (!ledger) return { status: 'no_ledger', message: 'You have no ledger yet.' };
+  if (prior) {
+    if (prior.ledger_id !== ledger.id) throw new McpToolError('Operation ledger no longer matches');
+    const outcome = await executeOperation(db, prior, userId, selfCallAdapter(c));
+    return finalizeCreateMany(outcome, ledger, opts);
+  }
+
+  // 校验名称存在
+  await validateNamesExist(c, ledger, transactions);
+
+  const normalized: Array<Record<string, unknown>> = [];
+  for (let index = 0; index < transactions.length; index++) {
+    try {
+      normalized.push(await prepareTransaction(c, ledger, transactions[index], { time_zone: opts.time_zone }));
+    } catch (exc: unknown) {
+      throw new McpToolError(`transactions[${index}]: ${exc instanceof Error ? exc.message : String(exc)}`);
+    }
+  }
+
+  // 默认标签（owner 自己）
+  if (ledger.user_id === userId) {
+    await ensureMcpTag(c, ledger.external_id);
+    for (const body of normalized) {
+      const names = (body.tags as string[] | undefined) || [];
+      body.tag_ids = await lookupTagSyncIds(c, ledger, names);
+    }
+  }
+
+  const root = `/api/v1/write/ledgers/${ledger.external_id}/transactions`;
+  let steps: OperationStep[];
+  if (opts.single) {
+    steps = [{ method: 'POST', path: root, body: normalized[0] }];
+  } else {
+    const items = normalized.map(b => {
+      const { base_change_id, ...rest } = b;
+      return rest;
+    });
+    steps = [];
+    for (let start = 0; start < items.length; start += 50) {
+      steps.push({
+        method: 'POST',
+        path: root + '/batch',
+        body: { base_change_id: 0, transactions: items.slice(start, start + 50), auto_ai_tag: false },
+      });
+    }
+  }
+
+  const row = await saveOperation(db, {
+    user_id: userId, ledger_id: ledger.id, key, kind, request: rawRequest, steps,
+  });
+  const outcome = await executeOperation(db, row, userId, selfCallAdapter(c));
+  return finalizeCreateMany(outcome, ledger, opts);
+}
+
+async function finalizeCreateMany(
+  outcome: OperationOut,
+  ledger: LedgerInfo,
+  opts: { single?: boolean; transactions: Array<Record<string, unknown>> },
+): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = { ...outcome, ledger: ledger.name, ledger_id: ledger.external_id, created_count: outcome.sync_ids.length };
+  if (out.status === 'completed') out.status = 'created';
+  if (opts.single && outcome.sync_ids.length > 0) {
+    const sid = outcome.sync_ids[0];
+    out.sync_id = sid;
+    if (opts.transactions[0]?.attachments !== null && opts.transactions[0]?.attachments !== undefined) {
+      out.attachments = opts.transactions[0].attachments;
+    }
+  }
+  return out;
+}
+
+/** 更新单笔交易（对齐上游 update_one）：保留历史结算比率 + expected_revision。 */
+export async function updateOne(
+  c: McpContext,
+  opts: { sync_id: string; ledger_id?: string | null; [k: string]: unknown },
+): Promise<Record<string, unknown>> {
+  const { db, userId } = c;
+  const { sync_id, ledger_id } = opts;
+  const [existing, ledger] = await transactionRow(db, userId, sync_id, ledger_id);
+  const raw = { ...opts };
+  const body = await prepareTransaction(c, ledger, raw, { time_zone: (raw.time_zone as string | undefined) ?? null, existing });
+  const path = `/api/v1/write/ledgers/${ledger.external_id}/transactions/${sync_id}`;
+  await selfCallAdapter(c)('PATCH', path, userId, body, {});
+  const updated = Object.keys(body).filter(k => k !== 'base_change_id' && k !== 'expected_revision');
+  return { sync_id, ledger_id: ledger.external_id, updated };
+}
+
+/** 规范化单笔交易 body（对齐上游 prepare_transaction）。 */
+export async function prepareTransaction(
+  c: McpContext,
+  ledger: LedgerInfo,
+  raw: Record<string, unknown>,
+  opts: { time_zone?: string | null; existing?: Record<string, unknown> | null } = {},
+): Promise<Record<string, unknown>> {
+  const { db, userId } = c;
+  const partial = opts.existing !== undefined && opts.existing !== null;
+  const existing = opts.existing;
+  const kind = (raw.tx_type as string | undefined) || (partial ? existing!.tx_type as string : 'expense');
+  if (!['expense', 'income', 'transfer'].includes(kind)) throw new McpToolError('Invalid tx_type');
+  const body: Record<string, unknown> = { base_change_id: 0 };
+  if (!partial || raw.tx_type !== undefined) body.tx_type = kind;
+  if (!partial || raw.amount !== undefined) body.amount = positiveAmount(raw.amount);
+  if (raw.happened_at !== undefined && raw.happened_at !== null) {
+    body.happened_at = parseTxDatetime(String(raw.happened_at), opts.time_zone, c.configuredTimeZone ?? null);
+  } else if (!partial) {
+    body.happened_at = new Date().toISOString();
+  }
+  if (raw.note !== undefined && raw.note !== null) body.note = raw.note;
+  // 对齐上游：创建时排除标记默认 False（写入 0 而非 NULL），
+  // 这样 analyze_transactions 的 exclude_from_stats is False 语义才成立
+  for (const flag of ['exclude_from_stats', 'exclude_from_budget']) {
+    body[flag] = raw[flag] === true;
+  }
+
+  let accountCurrency: string | null | undefined;
+  const category = await dictionaryEntry(db, 'user_category_projection', ledger.user_id, {
+    name: raw.category as string | null | undefined,
+    identifier: raw.category_id as string | null | undefined,
+    kind,
+  });
+  if (category) {
+    body.category_id = category.sync_id;
+    body.category_name = category.name;
+    body.category_kind = kind;
+  }
+
+  if (kind === 'transfer') {
+    let fromId = (raw.from_account_id as string | undefined) || (raw.account_id as string | undefined);
+    let fromName = (raw.from_account as string | undefined) || (raw.account as string | undefined);
+    let toId = raw.to_account_id as string | undefined;
+    let toName = raw.to_account as string | undefined;
+    if (partial && existing!.tx_type === 'transfer') {
+      if (!fromId && !fromName) fromId = existing!.from_account_sync_id as string | undefined;
+      if (!toId && !toName) toId = existing!.to_account_sync_id as string | undefined;
+    }
+    const source = await dictionaryEntry(db, 'user_account_projection', ledger.user_id, { name: fromName, identifier: fromId });
+    const target = await dictionaryEntry(db, 'user_account_projection', ledger.user_id, { name: toName, identifier: toId });
+    if (!source || !target) {
+      throw new McpToolError('Complete transfer requires both from_account_id/from_account and to_account_id/to_account');
+    }
+    if (source.sync_id === target.sync_id) throw new McpToolError('Transfer accounts must be different');
+    const sCur = (source.currency as string | null) || ledger.currency;
+    const tCur = (target.currency as string | null) || ledger.currency;
+    if ((sCur || 'CNY').toUpperCase() !== (tCur || 'CNY').toUpperCase()) {
+      throw new McpToolError('Transfer accounts must have the same currency');
+    }
+    body.from_account_id = source.sync_id;
+    body.from_account_name = source.name;
+    body.to_account_id = target.sync_id;
+    body.to_account_name = target.name;
+    body.currency_code = ((source.currency as string | null) || ledger.currency || 'CNY').toUpperCase();
+  } else {
+    const account = await dictionaryEntry(db, 'user_account_projection', ledger.user_id, {
+      name: raw.account as string | null | undefined,
+      identifier: raw.account_id as string | null | undefined,
+    });
+    if (account) {
+      body.account_id = account.sync_id;
+      body.account_name = account.name;
+      accountCurrency = account.currency as string | null | undefined;
+    } else if (partial && existing!.account_sync_id) {
+      const prev = await db.prepare(
+        'SELECT currency FROM user_account_projection WHERE user_id = ? AND sync_id = ?'
+      ).bind(ledger.user_id, existing!.account_sync_id).first<{ currency: string | null }>();
+      accountCurrency = prev?.currency ?? null;
+    }
+  }
+
+  if (raw.attachments !== undefined && raw.attachments !== null) {
+    body.attachments = await resolveTransactionAttachmentsRef(c, ledger.id, raw.attachments as string[]);
+  }
+
+  if (!partial || raw.tags !== undefined) {
+    const tags = !partial ? mergeDefaultTag(raw.tags as string[] | null | undefined) : (raw.tags as string[] | undefined || []);
+    body.tags = tags;
+    body.tag_ids = await lookupTagSyncIds(c, ledger, tags);
+  }
+
+  if (kind !== 'transfer' && (!partial || raw.amount !== undefined || raw.currency !== undefined || raw.native_amount !== undefined)) {
+    const amount = (body.amount as number | undefined) ?? (partial ? existing!.amount as number : undefined);
+    const currency = (raw.currency as string | null | undefined) ?? (partial ? (existing!.currency_code as string | null | undefined) : undefined);
+    if (raw.native_amount !== undefined && raw.native_amount !== null) {
+      body.currency_code = ((currency || accountCurrency || ledger.currency || 'CNY') as string).toUpperCase();
+      body.native_amount = positiveAmount(raw.native_amount);
+    } else if (partial && existing!.native_amount !== null && existing!.native_amount !== undefined && existing!.amount && !raw.currency) {
+      body.currency_code = existing!.currency_code;
+      body.native_amount = Number(existing!.native_amount) * Number(amount) / Number(existing!.amount);
+    } else {
+      const cf = await buildCurrencyFields(db, userId, ledger.currency || 'CNY', accountCurrency, currency, Number(amount));
+      if (cf.currency_code !== undefined) body.currency_code = cf.currency_code;
+      if (cf.native_amount !== undefined) body.native_amount = cf.native_amount;
+    }
+  }
+
+  if (partial && raw.expected_revision !== undefined && raw.expected_revision !== null) {
+    body.expected_revision = raw.expected_revision;
+  }
+  return body;
+}// ── write-tools 依赖的本地 helper（由 tools/write-tools 提供实现）──
+
+export type SelfCallFn = (
+  method: string, path: string, userId: string, body: Record<string, unknown>, headers: Record<string, string>,
+) => Promise<Record<string, unknown>>;
+
+let selfCallImpl: SelfCallFn | null = null;
+
+/** 注入自调用实现（默认由 tools/write-tools 设置；测试可替换模拟丢响应/失败） */
+export function setSelfCall(fn: SelfCallFn | null): void {
+  selfCallImpl = fn;
+}
+
+export function selfCallAdapter(c: McpContext): SelfCallFn {
+  if (selfCallImpl) return selfCallImpl;
+  throw new Error('selfCall not configured; call setSelfCall first');
+}
+
+export async function resolveWriteLedger(
+  c: McpContext,
+  ledgerId?: string | null,
+): Promise<{ ledger: LedgerInfo | null; status: Record<string, unknown> | null }> {
+  const { db, userId } = c;
+  if (ledgerId) {
+    const led = await listLiveLedgers(db, userId, ledgerId);
+    if (led.length === 0) return { ledger: null, status: { status: 'ledger_not_found', message: `Ledger not found or has been deleted: ${ledgerId}`, ledger_id: ledgerId } };
+    return { ledger: led[0], status: null };
+  }
+  const live = await listLiveLedgers(db, userId);
+  if (live.length === 0) return { ledger: null, status: { status: 'no_ledger', message: 'You have no ledger yet. Create one in BeeCount first.' } };
+  if (live.length === 1) return { ledger: live[0], status: null };
+  return {
+    ledger: null,
+    status: {
+      status: 'ledger_required',
+      message: 'You have multiple ledgers — refusing to guess which one to write to. Re-call this tool with an explicit `ledger_id`.',
+      candidates: live.map(l => ({ id: l.external_id, name: l.name })),
+    },
+  };
+}
+
+export async function validateNamesExist(
+  c: McpContext,
+  ledger: LedgerInfo,
+  transactions: Array<Record<string, unknown>>,
+): Promise<void> {
+  const { db } = c;
+  const categories = new Set<string>();
+  const accounts = new Set<string>();
+  for (const item of transactions) {
+    if (item.category) categories.add(String(item.category));
+    for (const k of ['account', 'from_account', 'to_account']) {
+      if (item[k]) accounts.add(String(item[k]));
+    }
+  }
+  if (categories.size > 0) {
+    const placeholders = [...categories].map(() => '?').join(',');
+    const rows = await db.prepare(
+      `SELECT name FROM user_category_projection WHERE user_id = ? AND name IN (${placeholders})`
+    ).bind(ledger.user_id, ...[...categories]).all<{ name: string }>();
+    const found = new Set(rows.results.map(r => r.name));
+    for (const name of categories) {
+      if (!found.has(name)) throw new McpToolError(`Category not found: ${name}`);
+    }
+  }
+  if (accounts.size > 0) {
+    const placeholders = [...accounts].map(() => '?').join(',');
+    const rows = await db.prepare(
+      `SELECT name FROM user_account_projection WHERE user_id = ? AND name IN (${placeholders})`
+    ).bind(ledger.user_id, ...[...accounts]).all<{ name: string }>();
+    const found = new Set(rows.results.map(r => r.name));
+    for (const name of accounts) {
+      if (!found.has(name)) throw new McpToolError(`Account not found: ${name}`);
+    }
+  }
+}
+
+export function mergeDefaultTag(tags: string[] | null | undefined): string[] {
+  const out = [...(tags ?? [])];
+  if (!out.includes('AI记账')) out.push('AI记账');
+  return out;
+}
+
+export async function ensureMcpTag(c: McpContext, ledgerExternalId: string): Promise<void> {
+  const { db, userId } = c;
+  const existing = await db.prepare(
+    'SELECT sync_id FROM user_tag_projection WHERE user_id = ? AND name = ?'
+  ).bind(userId, 'AI记账').first<{ sync_id: string }>();
+  if (existing) return;
+  await selfCallAdapter(c)(
+    'POST',
+    `/api/v1/write/ledgers/${ledgerExternalId}/tags`,
+    userId,
+    { base_change_id: 0, name: 'AI记账' },
+    {},
+  );
+}
+
+export async function lookupTagSyncIds(
+  c: McpContext,
+  ledger: LedgerInfo,
+  names: string[],
+): Promise<string[] | null> {
+  const { db } = c;
+  if (!names || names.length === 0) return null;
+  const placeholders = names.map(() => '?').join(',');
+  const rows = await db.prepare(
+    `SELECT sync_id FROM user_tag_projection WHERE user_id = ? AND name IN (${placeholders})`
+  ).bind(ledger.user_id, ...names).all<{ sync_id: string }>();
+  return rows.results.map(r => r.sync_id);
+}
+
+async function resolveTransactionAttachmentsRef(
+  c: McpContext,
+  ledgerId: string,
+  fileIds: string[],
+): Promise<Array<Record<string, unknown>>> {
+  const { db } = c;
+  if (fileIds.some(v => typeof v !== 'string' || !v.trim())) {
+    throw new McpToolError('attachments must contain non-empty uploaded file IDs');
+  }
+  const ids = fileIds.map(v => v.trim());
+  if (new Set(ids).size !== ids.length) throw new McpToolError('Duplicate attachment file IDs are not allowed');
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = await db.prepare(
+    `SELECT id, file_name, size_bytes, mime_type, sha256 FROM attachment_files
+     WHERE id IN (${placeholders}) AND ledger_id = ? AND attachment_kind = 'transaction'`
+  ).bind(...ids, ledgerId).all<{ id: string; file_name: string | null; size_bytes: number; mime_type: string | null; sha256: string }>();
+  const byId = new Map(rows.results.map(row => [row.id, row]));
+  if (byId.size !== ids.length) throw new McpToolError('Attachment not found in the target ledger; upload it there first');
+  return ids.map((fileId, index) => {
+    const row = byId.get(fileId)!;
+    return {
+      fileName: `sha_${row.sha256}.${extFromName(row.file_name)}`,
+      originalName: row.file_name ?? fileId,
+      fileSize: row.size_bytes,
+      mimeType: row.mime_type ?? 'application/octet-stream',
+      cloudFileId: row.id,
+      cloudSha256: row.sha256,
+      sortOrder: index,
+    };
+  });
+}
+
+function extFromName(name: string | null): string {
+  const m = name?.match(/\.([a-zA-Z0-9]+)$/);
+  return m ? m[1] : 'jpg';
+}

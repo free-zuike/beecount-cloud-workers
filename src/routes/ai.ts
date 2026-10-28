@@ -70,14 +70,13 @@ interface AiConfig {
   [key: string]: unknown;
 }
 
-// ===========================
-// AI 客户端工具
-// ===========================
+export interface AiProviderPublic extends AiProvider {}
+export type AiConfigPublic = AiConfig;
 
 /**
  * 解析用户 AI 配置
  */
-function parseAiConfig(jsonStr: string | null): AiConfig {
+export function parseAiConfig(jsonStr: string | null): AiConfig {
   if (!jsonStr) return {};
   try {
     return JSON.parse(jsonStr) as AiConfig;
@@ -89,16 +88,16 @@ function parseAiConfig(jsonStr: string | null): AiConfig {
 /**
  * 查找指定类型的 provider
  */
-function findProvider(config: AiConfig, kind: 'text' | 'vision'): AiProvider | null {
+export function findProvider(config: AiConfig, kind: 'text' | 'vision'): AiProvider | null {
   const bindingKey = kind === 'text' ? 'textProviderId' : 'visionProviderId';
   const modelKey = kind === 'text' ? 'textModel' : 'visionModel';
-  
+
   const providerId = config.binding?.[bindingKey];
   if (!providerId || !config.providers) return null;
-  
+
   const provider = config.providers.find(p => p.id === providerId);
   if (!provider || !provider.apiKey || !provider.baseUrl) return null;
-  
+
   return provider;
 }
 
@@ -285,7 +284,7 @@ async function* streamAiChat(
 /**
  * 从 LLM 输出中提取 JSON
  */
-function extractJson(text: string): unknown {
+export function extractJson(text: string): unknown {
   const blockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (blockMatch) {
     try {
@@ -328,7 +327,7 @@ export function normalizeCurrency(raw: unknown): string {
   return _ISO_CURRENCY_RE.test(code) ? code : '';
 }
 
-class SchemaInvalidError extends Error {}
+export class SchemaInvalidError extends Error {}
 
 /** 严格校验 LLM 输出：必须是 `{"tx_drafts": [...]}`。对齐原版 —— 不静默
  * 兼容其它结构（顶层 array / items key 等），兼容会让 prompt 漂移。 */
@@ -378,7 +377,7 @@ export function normalizeDrafts(result: unknown): Array<Record<string, unknown>>
  * - category 排除「有子分类的父类」（父类是 grouping，不能作为交易分类）
  * - account 返回 (名称, 币种)，排除隐藏账户（#240）
  * - 没传 ledger_id → 跨账本聚合；本位币取「唯一账本的币种，否则 CNY」 */
-async function loadLedgerContext(
+export async function loadLedgerContext(
   db: D1Database,
   userId: string,
   ledgerId?: string | null,
@@ -386,14 +385,25 @@ async function loadLedgerContext(
   const fallback = 'CNY';
   let ledgerIntIds: string[] = [];
   let ledgerCurrency = fallback;
+  // 字典归属：单账本共享时用 owner（对齐原版 get_accessible_ledger_by_external_id 覆写）
+  let dictionaryOwner = userId;
 
   if (ledgerId) {
     const ledger = await db
-      .prepare('SELECT id, currency FROM ledgers WHERE user_id = ? AND external_id = ?')
-      .bind(userId, ledgerId)
-      .first<{ id: string; currency: string | null }>();
+      .prepare(
+        `SELECT l.id, l.user_id, l.currency FROM ledgers l
+         LEFT JOIN ledger_members lm ON l.id = lm.ledger_id
+         WHERE l.external_id = ? AND (l.user_id = ? OR lm.user_id = ?)
+           AND NOT EXISTS (
+             SELECT 1 FROM sync_changes sc
+             WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot' AND sc.action = 'delete')
+         LIMIT 1`
+      )
+      .bind(ledgerId, userId, userId)
+      .first<{ id: string; user_id: string; currency: string | null }>();
     if (!ledger) return { categories: [], accounts: [], ledgerCurrency: fallback };
     ledgerIntIds = [ledger.id];
+    dictionaryOwner = ledger.user_id;
     ledgerCurrency = (ledger.currency || fallback).trim().toUpperCase();
   } else {
     const all = await db
@@ -408,10 +418,10 @@ async function loadLedgerContext(
 
   if (ledgerIntIds.length === 0) return { categories: [], accounts: [], ledgerCurrency };
 
-  // category 是 user-global，按 user_id 拉（跨 ledger 统一）
+  // category 是 user-global，按 owner 拉（共享账本用 owner 字典；跨 ledger 统一）
   const catRows = await db
     .prepare('SELECT name, parent_name FROM user_category_projection WHERE user_id = ?')
-    .bind(userId)
+    .bind(dictionaryOwner)
     .all<{ name: string | null; parent_name: string | null }>();
   const parentNamesWithChildren = new Set(
     catRows.results.filter((c) => c.parent_name).map((c) => c.parent_name as string)
@@ -423,10 +433,10 @@ async function loadLedgerContext(
     else if (!parentNamesWithChildren.has(c.name)) selectableCats.add(c.name);
   }
 
-  // account 排除隐藏（#240）：隐藏账户不作为新交易记账目标
+  // account 排除隐藏（#240）：隐藏账户不作为新交易记账目标；共享账本用 owner 账户
   const acctRows = await db
     .prepare('SELECT name, currency, hidden FROM user_account_projection WHERE user_id = ?')
-    .bind(userId)
+    .bind(dictionaryOwner)
     .all<{ name: string | null; currency: string | null; hidden: number | null }>();
   const acctSet = new Map<string, string | null>();
   for (const a of acctRows.results) {

@@ -41,6 +41,10 @@ new_sqlite_classes = ["BeeCountDO"]
 
 [vars]
 API_PREFIX = "/api/v1"
+# Cloud 默认时区：对齐原版 Dockerfile 的 ENV TZ=Asia/Shanghai（原版 config.py 中
+# cloud_timezone 的 env 别名就是 TZ）。裸时间（无 UTC 偏移）按此时区解释，
+# 部署时可用 -e/Secret 覆盖；置空则与上游一致：要求显式偏移或 time_zone。
+TZ = "Asia/Shanghai"
 # 是否允许注册新用户（"true"/"false" 字符串），生产环境建议设为 "false"
 REGISTRATION_ENABLED = "true"
 # D1 Export API 所需：账户 ID 和数据库 ID（对应 [[d1_databases]] 中的 database_id）

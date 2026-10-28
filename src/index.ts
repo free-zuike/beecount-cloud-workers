@@ -62,6 +62,8 @@ type Bindings = {
   EMBEDDING_MODEL?: string;
   EMBEDDING_BASE_URL?: string;
   EMBEDDING_API_KEY?: string;
+  INTERNAL_CRON_TOKEN?: string;
+  MCP_RECURRING_ENABLED?: string;
 };
 
 type Variables = {
@@ -560,7 +562,18 @@ export default {
     console.log('[CRON] Scheduled event triggered:', new Date().toISOString());
     
     const db = env.DB;
-    
+
+    // MCP 周期规则调度（对齐上游 main.py 的 asyncio tick；MCP_RECURRING_ENABLED=false 跳过）
+    if ((env.MCP_RECURRING_ENABLED ?? 'true') !== 'false') {
+      try {
+        const { executeDueRules } = await import('./mcp/rule-tools');
+        const results = await executeDueRules({ db, userId: '', jwtSecret: env.JWT_SECRET || '', baseUrl: 'https://internal', scopes: ['mcp:write'] }, { limit: 20 });
+        if (results.length > 0) console.log('[CRON] MCP recurring rules ran:', results.length);
+      } catch (error) {
+        console.error('[CRON] MCP recurring rules error:', error);
+      }
+    }
+
     try {
       await ensureInitialized(db, env.BEECOUNT_DO);
       const schedulesResult = await db

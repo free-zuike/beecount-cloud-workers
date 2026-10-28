@@ -227,6 +227,61 @@ async function resolveOrMakeAiTagName(db: D1Database, userId: string, locale: st
  *    （tx.tags 名字 + auto tags；新建的 tag 也发 sync_changes + 写投影）
  * 4. 每笔 tx：tags_csv = 合并后的名字、tag_sync_ids_json = 反查 sync_id（issue #5）
  */
+/**
+ * 对齐原版 mcp/attachments.py::resolve_transaction_attachments：
+ * 交易attachments 只接受本账本已上传的 transaction 附件 id，按传入顺序输出权威引用
+ * （fileName/originalName/fileSize/mimeType/cloudFileId/cloudSha256/sortOrder）。
+ * 空 id / 重复 id / 非本账本或未知 id → 抛错，由调用方转成 400 BATCH_TX_INVALID。
+ */
+function collectCloudFileIds(attachments: unknown): string[] {
+  if (!Array.isArray(attachments)) return [];
+  const ids: string[] = [];
+  for (const a of attachments) {
+    const id = (a as Record<string, unknown> | null)?.cloudFileId;
+    ids.push(typeof id === 'string' ? id : '');
+  }
+  return ids;
+}
+
+async function resolveTransactionAttachments(
+  db: D1Database,
+  ledgerId: string,
+  fileIds: string[],
+): Promise<Array<Record<string, unknown>>> {
+  if (fileIds.some(v => typeof v !== 'string' || !v.trim())) {
+    throw new Error('attachments must contain non-empty uploaded file IDs');
+  }
+  const ids = fileIds.map(v => v.trim());
+  if (new Set(ids).size !== ids.length) {
+    throw new Error('Duplicate attachment file IDs are not allowed');
+  }
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = await db
+    .prepare(
+      `SELECT id, file_name, size_bytes, mime_type, sha256 FROM attachment_files
+       WHERE id IN (${placeholders}) AND ledger_id = ? AND attachment_kind = 'transaction'`
+    )
+    .bind(...ids, ledgerId)
+    .all<{ id: string; file_name: string | null; size_bytes: number; mime_type: string | null; sha256: string }>();
+  const byId = new Map(rows.results.map(r => [r.id, r]));
+  if (byId.size !== ids.length) {
+    throw new Error('Attachment not found in the target ledger; upload it there first');
+  }
+  return ids.map((id, index) => {
+    const row = byId.get(id)!;
+    return {
+      fileName: `${row.id}_${row.file_name || 'attachment.bin'}`,
+      originalName: row.file_name || 'attachment.bin',
+      fileSize: row.size_bytes,
+      mimeType: row.mime_type ?? 'application/octet-stream',
+      cloudFileId: row.id,
+      cloudSha256: row.sha256,
+      sortOrder: index,
+    };
+  });
+}
+
 async function runBatchCreate(c: any, ledgerExternalId: string): Promise<Response> {
   const db = c.env.DB as D1Database;
   const userId = c.get('userId') as string;
@@ -284,7 +339,26 @@ async function runBatchCreate(c: any, ledgerExternalId: string): Promise<Respons
     tagNameToSyncId.set(name, tagSyncId);
   }
 
-  for (const tx of req.transactions) {
+  // 对齐原版 #133：批量是「整批成功或整批失败」（原版在 snapshot 上 mutate 后一次 commit，
+  // 任一条抛错整批回滚）。这里先在写库前逐条解析 attachments，任一条不合法就整体 400
+  // （带 failed_index），避免前半段落库、后半段失败的半成品。
+  const resolvedAttachments: unknown[] = [];
+  for (const [i, tx] of req.transactions.entries()) {
+    if (tx.attachments === undefined || tx.attachments === null) {
+      resolvedAttachments.push(mergeSharedAttachment(tx.attachments, sharedAttachment));
+      continue;
+    }
+    try {
+      resolvedAttachments.push(
+        await resolveTransactionAttachments(db, ledger.id, collectCloudFileIds(tx.attachments)),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message, error_code: 'BATCH_TX_INVALID', failed_index: i }, 400);
+    }
+  }
+
+  for (const [txIndex, tx] of req.transactions.entries()) {
     const txSyncId = randomUUID();
     const txType = tx.tx_type || 'expense';
 
@@ -324,7 +398,8 @@ async function runBatchCreate(c: any, ledgerExternalId: string): Promise<Respons
     const userTags = splitTags(tx.tags);
     const mergedTags = [...userTags, ...autoTagNames.filter(t => t && !userTags.includes(t))];
     const tagIds = mergedTags.map(n => tagNameToSyncId.get(n)).filter((v): v is string => !!v);
-    const attachments = mergeSharedAttachment(tx.attachments, sharedAttachment);
+
+    const attachments = resolvedAttachments[txIndex];
 
     const payload: Record<string, unknown> = {
       syncId: txSyncId,
@@ -333,14 +408,23 @@ async function runBatchCreate(c: any, ledgerExternalId: string): Promise<Respons
       happenedAt: tx.happened_at,
       note: tx.note || null,
       categoryId: categorySyncId,
+      categoryName: tx.category_name ?? null,
+      categoryKind: tx.category_kind ?? txType,
       accountId: txAccountCols.account_sync_id,
+      accountName: txAccountCols.account_name,
       fromAccountId: txAccountCols.from_account_sync_id,
+      fromAccountName: txAccountCols.from_account_name,
       toAccountId: txAccountCols.to_account_sync_id,
+      toAccountName: txAccountCols.to_account_name,
       tags: mergedTags.length ? mergedTags : null,
       tagIds: tagIds.length ? tagIds : null,
       attachments,
+      excludeFromStats: tx.exclude_from_stats ?? false,
+      excludeFromBudget: tx.exclude_from_budget ?? false,
       updatedByUserId: userId,
       createdByUserId: userId,
+      currencyCode: tx.currency_code ?? tx.currencyCode ?? null,
+      nativeAmount: tx.native_amount ?? tx.nativeAmount ?? null,
     };
 
     // sync_changes + projection 同事务原子写入（db.batch = SQL transaction，

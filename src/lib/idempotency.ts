@@ -99,7 +99,10 @@ export async function idempotencyMiddleware(c: any, next: () => Promise<void>) {
     if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return;
   } catch { return; }
   stored.idempotency_replayed = false;
-  const expires = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+  // 对齐上游 #133：MCP 内部调用（device_id=mcp-internal 且 key 以 mcp: 开头）
+  // 幂等记录 36500 天不过期（跨长时间恢复仍可重放），其余 24 小时。
+  const longWindow = deviceId === 'mcp-internal' && key.startsWith('mcp:');
+  const expires = new Date(Date.now() + (longWindow ? 36500 : 1) * 24 * 3600 * 1000).toISOString();
   try {
     await db.prepare(
       `INSERT INTO sync_push_idempotency (user_id, device_id, idempotency_key, request_hash, response_json, created_at, expires_at)

@@ -119,7 +119,7 @@ describe('SCHEMA v3/v4 迁移（真实 SQLite 数据安全）', () => {
     expect(artifacts).toHaveLength(1);
   });
 
-  it('全新库初始化直接得到 v4 结构，不触发迁移，版本号=4', async () => {
+  it('全新库初始化直接得到 v5 结构，不触发迁移，版本号=5', async () => {
     const { sqlite, db } = createRealDb();
     await initializeDatabase(db as any);
     const memberCount = sqlite.prepare('SELECT COUNT(*) c FROM ledger_members').get() as { c: number };
@@ -129,6 +129,6 @@ describe('SCHEMA v3/v4 迁移（真实 SQLite 数据安全）', () => {
     expect(inviteCount.c).toBe(0);
     expect(remoteCount.c).toBe(0);
     const meta = sqlite.prepare("SELECT value FROM app_metadata WHERE key = 'schema_version'").get() as any;
-    expect(meta.value).toBe('4');
+    expect(meta.value).toBe('5');
   });
 });
