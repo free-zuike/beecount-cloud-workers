@@ -506,9 +506,13 @@ export async function validateNamesExist(
   }
 }
 
+/** 对齐上游 _MCP_DEFAULT_TAG：MCP 记录自动打 "MCP" 标签（与 mobile 的"AI记账"区分） */
+export const MCP_DEFAULT_TAG = 'MCP';
+export const MCP_DEFAULT_TAG_COLOR = '#00BCD4';
+
 export function mergeDefaultTag(tags: string[] | null | undefined): string[] {
   const out = [...(tags ?? [])];
-  if (!out.includes('AI记账')) out.push('AI记账');
+  if (!out.includes(MCP_DEFAULT_TAG)) out.push(MCP_DEFAULT_TAG);
   return out;
 }
 
@@ -516,13 +520,13 @@ export async function ensureMcpTag(c: McpContext, ledgerExternalId: string): Pro
   const { db, userId } = c;
   const existing = await db.prepare(
     'SELECT sync_id FROM user_tag_projection WHERE user_id = ? AND name = ?'
-  ).bind(userId, 'AI记账').first<{ sync_id: string }>();
+  ).bind(userId, MCP_DEFAULT_TAG).first<{ sync_id: string }>();
   if (existing) return;
   await selfCallAdapter(c)(
     'POST',
     `/api/v1/write/ledgers/${ledgerExternalId}/tags`,
     userId,
-    { base_change_id: 0, name: 'AI记账' },
+    { base_change_id: 0, name: MCP_DEFAULT_TAG, color: MCP_DEFAULT_TAG_COLOR },
     {},
   );
 }

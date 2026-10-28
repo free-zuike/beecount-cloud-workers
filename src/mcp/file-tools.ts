@@ -435,8 +435,9 @@ export async function exportTransactions(
   }
   if (args.account_id) { q += ' AND (account_sync_id = ? OR from_account_sync_id = ? OR to_account_sync_id = ?)'; p.push(args.account_id, args.account_id, args.account_id); }
   if (args.category_id) { q += ' AND category_sync_id = ?'; p.push(args.category_id); }
-  q += ' ORDER BY happened_at, sync_id LIMIT ?';
-  p.push(50001);
+  q += ' ORDER BY happened_at, sync_id';
+  // 对齐上游：只有不带 tag_id 时才用 LIMIT 50001 提前截断（带 tag_id 需内存筛选，不能先截断）
+  if (!args.tag_id) { q += ' LIMIT ?'; p.push(50001); }
   const rows = await c.db.prepare(q).bind(...p).all<Record<string, unknown>>();
   // 对齐上游：tag_id 用 JSON 成员精确匹配（不做通配符插值），其余场景直接用查询结果
   const matched = args.tag_id
@@ -451,6 +452,8 @@ export async function exportTransactions(
     const item: Record<string, unknown> = { ...r };
     // 对齐上游：非空币种时回落到账本币种
     if (!item.currency_code) item.currency_code = ledger.currency;
+    // 对齐上游：happened_at 输出 ...+00:00（原版 isoformat）
+    if (item.happened_at) item.happened_at = `${new Date(String(item.happened_at)).toISOString().slice(0, 19)}+00:00`;
     lines.push(EXPORT_HEADERS.map(h => csvEscape(item[h as string] ?? '')).join(','));
   }
   const csv = '\uFEFF' + lines.join('\r\n');
@@ -465,11 +468,13 @@ export async function exportTransactions(
   await c.db.prepare(
     `INSERT INTO mcp_state_records (id, user_id, ledger_id, kind, revision, status, data_json, next_due_at, created_at, updated_at)
      VALUES (?, ?, ?, 'export', 1, 'ready', ?, NULL, ?, ?)`
-  ).bind(exportId, c.userId, ledger.id, JSON.stringify({ csv, sha256: sha, row_count: matched.length }), now, now).run();
+  ).bind(exportId, c.userId, ledger.id, JSON.stringify({ csv, sha256: sha, row_count: matched.length, dataset_revision: baseline }), now, now).run();
   return {
     export_id: exportId,
     row_count: matched.length,
-    revision: await revision(c.db, [ledger.id], ledger.user_id),
+    // 对齐上游：返回导出快照的基线 revision（不重算，重算会与 CSV 内容不一致）
+    dataset_revision: baseline,
+    revision: baseline,
     sha256: sha,
     resource_uri: `beecount://exports/${exportId}`,
   };
