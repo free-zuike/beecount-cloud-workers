@@ -169,20 +169,21 @@ describe('upload_attachment (execTool 集成)', () => {
   });
 
   it('rejects invalid base64 (garbage / data URL prefix / CJK / bad length)', async () => {
-    await expect(callUpload({ file_name: 'a.png', content_base64: 'not-base64!!' })).rejects.toThrow(/not valid base64/);
-    await expect(callUpload({ file_name: 'a.png', content_base64: 'data:image/png;base64,AAAA' })).rejects.toThrow(/not valid base64/);
-    await expect(callUpload({ file_name: 'a.png', content_base64: '中文' })).rejects.toThrow(/not valid base64/);
-    await expect(callUpload({ file_name: 'a.png', content_base64: 'abc' })).rejects.toThrow(/not valid base64/);
+    // 对齐上游文案：content_base64 must be valid standard Base64, without a data URL prefix
+    await expect(callUpload({ file_name: 'a.png', content_base64: 'not-base64!!' })).rejects.toThrow(/content_base64 must be valid standard Base64/);
+    await expect(callUpload({ file_name: 'a.png', content_base64: 'data:image/png;base64,AAAA' })).rejects.toThrow(/content_base64 must be valid standard Base64/);
+    await expect(callUpload({ file_name: 'a.png', content_base64: '中文' })).rejects.toThrow(/content_base64 must be valid standard Base64/);
+    await expect(callUpload({ file_name: 'a.png', content_base64: 'abc' })).rejects.toThrow(/content_base64 must be valid standard Base64/);
   });
 
   it('rejects an empty file', async () => {
-    await expect(callUpload({ file_name: 'a.png', content_base64: '' })).rejects.toThrow(/file is empty/);
+    await expect(callUpload({ file_name: 'a.png', content_base64: '' })).rejects.toThrow(/Attachment file is empty/);
   });
 
   it('rejects files over the 64 MiB upload limit', async () => {
     const big = new Uint8Array(64 * 1024 * 1024 + 1);
-    // 对齐上游文案：Attachment exceeds configured size limit
-await expect(callUpload({ file_name: 'big.png', content_base64: toBase64(big) })).rejects.toThrow(/Attachment exceeds configured size limit/);
+    // 对齐上游文案：Attachment upload too large
+await expect(callUpload({ file_name: 'big.png', content_base64: toBase64(big) })).rejects.toThrow(/Attachment upload too large/);
   }, 30000);
 
   it('requires mcp:write scope (mcp:read cannot upload)', async () => {

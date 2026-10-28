@@ -493,12 +493,20 @@ export async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_
       case 'upload_attachment': {
         const rawName = (args.file_name as string) || '';
         if (!rawName.trim()) throw new Error('file_name must not be empty');
-        const bytes = decodeStrictBase64((args.content_base64 as string) || '');
-        if (bytes.length === 0) throw new Error('file is empty');
-        // 对齐原版 attachment_max_upload_bytes = 64 MiB
-        // 对齐上游 attachment_max_upload_bytes（默认 64 MiB，可用 MAX_ATTACHMENT_BYTES 覆盖）
+        // 对齐上游 upload_attachment：先按 base64 长度粗判（4/3 膨胀），再解码，最后按字节判
         const MAX_UPLOAD_BYTES = Number((env as Record<string, unknown>).MAX_ATTACHMENT_BYTES ?? 64 * 1024 * 1024);
-        if (bytes.length > MAX_UPLOAD_BYTES) throw new Error('Attachment exceeds configured size limit');
+        const b64 = (args.content_base64 as string) || '';
+        if (b64.length > 4 * Math.floor((MAX_UPLOAD_BYTES + 2) / 3)) {
+          throw new Error('Attachment upload too large');
+        }
+        let bytes: Uint8Array;
+        try {
+          bytes = decodeStrictBase64(b64);
+        } catch {
+          throw new Error('content_base64 must be valid standard Base64, without a data URL prefix');
+        }
+        if (bytes.length === 0) throw new Error('Attachment file is empty');
+        if (bytes.length > MAX_UPLOAD_BYTES) throw new Error('Attachment upload too large');
         const { ledger: led, status: ledgerStatus } = await resolveWriteLedger(db, userId, args.ledger_id as string);
         if (ledgerStatus) { r = ledgerStatus; break; }
         if (!led) throw new Error('No ledger found');
