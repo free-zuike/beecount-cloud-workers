@@ -3,7 +3,7 @@
  * 统一走 transaction-service 的 create_many / update_one，支持幂等键与乐观修订。
  * selfCall 默认用 HTTP 自调用生产 write 路由；测试可通过 setSelfCall 注入。
  */
-import { createMany, updateOne, selfCallAdapter, setSelfCall, type SelfCallFn } from '../transaction-service';
+import { createMany, updateOne, selfCallAdapter, setSelfCall, positiveAmount, type SelfCallFn } from '../transaction-service';
 import type { McpContext } from '../types';
 
 export { setSelfCall };
@@ -137,11 +137,23 @@ export async function createCategory(
   const { ledger, status } = await resolveWriteLedger(c, args.ledger_id);
   if (status) return status;
   if (!ledger) return { status: 'no_ledger', message: 'You have no ledger yet.' };
-  const body: Record<string, unknown> = { base_change_id: 0, name: args.name, kind };
+  // 对齐上游 create_category：level = 2（有父分类）/ 1（顶层）
+  const body: Record<string, unknown> = {
+    base_change_id: 0,
+    name: args.name,
+    kind,
+    level: args.parent_name ? 2 : 1,
+  };
   if (args.parent_name) body.parent_name = args.parent_name;
   if (args.icon) body.icon = args.icon;
   const result = await selfCallAdapter(c)('POST', `/api/v1/write/ledgers/${ledger.external_id}/categories`, userId, body, {});
-  return { status: 'created', category_id: (result as Record<string, unknown>).entity_id ?? null };
+  // 对齐上游返回：sync_id / name / kind / _meta
+  return {
+    sync_id: (result as Record<string, unknown>).entity_id ?? null,
+    name: args.name,
+    kind,
+    _meta: result ?? {},
+  };
 }
 
 /** 更新预算（对齐上游 update_budget） */
@@ -150,13 +162,18 @@ export async function updateBudget(
   args: { budget_id: string; amount: number; ledger_id?: string | null },
 ): Promise<Record<string, unknown>> {
   const { db, userId } = c;
-  const { resolveWriteLedger } = await import('../transaction-service');
-  const { ledger, status } = await resolveWriteLedger(c, args.ledger_id);
-  if (status) return status;
-  if (!ledger) return { status: 'no_ledger', message: 'You have no ledger yet.' };
+  // 对齐上游 update_budget：amount>0，账本由预算自身定位（不是调用方给的 ledger_id）
+  positiveAmount(args.amount);
+  const budget = await db.prepare(
+    'SELECT ledger_id FROM read_budget_projection WHERE user_id = ? AND sync_id = ?'
+  ).bind(userId, args.budget_id).first<{ ledger_id: string }>();
+  if (!budget) throw new Error(`Budget not found: ${args.budget_id}`);
+  const ledgerRow = await db.prepare('SELECT external_id FROM ledgers WHERE id = ?')
+    .bind(budget.ledger_id).first<{ external_id: string }>();
+  if (!ledgerRow) throw new Error('Ledger missing for this budget');
   const result = await selfCallAdapter(c)(
-    'PATCH', `/api/v1/write/ledgers/${ledger.external_id}/budgets/${args.budget_id}`,
+    'PATCH', `/api/v1/write/ledgers/${ledgerRow.external_id}/budgets/${args.budget_id}`,
     userId, { base_change_id: 0, amount: args.amount }, {},
   );
-  return { status: 'updated', budget_id: args.budget_id, _meta: result };
+  return { sync_id: args.budget_id, amount: args.amount, _meta: result ?? {} };
 }
