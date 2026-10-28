@@ -11,8 +11,17 @@ import { analyticsRange, bucketKey, computeAnomalyMonths } from '../../routes/wo
 import type { McpContext, LedgerInfo, TxRow } from '../types';
 
 /** 日期边界（对齐上游 date_boundary：裸日期含当天、无时区按 UTC；end 包尾） */
-function parseDateBoundaryLocal(value: string, timeZone: string | null, end = false): Date {
-  return parseDateBoundary(value, { end, timeZone: timeZone ?? undefined });
+/**
+ * 日期边界：优先调用方给的 time_zone，否则回落 Cloud 配置时区
+ * （对齐上游 date_boundary 的 zone(None) = scheduler_timezone → cloud_timezone → UTC）
+ */
+function parseDateBoundaryLocal(
+  value: string,
+  timeZone: string | null,
+  end = false,
+  configuredTimeZone?: string | null,
+): Date {
+  return parseDateBoundary(value, { end, timeZone: timeZone ?? configuredTimeZone ?? undefined });
 }
 
 /** 序列化交易行（对齐上游 _serialize_tx） */
@@ -164,8 +173,8 @@ export async function listTransactions(
   let q = 'SELECT * FROM read_tx_projection WHERE ledger_id = ?';
   const p: unknown[] = [led.id];
   // 日期边界按查询时区折算（对齐上游 date_boundary：裸日期含当天、包尾）
-  if (opts.date_from) { q += ' AND happened_at >= ?'; p.push(parseDateBoundaryLocal(opts.date_from, timeZone).toISOString()); }
-  if (opts.date_to) { q += ' AND happened_at < ?'; p.push(parseDateBoundaryLocal(opts.date_to, timeZone, true).toISOString()); }
+  if (opts.date_from) { q += ' AND happened_at >= ?'; p.push(parseDateBoundaryLocal(opts.date_from, timeZone, false, c.configuredTimeZone).toISOString()); }
+  if (opts.date_to) { q += ' AND happened_at < ?'; p.push(parseDateBoundaryLocal(opts.date_to, timeZone, true, c.configuredTimeZone).toISOString()); }
   if (opts.tx_type) {
     if (!['income', 'expense', 'transfer'].includes(opts.tx_type)) throw new Error('Invalid tx_type');
     q += ' AND tx_type = ?'; p.push(opts.tx_type);
@@ -612,5 +621,6 @@ export async function search(
   const categoryNames = await loadCategoryNames(db, userId);
   return rows.results.map(r => serializeTx(r, categoryNames.get(r.category_sync_id ?? '') ?? null));
 }
+
 
 
