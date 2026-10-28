@@ -149,8 +149,9 @@ export async function manageLedger(
     const headers: Record<string, string> = {};
     if (idempotency_key) headers['Idempotency-Key'] = idempotency_key;
     const { db, userId } = c;
-    const result = await selfCallAdapter(c)('POST', '/api/v1/write/ledgers', userId, body, headers);
-    return { ...result, status: 'completed' };
+    // 对齐上游 manage_ledger 的 create 分支：直接返回 self-call 原始响应
+    //（不覆盖 status，否则会掩盖上游实际状态）
+    return await selfCallAdapter(c)('POST', '/api/v1/write/ledgers', userId, body, headers);
   }
   if (!ledger_id) throw new Error('An entity ID is required for update/delete');
   const ledger = await requireLedger(c, ledger_id, { owner: true });
@@ -233,10 +234,9 @@ export async function getOperation(c: McpContext, args: { operation_id: string }
     .bind(args.operation_id, c.userId)
     .first<{ ledger_id: string | null }>();
   if (!row) throw new Error('Operation not found');
-  if (row.ledger_id) {
-    const visible = new Set((await listLiveLedgers(c.db, c.userId)).map(l => l.id));
-    if (!visible.has(row.ledger_id)) throw new Error('Operation not found');
-  }
+  // 对齐上游：ledger_id 为 null 的记录也要判定（不在可见账本内 → 当不存在）
+  const visible = new Set((await listLiveLedgers(c.db, c.userId)).map(l => l.id));
+  if (!row.ledger_id || !visible.has(row.ledger_id)) throw new Error('Operation not found');
   const out = await opsGetOperation(c.db, c.userId, args.operation_id);
   if (!out) throw new Error('Operation not found');
   return out;
@@ -247,8 +247,8 @@ export async function retryOperation(c: McpContext, args: { operation_id: string
   const row = await db.prepare('SELECT * FROM mcp_write_operations WHERE id = ? AND user_id = ?')
     .bind(args.operation_id, userId).first<Record<string, unknown>>();
   if (!row) throw new Error('Operation not found');
-  // row.ledger_id 是内部 id：直接查 ledgers 表校验角色（external_id 过滤会漏）
-  const ledger = await db.prepare('SELECT * FROM ledgers WHERE id = ?').bind(String(row.ledger_id)).first<LedgerInfo>();
+  // 对齐上游 retry_operation：走可见账本（过滤软删），软删账本上的操作 → Ledger not found
+  const ledger = (await listLiveLedgers(db, userId)).find(l => l.id === String(row.ledger_id)) ?? null;
   if (!ledger) throw new Error('Ledger not found');
   const role = ledger.user_id === userId
     ? 'owner'
