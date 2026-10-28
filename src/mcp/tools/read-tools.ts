@@ -258,7 +258,7 @@ export async function getTransaction(
   const categoryName = await db.prepare(
     'SELECT name FROM user_category_projection WHERE user_id = ? AND sync_id = ?'
   ).bind(userId, tx.category_sync_id ?? '').first<{ name: string }>();
-  const out = serializeTx(tx, categoryName?.name ?? null);
+  const out = serializeTx(tx, (tx.category_name as string | null) ?? categoryName?.name ?? null);
   // 对齐上游：ledger 是账本名，另有 ledger_id 与币种回落
   out.ledger = ledger?.name ?? null;
   out.ledger_id = ledger?.external_id ?? null;
