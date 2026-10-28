@@ -17,15 +17,16 @@ function parseDateBoundaryLocal(value: string, timeZone: string | null, end = fa
 
 /** 序列化交易行（对齐上游 _serialize_tx） */
 export function serializeTx(row: TxRow, categoryName?: string | null): Record<string, unknown> {
-  // 对齐原版：happened_at 输出 ...+00:00（原版 dt.replace(tzinfo=utc).isoformat()），不是 .000Z
-  const happened = row.happened_at ? `${new Date(row.happened_at).toISOString().slice(0, 19)}+00:00` : null;
+  // 对齐原版：happened_at 输出 ...+00:00（原版 dt.replace(tzinfo=utc).isoformat()，保留毫秒）
+  const happened = row.happened_at ? `${new Date(row.happened_at).toISOString().replace(/Z$/, '+00:00')}` : null;
   let tagIds: string[] = [];
   if (row.tag_sync_ids_json) {
     try { tagIds = JSON.parse(row.tag_sync_ids_json); } catch { tagIds = []; }
   }
   return {
     sync_id: row.sync_id,
-    revision: row.source_change_id ?? 0,
+    // 对齐原版：revision 就是 source_change_id，无值时为 null（不是 0）
+    revision: row.source_change_id ?? null,
     tx_type: row.tx_type,
     amount: Number(row.amount ?? 0),
     happened_at: happened,
