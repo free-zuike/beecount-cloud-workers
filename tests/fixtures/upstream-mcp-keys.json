@@ -1,0 +1,133 @@
+{
+  "source": "upstream/main (tag 1.9.0)",
+  "functions": {
+    "analysis_tools::analyze_transactions": [
+      "calculation",
+      "currency",
+      "drill_down",
+      "filters",
+      "group_by",
+      "ledger_id",
+      "revision",
+      "time_zone"
+    ],
+    "auth::_resolve_pat_sync": [
+      "client_ip",
+      "id",
+      "name",
+      "prefix"
+    ],
+    "auth::get_mcp_call_meta_from_context": [
+      "client_ip",
+      "pat_id",
+      "pat_name",
+      "pat_prefix"
+    ],
+    "capability_tools::_manage": [
+      "base_change_id",
+      "create",
+      "delete",
+      "update"
+    ],
+    "file_tools::parse_receipt": [
+      "attachments",
+      "file_id",
+      "image",
+      "ledger_id",
+      "locale",
+      "writes_performed"
+    ],
+    "file_tools::preview_text_transactions": [
+      "writes_performed"
+    ],
+    "file_tools::preview_import_file": [
+      "plan",
+      "status"
+    ],
+    "operations::execute_operation": [
+      "code",
+      "retryable",
+      "step"
+    ],
+    "rule_tools::manage_recurring_rule": [
+      "delete",
+      "happened_at",
+      "next_occurrences",
+      "pause",
+      "resume"
+    ],
+    "rule_tools::execute_due_rules": [
+      "happened_at"
+    ],
+    "server::get_transaction": [
+      "sync_id"
+    ],
+    "server::list_categories": [
+      "kind"
+    ],
+    "server::list_accounts": [
+      "account_type"
+    ],
+    "server::list_budgets": [
+      "ledger_id"
+    ],
+    "server::get_ledger_stats": [
+      "ledger_id"
+    ],
+    "server::get_analytics_summary": [
+      "ledger_id",
+      "period",
+      "scope",
+      "tz_offset_minutes"
+    ],
+    "server::search": [
+      "limit",
+      "q"
+    ],
+    "server::update_budget": [
+      "amount",
+      "budget_id"
+    ],
+    "server::parse_and_create_from_text": [
+      "ledger_id",
+      "text"
+    ],
+    "server::attachment_resource": [
+      "file_id"
+    ],
+    "server::export_resource": [
+      "export_id"
+    ],
+    "transaction_service::prepare_transaction": [
+      "base_change_id"
+    ],
+    "transaction_service::update_one": [
+      "attachments"
+    ],
+    "workflow_tools::get_workflow_record": [
+      "ledger_id"
+    ],
+    "workflow_tools::execute_import_plan": [
+      "_reserved",
+      "created_revisions",
+      "import_plan_id",
+      "operation_id",
+      "plan_id",
+      "plan_revision",
+      "sources_linked"
+    ],
+    "workflow_tools::undo_import_plan": [
+      "plan_id"
+    ],
+    "workflow_tools::save_reconciliation_checkpoint": [
+      "confirmed_by_user_id",
+      "coverage_from",
+      "source_system"
+    ],
+    "workflow_tools::unlink_transaction_source": [
+      "before",
+      "reference_id",
+      "status"
+    ]
+  }
+}
