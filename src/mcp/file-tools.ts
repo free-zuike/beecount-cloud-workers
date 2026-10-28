@@ -13,6 +13,7 @@ import { requireLedger } from './capability-tools';
 import { uuid4, revision, parseDateBoundary } from './query-context';
 import { parseXlsx } from './xlsx';
 import { previewImport, type ImportCandidate } from './workflow-tools';
+import { selfCallAdapter } from './transaction-service';
 import type { McpContext } from './types';
 
 export interface ImportMapping {
@@ -307,33 +308,14 @@ export async function parseReceipt(c: McpContext, args: { file_id: string; local
 export async function previewTextTransactions(c: McpContext, args: { ledger_id: string; text: string; locale?: string }): Promise<Record<string, unknown>> {
   await requireLedger(c, args.ledger_id);
   const locale = args.locale ?? 'zh';
-  const { parseAiConfig, findProvider, loadLedgerContext, callAiChatJson, normalizeDrafts, extractJson, SchemaInvalidError } = await import('../routes/ai');
-  const { buildParseTxTextMessages } = await import('../services/ai/prompts');
-  const profile = await c.db.prepare('SELECT ai_config_json FROM user_profiles WHERE user_id = ?').bind(c.userId).first<{ ai_config_json: string | null }>();
-  const aiConfig = parseAiConfig(profile?.ai_config_json ?? null);
-  const provider = findProvider(aiConfig, 'text');
-  if (!provider || !provider.textModel) {
-    throw new Error('AI provider not configured. Please configure AI provider in settings.');
-  }
-  const { categories, accounts, ledgerCurrency } = await loadLedgerContext(c.db, c.userId, args.ledger_id);
-  const messages = buildParseTxTextMessages({
-    text: args.text,
-    categories,
-    accounts,
-    ledgerCurrency,
-    now: new Date(),
-    locale,
-    customPromptTemplate: (aiConfig as Record<string, unknown>).parseTxTextPrompt as string | null,
-  });
-  let drafts: Array<Record<string, unknown>>;
-  try {
-    const content = await callAiChatJson(provider.baseUrl, provider.apiKey, provider.textModel, messages);
-    drafts = normalizeDrafts(extractJson(content));
-  } catch (err) {
-    if (err instanceof SchemaInvalidError) throw new Error(`AI schema invalid: ${(err as Error).message}`);
-    throw new Error(`AI parsing failed: ${err instanceof Error ? err.message.slice(0, 200) : 'unknown'}`);
-  }
-  return { tx_drafts: drafts, writes_performed: false, ledger_id: args.ledger_id };
+  // 对齐上游 preview_text_transactions：self-call 生产 /api/v1/ai/parse-tx-text
+  // （复用服务端 prompt、字典与账本上下文，跟 parse_and_create_from_text 同一条链路）
+  const result = await selfCallAdapter(c)(
+    'POST', '/api/v1/ai/parse-tx-text', c.userId,
+    { ledger_id: args.ledger_id, text: args.text, locale },
+    {},
+  );
+  return { ...(result as Record<string, unknown> ?? {}), writes_performed: false };
 }
 
 /** CSV 基础解析（对齐上游最小解析面：逗号分隔、引号包裹、回车忽略）。 */
