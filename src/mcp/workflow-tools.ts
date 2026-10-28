@@ -533,8 +533,8 @@ export async function reconcileAccount(
   const ledger = await requireLedger(c, args.ledger_id);
   const owner = ledger.user_id;
   const ownerLedgers = (await listLiveLedgers(c.db, c.userId)).filter(l => l.user_id === owner);
-  const cutoff = parseDateBoundary(args.at, { end: true, timeZone: args.time_zone ?? undefined });
-  const balances = await getAccountBalances(c, { at: args.at, time_zone: args.time_zone ?? null, scope: 'visible' });
+  const cutoff = parseDateBoundary(args.at, { end: true, timeZone: args.time_zone ?? c.configuredTimeZone ?? undefined });
+  const balances = await getAccountBalances(c, { at: args.at, time_zone: args.time_zone ?? c.configuredTimeZone ?? null, scope: 'visible' });
   const matches = (balances.accounts as Array<Record<string, unknown>>).filter(
     item => item.account_id === args.account_id && item.owner_user_id === owner,
   );
@@ -554,8 +554,10 @@ export async function reconcileAccount(
     difference: args.actual_balance - calculated,
     reconciled: Math.abs(args.actual_balance - calculated) < 0.005,
     at: args.at,
-    cutoff_exclusive: cutoff.toISOString(),
-    time_zone: args.time_zone ?? 'Cloud default',
+    // 对齐上游 reconcile_account：isoformat（+00:00），不是 Z 结尾
+    cutoff_exclusive: cutoff.toISOString().replace(/Z$/, '+00:00'),
+    // 未给 time_zone 时用 Cloud 配置时区（对齐上游 zone(None)）
+    time_zone: args.time_zone ?? c.configuredTimeZone ?? 'Cloud default',
     coverage: {
       ledger_ids: ownerLedgers.map(l => l.external_id),
       revision: await revision(c.db, ownerLedgers.map(l => l.id), owner),
@@ -602,3 +604,4 @@ export async function unlinkTransactionSource(
   await c.db.prepare('DELETE FROM mcp_source_references WHERE id = ?').bind(args.reference_id).run();
   return { status: 'unlinked', reference_id: args.reference_id };
 }
+
