@@ -720,7 +720,7 @@ async function jsonRpcHandler(c: any) {
     if (method === 'initialize') {
       // 协商协议版本：取客户端请求版本与服务器支持版本的 LCA（最高公共版本）
       const negotiated = negotiateVersion(reqVersion);
-      return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { protocolVersion: negotiated, capabilities: { tools: {} }, serverInfo: SERVER_INFO } }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { protocolVersion: negotiated, capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: SERVER_INFO } }), { headers: { 'Content-Type': 'application/json' } });
     }
     if (method === 'server/discover') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', ttlMs: 0, cacheScope: 'private', supportedVersions: SUPPORTED_VERSIONS, capabilities: { tools: {}, resources: {}, prompts: {} }, instructions: 'BeeCount Cloud MCP server - manage your personal finance ledgers via 55 tools (imports, reconciliation, recurring rules, classification rules, files, analysis).' } }), { headers: { 'Content-Type': 'application/json' } });
     if (method === 'tools/list') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', tools: ALL_TOOL_DEFS, _meta: { 'io.modelcontextprotocol/serverInfo': SERVER_INFO } } }), { headers: { 'Content-Type': 'application/json' } });
