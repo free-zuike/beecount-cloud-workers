@@ -26,8 +26,9 @@ function setup(): ReturnType<typeof mcpCtx> {
 describe('MCP 参数校验（对齐上游 pydantic）', () => {
   it('金额拒绝 boolean（Number(true)=1 不能伪装成 1 元）', () => {
     expect(() => positiveAmount(true)).toThrow(/amount must be a number, not a boolean/);
-    expect(() => positiveAmount(0)).toThrow(/positive finite/);
-    expect(() => positiveAmount(Number.NaN)).toThrow(/positive finite/);
+    expect(() => positiveAmount(0)).toThrow(/Input should be greater than 0/);
+    expect(() => positiveAmount(Number.NaN)).toThrow(/Input should be a finite number/);
+    expect(() => positiveAmount('abc')).toThrow(/Input should be a valid number/);
     expect(positiveAmount(12.5)).toBe(12.5);
   });
 
@@ -65,7 +66,8 @@ describe('MCP 参数校验（对齐上游 pydantic）', () => {
     const c = setup();
     await expect(
       manageBudget(c, { action: 'create', ledger_id: 'L1', data: { type: 'total', amount: 0 } }),
-    ).rejects.toThrow(/amount must be a positive finite number/);
+    // 对齐上游 pydantic 文案：amount<=0 → Input should be greater than 0
+    ).rejects.toThrow(/Input should be greater than 0/);
     await expect(
       manageBudget(c, { action: 'create', ledger_id: 'L1', data: { type: 'total', amount: 10, period: 'daily' } }),
     ).rejects.toThrow(/period must be one of/);

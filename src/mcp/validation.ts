@@ -22,9 +22,19 @@ function isBlank(value: unknown): boolean {
 /** 金额：拒绝 boolean（Number(true)=1 会伪装成 1 元）、NaN/Inf、<=0 */
 export function positiveAmount(value: unknown, field = 'amount'): number {
   if (typeof value === 'boolean') throw new ValidationError(`${field} must be a number, not a boolean`);
-  const n = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(n) || n <= 0) throw new ValidationError(`${field} must be a positive finite number`);
-  return n;
+  // 对齐上游（pydantic float 校验）的分段文案
+  let raw: unknown = value;
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    if (!t || !Number.isFinite(Number(t))) throw new ValidationError('Input should be a valid number');
+    raw = Number(t);
+  }
+  if (raw === null || raw === undefined || typeof raw !== 'number') {
+    throw new ValidationError('Input should be a valid number');
+  }
+  if (!Number.isFinite(raw)) throw new ValidationError('Input should be a finite number');
+  if (raw <= 0) throw new ValidationError('Input should be greater than 0');
+  return raw;
 }
 
 /** 可选数值区间（ge/le） */

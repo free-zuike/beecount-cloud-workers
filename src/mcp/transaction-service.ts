@@ -15,14 +15,22 @@ import { McpToolError } from './types';
 
 /** 正数金额校验（对齐上游 positive_amount：拒绝 boolean/NaN/Inf/<=0） */
 export function positiveAmount(value: unknown): number {
+  // 与 validation.positiveAmount 同口径（上游 pydantic 文案）
   if (typeof value === 'boolean') {
     throw new McpToolError('amount must be a number, not a boolean');
   }
-  const n = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(n) || n <= 0) {
-    throw new McpToolError('amount must be a positive finite number');
+  let raw: unknown = value;
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    if (!t || !Number.isFinite(Number(t))) throw new McpToolError('Input should be a valid number');
+    raw = Number(t);
   }
-  return n;
+  if (raw === null || raw === undefined || typeof raw !== 'number') {
+    throw new McpToolError('Input should be a valid number');
+  }
+  if (!Number.isFinite(raw)) throw new McpToolError('Input should be a finite number');
+  if (raw <= 0) throw new McpToolError('Input should be greater than 0');
+  return raw;
 }
 
 /** 按名/ID 解析字典项（账户/分类），歧义或不存在 → 报错（对齐上游 dictionary_entry） */
