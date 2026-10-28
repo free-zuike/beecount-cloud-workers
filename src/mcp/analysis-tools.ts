@@ -125,7 +125,8 @@ export async function analyzeTransactions(c: McpContext, args: AnalyzeArgs): Pro
   const { db, userId } = c;
   const filters: TransactionFilter = args.filters ?? {};
   const groupBy = args.group_by ?? 'month';
-  const tz = args.time_zone || 'UTC';
+  // 对齐上游 analysis_tools：未给 time_zone 时用部署/Cloud 配置时区，而不是硬编码 UTC
+  const tz = args.time_zone || c.configuredTimeZone || 'UTC';
   const topN = Math.max(1, Math.min(args.top_n ?? 100, 500));
   if ((filters.min_amount ?? null) !== null && (filters.max_amount ?? null) !== null && filters.min_amount! > filters.max_amount!) {
     throw new Error('Invalid amount range');

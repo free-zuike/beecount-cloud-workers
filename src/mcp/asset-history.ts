@@ -33,11 +33,13 @@ export async function history(
 ): Promise<Record<string, unknown>> {
   const { db, userId } = c;
   const tzOffset = args.tz_offset_minutes ?? 0;
-  if (!Number.isInteger(tzOffset) || tzOffset < -720 || tzOffset > 840) {
+  // 对齐上游：只校验范围，不额外要求整数（330.5 之类上游是接受的）
+  if (!Number.isFinite(tzOffset) || tzOffset < -720 || tzOffset > 840) {
     throw new Error('Invalid timezone offset');
   }
-  // 对齐上游 asset_history.history：给了 time_zone 就按该 IANA 时区归月（覆盖固定偏移）
-  const timeZone = args.time_zone ?? null;
+  // 对齐上游 asset_history.history：给了 time_zone 就按该 IANA 时区归月（覆盖固定偏移）；
+  // 都没给则用 Cloud 配置时区（原版 zone() = 部署时区）
+  const timeZone = args.time_zone ?? c.configuredTimeZone ?? null;
   if (timeZone) {
     try { new Intl.DateTimeFormat('en-US', { timeZone }); }
     catch { throw new Error(`Invalid IANA time zone: ${JSON.stringify(timeZone)}`); }

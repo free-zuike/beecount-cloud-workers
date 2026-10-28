@@ -15,7 +15,7 @@ import { prepareTransaction, dictionaryEntry } from './transaction-service';
 import { serializeTx } from './tools/read-tools';
 import { createTransactions } from './tools/write-tools';
 import { loadRecord, saveRecord } from './workflow-tools';
-import { enumValue, maxItems, optionalInt, optionalString } from './validation';
+import { enumValue, maxItems, optionalInt, optionalNumber, optionalString } from './validation';
 import type { McpContext, LedgerInfo } from './types';
 
 export interface ReviewItem {
@@ -92,6 +92,14 @@ export async function saveClassificationRule(
   c: McpContext,
   args: { ledger_id: string; name: string; note_contains?: string | null; account_id?: string | null; tx_type?: 'income' | 'expense'; min_amount?: number | null; max_amount?: number | null; category_id: string; tags?: string[] | null; except_sync_ids?: string[]; enabled?: boolean; confirmed?: boolean; record_id?: string | null; expected_revision?: number | null; confirm?: boolean },
 ): Promise<Record<string, unknown>> {
+  // 对齐上游 ClassificationRule：name 1..255、note_contains ≤500、金额 ≥0、
+  // except_sync_ids ≤1000、tx_type 枚举
+  optionalString(args.name, 'name', { minLength: 1, maxLength: 255 });
+  optionalString(args.note_contains, 'note_contains', { maxLength: 500 });
+  optionalNumber(args.min_amount, 'min_amount', { ge: 0 });
+  optionalNumber(args.max_amount, 'max_amount', { ge: 0 });
+  maxItems(args.except_sync_ids, 1000, 'except_sync_ids');
+  enumValue(args.tx_type, ['income', 'expense'] as const, 'tx_type');
   const rule: ClassificationRule = {
     name: args.name,
     note_contains: args.note_contains ?? null,
