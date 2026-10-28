@@ -366,7 +366,8 @@ export async function getAccountBalances(
   let q = `SELECT * FROM read_tx_projection WHERE ledger_id IN (${scopeLedgers.map(() => '?').join(',')})`;
   const p: unknown[] = scopeLedgers.map(l => l.id);
   if (args.at) {
-    const boundary = parseDateBoundary(args.at, { end: true, timeZone: args.time_zone ?? undefined }).toISOString();
+    // 对齐上游 date_boundary(at, time_zone=None)：未给 time_zone 时用 Cloud 配置时区
+const boundary = parseDateBoundary(args.at, { end: true, timeZone: args.time_zone ?? c.configuredTimeZone ?? undefined }).toISOString();
     q += ' AND happened_at < ?';
     p.push(boundary);
   }
@@ -384,7 +385,8 @@ export async function getAccountBalances(
       currency: (acc.currency as string) || 'CNY',
       initial_balance: Number(acc.initial_balance ?? 0),
       income: 0, expense: 0, transfer_in: 0, transfer_out: 0,
-      hidden: Boolean(acc.hidden),
+      // 对齐上游：hidden 原样存（可为 null），输出同样不布尔化
+      hidden: acc.hidden ?? null,
     });
   }
   for (const row of rows.results) {
