@@ -445,6 +445,9 @@ export async function listBudgets(
       start_day: (b.start_day as number) ?? 1,
       enabled: Boolean(b.enabled),
       ledger_id: led.external_id,
+      // 对齐上游（routers/read/ledgers.py）：补 ledger_name 与 last_change_id
+      ledger_name: led.name ?? null,
+      last_change_id: b.last_change_id ?? null,
       currency: led.currency,
       spent,
       remaining: Math.max(0, amount - spent),

@@ -548,7 +548,9 @@ export async function resolveWriteLedger(
     ledger: null,
     status: {
       status: 'ledger_required',
-      message: 'You have multiple ledgers — refusing to guess which one to write to. Re-call this tool with an explicit `ledger_id`.',
+      // 对齐上游 ledger_required 文案：提示用候选里的 id 字段
+    message: 'You have multiple ledgers — refusing to guess which one to write to. '
+      + 'Re-call this tool with an explicit `ledger_id` (the `id` field of one of the candidates below).',
       candidates: live.map(l => ({ id: l.external_id, name: l.name })),
     },
   };
