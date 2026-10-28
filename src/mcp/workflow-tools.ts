@@ -370,8 +370,8 @@ export async function executeImportPlan(
   const { db, userId } = c;
   const planId = args.plan_id;
   const expectedRevision = args.expected_revision ?? 0;
-  // 对齐上游 execute_import_plan：未确认时只回 status（不带 plan_id）
-  if (!args.confirm) return { status: 'confirmation_required' };
+  // 对齐上游 execute_import_plan：未确认时回 status + plan_id（第 22 批误删 plan_id，此处修正）
+  if (!args.confirm) return { status: 'confirmation_required', plan_id: planId };
   const [row, ledger] = await loadRecord(c, planId, { kind: 'import_plan', write: true });
   if (row.user_id !== userId) throw new Error('Only the preview creator can execute its import operation');
   if (row.revision !== expectedRevision) throw new Error('REVISION_CONFLICT: import plan version changed');
