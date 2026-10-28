@@ -533,57 +533,29 @@ export async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_
         if (ledResult.status) { r = ledResult.status; break; }
         const led = ledResult.ledger;
         if (!led) throw new Error('No ledger found');
-        const profile = await db.prepare('SELECT ai_config_json FROM user_profiles WHERE user_id = ?').bind(userId).first<{ ai_config_json: string | null }>();
-        const aiConfig = profile?.ai_config_json ? (() => { try { return JSON.parse(profile.ai_config_json); } catch { return {}; } })() : {};
-        const providerId = aiConfig?.binding?.textProviderId;
-        const provider = aiConfig?.providers?.find((p: any) => p.id === providerId);
-        if (!provider?.apiKey || !provider?.baseUrl || !provider?.textModel) {
-          throw new Error('AI provider not configured. Please configure AI provider in settings.');
-        }
-        const systemPrompt = `你是一个专业的记账助手。请分析用户的文字描述，提取交易信息。
-请返回 JSON 格式：
-{"tx_drafts": [{"tx_type": "expense|income|transfer", "amount": 金额数字, "category_name": "分类名", "account_name": "账户名", "happened_at": "YYYY-MM-DD", "note": "备注", "currency": "币种"}]}
-规则：
-- 金额必须是数字，不是字符串
-- 尝试识别支出/收入/转账
-- 如果金额不明确，根据语境推断
-- currency 必须是 3 位大写 ISO 4217 代码(不要填货币符号或中文名)：美元/$ → USD,日元/円 → JPY,欧元/€ → EUR,英镑/£ → GBP,港币 → HKD,新台币 → TWD,韩元 → KRW,泰铢 → THB
-- 与账本主币种(${(led.currency || 'CNY').toUpperCase()})相同时留 ""；原文出现任何外币说法(中文名/符号/代码都算)就必须填，别漏
-- 例:「花了 45 美元」→ "USD"；「1200 日元」→ "JPY"；「星巴克 $6.5」→ "USD"`;
-        const aiUrl = `${provider.baseUrl.replace(/\/$/, '')}/chat/completions`;
-        const aiRes = await fetch(aiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}` },
-          body: JSON.stringify({ model: provider.textModel, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: (args.text as string) + '\n\nlocale: zh' }], temperature: 0.2, response_format: { type: 'json_object' } }),
-          signal: AbortSignal.timeout(30000),
-        });
-        if (!aiRes.ok) throw new Error(`AI API error: ${aiRes.status}`);
-        const aiData = await aiRes.json() as any;
-        const aiContent = aiData?.choices?.[0]?.message?.content || '';
-        const parsed = extractJson(aiContent);
-        const drafts = parsed?.tx_drafts;
-        if (!drafts?.length) { r = { status: 'parse_failed', message: 'AI did not extract any draft', parsed: aiContent }; break; }
+        // 对齐上游：把账本先定死，再 self-call 生产 /api/v1/ai/parse-tx-text
+        // （复用服务端 prompt 与账本上下文，跟 web/mobile 完全同一条代码路径）
+        const parsed = await selfCall(
+          'POST', '/api/v1/ai/parse-tx-text', env, baseUrl, userId,
+          { text: args.text as string, ledger_id: led.external_id, locale: 'zh' },
+        );
+        const drafts = (parsed as Record<string, unknown>)?.tx_drafts as Array<Record<string, unknown>> | undefined;
+        if (!drafts?.length) { r = { status: 'parse_failed', message: 'AI did not extract any draft', parsed }; break; }
         const draft = drafts[0];
-        const amount = draft.amount;
-        if (typeof amount !== 'number' || amount === 0) { r = { status: 'parse_failed', message: 'No valid amount in draft', parsed: draft }; break; }
-        const txType = draft.tx_type || 'expense';
-        const category = draft.category_name;
-        const account = draft.account_name;
-        const happenedAt = draft.happened_at;
-        const note = draft.note || (args.text as string);
-        // v30 多币种:AI 可能返回 currency(已被 prompt 约束为 ISO 4217 或 "")。
-        // 空串/缺省传 null → 创建时走「随账户币种 / 账本主币种」。
-        const currency = ((draft.currency || '') as string).trim().toUpperCase() || null;
+        const draftAmount = draft.amount;
+        if (typeof draftAmount !== 'number' || draftAmount === 0) {
+          r = { status: 'parse_failed', message: 'No valid amount in draft', parsed: draft }; break;
+        }
         const created = await createTxViaWriteRouter(db, env, baseUrl, userId, {
-          amount: Math.abs(amount),
-          tx_type: txType,
-          category,
-          account,
-          happened_at: happenedAt,
-          note,
+          amount: Math.abs(draftAmount),
+          tx_type: (draft.tx_type as string) || 'expense',
+          category: (draft.category_name as string | null) ?? undefined,
+          account: (draft.account_name as string | null) ?? undefined,
+          happened_at: (draft.happened_at as string | null) ?? undefined,
+          note: (draft.note as string) || (args.text as string),
           tags: null,
-          currency,
-          ledger_id: args.ledger_id as string | null | undefined,
+          currency: ((draft.currency as string | undefined) || '').trim().toUpperCase() || null,
+          ledger_id: led.external_id,
         });
         if (!created.ok) { r = created.status; break; }
         r = { status: 'created', parsed: draft, transaction: created.tx };
