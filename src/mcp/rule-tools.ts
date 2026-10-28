@@ -459,10 +459,10 @@ export async function executeDueRules(
       const ledger = await db.prepare('SELECT id, user_id, external_id, name, currency FROM ledgers WHERE id = ?')
         .bind(String(row.ledger_id)).first<LedgerInfo>();
       if (!ledger) continue;
-      // 对齐上游 execute_due_rules：每次触发重新校验用户启用状态，禁用账号不再落账
+      // 对齐上游 execute_due_rules：用户不存在/被禁用都不再落账
       const owner = await db.prepare('SELECT * FROM users WHERE id = ?')
         .bind(userId).first<Record<string, unknown>>();
-      if (owner && Number(owner.is_enabled ?? 1) === 0) continue;
+      if (!owner || Number(owner.is_enabled ?? 1) === 0) continue;
       try {
         await requireLedger(rowCtx, ledger.external_id, { write: true });
       } catch {
@@ -494,10 +494,8 @@ export async function executeDueRules(
         nextDue, nextDue ? 'active' : 'completed', new Date().toISOString(),
         String(row.id), Number(row.revision), due,
       ).run();
-      if (updated.meta.changes === 0) {
-        // 并发修改（例如暂停/编辑）：不覆盖，记录失败以允许重试
-        results.push({ rule_id: row.id, status: 'failed', error_code: 'REVISION_CONFLICT' });
-      }
+      // 对齐上游 execute_due_rules：并发修改（暂停/编辑）导致条件更新不命中时静默跳过
+      // （上游不追加额外结果条目，下一次 tick 会自然重试）
     } catch (exc: unknown) {
       const code = exc instanceof Error ? exc.name : 'Error';
       results.push({ rule_id: row.id, status: 'failed', error_code: code });
