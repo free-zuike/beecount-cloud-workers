@@ -746,8 +746,19 @@ async function jsonRpcHandler(c: any) {
     // 未知方法按规范回 404 + -32601
     return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32601, message: `Method not found: ${method}` } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
   } catch (e) {
-    // 对齐原版 Python：异常转为 JSON-RPC error（不是 isError）
-    return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32603, message: (e as Error).message } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    // 对齐原版（Python MCP SDK）：工具执行错误是 **协议成功 + isError 内容**，
+    // 不是 JSON-RPC error —— 传输层只用于协议级错误（parse/invalid request/method not found）。
+    const message = (e as Error)?.message ?? String(e);
+    return new Response(JSON.stringify({
+      jsonrpc: '2.0',
+      id,
+      result: {
+        resultType: 'complete',
+        content: [{ type: 'text', text: message }],
+        isError: true,
+        _meta: { 'io.modelcontextprotocol/serverInfo': SERVER_INFO },
+      },
+    }), { headers: { 'Content-Type': 'application/json' } });
   }
 }
 
