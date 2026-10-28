@@ -299,6 +299,51 @@ export async function previewTextTransactions(c: McpContext, args: { ledger_id: 
   return { ...(result as Record<string, unknown> ?? {}), writes_performed: false };
 }
 
+/**
+ * 列名别名表（对齐上游 services/import_data/parsers/generic.py 的 _PATTERNS）。
+ * 顺序即抢占优先级：tx_type → amount → currency → happened_at → category_name →
+ * subcategory_name → account_name → from/to account → note → tags，一列只服务一个字段。
+ */
+const SUGGEST_PATTERNS: Array<[keyof ImportMapping, RegExp]> = [
+  ['tx_type', /^(类型|type|kind|收[/／]?支|收支)$/i],
+  ['amount', /(金额|amount|amt|价格|price|总金额|发生额|sum|total)/i],
+  ['currency', /^(币种|幣種|货币|貨幣|currency|currency\s*code)$/i],
+  ['happened_at', /(交易时间|交易创建时间|创建时间|发生时间|happened|时间|日期|date|when)/i],
+  ['category_name', /(分类|交易类型|类别|商品类目|主类目|顶级分类|父类|category|cat$)/i],
+  ['subcategory_name', /(二级分类|子分类|子类目|subcategory|sub.?cat)/i],
+  ['account_name', /(账户|账号|account|支付方式|付款方式|收[/／]?付款方式|来源|出处)/i],
+  ['from_account_name', /(转出|from.?account|source.?account|出账)/i],
+  ['to_account_name', /(转入|to.?account|dest.?account|target.?account|入账)/i],
+  ['note', /(商品说明|商品|商家|对方|交易对方|备注|note|description|说明|memo)/i],
+  ['tags', /(标签|tag|label)/i],
+];
+
+/**
+ * 推断建议映射（对齐上游 GenericParser.suggest_mapping）：跳过空列名，
+ * 按优先级匹配且一列只被一个字段占用。
+ */
+export function suggestMapping(headers: string[]): ImportMapping {
+  const nonEmpty = headers.filter(h => (h ?? '').trim() !== '');
+  const taken = new Set<string>();
+  const grab = (pattern: RegExp): string | null => {
+    for (const h of nonEmpty) {
+      if (taken.has(h)) continue;
+      if (pattern.test(h)) { taken.add(h); return h; }
+    }
+    return null;
+  };
+  const out: ImportMapping = {};
+  for (const [field, pattern] of SUGGEST_PATTERNS) {
+    const hit = grab(pattern);
+    if (field === 'tags') out.tags = hit ? [hit] : [];
+    else (out as Record<string, unknown>)[field] = hit;
+  }
+  out.datetime_format = null;
+  out.strip_currency_symbols = true;
+  out.expense_is_negative = false;
+  return out;
+}
+
 /** CSV 基础解析（对齐上游最小解析面：逗号分隔、引号包裹、回车忽略）。 */
 function parseCsv(raw: string): string[][] {
   const rows: string[][] = [];
@@ -343,12 +388,16 @@ export async function previewImportFile(
     text = new TextDecoder('gbk').decode(bytes);
   }
   // 对齐上游：按扩展名/mime 选择解析器（csv/tsv → 文本解析；xlsx → 工作簿解析）
+  // 对齐上游：扩展名 / mime / ZIP 本地文件头(PK\x03\x04) 任一命中即按工作簿解析
   const isXlsx = /\.xlsx$/i.test(metadata.file_name ?? '')
-    || metadata.mime_type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    || metadata.mime_type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    || (bytes.length > 3 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04);
   const rows = isXlsx ? await parseXlsx(bytes) : parseCsv(text);
   if (rows.length < 2) throw new Error('Import file is empty or has no data rows');
   const headers = rows[0];
-  const mapping = args.mapping ?? {};
+  // 对齐上游：未给 mapping 时用解析器的建议映射（不再空映射导致全行报错）
+  const suggested = suggestMapping(headers);
+  const mapping: ImportMapping = args.mapping ?? suggested;
   const lookup = (col: string | null | undefined): { index: number; header: string } | null => {
     if (!col) return null;
     const index = headers.indexOf(col);
@@ -426,7 +475,7 @@ export async function previewImportFile(
       file_id: args.file_id,
       file_sha256: metadata.sha256,
       headers,
-      suggested_mapping: {},
+      suggested_mapping: suggested,
       total_rows: rows.length - 1,
       offset,
       next_offset: offset + dataRows.length < rows.length - 1 ? offset + dataRows.length : null,
@@ -441,7 +490,7 @@ export async function previewImportFile(
     file_id: args.file_id,
     file_sha256: metadata.sha256,
     headers,
-    suggested_mapping: {},
+    suggested_mapping: suggested,
     total_rows: rows.length - 1,
     offset,
     next_offset: offset + dataRows.length < rows.length - 1 ? offset + dataRows.length : null,
