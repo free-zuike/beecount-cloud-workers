@@ -327,17 +327,22 @@ export async function prepareTransaction(
   if (!['expense', 'income', 'transfer'].includes(kind)) throw new McpToolError('Invalid tx_type');
   const body: Record<string, unknown> = { base_change_id: 0 };
   if (!partial || raw.tx_type !== undefined) body.tx_type = kind;
-  if (!partial || raw.amount !== undefined) body.amount = positiveAmount(raw.amount);
+  // 对齐上游：显式 None（null）表示"未设置"，不当成有值
+  if (!partial || (raw.amount !== undefined && raw.amount !== null)) body.amount = positiveAmount(raw.amount);
   if (raw.happened_at !== undefined && raw.happened_at !== null) {
     body.happened_at = parseTxDatetime(String(raw.happened_at), opts.time_zone, c.configuredTimeZone ?? null);
   } else if (!partial) {
     body.happened_at = new Date().toISOString();
   }
   if (raw.note !== undefined && raw.note !== null) body.note = raw.note;
-  // 对齐上游：创建时排除标记默认 False（写入 0 而非 NULL），
-  // 这样 analyze_transactions 的 exclude_from_stats is False 语义才成立
+  // 对齐上游：创建时排除标记默认 False（写入 0 而非 NULL）；
+  // 更新时只有显式给了 true/false 才改（None 表示不改），绝不强制清零
   for (const flag of ['exclude_from_stats', 'exclude_from_budget']) {
-    body[flag] = raw[flag] === true;
+    if (!partial) {
+      body[flag] = raw[flag] === true;
+    } else if (raw[flag] !== undefined && raw[flag] !== null) {
+      body[flag] = Boolean(raw[flag]);
+    }
   }
 
   let accountCurrency: string | null | undefined;
@@ -398,7 +403,7 @@ export async function prepareTransaction(
     body.attachments = await resolveTransactionAttachmentsRef(c, ledger.id, raw.attachments as string[]);
   }
 
-  if (!partial || raw.tags !== undefined) {
+  if (!partial || (raw.tags !== undefined && raw.tags !== null)) {
     const tags = !partial ? mergeDefaultTag(raw.tags as string[] | null | undefined) : (raw.tags as string[] | undefined || []);
     body.tags = tags;
     body.tag_ids = await lookupTagSyncIds(c, ledger, tags);

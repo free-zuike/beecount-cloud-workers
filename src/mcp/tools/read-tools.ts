@@ -17,7 +17,8 @@ function parseDateBoundaryLocal(value: string, timeZone: string | null, end = fa
 
 /** 序列化交易行（对齐上游 _serialize_tx） */
 export function serializeTx(row: TxRow, categoryName?: string | null): Record<string, unknown> {
-  const happened = row.happened_at ? new Date(row.happened_at).toISOString() : null;
+  // 对齐原版：happened_at 输出 ...+00:00（原版 dt.replace(tzinfo=utc).isoformat()），不是 .000Z
+  const happened = row.happened_at ? `${new Date(row.happened_at).toISOString().slice(0, 19)}+00:00` : null;
   let tagIds: string[] = [];
   if (row.tag_sync_ids_json) {
     try { tagIds = JSON.parse(row.tag_sync_ids_json); } catch { tagIds = []; }

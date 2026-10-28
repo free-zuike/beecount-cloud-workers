@@ -409,8 +409,9 @@ const EXPORT_HEADERS = [
 
 function csvEscape(value: unknown): string {
   if (value === null || value === undefined) return '';
-  let s = String(value);
-  // 防公式注入（对齐原版：以 = + - @ \t \r 开头时前置 '）
+  // 对齐原版 csv 契约：只对字符串做公式注入防护，数字（含负数）原样输出
+  if (typeof value !== 'string') return String(value);
+  let s = value;
   if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   if (/[",\n\r]/.test(s)) s = `"${s.replace(/"/g, '""')}"`;
   return s;
