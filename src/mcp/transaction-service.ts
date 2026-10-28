@@ -523,8 +523,10 @@ export async function prepareTransaction(
   return body;
 }// ── write-tools 依赖的本地 helper（由 tools/write-tools 提供实现）──
 
+/** body 允许 FormData：对齐上游 wt._self_call 的 files= 分支（parse_receipt 要传图片二进制） */
 export type SelfCallFn = (
-  method: string, path: string, userId: string, body: Record<string, unknown>, headers: Record<string, string>,
+  method: string, path: string, userId: string,
+  body: Record<string, unknown> | FormData, headers: Record<string, string>,
 ) => Promise<Record<string, unknown>>;
 
 let selfCallImpl: SelfCallFn | null = null;

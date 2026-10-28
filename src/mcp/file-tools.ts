@@ -276,28 +276,15 @@ export async function parseReceipt(c: McpContext, args: { file_id: string; local
   if (!provider || !provider.visionModel) {
     throw new Error('Vision AI provider not configured. Please configure AI provider with vision model.');
   }
-  const { categories, accounts, ledgerCurrency } = await loadLedgerContext(c.db, c.userId, metadata.ledger_id);
-  const imageDataUrl = `data:${mime};base64,${bytesToBase64(bytes)}`;
-  const messages = buildParseTxImageMessages({
-    categories,
-    accounts,
-    ledgerCurrency,
-    now: new Date(),
-    locale,
-    imageDataUrl,
-    customPromptTemplate: (aiConfig as Record<string, unknown>).parseTxImagePrompt as string | null,
-  });
-  let drafts: Array<Record<string, unknown>>;
-  try {
-    const content = await callAiChatJson(provider.baseUrl, provider.apiKey, provider.visionModel, messages);
-    drafts = normalizeDrafts(extractJson(content));
-  } catch (err) {
-    if (err instanceof SchemaInvalidError) throw new Error(`AI schema invalid: ${(err as Error).message}`);
-    throw new Error(`AI parsing failed: ${err instanceof Error ? err.message.slice(0, 200) : 'unknown'}`);
-  }
+  // 对齐上游 parse_receipt：self-call 生产 /api/v1/ai/parse-tx-image（multipart）
+  // 复用服务端视觉 prompt 与账本上下文，不在 MCP 侧自己拼 messages
+  const form = new FormData();
+  form.set('ledger_id', String(metadata.ledger_id ?? ''));
+  form.set('locale', locale);
+  form.set('image', new Blob([bytes], { type: mime }), String(metadata.file_name ?? 'receipt'));
+  const result = await selfCallAdapter(c)('POST', '/api/v1/ai/parse-tx-image', c.userId, form, {});
   return {
-    tx_drafts: drafts,
-    image_id: metadata.file_id,
+    ...(result as Record<string, unknown> ?? {}),
     file_id: args.file_id,
     ledger_id: metadata.ledger_id,
     writes_performed: false,
