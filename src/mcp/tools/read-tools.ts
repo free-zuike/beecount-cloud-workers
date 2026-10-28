@@ -74,14 +74,15 @@ async function resolveLedger(c: McpContext, ledgerId?: string | null): Promise<L
 /** 当前用户可见账本列表（含共享成员，排除软删），对齐上游 list_ledgers 字段 */
 export async function listLedgers(c: McpContext): Promise<Array<Record<string, unknown>>> {
   const ledgers = await listLiveLedgers(c.db, c.userId);
+  // 对齐上游 list_ledgers：name/currency 原样（不回落），created_at 用 isoformat(+00:00)
   return ledgers.map(l => ({
     id: l.external_id,
-    name: l.name || l.external_id,
-    currency: l.currency || 'CNY',
+    name: l.name ?? null,
+    currency: l.currency ?? null,
     month_start_day: l.month_start_day ?? null,
     owner_user_id: l.user_id,
     shared: l.user_id !== c.userId,
-    created_at: l.created_at ?? null,
+    created_at: l.created_at ? `${new Date(String(l.created_at)).toISOString().replace(/Z$/, '+00:00')}` : null,
   }));
 }
 
@@ -113,7 +114,8 @@ export async function getActiveLedger(c: McpContext): Promise<Record<string, unk
   const live = await listLiveLedgers(c.db, c.userId);
   if (live.length === 0) return null;
   const l = live[0];
-  return { id: l.external_id, name: l.name, currency: l.currency || 'CNY' };
+  // 对齐上游 get_active_ledger：currency 原样（不回落 CNY）
+  return { id: l.external_id, name: l.name, currency: l.currency ?? null };
 }
 
 /**
