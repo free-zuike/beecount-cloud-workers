@@ -45,6 +45,21 @@ export function negotiateVersion(clientVersion: string | undefined): string {
 
 interface ToolDef { name: string; description: string; inputSchema: Record<string, unknown>; }
 
+/** 走分发层 switch 的基础工具里，需要 mcp:write 的那几个（对齐上游 server.py 的 SCOPE_MCP_WRITE） */
+export const BASE_WRITE_TOOLS = [
+  'create_transaction', 'update_transaction', 'delete_transaction', 'create_category',
+  'update_budget', 'create_transactions', 'parse_and_create_from_text', 'upload_attachment',
+];
+
+/** 基础工具（分发层 switch 分支）名称清单，供契约测试比对上游工具集 */
+export const BASE_TOOL_NAMES = [
+  'list_ledgers', 'get_active_ledger', 'list_transactions', 'get_transaction',
+  'list_categories', 'list_accounts', 'list_tags', 'list_budgets', 'get_ledger_stats',
+  'get_analytics_summary', 'search', 'upload_attachment', 'create_transaction',
+  'create_transactions', 'update_transaction', 'delete_transaction', 'create_category',
+  'update_budget', 'parse_and_create_from_text',
+];
+
 export const TOOL_DEFS: ToolDef[] = [
   { name: 'list_ledgers', description: 'List all ledgers for the authenticated BeeCount user. Returns each ledger\'s id (external_id), name, currency, and created_at. Use the returned id when calling other tools that take ledger_id.', inputSchema: { type: 'object', properties: {} } },
   { name: 'get_active_ledger', description: 'Get the user\'s primary/default ledger. Use this when the user doesn\'t specify which ledger they\'re talking about. Returns null if the user has no ledgers.', inputSchema: { type: 'object', properties: {} } },
@@ -65,6 +80,30 @@ export const TOOL_DEFS: ToolDef[] = [
   { name: 'create_category', description: 'Create a new category. Usually unnecessary - prefer existing categories. name: required. kind: expense/income/transfer, default expense. parent_name: optional, for level-2 categories.', inputSchema: { type: 'object', properties: { name: { type: 'string' }, kind: { type: 'string', enum: ['expense', 'income', 'transfer'] }, parent_name: { type: 'string' }, icon: { type: 'string' }, ledger_id: { type: 'string' } }, required: ['name'] } },
   { name: 'update_budget', description: 'Update a budget\'s amount.', inputSchema: { type: 'object', properties: { budget_id: { type: 'string' }, amount: { type: 'number' } }, required: ['budget_id', 'amount'] } },
   { name: 'parse_and_create_from_text', description: 'Have BeeCount AI parse free-form natural-language text into a transaction. Useful when the user gives a sentence like "上午星巴克花了 38" and you want BeeCount\'s own AI prompt + ledger context to do the heavy lifting. Requires the user to have configured an AI chat provider in their profile.', inputSchema: { type: 'object', properties: { text: { type: 'string' }, ledger_id: { type: 'string' } }, required: ['text'] } },
+  ...REGISTERED_TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+];
+
+/** 工具注解（对齐上游 register_capabilities 里的 _ANNOTATIONS 映射） */
+function toolAnnotations(name: string, write: boolean): Record<string, boolean> {
+  if (write) {
+    return {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: name === 'parse_and_create_from_text',
+    };
+  }
+  return { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+}
+
+/** tools/list 的完整清单：基础工具 + 注册表里注册的全部模块工具，并带上注解 */
+export const ALL_TOOL_DEFS: Array<ToolDef & { annotations?: Record<string, boolean> }> = [
+  ...BASE_TOOL_NAMES.map(name => ({
+    name,
+    description: TOOL_DEFS.find(d => d.name === name)?.description ?? '',
+    inputSchema: TOOL_DEFS.find(d => d.name === name)?.inputSchema ?? { type: 'object', properties: {} },
+    annotations: toolAnnotations(name, BASE_WRITE_TOOLS.includes(name)),
+  })),
   ...REGISTERED_TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
 ];
 
@@ -630,21 +669,6 @@ async function checkAuth(c: any): Promise<Response | null> {
   return null;
 }
 
-/** 走分发层 switch 的基础工具里，需要 mcp:write 的那几个（对齐上游 server.py 的 SCOPE_MCP_WRITE） */
-export const BASE_WRITE_TOOLS = [
-  'create_transaction', 'update_transaction', 'delete_transaction', 'create_category',
-  'update_budget', 'create_transactions', 'parse_and_create_from_text', 'upload_attachment',
-];
-
-/** 基础工具（分发层 switch 分支）名称清单，供契约测试比对上游工具集 */
-export const BASE_TOOL_NAMES = [
-  'list_ledgers', 'get_active_ledger', 'list_transactions', 'get_transaction',
-  'list_categories', 'list_accounts', 'list_tags', 'list_budgets', 'get_ledger_stats',
-  'get_analytics_summary', 'search', 'upload_attachment', 'create_transaction',
-  'create_transactions', 'update_transaction', 'delete_transaction', 'create_category',
-  'update_budget', 'parse_and_create_from_text',
-];
-
 // JSON-RPC 处理
 async function jsonRpcHandler(c: any) {
   const ae = await checkAuth(c); if (ae) return ae;
@@ -695,7 +719,7 @@ async function jsonRpcHandler(c: any) {
       return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { protocolVersion: negotiated, capabilities: { tools: {} }, serverInfo: SERVER_INFO } }), { headers: { 'Content-Type': 'application/json' } });
     }
     if (method === 'server/discover') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', ttlMs: 0, cacheScope: 'private', supportedVersions: SUPPORTED_VERSIONS, capabilities: { tools: {}, resources: {}, prompts: {} }, instructions: 'BeeCount Cloud MCP server - manage your personal finance ledgers via 55 tools (imports, reconciliation, recurring rules, classification rules, files, analysis).' } }), { headers: { 'Content-Type': 'application/json' } });
-    if (method === 'tools/list') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', tools: TOOL_DEFS, _meta: { 'io.modelcontextprotocol/serverInfo': SERVER_INFO } } }), { headers: { 'Content-Type': 'application/json' } });
+    if (method === 'tools/list') return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', tools: ALL_TOOL_DEFS, _meta: { 'io.modelcontextprotocol/serverInfo': SERVER_INFO } } }), { headers: { 'Content-Type': 'application/json' } });
     if (method === 'resources/list') {
       return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', resources: [
         { uri: 'beecount://attachments/{file_id}', name: 'Attachment original bytes', mimeType: 'application/octet-stream', description: 'Original attachment bytes; ledger membership and mcp:read scope are checked on every read.' },
@@ -824,6 +848,7 @@ router.post('/tools/call', async (c) => {
 });
 
 export default router;
+
 
 
 
