@@ -184,7 +184,16 @@ export async function getBookkeepingContext(
     server_time: `${new Date().toISOString().slice(0, 19)}+00:00`,
     time_zone: c.configuredTimeZone ?? 'UTC',
     pat_scopes: [...(c.scopes ?? [])].sort(),
-    ledgers: ledgers.map(l => ({ id: l.external_id, name: l.name, currency: l.currency || 'CNY' })),
+    // 对齐上游（经 rt.list_ledgers）：补 month_start_day / owner_user_id / shared / created_at
+    ledgers: ledgers.map(l => ({
+      id: l.external_id,
+      name: l.name,
+      currency: l.currency || 'CNY',
+      month_start_day: l.month_start_day ?? null,
+      owner_user_id: l.user_id,
+      shared: l.user_id !== c.userId,
+      created_at: l.created_at ? `${new Date(String(l.created_at)).toISOString().slice(0, 19)}+00:00` : null,
+    })),
     selected_ledger_id: selected?.external_id ?? null,
     selection_required: selected === null && ledgers.length > 1,
     // 对齐上游 capabilities 清单（顺序与命名一致）
@@ -218,7 +227,30 @@ export async function getBookkeepingContext(
       .prepare('SELECT role FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
       .bind(selected.id, c.userId)
       .first<{ role: string | null }>();
-    out.dictionary = { categories, accounts, tags, budgets };
+    // 对齐上游 shared_resources.model_dump：字典用 sync_id 键名，并带 owner_user_id
+    out.dictionary = {
+      owner_user_id: selected.user_id,
+      categories: categories.map(x => ({
+        sync_id: x.id ?? null,
+        name: x.name ?? null,
+        kind: x.kind ?? null,
+        icon: x.icon ?? null,
+        icon_type: x.icon_type ?? null,
+        icon_cloud_file_id: x.icon_cloud_file_id ?? null,
+        icon_cloud_sha256: x.icon_cloud_sha256 ?? null,
+        sort_order: x.sort_order ?? null,
+        parent_sync_id: x.parent_id ?? null,
+      })),
+      accounts: accounts.map(x => ({
+        sync_id: x.id ?? null,
+        name: x.name ?? null,
+        account_type: x.account_type ?? null,
+        currency: x.currency ?? null,
+        note: x.note ?? null,
+      })),
+      tags: tags.map(x => ({ sync_id: x.id ?? null, name: x.name ?? null, color: x.color ?? null })),
+      budgets,
+    };
     out.currency = selected.currency;
     out.month_start_day = selected.month_start_day ?? null;
     out.role = selected.user_id === c.userId ? 'owner' : (member?.role ?? null);
