@@ -468,7 +468,7 @@ const LEGACY_TOOLS: Record<string, LegacyHandler> = {
 export async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_TIMEZONE?: string; TZ?: string; R2?: R2Bucket }, baseUrl: string, userId: string, scopes: string[], name: string, args: Record<string, unknown>, patId: string, patPrefix: string, patName: string, clientIp?: string | null): Promise<{ content: { type: string; text: string }[] }> {
   const t = Date.now();
   const registeredWrite = new Set(REGISTERED_TOOLS.filter(tool => tool.scope === 'write').map(tool => tool.name));
-  const isWrite = ['create_transaction', 'update_transaction', 'delete_transaction', 'create_category', 'update_budget', 'create_transactions', 'parse_and_create_from_text', 'upload_attachment'].includes(name) || registeredWrite.has(name);
+  const isWrite = BASE_WRITE_TOOLS.includes(name) || registeredWrite.has(name);
   if (isWrite && !scopes.includes('mcp:write')) throw new Error('PAT missing required scope: mcp:write');
   // 对齐上游 require_mcp_scope：读工具必须 mcp:read，只允许 mcp:write 的 PAT 不能读数据
   if (!isWrite && !scopes.includes('mcp:read')) throw new Error('PAT missing required scope: mcp:read');
@@ -620,6 +620,21 @@ async function checkAuth(c: any): Promise<Response | null> {
   c.env.DB.prepare(`UPDATE personal_access_tokens SET last_used_at = ?, last_used_ip = ? WHERE id = ?`).bind(nowUtc(), ip, p.id).run().catch(() => {});
   return null;
 }
+
+/** 走分发层 switch 的基础工具里，需要 mcp:write 的那几个（对齐上游 server.py 的 SCOPE_MCP_WRITE） */
+export const BASE_WRITE_TOOLS = [
+  'create_transaction', 'update_transaction', 'delete_transaction', 'create_category',
+  'update_budget', 'create_transactions', 'parse_and_create_from_text', 'upload_attachment',
+];
+
+/** 基础工具（分发层 switch 分支）名称清单，供契约测试比对上游工具集 */
+export const BASE_TOOL_NAMES = [
+  'list_ledgers', 'get_active_ledger', 'list_transactions', 'get_transaction',
+  'list_categories', 'list_accounts', 'list_tags', 'list_budgets', 'get_ledger_stats',
+  'get_analytics_summary', 'search', 'upload_attachment', 'create_transaction',
+  'create_transactions', 'update_transaction', 'delete_transaction', 'create_category',
+  'update_budget', 'parse_and_create_from_text',
+];
 
 // JSON-RPC 处理
 async function jsonRpcHandler(c: any) {

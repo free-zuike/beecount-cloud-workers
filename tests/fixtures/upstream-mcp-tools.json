@@ -1,0 +1,349 @@
+{
+  "source": "TNT-Likely/BeeCount-Cloud (upstream/main, tag 1.9.0)",
+  "generated_by": "scripts derived from src/mcp/server.py + *_FUNCTIONS lists",
+  "tool_count": 57,
+  "tools": [
+    {
+      "name": "analyze_transactions",
+      "scope": "read",
+      "module": "analysis_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "apply_classification_rule",
+      "scope": "write",
+      "module": "rule_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "create_category",
+      "scope": "write",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "create_transaction",
+      "scope": "write",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "create_transactions",
+      "scope": "write",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "delete_transaction",
+      "scope": "write",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "execute_classification_preview",
+      "scope": "write",
+      "module": "rule_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "execute_import_plan",
+      "scope": "write",
+      "module": "workflow_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "export_transactions",
+      "scope": "read",
+      "module": "file_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "get_account_balances",
+      "scope": "read",
+      "module": "capability_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "get_active_ledger",
+      "scope": "read",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "get_analytics_summary",
+      "scope": "read",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "get_bookkeeping_context",
+      "scope": "read",
+      "module": "capability_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "get_ledger_stats",
+      "scope": "read",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "get_net_worth_history",
+      "scope": "read",
+      "module": "capability_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "get_operation",
+      "scope": "read",
+      "module": "capability_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "get_transaction",
+      "scope": "read",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "get_workflow_record",
+      "scope": "read",
+      "module": "workflow_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "link_transaction_source",
+      "scope": "write",
+      "module": "workflow_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "list_accounts",
+      "scope": "read",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "list_attachments",
+      "scope": "read",
+      "module": "file_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "list_budgets",
+      "scope": "read",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "list_categories",
+      "scope": "read",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "list_changes",
+      "scope": "read",
+      "module": "capability_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "list_ledger_members",
+      "scope": "read",
+      "module": "capability_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "list_ledgers",
+      "scope": "read",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "list_operations",
+      "scope": "read",
+      "module": "capability_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "list_tags",
+      "scope": "read",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "list_transaction_sources",
+      "scope": "read",
+      "module": "workflow_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "list_transactions",
+      "scope": "read",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "list_workflow_records",
+      "scope": "read",
+      "module": "workflow_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "manage_account",
+      "scope": "write",
+      "module": "capability_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "manage_budget",
+      "scope": "write",
+      "module": "capability_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "manage_category",
+      "scope": "write",
+      "module": "capability_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "manage_ledger",
+      "scope": "write",
+      "module": "capability_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "manage_recurring_rule",
+      "scope": "write",
+      "module": "rule_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "manage_tag",
+      "scope": "write",
+      "module": "capability_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "parse_and_create_from_text",
+      "scope": "write",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "parse_receipt",
+      "scope": "write",
+      "module": "file_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "preview_import",
+      "scope": "write",
+      "module": "workflow_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "preview_import_file",
+      "scope": "write",
+      "module": "file_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "preview_text_transactions",
+      "scope": "write",
+      "module": "file_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "read_attachment",
+      "scope": "read",
+      "module": "file_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "read_attachment_resource",
+      "scope": "read",
+      "module": "server",
+      "kind": "resource"
+    },
+    {
+      "name": "read_export_resource",
+      "scope": "read",
+      "module": "server",
+      "kind": "resource"
+    },
+    {
+      "name": "reconcile_account",
+      "scope": "read",
+      "module": "workflow_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "retry_operation",
+      "scope": "write",
+      "module": "capability_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "run_due_recurring_rules",
+      "scope": "write",
+      "module": "rule_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "save_classification_rule",
+      "scope": "write",
+      "module": "rule_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "save_reconciliation_checkpoint",
+      "scope": "write",
+      "module": "workflow_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "save_review_item",
+      "scope": "write",
+      "module": "rule_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "search",
+      "scope": "read",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "undo_import_plan",
+      "scope": "write",
+      "module": "workflow_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "unlink_transaction_source",
+      "scope": "write",
+      "module": "workflow_tools",
+      "kind": "tool"
+    },
+    {
+      "name": "update_budget",
+      "scope": "write",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "update_transaction",
+      "scope": "write",
+      "module": "server",
+      "kind": "tool"
+    },
+    {
+      "name": "upload_attachment",
+      "scope": "write",
+      "module": "server",
+      "kind": "tool"
+    }
+  ]
+}
