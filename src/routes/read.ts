@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 读路由模块 - 实现 BeeCount Cloud 只读查询接口
  *
  * 参考原版 BeeCount-Cloud (Python/FastAPI) 的 /read/* 端点：
@@ -22,6 +22,7 @@
 import { Hono } from 'hono';
 
 import { normalizeTransactionAccounts } from '../lib/transaction-normalization';
+import { getRateSnapshot } from '../mcp/exchange-rate';
 import { serverLogger } from '../lib/logger';
 import { z } from 'zod';
 
@@ -1852,23 +1853,17 @@ readRouter.get('/exchange-rates', async (c) => {
   }
 
   try {
-    const response = await fetch(`https://api.exchangerate-api.com/v4/latest/${b}`);
-    if (!response.ok) throw new Error(`upstream status ${response.status}`);
-    const data = await response.json() as { rates: Record<string, number>; date: string };
-    const fetchedAt = new Date().toISOString();
-    const ratesJson = JSON.stringify(data.rates);
-    await db.prepare(
-      `INSERT OR REPLACE INTO exchange_rate_cache (base_currency, rate_date, source, payload_json, fetched_at)
-       VALUES (?, ?, 'exchangerate-api.com', ?, ?)`
-    ).bind(b, data.date, ratesJson, fetchedAt).run();
-
+    // 对齐上游 services/exchange_rate/fetcher：配置上游 → 三个 jsDelivr 镜像 → frankfurter。
+    // 与 MCP 侧共用同一条取价链（原来这里是单源 api.exchangerate-api.com，与上游不一致）
+    const snap = await getRateSnapshot(db, b, env as unknown as Record<string, unknown>);
+    if (!snap) throw new Error('Exchange rate fetch failed');
     return c.json({
       base: b,
-      rate_date: data.date,
-      source: 'exchangerate-api.com',
-      fetched_at: fetchedAt,
+      rate_date: snap.rate_date,
+      source: snap.source,
+      fetched_at: snap.fetched_at,
       stale: false,
-      rates: Object.fromEntries(Object.entries(data.rates).map(([k, v]) => [k, String(v)])),
+      rates: Object.fromEntries(Object.entries(snap.rates).map(([k, v]) => [k, String(v)])),
     });
   } catch {
     // 上游失败:有过期缓存 → stale=true 返回旧数据(对齐上游);无缓存 → 503
@@ -1879,8 +1874,9 @@ readRouter.get('/exchange-rates', async (c) => {
         source: cached.source,
         fetched_at: cached.fetched_at,
         stale: true,
-        rates: parsePayload(cached.payload_json),
-      });
+        // 缓存里存的是数值（对齐上游 fetcher），对外仍按字符串输出
+        rates: Object.fromEntries(Object.entries(parsePayload(cached.payload_json)).map(([k, v]) => [k, String(v)])),
+        });
     }
     return c.json({ error: 'Exchange rate fetch failed' }, 503);
   }
@@ -2093,3 +2089,4 @@ readRouter.get('/workspace/attachments', async (c) => {
 });
 
 export default readRouter;
+

@@ -20,12 +20,19 @@ const authHeaders = () => ({
   Authorization: `Bearer ${token}`,
 });
 
+/** 取价链是「jsDelivr 镜像(fawazahmed0) → frankfurter」，mock 按 URL 返回对应形状 */
 function stubFetchOk(rates: Record<string, string>, date = '2026-06-10') {
-  const fn = vi.fn(async (_url: string) => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ rates, date }),
-  }));
+  const fn = vi.fn(async (url: string) => {
+    const u = String(url);
+    if (u.includes('jsdelivr')) {
+      const base = (u.match(/currencies\/([a-z0-9]+)\.min\.json/) ?? [, 'cny'])[1];
+      // fawazahmed0 形状：data[base] = { QUOTE: rate }
+      const inner: Record<string, number> = {};
+      for (const [k, v] of Object.entries(rates)) inner[k.toUpperCase()] = Number(v);
+      return { ok: true, status: 200, json: async () => ({ date, [base]: inner }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ rates, date }) };
+  });
   vi.stubGlobal('fetch', fn);
   return fn;
 }
@@ -47,8 +54,9 @@ describe('GET /read/exchange-rates 汇率代理契约', () => {
     expect(b1.stale).toBe(false);
     expect(typeof b1.rates).toBe('object');
     expect(b1.rates.USD).toBe('0.1477');
+    // 取价链第一个源就是 jsDelivr 镜像，命中即停
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe('https://api.exchangerate-api.com/v4/latest/CNY');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('jsdelivr');
 
     const r2 = await env.app.request('/api/v1/read/exchange-rates?base=CNY', { headers: authHeaders() });
     expect(r2.status).toBe(200);
@@ -69,7 +77,8 @@ describe('GET /read/exchange-rates 汇率代理契约', () => {
     expect(r2.status).toBe(200);
     const b2 = await r2.json() as any;
     expect(b2.stale).toBe(true);
-    expect(b2.rates.USD).toBe('0.1400');
+    // 缓存按数值存（对齐上游 fetcher），输出转字符串
+    expect(b2.rates.USD).toBe('0.14');
   });
 
   it('无缓存且上游挂掉时返回 503', async () => {
