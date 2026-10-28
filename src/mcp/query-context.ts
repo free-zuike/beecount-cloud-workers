@@ -188,7 +188,8 @@ export function timeZoneOffsetMinutes(tz: string, at: Date): number {
 
 /** HMAC-SHA256 签名续传令牌（sig || payload，base64url 去 padding）。 */
 export function encodeCursor(payload: CursorPayload, jwtSecret: string): string {
-  const data = Buffer.from(JSON.stringify(payload), 'utf8');
+  // 对齐上游 encode_cursor：json.dumps(sort_keys=True, separators=(",",":")) → 规范 JSON
+  const data = Buffer.from(stableStringify(payload), 'utf8');
   const sig = createHmac('sha256', jwtSecret).update(data).digest();
   return Buffer.concat([sig, data]).toString('base64url').replace(/=+$/, '');
 }
@@ -225,7 +226,9 @@ export function fingerprint(value: unknown): string {
 
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return JSON.stringify(value);
+    // 对齐上游 default=str：Date 等非 JSON 标量序列化为其字符串形式
+    if (value instanceof Date) return JSON.stringify(value.toISOString());
+    return JSON.stringify(value ?? null);
   }
   const obj = value as Record<string, unknown>;
   const keys = Object.keys(obj).sort();
