@@ -10,6 +10,7 @@
 import { requireLedger } from './capability-tools';
 import { revision, parseDateBoundary } from './query-context';
 import { listLiveLedgers } from './transaction-service';
+import { enumValue, maxItems, optionalNumber } from './validation';
 import type { McpContext } from './types';
 
 export interface TransactionFilter {
@@ -33,6 +34,30 @@ interface AnalyzeArgs {
   time_zone?: string | null;
   comparison?: TransactionFilter | null;
   top_n?: number;
+}
+
+/**
+ * filters 校验（对齐上游 TransactionFilter：ids ≤100、金额 ≥0、tx_type 枚举、未知键拒绝）
+ */
+const FILTER_KEYS = [
+  'date_from', 'date_to', 'tx_type', 'category_ids', 'account_ids', 'tag_ids',
+  'member_user_ids', 'note_contains', 'min_amount', 'max_amount', 'include_excluded',
+] as const;
+
+export function validateTransactionFilter(filters: TransactionFilter | null | undefined, label = 'filters'): void {
+  if (!filters) return;
+  for (const key of Object.keys(filters)) {
+    if (!FILTER_KEYS.includes(key as typeof FILTER_KEYS[number])) {
+      throw new Error(`${label} received an unknown field: ${key}`);
+    }
+  }
+  enumValue(filters.tx_type, ['income', 'expense', 'transfer'] as const, `${label}.tx_type`);
+  maxItems(filters.category_ids, 100, `${label}.category_ids`);
+  maxItems(filters.account_ids, 100, `${label}.account_ids`);
+  maxItems(filters.tag_ids, 100, `${label}.tag_ids`);
+  maxItems(filters.member_user_ids, 100, `${label}.member_user_ids`);
+  optionalNumber(filters.min_amount, `${label}.min_amount`, { ge: 0 });
+  optionalNumber(filters.max_amount, `${label}.max_amount`, { ge: 0 });
 }
 
 function conditionsSql(filters: TransactionFilter, ledgerId: string, tz: string): { sql: string; params: unknown[] } {
@@ -124,6 +149,8 @@ function isoWeekKey(d: Date): string {
 export async function analyzeTransactions(c: McpContext, args: AnalyzeArgs): Promise<Record<string, unknown>> {
   const { db, userId } = c;
   const filters: TransactionFilter = args.filters ?? {};
+  validateTransactionFilter(filters, 'filters');
+  validateTransactionFilter(args.comparison ?? null, 'comparison');
   const groupBy = args.group_by ?? 'month';
   // 对齐上游 analysis_tools：未给 time_zone 时用部署/Cloud 配置时区，而不是硬编码 UTC
   const tz = args.time_zone || c.configuredTimeZone || 'UTC';
