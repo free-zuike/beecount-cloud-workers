@@ -7,6 +7,7 @@
  * - transaction_row / dictionary_entry：跨账本定位与字典消歧
  */
 import { uuid4, fingerprint, wallTimeCandidates } from './query-context';
+import { enumValue } from './validation';
 import { saveOperation, executeOperation, findOperation, type OperationOut, type OperationStep } from './operations';
 import type { McpContext, LedgerInfo } from './types';
 import { McpToolError } from './types';
@@ -239,6 +240,8 @@ export async function createMany(
   const normalized: Array<Record<string, unknown>> = [];
   for (let index = 0; index < transactions.length; index++) {
     try {
+      // 对齐上游 BatchTransactionItem：extra="forbid" + amount>0 + tx_type 枚举 + native_amount>0
+      validateBatchItem(transactions[index], index);
       normalized.push(await prepareTransaction(c, ledger, transactions[index], { time_zone: opts.time_zone }));
     } catch (exc: unknown) {
       throw new McpToolError(`transactions[${index}]: ${exc instanceof Error ? exc.message : String(exc)}`);
@@ -278,6 +281,32 @@ export async function createMany(
   });
   const outcome = await executeOperation(db, row, userId, selfCallAdapter(c));
   return finalizeCreateMany(outcome, ledger, opts);
+}
+
+/**
+ * 批量条目校验（对齐上游 schemas.BatchTransactionItem：extra="forbid"）。
+ * 原版靠 pydantic 在入口拦住非法条目，TS 侧此前零校验。
+ */
+const BATCH_ITEM_KEYS = [
+  'amount', 'tx_type', 'happened_at', 'note', 'category', 'account', 'tags', 'currency',
+  'category_id', 'account_id', 'from_account_id', 'to_account_id', 'from_account', 'to_account',
+  'native_amount', 'exclude_from_stats', 'exclude_from_budget', 'attachments',
+] as const;
+
+function validateBatchItem(item: Record<string, unknown>, index: number): void {
+  if (!item || typeof item !== 'object') {
+    throw new McpToolError(`transactions[${index}] must be an object`);
+  }
+  for (const key of Object.keys(item)) {
+    if (!BATCH_ITEM_KEYS.includes(key as typeof BATCH_ITEM_KEYS[number])) {
+      throw new McpToolError(`transactions[${index}] received an unknown field: ${key}`);
+    }
+  }
+  if (item.amount !== undefined && item.amount !== null) positiveAmount(item.amount);
+  if (item.native_amount !== undefined && item.native_amount !== null) positiveAmount(item.native_amount);
+  if (item.tx_type !== undefined && item.tx_type !== null) {
+    enumValue(item.tx_type, ['expense', 'income', 'transfer'] as const, 'tx_type');
+  }
 }
 
 async function finalizeCreateMany(
@@ -567,8 +596,9 @@ async function resolveTransactionAttachmentsRef(
   return ids.map((fileId, index) => {
     const row = byId.get(fileId)!;
     return {
-      fileName: `sha_${row.sha256}.${extFromName(row.file_name)}`,
-      originalName: row.file_name ?? fileId,
+      // 对齐上游 attachments.py：fileName = "<id>_<原文件名>"，originalName 回落 attachment.bin
+      fileName: `${row.id}_${row.file_name || 'attachment.bin'}`,
+      originalName: row.file_name || 'attachment.bin',
       fileSize: row.size_bytes,
       mimeType: row.mime_type ?? 'application/octet-stream',
       cloudFileId: row.id,
