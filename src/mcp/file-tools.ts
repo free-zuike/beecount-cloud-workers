@@ -267,15 +267,6 @@ export async function parseReceipt(c: McpContext, args: { file_id: string; local
   const { metadata, bytes } = await attachmentBytes(c, { file_id: args.file_id });
   const mime = metadata.mime_type.toLowerCase();
   const locale = args.locale ?? 'zh';
-  const { parseAiConfig, findProvider, loadLedgerContext, callAiChatJson, normalizeDrafts, extractJson, SchemaInvalidError } = await import('../routes/ai');
-  const { buildParseTxImageMessages } = await import('../services/ai/prompts');
-  const { bytesToBase64 } = await import('../lib/base64');
-  const profile = await c.db.prepare('SELECT ai_config_json FROM user_profiles WHERE user_id = ?').bind(c.userId).first<{ ai_config_json: string | null }>();
-  const aiConfig = parseAiConfig(profile?.ai_config_json ?? null);
-  const provider = findProvider(aiConfig, 'vision');
-  if (!provider || !provider.visionModel) {
-    throw new Error('Vision AI provider not configured. Please configure AI provider with vision model.');
-  }
   // 对齐上游 parse_receipt：self-call 生产 /api/v1/ai/parse-tx-image（multipart）
   // 复用服务端视觉 prompt 与账本上下文，不在 MCP 侧自己拼 messages
   const form = new FormData();
