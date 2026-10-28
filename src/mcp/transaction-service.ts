@@ -46,14 +46,14 @@ export async function dictionaryEntry(
     where.push('kind = ?');
     params.push(kind);
   }
-  const rows = await db.prepare(`SELECT * FROM ${table} WHERE ${where.join(' AND ')} LIMIT 3`).bind(...params).all<Record<string, unknown>>();
+  // 对齐上游 dictionary_entry：文案用模型类名、歧义时带 repr 引号、LIMIT 2
+  const label = table === 'user_account_projection' ? 'UserAccountProjection' : 'UserCategoryProjection';
+  const rows = await db.prepare(`SELECT * FROM ${table} WHERE ${where.join(' AND ')} LIMIT 2`).bind(...params).all<Record<string, unknown>>();
   if (rows.results.length === 0) {
-    const label = table === 'user_account_projection' ? 'Account' : 'Category';
     throw new McpToolError(`${label} not found: ${identifier || name}`);
   }
   if (rows.results.length !== 1) {
-    const label = table === 'user_account_projection' ? 'Account' : 'Category';
-    throw new McpToolError(`Ambiguous ${label}: ${name || identifier}; use its id`);
+    throw new McpToolError(`Ambiguous ${label}: ${JSON.stringify(name || identifier)}; use its id`);
   }
   if (name && rows.results[0].name !== name) {
     throw new McpToolError('Name and identifier refer to different entities');
