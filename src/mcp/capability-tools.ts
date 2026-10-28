@@ -174,6 +174,8 @@ export async function getBookkeepingContext(
   const selected = args.ledger_id
     ? (await listLiveLedgers(c.db, c.userId, args.ledger_id))[0] ?? null
     : ledgers.length === 1 ? ledgers[0] : null;
+  // 对齐上游：显式给了 ledger_id 却解析不到 → Ledger not found（不要静默降级成"未选中"）
+  if (args.ledger_id && !selected) throw new Error('Ledger not found');
   const out: Record<string, unknown> = {
     // 对齐上游：server_time 用 isoformat（+00:00），time_zone 用部署/Cloud 配置时区
     server_time: `${new Date().toISOString().slice(0, 19)}+00:00`,

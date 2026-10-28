@@ -60,6 +60,23 @@ export function validateTransactionFilter(filters: TransactionFilter | null | un
   optionalNumber(filters.max_amount, `${label}.max_amount`, { ge: 0 });
 }
 
+/** 回显用的完整 filters（对齐上游 model_dump：未传的键也要出现，值为 null/[]） */
+function normalizedFilters(filters: TransactionFilter): Record<string, unknown> {
+  return {
+    date_from: filters.date_from ?? null,
+    date_to: filters.date_to ?? null,
+    tx_type: filters.tx_type ?? null,
+    category_ids: filters.category_ids ?? [],
+    account_ids: filters.account_ids ?? [],
+    tag_ids: filters.tag_ids ?? [],
+    member_user_ids: filters.member_user_ids ?? [],
+    note_contains: filters.note_contains ?? null,
+    min_amount: filters.min_amount ?? null,
+    max_amount: filters.max_amount ?? null,
+    include_excluded: filters.include_excluded ?? false,
+  };
+}
+
 function conditionsSql(filters: TransactionFilter, ledgerId: string, tz: string): { sql: string; params: unknown[] } {
   let sql = ' WHERE ledger_id = ?';
   const params: unknown[] = [ledgerId];
@@ -272,7 +289,8 @@ export async function analyzeTransactions(c: McpContext, args: AnalyzeArgs): Pro
     ledger_id: args.ledger_id,
     currency: ledger.currency,
     revision: baseline,
-    filters: filters,
+    // 对齐上游 filters.model_dump(mode="json")：回显完整键集合（未传的用默认值），不是原样回显入参
+    filters: normalizedFilters(filters),
     time_zone: tz,
     group_by: groupBy,
     calculation: {
