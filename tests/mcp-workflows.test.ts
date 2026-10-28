@@ -1,4 +1,4 @@
-// 移植上游 tests/test_mcp_workflows.py（#133 导入/对账/周期/分类规则/文件/分析工作流，17 例）：
+﻿// 移植上游 tests/test_mcp_workflows.py（#133 导入/对账/周期/分类规则/文件/分析工作流，17 例）：
 // 导入计划预览→执行→来源链接→安全撤销、相似度审查、过期预览拒绝、修订乐观锁、
 // 对账与检查点、CSV 文件导入导出与权限、组合分析本地日期/标记、月末周期规则幂等、
 // 失效规则不阻塞、DST 间隙/歧义策略、分类规则冻结版本、保留来源互斥、净资产多币种、
@@ -110,18 +110,18 @@ describe('MCP workflows（移植上游 test_mcp_workflows.py）', () => {
 
   it('相似导入需审查，精确来源复用后跳过', async () => {
     const original = asObj<{ sync_id: string }>(await createTransaction(ctx(), { amount: 10, happened_at: '2026-01-02T12:00:00+08:00' }));
-    const plan = asObj<{ status: string; id: string; revision: number; data: { items: Array<Record<string, unknown>> } }>(
+    const plan = asObj<{ status: string; id: string; revision: number; data: string }>(
       await workflows.previewImport(ctx(), { ledger_id: 'L1', candidates: [candidate()] }),
     );
     expect(plan.status).toBe('needs_review');
-    expect(plan.data.items[0].status).toBe('review_required');
+    expect((JSON.parse(plan.data as string) as { items: Array<{ status: string }> }).items[0].status).toBe('review_required');
     await expect(workflows.executeImportPlan(ctx(), { plan_id: plan.id, expected_revision: plan.revision, confirm: true }))
       .rejects.toThrow(/unresolved/);
     await workflows.linkTransactionSource(ctx(), { ledger_id: 'L1', sync_id: original.sync_id, source: { source_system: 'synthetic-bank', source_id: 'source-1' } });
-    const repeated = asObj<{ id: string; revision: number; data: { items: Array<Record<string, unknown>> } }>(
+    const repeated = asObj<{ id: string; revision: number; data: string }>(
       await workflows.previewImport(ctx(), { ledger_id: 'L1', candidates: [candidate()] }),
     );
-    expect(repeated.data.items[0].status).toBe('existing');
+    expect((JSON.parse(repeated.data as string) as { items: Array<{ status: string }> }).items[0].status).toBe('existing');
     const outcome = asObj<{ status: string; sync_ids: string[] }>(
       await workflows.executeImportPlan(ctx(), { plan_id: repeated.id, expected_revision: repeated.revision, confirm: true }),
     );
@@ -248,8 +248,8 @@ describe('MCP workflows（移植上游 test_mcp_workflows.py）', () => {
     expect(first[0].operation.created_count).toBe(1);
     expect(asObj<Array<unknown>>(await rules.executeDueRules(ctx(), { now: '2026-02-28T02:00:00Z' }))).toEqual([]);
     expect(asObj<{ total: number }>(await listTransactions(ctx(), {})).total).toBe(2);
-    const current = asObj<{ data: { executed_count: number } }>(await workflows.getWorkflowRecord(ctx(), { record_id: saved.id }));
-    expect(current.data.executed_count).toBe(2);
+    const current = asObj<{ data: string }>(await workflows.getWorkflowRecord(ctx(), { record_id: saved.id }));
+    expect((JSON.parse(current.data as string) as { executed_count: number }).executed_count).toBe(2);
     await rules.manageRecurringRule(ctx(), {
       action: 'pause', ledger_id: 'L1', record_id: saved.id,
       expected_revision: asObj<{ revision: number }>(current).revision, confirm: true,
@@ -434,3 +434,5 @@ describe('MCP workflows（移植上游 test_mcp_workflows.py）', () => {
     expect(asObj<{ items: Array<{ amount: number }> }>(await listTransactions(ctx(), {})).items[0].amount).toBe(7);
   });
 });
+
+

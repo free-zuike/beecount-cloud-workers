@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 文件/导入导出工具对齐回归（上游 src/mcp/file_tools.py）。
  *
  * - attachment_bytes：只认 transaction 附件、sha256 完整性校验
@@ -115,8 +115,10 @@ describe('preview_import_file（对齐上游 source_id 契约）', () => {
     const out = await previewImportFile(c, {
       file_id: 'f-csv',
       mapping: { amount: 'amount', happened_at: 'date', note: 'note' },
-    }) as { plan: { data: { items: Array<{ sources: Array<{ source_id: string; row_number: number }> }> } } };
-    const sources = out.plan.data.items.flatMap(cand => cand.sources);
+    }) as { plan: { data: string } };
+    // 对齐上游 record_out：data 是原始 JSON 字符串，需自行解析
+    const planData = JSON.parse(out.plan.data as string) as { items: Array<{ sources: Array<{ source_id: string; row_number: number }> }> };
+    const sources = planData.items.flatMap(cand => cand.sources);
     expect(sources.map(s => s.source_id)).toEqual([`${sha256}:2`, `${sha256}:3`]);
     expect(sources.map(s => s.row_number)).toEqual([2, 3]);
   });
@@ -186,3 +188,5 @@ describe('export_transactions（对齐上游 CSV 契约）', () => {
     expect(out.row_count).toBe(1);
   });
 });
+
+

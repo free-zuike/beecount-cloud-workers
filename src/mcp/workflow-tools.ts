@@ -64,16 +64,17 @@ function isUniqueViolation(err: unknown): boolean {
 }
 
 export function recordOut(row: MCPStateRow): Record<string, unknown> {
+  // 对齐上游 record_out：data 是原始 JSON 字符串（不做解析）；时间用 isoformat(+00:00)
   return {
     id: row.id,
     ledger_internal_id: row.ledger_id,
     kind: row.kind,
     revision: row.revision,
     status: row.status,
-    data: row.data_json ? JSON.parse(row.data_json) : null,
-    next_due_at: row.next_due_at ? new Date(row.next_due_at).toISOString() : null,
-    created_at: new Date(row.created_at).toISOString(),
-    updated_at: new Date(row.updated_at).toISOString(),
+    data: row.data_json ?? null,
+    next_due_at: row.next_due_at ? `${new Date(row.next_due_at).toISOString().replace(/Z$/, '+00:00')}` : null,
+    created_at: `${new Date(row.created_at).toISOString().replace(/Z$/, '+00:00')}`,
+    updated_at: `${new Date(row.updated_at).toISOString().replace(/Z$/, '+00:00')}`,
   };
 }
 
@@ -168,7 +169,8 @@ function sourceOut(row: MCPSourceRow): Record<string, unknown> {
     sync_id: row.tx_sync_id,
     source_system: row.source_system,
     source_id: row.source_id,
-    metadata: row.metadata_json ? JSON.parse(row.metadata_json) : {},
+    // 对齐上游 _source_out：metadata 是原始 JSON 字符串
+    metadata: row.metadata_json ?? null,
   };
 }
 
