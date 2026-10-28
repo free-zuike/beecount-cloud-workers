@@ -25,6 +25,8 @@ export async function requireLedger(
   const { db, userId } = c;
   const ledgers = await listLiveLedgers(db, userId, ledgerId);
   if (ledgers.length === 0) throw new Error('Ledger not found');
+  // 对齐上游 require_ledger：同一 external_id 命中多个账本时报错，不静默取第一个
+  if (ledgers.length > 1) throw new Error('Ambiguous ledger identifier');
   const ledger = ledgers[0];
   const role = ledger.user_id === userId
     ? 'owner'
@@ -298,8 +300,9 @@ export async function listChanges(
       entity_type: r.entity_type,
       sync_id: r.entity_sync_id,
       action: r.action,
-      payload: r.payload_json ? JSON.parse(r.payload_json) : null,
-      updated_at: new Date(r.updated_at).toISOString(),
+      // 对齐上游 list_changes：payload 原样返回字符串；updated_at 用 isoformat（+00:00）
+      payload: r.payload_json,
+      updated_at: `${new Date(r.updated_at).toISOString().slice(0, 19)}+00:00`,
     })),
     has_more: more,
     next_cursor: encodeCursor(

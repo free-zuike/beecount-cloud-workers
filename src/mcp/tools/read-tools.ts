@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP 读工具（对齐原版 src/mcp/tools/read_tools.py + #133 扩展）。
  *
  * - list_transactions：修订绑定分页（签名游标，过滤条件变化/数据变化 → CURSOR_INVALIDATED）
@@ -270,7 +270,9 @@ export async function listCategories(
   let ownerId = userId;
   if (opts.ledger_id) {
     const ledgers = await listLiveLedgers(db, userId, opts.ledger_id);
-    if (ledgers.length === 0) return [];
+    // 对齐上游 _dictionary_owner：解析不到 → Ledger not found；歧义 → Ambiguous ledger identifier
+    if (ledgers.length === 0) throw new Error('Ledger not found');
+    if (ledgers.length > 1) throw new Error('Ambiguous ledger identifier');
     ownerId = ledgers[0].user_id;
   }
   let q = 'SELECT * FROM user_category_projection WHERE user_id = ?';
@@ -303,7 +305,9 @@ export async function listAccounts(
   let ownerId = userId;
   if (opts.ledger_id) {
     const ledgers = await listLiveLedgers(db, userId, opts.ledger_id);
-    if (ledgers.length === 0) return [];
+    // 对齐上游 _dictionary_owner：解析不到 → Ledger not found；歧义 → Ambiguous ledger identifier
+    if (ledgers.length === 0) throw new Error('Ledger not found');
+    if (ledgers.length > 1) throw new Error('Ambiguous ledger identifier');
     ownerId = ledgers[0].user_id;
   }
   let q = 'SELECT * FROM user_account_projection WHERE user_id = ?';
@@ -334,7 +338,9 @@ export async function listTags(c: McpContext, opts: { ledger_id?: string | null 
   let ownerId = userId;
   if (opts.ledger_id) {
     const ledgers = await listLiveLedgers(db, userId, opts.ledger_id);
-    if (ledgers.length === 0) return [];
+    // 对齐上游 _dictionary_owner：解析不到 → Ledger not found；歧义 → Ambiguous ledger identifier
+    if (ledgers.length === 0) throw new Error('Ledger not found');
+    if (ledgers.length > 1) throw new Error('Ambiguous ledger identifier');
     ownerId = ledgers[0].user_id;
   }
   const rows = await db.prepare('SELECT * FROM user_tag_projection WHERE user_id = ?').bind(ownerId).all<Record<string, unknown>>();
@@ -415,7 +421,7 @@ export async function listBudgets(
         `SELECT COALESCE(SUM(COALESCE(native_amount, amount)), 0) AS total FROM read_tx_projection
          WHERE ledger_id = ? AND category_sync_id IN (${placeholders}) AND tx_type = 'expense'
            AND happened_at >= ? AND happened_at < ?
-           AND (exclude_from_budget IS NULL OR exclude_from_budget = 0)`
+           AND exclude_from_budget = 0`
       ).bind(led.id, ...categoryIds, currentMonth, nextMonth).first<{ total: number }>();
       spent = Math.abs(Number(row?.total ?? 0));
     } else {
@@ -423,7 +429,7 @@ export async function listBudgets(
         `SELECT COALESCE(SUM(COALESCE(native_amount, amount)), 0) AS total FROM read_tx_projection
          WHERE ledger_id = ? AND tx_type = 'expense'
            AND happened_at >= ? AND happened_at < ?
-           AND (exclude_from_budget IS NULL OR exclude_from_budget = 0)`
+           AND exclude_from_budget = 0`
       ).bind(led.id, currentMonth, nextMonth).first<{ total: number }>();
       spent = Math.abs(Number(row?.total ?? 0));
     }
@@ -598,3 +604,5 @@ export async function search(
   const categoryNames = await loadCategoryNames(db, userId);
   return rows.results.map(r => serializeTx(r, categoryNames.get(r.category_sync_id ?? '') ?? null));
 }
+
+
