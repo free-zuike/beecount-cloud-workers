@@ -77,6 +77,15 @@ jobs:
       - name: Install upstream deps
         run: pip install -r scripts/parity/requirements.txt
 
+      # 先单独验证 import：缺依赖/路径错时在这里失败，报错比在 dump 里清楚
+      - name: Preflight imports
+        working-directory: .parity/upstream
+        env:
+          PYTHONPATH: .
+          DATABASE_URL: sqlite:////tmp/parity.db
+        run: |
+          python -c "import src.database, src.mcp.tools.read_tools; print('imports ok')"
+
       - name: Generate golden from upstream
         working-directory: .parity/upstream
         env:
