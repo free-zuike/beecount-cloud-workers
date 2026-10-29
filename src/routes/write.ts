@@ -1451,10 +1451,13 @@ writeRouter.patch('/ledgers/:ledgerId/transactions/:id', zValidator('json', Writ
   }
 
   // 多币种联动折算（与原版 rescale_native_amount 对齐）：
-  // item有nativeAmount且payload未显式传native_amount → 按隐含汇率等比缩放
-  if (req.amount !== undefined && req.native_amount === undefined && 'nativeAmount' in existingPayload) {
+  // item有nativeAmount且payload未显式传native_amount → 按隐含汇率等比缩放。
+  // 注意：nativeAmount 为 **null** 表示"本币交易、无折算快照"，不能当成 0 参与缩放，
+  // 否则改金额会把 null 写成 0（上游此处保持 null）。
+  const hasOldNative = existingPayload.nativeAmount !== null && existingPayload.nativeAmount !== undefined;
+  if (req.amount !== undefined && req.native_amount === undefined && hasOldNative) {
     const oldAmount = Number(existingPayload.amount ?? 0);
-    const oldNative = Number(existingPayload.nativeAmount ?? 0);
+    const oldNative = Number(existingPayload.nativeAmount);
     const newAmount = Number(req.amount);
     if (oldAmount !== 0 && oldNative !== oldAmount && newAmount !== oldAmount) {
       newPayload.nativeAmount = oldNative / oldAmount * newAmount;

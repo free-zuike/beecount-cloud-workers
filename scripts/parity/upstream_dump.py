@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -198,12 +199,26 @@ def main(out_path: str) -> int:
     # 所以这里要先把 src.main:app 拉起来（get_internal_client 会 late-bind）。
     from src.mcp.tools import write_tools  # type: ignore
 
-    VOLATILE = {"revision", "created_at", "updated_at", "source_change_id", "last_change_id"}
+    VOLATILE = {"revision", "created_at", "updated_at", "source_change_id", "last_change_id",
+                "operation_id", "server_timestamp"}
+    SEEDED_TAGS = {"g1", "g2"}
+
+    def scrub_tag_ids(value, new_id):
+        """写工具会自动补「MCP」标签（sync_id 每次不同）；其余按 <AUTO_TAG> 归一后排序。"""
+        if not isinstance(value, list):
+            return scrub(value, new_id)
+        mapped = [v if isinstance(v, str) and v in SEEDED_TAGS else "<AUTO_TAG>" for v in value]
+        return sorted(mapped)
 
     def scrub(value, new_id):
         """去掉一次运行就变的字段；把新建行的 sync_id 归一成 <NEW>。"""
         if isinstance(value, dict):
-            return {k: scrub(v, new_id) for k, v in sorted(value.items()) if k not in VOLATILE}
+            out = {}
+            for k, v in sorted(value.items()):
+                if k in VOLATILE:
+                    continue
+                out[k] = scrub_tag_ids(v, new_id) if k == "tag_ids" else scrub(v, new_id)
+            return out
         if isinstance(value, (list, tuple)):
             return [scrub(v, new_id) for v in value]
         if isinstance(value, str) and new_id and value == new_id:

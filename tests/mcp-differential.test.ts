@@ -12,13 +12,15 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { addMember, createLedger, makeHarness, mcpCtx, registerUser, type Harness } from './mcp-harness';
+import { addMember, bindSelfCall, createLedger, makeHarness, mcpCtx, registerUser, type Harness } from './mcp-harness';
 import { diffJson, formatDiffs, normalize, type Json } from './parity-compare';
 import {
   getAnalyticsSummary, getLedgerStats, getTransaction, listAccounts, listBudgets,
   listCategories, listTags, listTransactions, search,
 } from '../src/mcp/tools/read-tools';
-import { createTransaction, deleteTransaction, updateTransaction } from '../src/mcp/tools/write-tools';
+import {
+  createTransaction, deleteTransaction, setSelfCall, updateTransaction,
+} from '../src/mcp/tools/write-tools';
 
 const GOLDEN_PATH = join(process.cwd(), 'tests/fixtures/upstream-golden.json');
 
@@ -222,19 +224,32 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     seed(h);
     const c = mcpCtx(h, 'u1');
     c.configuredTimeZone = 'Asia/Shanghai';
+    // 本地写工具通过 selfCall 回调打到自己的 write handler（生产里是 Worker 自请求）
+    bindSelfCall(h, setSelfCall);
     const failures: string[] = [];
     let newId: string | null = null;
+
+    // 夹具里预置的标签 id；其余出现在 tag_ids 里的一律是写工具自动补的「MCP」标签
+    const SEEDED_TAGS = new Set(['g1', 'g2']);
+    const scrubTagIds = (value: Json): Json => {
+      if (!Array.isArray(value)) return scrub(value);
+      const mapped = value.map(v => (typeof v === 'string' && SEEDED_TAGS.has(v) ? v : '<AUTO_TAG>'));
+      // 两侧都是各自 id 的字典序遍历，归一后 id 变了会打乱顺序，故统一再排一次
+      return mapped.sort((a, b) => String(a).localeCompare(String(b)));
+    };
 
     const scrub = (value: Json): Json => {
       if (Array.isArray(value)) return value.map(scrub);
       if (value && typeof value === 'object') {
         const out: Record<string, Json> = {};
         for (const key of Object.keys(value as Record<string, Json>)) {
-          out[key] = scrub((value as Record<string, Json>)[key]);
+          const v = (value as Record<string, Json>)[key];
+          out[key] = key === 'tag_ids' ? scrubTagIds(v) : scrub(v);
         }
         return out;
       }
-      return newId && value === newId ? '<NEW>' : value;
+      if (newId && value === newId) return '<NEW>';
+      return value;
     };
 
     const newIdOf = (res: unknown): string | null => {
@@ -262,7 +277,8 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
         failures.push(`[${name}] 本地抛错而上游成功: ${thrown}`);
         return;
       }
-      const diffs = diffJson(normalize(expected.result as Json), actualJson as Json);
+      // 期望值也走一遍 scrub：golden 可能是旧规则生成的，重复归一化是幂等的
+      const diffs = diffJson(scrub(normalize(expected.result as Json)), actualJson as Json);
       if (diffs.length) failures.push(formatDiffs(name, diffs));
     };
 

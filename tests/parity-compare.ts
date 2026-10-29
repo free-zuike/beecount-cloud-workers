@@ -16,6 +16,9 @@ const VOLATILE_KEYS = new Set([
   'next_due_at',
   'file_sha256',
   'duration_ms',
+  // 写路径：每次调用都新生成的请求 id 与服务器时钟
+  'operation_id',
+  'server_timestamp',
 ]);
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
