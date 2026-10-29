@@ -1,16 +1,15 @@
 name: MCP parity
 
-# 运行时差分：把上游 Python 实现的输出作为 golden，与本地实现逐字段比对。
+# 运行时差分：把上游 Python 实现（TNT-Likely/BeeCount-Cloud）的输出作为 golden，
+# 与本地实现逐字段比对。
 #
-# 为什么放在 CI：本地开发机可能没有 Python（Windows 上 python.exe 常常只是
-# Microsoft Store 的占位程序），而 CI 天然有 Python + 可以固定版本。
+# ref 策略：默认**每次跑都对齐上游最新 tag**（因为上游按版本发 tag）；
+# 需要复现某次结果时，手动设 PARITY_UPSTREAM_REF 固定到某个 tag/SHA。
 #
-# 需要配置（仓库 Settings → Variables）：
-#   PARITY_UPSTREAM_REPO  Python 实现的上游仓库，如 `owner/repo`
-#   PARITY_UPSTREAM_REF   上游分支/标签/SHA，建议填**固定 SHA**（默认 main）
-# 若上游是私有仓库，再加 Secrets：PARITY_UPSTREAM_TOKEN（只读权限即可）
-#
-# 未配置 PARITY_UPSTREAM_REPO 时作业会显式跳过（不是静默通过）。
+# 无需任何必填配置即可运行。可选：
+#   Variables  PARITY_UPSTREAM_REPO  覆盖上游仓库（默认 TNT-Likely/BeeCount-Cloud）
+#   Variables  PARITY_UPSTREAM_REF   固定 ref（默认空 = 取最新 tag）
+#   Secrets    PARITY_UPSTREAM_TOKEN 上游为私有仓库时的只读 token
 
 on:
   schedule:
@@ -38,31 +37,37 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Check configuration
-        id: cfg
+      - name: Resolve upstream ref
+        id: upstream
         run: |
-          if [ -z "${{ vars.PARITY_UPSTREAM_REPO }}" ]; then
-            echo "::warning::PARITY_UPSTREAM_REPO 未配置，跳过运行时差分"
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          REPO="${{ vars.PARITY_UPSTREAM_REPO || 'TNT-Likely/BeeCount-Cloud' }}"
+          if [ -n "${{ vars.PARITY_UPSTREAM_REF }}" ]; then
+            REF="${{ vars.PARITY_UPSTREAM_REF }}"
+            echo "::notice::使用固定 ref: $REPO@$REF"
           else
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            REF=$(git ls-remote --tags --refs --sort=-v:refname "https://github.com/$REPO.git" \
+                  | head -1 | sed 's#.*refs/tags/##')
+            if [ -z "$REF" ]; then
+              echo "::error::无法取得上游 tag 列表（仓库不存在或无权限）"
+              exit 1
+            fi
+            echo "::notice::对齐上游最新 tag: $REPO@$REF"
           fi
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
 
       - name: Checkout worker
-        if: steps.cfg.outputs.enabled == 'true'
         uses: actions/checkout@v7
 
       - name: Checkout upstream (Python)
-        if: steps.cfg.outputs.enabled == 'true'
         uses: actions/checkout@v7
         with:
-          repository: ${{ vars.PARITY_UPSTREAM_REPO }}
-          ref: ${{ vars.PARITY_UPSTREAM_REF || 'main' }}
+          repository: ${{ steps.upstream.outputs.repo }}
+          ref: ${{ steps.upstream.outputs.ref }}
           path: .parity/upstream
           token: ${{ secrets.PARITY_UPSTREAM_TOKEN || github.token }}
 
       - name: Setup Python
-        if: steps.cfg.outputs.enabled == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -70,56 +75,66 @@ jobs:
           cache-dependency-path: scripts/parity/requirements.txt
 
       - name: Install upstream deps
-        if: steps.cfg.outputs.enabled == 'true'
         run: pip install -r scripts/parity/requirements.txt
 
       - name: Generate golden from upstream
-        if: steps.cfg.outputs.enabled == 'true'
         working-directory: .parity/upstream
         env:
           SCHEDULER_TIMEZONE: Asia/Shanghai
           DATABASE_URL: sqlite:////tmp/parity.db
           PYTHONPATH: .
         run: |
+          rm -f /tmp/parity.db
           python "$GITHUB_WORKSPACE/scripts/parity/upstream_dump.py" \
                  "$GITHUB_WORKSPACE/tests/fixtures/upstream-golden.json"
 
       - name: Upload golden
-        if: steps.cfg.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: upstream-golden
+          name: upstream-golden-${{ steps.upstream.outputs.ref }}
           path: tests/fixtures/upstream-golden.json
           retention-days: 7
 
       - name: Setup Node
-        if: steps.cfg.outputs.enabled == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: '22'
 
       - name: Install deps
-        if: steps.cfg.outputs.enabled == 'true'
         run: npm ci
 
       - name: Run differential test
-        if: steps.cfg.outputs.enabled == 'true'
         run: npm test -- --run tests/mcp-differential.test.ts
 
-      # golden 发生变化说明上游行为变了：开 PR 让人确认，而不是自动覆盖
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### MCP parity"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 上游 | \`${{ steps.upstream.outputs.repo }}\` |"
+            echo "| 对齐 ref | \`${{ steps.upstream.outputs.ref }}\` |"
+            echo "| 本地用例 | \`tests/mcp-differential.test.ts\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # golden 变化说明上游行为变了：开 PR 让人确认，而不是自动覆盖
       - name: Open PR on upstream drift
-        if: steps.cfg.outputs.enabled == 'true' && github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           add-paths: tests/fixtures/upstream-golden.json
           branch: parity/upstream-golden
-          title: "chore(parity): 上游 MCP 输出变化"
+          title: "chore(parity): 上游 MCP 输出变化（${{ steps.upstream.outputs.ref }}）"
           body: |
             上游 Python 实现的输出发生了变化，golden 已重新生成。
 
-            - 上游仓库：`${{ vars.PARITY_UPSTREAM_REPO }}`
-            - 上游版本：`${{ vars.PARITY_UPSTREAM_REF || 'main' }}`
-            - 差异用例：`tests/mcp-differential.test.ts`
+            | 项 | 值 |
+            | --- | --- |
+            | 上游仓库 | `${{ steps.upstream.outputs.repo }}` |
+            | 对齐 ref | `${{ steps.upstream.outputs.ref }}` |
 
-            请确认这些变化是上游有意的行为调整，再合并本 PR。
+            差异会由 `tests/mcp-differential.test.ts` 列出路径。请确认这些变化是上游有意的
+            行为调整，再合并本 PR；如果是本地实现走偏了，应改本地代码而不是接受新 golden。

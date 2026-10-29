@@ -1,26 +1,24 @@
-# 上游 Python 实现运行 parity:dump 所需依赖。
+# 上游 TNT-Likely/BeeCount-Cloud 的依赖，摘自其 requirements.txt。
 #
-# 这份清单不是抄来的（上游导出的源码里没有 requirements.txt / pyproject.toml），
-# 是从 src/ 下所有 .py 的 import 反推出来的，因此**只保证覆盖，不保证版本**：
-#   apscheduler cryptography fastapi httpx jwt mcp numpy openpyxl passlib
-#   PIL pydantic pydantic_settings pyotp pyzipper sqlalchemy starlette tzlocal
-# 不锁版本是刻意的：锁错版本比不锁更难查（上游代码用哪个大版本只能从用法判断）。
-# 首次在 CI/本地跑通后，应把 `pip freeze` 的结果回填成精确 pin，避免上游改动导致漂移。
-fastapi
-sqlalchemy>=2
-pydantic>=2
-pydantic-settings>=2
-mcp
-httpx
-openpyxl
-pillow
-pyzipper
-numpy
-passlib
-pyotp
-cryptography
-apscheduler
-tzlocal
-pyjwt
-python-multipart
-uvicorn
+# 与上游的差异（刻意的）：
+# - 去掉 dev 工具：pytest / ruff / mypy / types-PyYAML
+# - 去掉仅 Postgres 需要：psycopg[binary]、alembic（parity 用 sqlite）
+# - uvicorn 不带 [standard] 额外件（dump 不经 HTTP 服务）
+# 版本约束保持上游原样，不自行收紧或放宽。
+fastapi>=0.111.0
+uvicorn>=0.30.0
+sqlalchemy>=2.0.30
+pydantic>=2.8.2
+pydantic-settings>=2.3.4
+email-validator>=2.2.0
+passlib>=1.7.4
+PyJWT>=2.9.0
+python-multipart>=0.0.9
+apscheduler>=3.10.4
+pyzipper>=0.3.6
+pyotp>=2.9.0
+cryptography>=42.0.0
+mcp>=1.27.0,<2
+httpx>=0.27.0
+numpy>=1.26.0
+openpyxl>=3.0
