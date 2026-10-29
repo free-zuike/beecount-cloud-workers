@@ -1,0 +1,1990 @@
+{
+  "generatedFrom": "C:\\Users\\张然\\AppData\\Local\\Temp\\bc-upstream",
+  "files": {
+    "test_mcp_attachments.py": [
+      {
+        "test": null,
+        "line": 54,
+        "kind": "http-status-ok",
+        "expr": "response.status_code == 200"
+      },
+      {
+        "test": null,
+        "line": 58,
+        "kind": "http-status-ok",
+        "expr": "response.status_code == 200"
+      },
+      {
+        "test": "test_upload_uses_existing_dedup_and_real_file",
+        "line": 100,
+        "kind": "other",
+        "expr": "first[\"file_id\"] == second[\"file_id\"]"
+      },
+      {
+        "test": "test_upload_uses_existing_dedup_and_real_file",
+        "line": 101,
+        "kind": "other",
+        "expr": "first[\"mime_type\"] == \"image/png\""
+      },
+      {
+        "test": "test_upload_uses_existing_dedup_and_real_file",
+        "line": 104,
+        "kind": "count-or-empty",
+        "expr": "len(rows) == 1"
+      },
+      {
+        "test": "test_upload_uses_existing_dedup_and_real_file",
+        "line": 105,
+        "kind": "other",
+        "expr": "Path(rows[0].storage_path).read_bytes() == b\"synthetic receipt\""
+      },
+      {
+        "test": "test_upload_uses_existing_dedup_and_real_file",
+        "line": 106,
+        "kind": "other",
+        "expr": "rows[0].sha256 == hashlib.sha256(b\"synthetic receipt\").hexdigest()"
+      },
+      {
+        "test": "test_upload_uses_existing_dedup_and_real_file",
+        "line": 107,
+        "kind": "count-or-empty",
+        "expr": "read_tools.list_transactions(ledger.user)[\"total\"] == 0"
+      },
+      {
+        "test": "test_invalid_upload_does_not_write",
+        "line": 120,
+        "kind": "count-or-empty",
+        "expr": "db.scalars(select(AttachmentFile)).all() == []"
+      },
+      {
+        "test": "test_create_multiple_same_name_files_has_unique_identity_and_order",
+        "line": 134,
+        "kind": "other",
+        "expr": "refs == result[\"attachments\"]"
+      },
+      {
+        "test": "test_create_multiple_same_name_files_has_unique_identity_and_order",
+        "line": 135,
+        "kind": "other",
+        "expr": "[x[\"cloudFileId\"] for x in refs] == [b[\"file_id\"], a[\"file_id\"]]"
+      },
+      {
+        "test": "test_create_multiple_same_name_files_has_unique_identity_and_order",
+        "line": 136,
+        "kind": "other",
+        "expr": "[x[\"sortOrder\"] for x in refs] == [0, 1]"
+      },
+      {
+        "test": "test_create_multiple_same_name_files_has_unique_identity_and_order",
+        "line": 137,
+        "kind": "count-or-empty",
+        "expr": "len({x[\"fileName\"] for x in refs}) == 2"
+      },
+      {
+        "test": "test_create_multiple_same_name_files_has_unique_identity_and_order",
+        "line": 139,
+        "kind": "other",
+        "expr": "ref[\"originalName\"] == \"receipt.png\""
+      },
+      {
+        "test": "test_create_multiple_same_name_files_has_unique_identity_and_order",
+        "line": 140,
+        "kind": "other",
+        "expr": "ref[\"fileSize\"] == 1"
+      },
+      {
+        "test": "test_create_multiple_same_name_files_has_unique_identity_and_order",
+        "line": 141,
+        "kind": "other",
+        "expr": "ref[\"cloudSha256\"] in [a[\"sha256\"], b[\"sha256\"]]"
+      },
+      {
+        "test": "test_invalid_references_never_create_transaction",
+        "line": 148,
+        "kind": "count-or-empty",
+        "expr": "read_tools.list_transactions(ledger.user)[\"total\"] == 0"
+      },
+      {
+        "test": "test_duplicate_references_rejected_before_create",
+        "line": 155,
+        "kind": "count-or-empty",
+        "expr": "read_tools.list_transactions(ledger.user)[\"total\"] == 0"
+      },
+      {
+        "test": "test_update_preserves_reorders_appends_replaces_and_clears",
+        "line": 185,
+        "kind": "other",
+        "expr": "[x[\"cloudFileId\"] for x in read(ledger, sid)[\"attachments\"]] == [a, b]"
+      },
+      {
+        "test": "test_update_preserves_reorders_appends_replaces_and_clears",
+        "line": 189,
+        "kind": "other",
+        "expr": "[x[\"cloudFileId\"] for x in refs] == ids"
+      },
+      {
+        "test": "test_update_preserves_reorders_appends_replaces_and_clears",
+        "line": 190,
+        "kind": "count-or-empty",
+        "expr": "[x[\"sortOrder\"] for x in refs] == list(range(len(ids)))"
+      },
+      {
+        "test": "test_update_preserves_reorders_appends_replaces_and_clears",
+        "line": 191,
+        "kind": "other",
+        "expr": "result[\"attachments\"] == refs"
+      },
+      {
+        "test": "test_update_preserves_reorders_appends_replaces_and_clears",
+        "line": 192,
+        "kind": "other",
+        "expr": "read_tools.list_transactions(ledger.user)[\"total\"] == 1"
+      },
+      {
+        "test": "test_failed_update_keeps_existing_files_and_fields",
+        "line": 202,
+        "kind": "other",
+        "expr": "after[\"amount\"] == before[\"amount\"]"
+      },
+      {
+        "test": "test_failed_update_keeps_existing_files_and_fields",
+        "line": 203,
+        "kind": "other",
+        "expr": "after[\"attachments\"] == before[\"attachments\"]"
+      },
+      {
+        "test": "test_mcp_schema_has_upload_and_ordered_optional_ids",
+        "line": 208,
+        "kind": "catalog",
+        "expr": "{\"file_name\", \"content_base64\"} <= set(tools[\"upload_attachment\"].parameters[\"required\"])"
+      },
+      {
+        "test": "test_mcp_schema_has_upload_and_ordered_optional_ids",
+        "line": 211,
+        "kind": "other",
+        "expr": "{\"type\": \"array\", \"items\": {\"type\": \"string\"}} in prop[\"anyOf\"]"
+      },
+      {
+        "test": "test_mcp_schema_has_upload_and_ordered_optional_ids",
+        "line": 212,
+        "kind": "other",
+        "expr": "\"attachments\" not in tools[name].parameters.get(\"required\", [])"
+      },
+      {
+        "test": "test_read_only_scope_cannot_upload",
+        "line": 222,
+        "kind": "count-or-empty",
+        "expr": "db.scalars(select(AttachmentFile)).all() == []"
+      },
+      {
+        "test": "test_attachment_call_summary_does_not_store_filename_or_bytes",
+        "line": 230,
+        "kind": "other",
+        "expr": "\"PRIVATE\" not in summary and \"private\" not in summary"
+      },
+      {
+        "test": "test_attachment_call_summary_does_not_store_filename_or_bytes",
+        "line": 231,
+        "kind": "other",
+        "expr": "\"content_base64\" not in summary and \"file_name\" not in summary"
+      },
+      {
+        "test": "test_attachment_call_summary_does_not_store_filename_or_bytes",
+        "line": 232,
+        "kind": "other",
+        "expr": "\"attachments=[1]\" in summary"
+      },
+      {
+        "test": "test_no_attachments_keeps_old_create_behavior",
+        "line": 237,
+        "kind": "other",
+        "expr": "\"attachments\" not in result"
+      },
+      {
+        "test": "test_no_attachments_keeps_old_create_behavior",
+        "line": 238,
+        "kind": "count-or-empty",
+        "expr": "read(ledger, result[\"sync_id\"])[\"attachments\"] == []"
+      }
+    ],
+    "test_mcp_call_log.py": [
+      {
+        "test": null,
+        "line": 63,
+        "kind": "http-status-ok",
+        "expr": "res.status_code == 200, res.text"
+      },
+      {
+        "test": "test_summarize_args_skips_sensitive_fields",
+        "line": 76,
+        "kind": "other",
+        "expr": "s is not None"
+      },
+      {
+        "test": "test_summarize_args_skips_sensitive_fields",
+        "line": 77,
+        "kind": "other",
+        "expr": "\"amount=38.5\" in s"
+      },
+      {
+        "test": "test_summarize_args_skips_sensitive_fields",
+        "line": 78,
+        "kind": "other",
+        "expr": "\"tx_type=expense\" in s"
+      },
+      {
+        "test": "test_summarize_args_skips_sensitive_fields",
+        "line": 79,
+        "kind": "other",
+        "expr": "\"category=咖啡\" in s"
+      },
+      {
+        "test": "test_summarize_args_skips_sensitive_fields",
+        "line": 80,
+        "kind": "other",
+        "expr": "\"note\" not in s"
+      },
+      {
+        "test": "test_summarize_args_skips_sensitive_fields",
+        "line": 81,
+        "kind": "other",
+        "expr": "\"心情\" not in s"
+      },
+      {
+        "test": "test_summarize_args_skips_sensitive_fields",
+        "line": 82,
+        "kind": "other",
+        "expr": "\"text\" not in s"
+      },
+      {
+        "test": "test_summarize_args_truncates_long_strings",
+        "line": 87,
+        "kind": "other",
+        "expr": "s is not None"
+      },
+      {
+        "test": "test_summarize_args_truncates_long_strings",
+        "line": 89,
+        "kind": "count-or-empty",
+        "expr": "len(s) <= 200"
+      },
+      {
+        "test": "test_summarize_args_truncates_long_strings",
+        "line": 90,
+        "kind": "other",
+        "expr": "\"category=\" in s"
+      },
+      {
+        "test": "test_summarize_args_empty_returns_none",
+        "line": 94,
+        "kind": "other",
+        "expr": "_summarize_args({}) is None"
+      },
+      {
+        "test": "test_summarize_args_empty_returns_none",
+        "line": 95,
+        "kind": "other",
+        "expr": "_summarize_args({\"x\": None}) is None"
+      },
+      {
+        "test": "test_write_call_log_persists_row",
+        "line": 130,
+        "kind": "count-or-empty",
+        "expr": "len(rows) == 1"
+      },
+      {
+        "test": "test_write_call_log_persists_row",
+        "line": 132,
+        "kind": "catalog",
+        "expr": "r.tool_name == \"list_ledgers\""
+      },
+      {
+        "test": "test_write_call_log_persists_row",
+        "line": 133,
+        "kind": "other",
+        "expr": "r.status == \"ok\""
+      },
+      {
+        "test": "test_write_call_log_persists_row",
+        "line": 134,
+        "kind": "other",
+        "expr": "r.error_message is None"
+      },
+      {
+        "test": "test_write_call_log_persists_row",
+        "line": 135,
+        "kind": "other",
+        "expr": "r.args_summary == \"kind=expense\""
+      },
+      {
+        "test": "test_write_call_log_persists_row",
+        "line": 136,
+        "kind": "other",
+        "expr": "r.duration_ms == 42"
+      },
+      {
+        "test": "test_write_call_log_persists_row",
+        "line": 137,
+        "kind": "other",
+        "expr": "r.client_ip == \"127.0.0.1\""
+      },
+      {
+        "test": "test_write_call_log_persists_row",
+        "line": 138,
+        "kind": "other",
+        "expr": "r.pat_prefix == \"bcmcp_abc123\""
+      },
+      {
+        "test": "test_write_call_log_persists_row",
+        "line": 139,
+        "kind": "catalog",
+        "expr": "r.pat_name == \"Claude Desktop\""
+      },
+      {
+        "test": "test_write_call_log_captures_error",
+        "line": 171,
+        "kind": "other",
+        "expr": "r is not None"
+      },
+      {
+        "test": "test_write_call_log_captures_error",
+        "line": 172,
+        "kind": "error-body",
+        "expr": "r.status == \"error\""
+      },
+      {
+        "test": "test_write_call_log_captures_error",
+        "line": 173,
+        "kind": "other",
+        "expr": "r.error_message is not None"
+      },
+      {
+        "test": "test_write_call_log_captures_error",
+        "line": 174,
+        "kind": "other",
+        "expr": "\"ValueError\" in r.error_message"
+      },
+      {
+        "test": "test_write_call_log_captures_error",
+        "line": 175,
+        "kind": "other",
+        "expr": "\"not allowed\" in r.error_message"
+      },
+      {
+        "test": "test_list_mcp_calls_endpoint",
+        "line": 213,
+        "kind": "http-status-ok",
+        "expr": "res.status_code == 200, res.text"
+      },
+      {
+        "test": "test_list_mcp_calls_endpoint",
+        "line": 215,
+        "kind": "other",
+        "expr": "body[\"total\"] == 5"
+      },
+      {
+        "test": "test_list_mcp_calls_endpoint",
+        "line": 216,
+        "kind": "count-or-empty",
+        "expr": "len(body[\"items\"]) == 5"
+      },
+      {
+        "test": "test_list_mcp_calls_endpoint",
+        "line": 221,
+        "kind": "other",
+        "expr": "\"+00:00\" in item[\"called_at\"] or item[\"called_at\"].endswith(\"Z\")"
+      },
+      {
+        "test": "test_list_mcp_calls_endpoint",
+        "line": 223,
+        "kind": "other",
+        "expr": "item[\"client_active\"] is False"
+      },
+      {
+        "test": "test_list_mcp_calls_endpoint",
+        "line": 224,
+        "kind": "other",
+        "expr": "item[\"client_label\"] == \"bcmcp_xxxxxxxx\""
+      },
+      {
+        "test": "test_list_mcp_calls_endpoint",
+        "line": 231,
+        "kind": "http-status-ok",
+        "expr": "res2.status_code == 200"
+      },
+      {
+        "test": "test_list_mcp_calls_endpoint",
+        "line": 233,
+        "kind": "other",
+        "expr": "all(it[\"tool_name\"] == \"list_ledgers\" for it in items2)"
+      },
+      {
+        "test": "test_list_mcp_calls_endpoint",
+        "line": 240,
+        "kind": "http-status-ok",
+        "expr": "res3.status_code == 200"
+      },
+      {
+        "test": "test_list_mcp_calls_endpoint",
+        "line": 242,
+        "kind": "count-or-empty",
+        "expr": "len(items3) == 1"
+      },
+      {
+        "test": "test_list_mcp_calls_endpoint",
+        "line": 243,
+        "kind": "error-body",
+        "expr": "items3[0][\"status\"] == \"error\""
+      },
+      {
+        "test": "test_list_mcp_calls_endpoint",
+        "line": 251,
+        "kind": "other",
+        "expr": "body4[\"total\"] == 5"
+      },
+      {
+        "test": "test_list_mcp_calls_endpoint",
+        "line": 252,
+        "kind": "count-or-empty",
+        "expr": "len(body4[\"items\"]) == 2"
+      },
+      {
+        "test": "test_list_mcp_calls_client_label_resolution",
+        "line": 318,
+        "kind": "http-status-ok",
+        "expr": "res.status_code == 200, res.text"
+      },
+      {
+        "test": "test_list_mcp_calls_client_label_resolution",
+        "line": 321,
+        "kind": "other",
+        "expr": "items[\"bcmcp_live_xxxx\"][\"client_label\"] == \"Renamed Live\""
+      },
+      {
+        "test": "test_list_mcp_calls_client_label_resolution",
+        "line": 322,
+        "kind": "other",
+        "expr": "items[\"bcmcp_live_xxxx\"][\"client_active\"] is True"
+      },
+      {
+        "test": "test_list_mcp_calls_client_label_resolution",
+        "line": 324,
+        "kind": "other",
+        "expr": "items[\"bcmcp_deld_xxxx\"][\"client_label\"] == \"Cached Name\""
+      },
+      {
+        "test": "test_list_mcp_calls_client_label_resolution",
+        "line": 325,
+        "kind": "other",
+        "expr": "items[\"bcmcp_deld_xxxx\"][\"client_active\"] is False"
+      },
+      {
+        "test": "test_list_mcp_calls_user_isolation",
+        "line": 357,
+        "kind": "http-status-ok",
+        "expr": "res.status_code == 200"
+      },
+      {
+        "test": "test_list_mcp_calls_user_isolation",
+        "line": 358,
+        "kind": "other",
+        "expr": "res.json() == {\"total\": 0, \"items\": []}"
+      },
+      {
+        "test": "test_list_mcp_calls_user_isolation",
+        "line": 365,
+        "kind": "other",
+        "expr": "res2.json()[\"total\"] == 1"
+      }
+    ],
+    "test_mcp_complete.py": [
+      {
+        "test": null,
+        "line": 27,
+        "kind": "status-field",
+        "expr": "result[\"status\"] == \"completed\", result"
+      },
+      {
+        "test": "test_management_idempotency_key_cannot_replay_another_tool",
+        "line": 45,
+        "kind": "status-field",
+        "expr": "created[\"status\"] == \"completed\""
+      },
+      {
+        "test": "test_management_idempotency_key_cannot_replay_another_tool",
+        "line": 46,
+        "kind": "other",
+        "expr": "replayed[\"operation_id\"] == created[\"operation_id\"]"
+      },
+      {
+        "test": "test_management_idempotency_key_cannot_replay_another_tool",
+        "line": 53,
+        "kind": "other",
+        "expr": "not any(item[\"name\"] == \"Same name\" for item in rt.list_tags(ledger.user))"
+      },
+      {
+        "test": "test_same_timestamp_pages_are_complete_and_revision_bound",
+        "line": 67,
+        "kind": "other",
+        "expr": "result[\"created_count\"] == size, result"
+      },
+      {
+        "test": "test_same_timestamp_pages_are_complete_and_revision_bound",
+        "line": 77,
+        "kind": "count-or-empty",
+        "expr": "len(ids) == len(set(ids)) == 260"
+      },
+      {
+        "test": "test_lost_response_replays_original_write_and_rejects_key_reuse",
+        "line": 109,
+        "kind": "status-field",
+        "expr": "first[\"status\"] == \"failed\""
+      },
+      {
+        "test": "test_lost_response_replays_original_write_and_rejects_key_reuse",
+        "line": 110,
+        "kind": "other",
+        "expr": "rt.list_transactions(ledger.user)[\"total\"] == 1"
+      },
+      {
+        "test": "test_lost_response_replays_original_write_and_rejects_key_reuse",
+        "line": 112,
+        "kind": "status-field",
+        "expr": "second[\"status\"] == \"created\", second"
+      },
+      {
+        "test": "test_lost_response_replays_original_write_and_rejects_key_reuse",
+        "line": 113,
+        "kind": "other",
+        "expr": "rt.list_transactions(ledger.user)[\"total\"] == 1"
+      },
+      {
+        "test": "test_lost_response_replays_original_write_and_rejects_key_reuse",
+        "line": 114,
+        "kind": "other",
+        "expr": "first[\"operation_id\"] == second[\"operation_id\"]"
+      },
+      {
+        "test": "test_partial_batch_retries_only_failed_chunk",
+        "line": 140,
+        "kind": "status-field",
+        "expr": "result[\"status\"] == \"partial\""
+      },
+      {
+        "test": "test_partial_batch_retries_only_failed_chunk",
+        "line": 141,
+        "kind": "other",
+        "expr": "result[\"created_count\"] == 50"
+      },
+      {
+        "test": "test_partial_batch_retries_only_failed_chunk",
+        "line": 143,
+        "kind": "status-field",
+        "expr": "resumed[\"status\"] == \"completed\", resumed"
+      },
+      {
+        "test": "test_partial_batch_retries_only_failed_chunk",
+        "line": 144,
+        "kind": "count-or-empty",
+        "expr": "len(resumed[\"sync_ids\"]) == 51"
+      },
+      {
+        "test": "test_partial_batch_retries_only_failed_chunk",
+        "line": 145,
+        "kind": "other",
+        "expr": "calls == 3"
+      },
+      {
+        "test": "test_partial_batch_retries_only_failed_chunk",
+        "line": 146,
+        "kind": "other",
+        "expr": "rt.list_transactions(ledger.user)[\"total\"] == 51"
+      },
+      {
+        "test": "test_complete_transfer_balances_and_optimistic_revision",
+        "line": 161,
+        "kind": "status-field",
+        "expr": "result[\"status\"] == \"created\", result"
+      },
+      {
+        "test": "test_complete_transfer_balances_and_optimistic_revision",
+        "line": 163,
+        "kind": "other",
+        "expr": "(tx[\"from_account_id\"], tx[\"to_account_id\"]) == (source, destination)"
+      },
+      {
+        "test": "test_complete_transfer_balances_and_optimistic_revision",
+        "line": 166,
+        "kind": "other",
+        "expr": "by_id[source][\"balance\"] == 800"
+      },
+      {
+        "test": "test_complete_transfer_balances_and_optimistic_revision",
+        "line": 167,
+        "kind": "other",
+        "expr": "by_id[destination][\"balance\"] == 1200"
+      },
+      {
+        "test": "test_complete_transfer_balances_and_optimistic_revision",
+        "line": 169,
+        "kind": "count-or-empty",
+        "expr": "summary[\"expense\"] == summary[\"income\"] == 0"
+      },
+      {
+        "test": "test_complete_transfer_balances_and_optimistic_revision",
+        "line": 184,
+        "kind": "other",
+        "expr": "rt.get_transaction(ledger.user, tx[\"sync_id\"])[\"note\"] == \"first edit\""
+      },
+      {
+        "test": "test_batch_flags_and_attachments_are_preserved",
+        "line": 229,
+        "kind": "other",
+        "expr": "tx[\"exclude_from_stats\"] is True"
+      },
+      {
+        "test": "test_batch_flags_and_attachments_are_preserved",
+        "line": 230,
+        "kind": "other",
+        "expr": "tx[\"exclude_from_budget\"] is True"
+      },
+      {
+        "test": "test_batch_flags_and_attachments_are_preserved",
+        "line": 231,
+        "kind": "other",
+        "expr": "tx[\"attachments\"][0][\"cloudFileId\"] == file_id"
+      },
+      {
+        "test": "test_batch_flags_and_attachments_are_preserved",
+        "line": 232,
+        "kind": "count-or-empty",
+        "expr": "rt.get_analytics_summary(ledger.user, scope=\"all\")[\"expense\"] == 0"
+      },
+      {
+        "test": "test_member_can_read_shared_ledger_and_use_owner_accounts",
+        "line": 242,
+        "kind": "other",
+        "expr": "ledger.ledger_id in {row[\"id\"] for row in rt.list_ledgers(member)}"
+      },
+      {
+        "test": "test_member_can_read_shared_ledger_and_use_owner_accounts",
+        "line": 248,
+        "kind": "status-field",
+        "expr": "result[\"status\"] == \"created\", result"
+      },
+      {
+        "test": "test_member_can_read_shared_ledger_and_use_owner_accounts",
+        "line": 249,
+        "kind": "other",
+        "expr": "rt.get_transaction(member, result[\"sync_id\"])[\"account_id\"] == owner_account"
+      },
+      {
+        "test": "test_new_tools_have_typed_arguments_and_no_user_identity_parameter",
+        "line": 264,
+        "kind": "other",
+        "expr": "\"user\" not in tool.parameters.get(\"properties\", {})"
+      },
+      {
+        "test": "test_new_tools_have_typed_arguments_and_no_user_identity_parameter",
+        "line": 265,
+        "kind": "other",
+        "expr": "\"ctx\" not in tool.parameters.get(\"properties\", {})"
+      },
+      {
+        "test": "test_new_tools_have_typed_arguments_and_no_user_identity_parameter",
+        "line": 266,
+        "kind": "other",
+        "expr": "\"kwargs\" not in tool.parameters.get(\"properties\", {})"
+      },
+      {
+        "test": "test_new_tools_have_typed_arguments_and_no_user_identity_parameter",
+        "line": 267,
+        "kind": "protocol",
+        "expr": "tool.annotations.readOnlyHint is (function in capabilities.READ_FUNCTIONS)"
+      },
+      {
+        "test": "test_new_tools_have_typed_arguments_and_no_user_identity_parameter",
+        "line": 269,
+        "kind": "other",
+        "expr": "definition[\"$defs\"][\"AccountFields\"][\"additionalProperties\"] is False"
+      },
+      {
+        "test": "test_crud_ledger_dictionary_budget_and_replay",
+        "line": 291,
+        "kind": "other",
+        "expr": "created[\"entity_id\"] == repeated[\"entity_id\"]"
+      },
+      {
+        "test": "test_crud_ledger_dictionary_budget_and_replay",
+        "line": 292,
+        "kind": "other",
+        "expr": "repeated[\"idempotency_replayed\"] is True"
+      },
+      {
+        "test": "test_crud_ledger_dictionary_budget_and_replay",
+        "line": 301,
+        "kind": "status-field",
+        "expr": "changed[\"status\"] == \"completed\", changed"
+      },
+      {
+        "test": "test_crud_ledger_dictionary_budget_and_replay",
+        "line": 320,
+        "kind": "status-field",
+        "expr": "changed_tag[\"status\"] == \"completed\""
+      },
+      {
+        "test": "test_crud_ledger_dictionary_budget_and_replay",
+        "line": 321,
+        "kind": "other",
+        "expr": "any("
+      },
+      {
+        "test": "test_crud_ledger_dictionary_budget_and_replay",
+        "line": 332,
+        "kind": "status-field",
+        "expr": "budget[\"status\"] == \"completed\", budget"
+      },
+      {
+        "test": "test_crud_ledger_dictionary_budget_and_replay",
+        "line": 333,
+        "kind": "other",
+        "expr": "rt.list_budgets(ledger.user, ledger_id=ledger.ledger_id)[0][\"amount\"] == 100"
+      },
+      {
+        "test": "test_crud_ledger_dictionary_budget_and_replay",
+        "line": 339,
+        "kind": "status-field",
+        "expr": "no_delete[\"status\"] == \"confirmation_required\""
+      },
+      {
+        "test": "test_crud_ledger_dictionary_budget_and_replay",
+        "line": 345,
+        "kind": "status-field",
+        "expr": "deleted[\"status\"] == \"completed\""
+      },
+      {
+        "test": "test_typed_adapter_authenticates_identity_and_enforces_readonly_pat",
+        "line": 363,
+        "kind": "other",
+        "expr": "result[\"selected_ledger_id\"] == ledger.ledger_id"
+      },
+      {
+        "test": "test_typed_adapter_authenticates_identity_and_enforces_readonly_pat",
+        "line": 364,
+        "kind": "other",
+        "expr": "result[\"pat_scopes\"] == [\"mcp:read\"]"
+      },
+      {
+        "test": "test_typed_adapter_authenticates_identity_and_enforces_readonly_pat",
+        "line": 376,
+        "kind": "other",
+        "expr": "not any(item[\"name\"] == \"Forbidden\" for item in rt.list_accounts(ledger.user))"
+      }
+    ],
+    "test_mcp_local_files.py": [
+      {
+        "test": "test_schema_exposes_path_and_keeps_upstream_output",
+        "line": 26,
+        "kind": "other",
+        "expr": "local.inputSchema[\"required\"] == [\"file_path\"]"
+      },
+      {
+        "test": "test_schema_exposes_path_and_keeps_upstream_output",
+        "line": 27,
+        "kind": "catalog",
+        "expr": "set(local.inputSchema[\"properties\"]) == {\"ledger_id\", \"file_path\"}"
+      },
+      {
+        "test": "test_schema_exposes_path_and_keeps_upstream_output",
+        "line": 28,
+        "kind": "other",
+        "expr": "local.inputSchema[\"additionalProperties\"] is False"
+      },
+      {
+        "test": "test_schema_exposes_path_and_keeps_upstream_output",
+        "line": 29,
+        "kind": "other",
+        "expr": "local.outputSchema == remote.outputSchema"
+      },
+      {
+        "test": "test_schema_exposes_path_and_keeps_upstream_output",
+        "line": 30,
+        "kind": "other",
+        "expr": "\"content_base64\" in remote.inputSchema[\"properties\"]"
+      },
+      {
+        "test": "test_original_large_file_bytes_are_unchanged",
+        "line": 38,
+        "kind": "catalog",
+        "expr": "name == path.name and result == data"
+      },
+      {
+        "test": "test_symlink_to_allowed_file_is_supported",
+        "line": 76,
+        "kind": "other",
+        "expr": "bridge.read_receipt(str(link), [tmp_path]) == (\"actual.png\", b\"original\")"
+      },
+      {
+        "test": "test_upload_forwards_bytes_and_never_forwards_local_path",
+        "line": 97,
+        "kind": "other",
+        "expr": "result is upstream.result"
+      },
+      {
+        "test": "test_upload_forwards_bytes_and_never_forwards_local_path",
+        "line": 99,
+        "kind": "catalog",
+        "expr": "name == \"upload_attachment\" and args[\"ledger_id\"] == \"target\""
+      },
+      {
+        "test": "test_upload_forwards_bytes_and_never_forwards_local_path",
+        "line": 100,
+        "kind": "other",
+        "expr": "\"file_path\" not in args"
+      },
+      {
+        "test": "test_upload_forwards_bytes_and_never_forwards_local_path",
+        "line": 101,
+        "kind": "other",
+        "expr": "args[\"file_name\"] == p.name and args[\"mime_type\"] == \"image/png\""
+      },
+      {
+        "test": "test_upload_forwards_bytes_and_never_forwards_local_path",
+        "line": 102,
+        "kind": "other",
+        "expr": "base64.b64decode(args[\"content_base64\"]) == data"
+      },
+      {
+        "test": "test_upload_forwards_bytes_and_never_forwards_local_path",
+        "line": 103,
+        "kind": "other",
+        "expr": "result.structuredContent == {\"file_id\": \"uploaded\"}"
+      },
+      {
+        "test": "test_bad_arguments_never_reach_cloud",
+        "line": 111,
+        "kind": "count-or-empty",
+        "expr": "upstream.calls == []"
+      },
+      {
+        "test": "test_other_tools_are_forwarded_unmodified",
+        "line": 118,
+        "kind": "other",
+        "expr": "result is upstream.result and upstream.calls == [(\"create_transaction\", args)]"
+      },
+      {
+        "test": "test_discovery_preserves_all_tools_and_pagination",
+        "line": 130,
+        "kind": "other",
+        "expr": "[t.name for t in local] == [t.name for t in tools]"
+      },
+      {
+        "test": "test_discovery_preserves_all_tools_and_pagination",
+        "line": 131,
+        "kind": "other",
+        "expr": "local[0] is tools[0] and local[2] is tools[2]"
+      },
+      {
+        "test": "test_discovery_preserves_all_tools_and_pagination",
+        "line": 132,
+        "kind": "other",
+        "expr": "\"file_path\" in local[1].inputSchema[\"properties\"]"
+      }
+    ],
+    "test_mcp_sse_handshake.py": [
+      {
+        "test": "test_oauth_protected_resource_metadata_returns_valid_shape",
+        "line": 96,
+        "kind": "http-status-ok",
+        "expr": "res.status_code == 200, res.text"
+      },
+      {
+        "test": "test_oauth_protected_resource_metadata_returns_valid_shape",
+        "line": 98,
+        "kind": "other",
+        "expr": "body[\"resource\"].endswith(\"/api/v1/mcp\")"
+      },
+      {
+        "test": "test_oauth_protected_resource_metadata_returns_valid_shape",
+        "line": 99,
+        "kind": "other",
+        "expr": "body[\"bearer_methods_supported\"] == [\"header\"]"
+      },
+      {
+        "test": "test_oauth_protected_resource_metadata_returns_valid_shape",
+        "line": 100,
+        "kind": "other",
+        "expr": "isinstance(body[\"authorization_servers\"], list)"
+      },
+      {
+        "test": "test_oauth_protected_resource_metadata_returns_valid_shape",
+        "line": 104,
+        "kind": "http-status-ok",
+        "expr": "res2.status_code == 200, res2.text"
+      },
+      {
+        "test": "test_dns_rebinding_protection_disabled_via_settings",
+        "line": 118,
+        "kind": "other",
+        "expr": "ts is not None, \"transport_security should be explicitly set\""
+      },
+      {
+        "test": "test_dns_rebinding_protection_disabled_via_settings",
+        "line": 119,
+        "kind": "other",
+        "expr": "ts.enable_dns_rebinding_protection is False, ("
+      },
+      {
+        "test": "test_pat_with_future_expires_at_resolves",
+        "line": 170,
+        "kind": "other",
+        "expr": "user.email == \"future@x\""
+      },
+      {
+        "test": "test_pat_with_future_expires_at_resolves",
+        "line": 171,
+        "kind": "other",
+        "expr": "user.is_enabled is True"
+      },
+      {
+        "test": "test_pat_with_future_expires_at_resolves",
+        "line": 172,
+        "kind": "other",
+        "expr": "scopes == {\"mcp:read\"}"
+      },
+      {
+        "test": "test_pat_with_past_expires_at_rejects",
+        "line": 218,
+        "kind": "other",
+        "expr": "exc.code == 401"
+      },
+      {
+        "test": "test_pat_with_past_expires_at_rejects",
+        "line": 219,
+        "kind": "other",
+        "expr": "\"expired\" in exc.detail.lower()"
+      }
+    ],
+    "test_mcp_streamable_http.py": [
+      {
+        "test": "test_mcp_endpoint_is_streamable_http_not_sse",
+        "line": 96,
+        "kind": "other",
+        "expr": "isinstance(mcp_server.app, PATAuthMiddleware)"
+      },
+      {
+        "test": "test_mcp_endpoint_is_streamable_http_not_sse",
+        "line": 97,
+        "kind": "other",
+        "expr": "isinstance(mcp_server.app.app, StreamableHTTPASGIApp), ("
+      },
+      {
+        "test": "test_mcp_transport_is_stateless_json",
+        "line": 105,
+        "kind": "other",
+        "expr": "mcp_server.mcp.settings.stateless_http is True"
+      },
+      {
+        "test": "test_mcp_transport_is_stateless_json",
+        "line": 106,
+        "kind": "other",
+        "expr": "mcp_server.mcp.settings.json_response is True"
+      },
+      {
+        "test": "test_post_mcp_routes_to_session_manager",
+        "line": 140,
+        "kind": "other",
+        "expr": "hits.get(\"called\") is True, \"POST 没有分流到 streamable session manager\""
+      },
+      {
+        "test": "test_post_mcp_routes_to_session_manager",
+        "line": 141,
+        "kind": "http-status-ok",
+        "expr": "res.status_code == 202"
+      },
+      {
+        "test": "test_post_mcp_without_trailing_slash_not_redirected",
+        "line": 176,
+        "kind": "other",
+        "expr": "res.status_code != 307, ("
+      },
+      {
+        "test": "test_post_mcp_without_trailing_slash_not_redirected",
+        "line": 180,
+        "kind": "other",
+        "expr": "hits.get(\"called\") is True, \"POST 没有直接到达 streamable 端点\""
+      }
+    ],
+    "test_mcp_tools.py": [
+      {
+        "test": null,
+        "line": 52,
+        "kind": "http-status-ok",
+        "expr": "res.status_code == 200, res.text"
+      },
+      {
+        "test": null,
+        "line": 62,
+        "kind": "http-status-ok",
+        "expr": "res.status_code == 200, res.text"
+      },
+      {
+        "test": null,
+        "line": 69,
+        "kind": "other",
+        "expr": "user is not None"
+      },
+      {
+        "test": "test_list_ledgers_returns_user_ledgers",
+        "line": 84,
+        "kind": "count-or-empty",
+        "expr": "len(ledgers) == 2"
+      },
+      {
+        "test": "test_list_ledgers_returns_user_ledgers",
+        "line": 86,
+        "kind": "catalog",
+        "expr": "names == {\"Family\", \"Personal\"}"
+      },
+      {
+        "test": "test_list_ledgers_returns_user_ledgers",
+        "line": 88,
+        "kind": "other",
+        "expr": "led[\"id\"]"
+      },
+      {
+        "test": "test_list_ledgers_returns_user_ledgers",
+        "line": 89,
+        "kind": "other",
+        "expr": "led[\"currency\"] == \"CNY\""
+      },
+      {
+        "test": "test_get_active_ledger_returns_earliest",
+        "line": 104,
+        "kind": "other",
+        "expr": "active is not None"
+      },
+      {
+        "test": "test_get_active_ledger_returns_earliest",
+        "line": 105,
+        "kind": "other",
+        "expr": "active[\"name\"] == \"First\""
+      },
+      {
+        "test": "test_get_active_ledger_returns_none_for_no_ledger",
+        "line": 117,
+        "kind": "other",
+        "expr": "active is None"
+      },
+      {
+        "test": "test_list_transactions_empty_ledger",
+        "line": 131,
+        "kind": "count-or-empty",
+        "expr": "result[\"total\"] == 0"
+      },
+      {
+        "test": "test_list_transactions_empty_ledger",
+        "line": 132,
+        "kind": "count-or-empty",
+        "expr": "result[\"items\"] == []"
+      },
+      {
+        "test": "test_list_transactions_empty_ledger",
+        "line": 133,
+        "kind": "other",
+        "expr": "result[\"ledger\"] == \"Empty\""
+      },
+      {
+        "test": "test_get_ledger_stats_returns_zero_for_fresh_ledger",
+        "line": 147,
+        "kind": "other",
+        "expr": "stats is not None"
+      },
+      {
+        "test": "test_get_ledger_stats_returns_zero_for_fresh_ledger",
+        "line": 148,
+        "kind": "other",
+        "expr": "stats[\"ledger\"] == \"Stats\""
+      },
+      {
+        "test": "test_get_ledger_stats_returns_zero_for_fresh_ledger",
+        "line": 149,
+        "kind": "count-or-empty",
+        "expr": "stats[\"transaction_count\"] == 0"
+      },
+      {
+        "test": "test_get_ledger_stats_returns_zero_for_fresh_ledger",
+        "line": 151,
+        "kind": "other",
+        "expr": "stats[\"category_count\"] >= 0"
+      },
+      {
+        "test": "test_get_ledger_stats_returns_zero_for_fresh_ledger",
+        "line": 152,
+        "kind": "other",
+        "expr": "stats[\"account_count\"] >= 0"
+      },
+      {
+        "test": "test_search_empty_query_returns_empty",
+        "line": 167,
+        "kind": "count-or-empty",
+        "expr": "out == []"
+      },
+      {
+        "test": "test_search_empty_query_returns_empty",
+        "line": 169,
+        "kind": "count-or-empty",
+        "expr": "out == []"
+      },
+      {
+        "test": "test_merge_default_tag_dedupes_and_preserves_order",
+        "line": 179,
+        "kind": "other",
+        "expr": "_merge_default_tag(None) == [_MCP_DEFAULT_TAG]"
+      },
+      {
+        "test": "test_merge_default_tag_dedupes_and_preserves_order",
+        "line": 180,
+        "kind": "other",
+        "expr": "_merge_default_tag([]) == [_MCP_DEFAULT_TAG]"
+      },
+      {
+        "test": "test_merge_default_tag_dedupes_and_preserves_order",
+        "line": 183,
+        "kind": "other",
+        "expr": "_merge_default_tag([\"coffee\", \"work\"]) == [\"coffee\", \"work\", _MCP_DEFAULT_TAG]"
+      },
+      {
+        "test": "test_merge_default_tag_dedupes_and_preserves_order",
+        "line": 187,
+        "kind": "other",
+        "expr": "out == [_MCP_DEFAULT_TAG, \"coffee\"]"
+      },
+      {
+        "test": "test_merge_default_tag_dedupes_and_preserves_order",
+        "line": 190,
+        "kind": "other",
+        "expr": "_merge_default_tag([\"  \", \"\", \"x\"]) == [\"x\", _MCP_DEFAULT_TAG]"
+      },
+      {
+        "test": "test_get_analytics_summary_empty_ledger",
+        "line": 202,
+        "kind": "other",
+        "expr": "summary[\"ledger\"] == \"A\""
+      },
+      {
+        "test": "test_get_analytics_summary_empty_ledger",
+        "line": 203,
+        "kind": "count-or-empty",
+        "expr": "summary[\"income\"] == 0"
+      },
+      {
+        "test": "test_get_analytics_summary_empty_ledger",
+        "line": 204,
+        "kind": "count-or-empty",
+        "expr": "summary[\"expense\"] == 0"
+      },
+      {
+        "test": "test_get_analytics_summary_empty_ledger",
+        "line": 205,
+        "kind": "count-or-empty",
+        "expr": "summary[\"balance\"] == 0"
+      },
+      {
+        "test": "test_get_analytics_summary_empty_ledger",
+        "line": 206,
+        "kind": "count-or-empty",
+        "expr": "summary[\"transaction_count\"] == 0"
+      },
+      {
+        "test": "test_get_analytics_summary_empty_ledger",
+        "line": 207,
+        "kind": "count-or-empty",
+        "expr": "summary[\"top_categories\"] == []"
+      },
+      {
+        "test": "test_mcp_currency_fields_base_currency_no_fields",
+        "line": 231,
+        "kind": "count-or-empty",
+        "expr": "fields == {}"
+      },
+      {
+        "test": "test_mcp_currency_fields_foreign_auto_rate",
+        "line": 250,
+        "kind": "other",
+        "expr": "base == \"CNY\""
+      },
+      {
+        "test": "test_mcp_currency_fields_foreign_auto_rate",
+        "line": 261,
+        "kind": "other",
+        "expr": "fields[\"currency_code\"] == \"USD\""
+      },
+      {
+        "test": "test_mcp_currency_fields_foreign_auto_rate",
+        "line": 262,
+        "kind": "other",
+        "expr": "abs(fields[\"native_amount\"] - 12.0 / 0.14) < 1e-6"
+      },
+      {
+        "test": "test_mcp_currency_fields_missing_rate_falls_back_to_amount",
+        "line": 288,
+        "kind": "other",
+        "expr": "fields[\"currency_code\"] == \"THB\""
+      },
+      {
+        "test": "test_mcp_currency_fields_missing_rate_falls_back_to_amount",
+        "line": 289,
+        "kind": "other",
+        "expr": "fields[\"native_amount\"] == 500.0"
+      }
+    ],
+    "test_mcp_transaction_timezone.py": [
+      {
+        "test": "test_cloud_local_times_and_explicit_offsets",
+        "line": 48,
+        "kind": "other",
+        "expr": "parse_transaction_datetime(value).isoformat() == expected"
+      },
+      {
+        "test": "test_cloud_timezone_has_priority_over_agent_fallback",
+        "line": 53,
+        "kind": "other",
+        "expr": "result.hour == 13"
+      },
+      {
+        "test": "test_explicit_scheduler_timezone_has_priority",
+        "line": 59,
+        "kind": "other",
+        "expr": "result.hour == 12"
+      },
+      {
+        "test": "test_env_file_tz_is_read",
+        "line": 66,
+        "kind": "other",
+        "expr": "Settings(_env_file=env_file).cloud_timezone == \"America/New_York\""
+      },
+      {
+        "test": "test_caller_timezone_when_cloud_has_none",
+        "line": 72,
+        "kind": "other",
+        "expr": "parse_transaction_datetime(date, time_zone=\"America/New_York\").hour == hour"
+      },
+      {
+        "test": "test_invalid_cloud_timezone_is_not_silently_ignored",
+        "line": 86,
+        "kind": "datetime",
+        "expr": "parse_transaction_datetime(\"2026-05-23T13:28:52Z\").hour == 13"
+      },
+      {
+        "test": "test_batch_amount_schema_accepts_numeric_strings_and_rejects_invalid_values",
+        "line": 92,
+        "kind": "other",
+        "expr": "BatchTransactionItem(amount=\"12.50\").amount == 12.5"
+      },
+      {
+        "test": "test_create_transactions_tool_schema_describes_batch_items",
+        "line": 104,
+        "kind": "count-or-empty",
+        "expr": "item_schema[\"properties\"][\"amount\"][\"exclusiveMinimum\"] == 0"
+      },
+      {
+        "test": "test_create_transactions_tool_schema_describes_batch_items",
+        "line": 105,
+        "kind": "other",
+        "expr": "item_schema[\"additionalProperties\"] is False"
+      },
+      {
+        "test": "test_create_transactions_tool_schema_describes_batch_items",
+        "line": 106,
+        "kind": "other",
+        "expr": "schema[\"properties\"][\"transactions\"][\"items\"][\"$ref\"] == ("
+      },
+      {
+        "test": "test_dst_gaps_and_overlaps_require_explicit_offset",
+        "line": 119,
+        "kind": "datetime",
+        "expr": "parse_transaction_datetime(\"2026-11-01T01:30:00-05:00\").hour == 6"
+      },
+      {
+        "test": "test_dst_gaps_and_overlaps_require_explicit_offset",
+        "line": 142,
+        "kind": "http-status-ok",
+        "expr": "response.status_code == 200, response.text"
+      },
+      {
+        "test": "test_dst_gaps_and_overlaps_require_explicit_offset",
+        "line": 146,
+        "kind": "http-status-ok",
+        "expr": "response.status_code == 200, response.text"
+      },
+      {
+        "test": "test_mcp_write_web_read_and_mobile_sync_keep_source_wall_time",
+        "line": 176,
+        "kind": "other",
+        "expr": "result[\"created_count\"] == 2"
+      },
+      {
+        "test": "test_mcp_write_web_read_and_mobile_sync_keep_source_wall_time",
+        "line": 180,
+        "kind": "count-or-empty",
+        "expr": "len(rows) == (2 if bulk else 1)"
+      },
+      {
+        "test": "test_mcp_write_web_read_and_mobile_sync_keep_source_wall_time",
+        "line": 183,
+        "kind": "other",
+        "expr": "happened.astimezone(ZoneInfo(\"Asia/Shanghai\")).strftime(\"%H:%M:%S\") == \"21:28:52\""
+      },
+      {
+        "test": "test_mcp_write_web_read_and_mobile_sync_keep_source_wall_time",
+        "line": 185,
+        "kind": "other",
+        "expr": "all(row[\"happened_at\"].endswith(\"+00:00\") for row in mcp_rows)"
+      },
+      {
+        "test": "test_mcp_write_web_read_and_mobile_sync_keep_source_wall_time",
+        "line": 188,
+        "kind": "count-or-empty",
+        "expr": "len(tx_changes) == len(rows)"
+      },
+      {
+        "test": "test_mcp_write_web_read_and_mobile_sync_keep_source_wall_time",
+        "line": 191,
+        "kind": "other",
+        "expr": "happened.astimezone(ZoneInfo(\"Asia/Shanghai\")).hour == 21"
+      },
+      {
+        "test": "test_update_uses_cloud_timezone",
+        "line": 199,
+        "kind": "other",
+        "expr": "datetime.fromisoformat(rows[0][\"happened_at\"].replace(\"Z\", \"+00:00\")) == datetime(2026, 5, 24, 1, tzinfo=timezone.utc)"
+      },
+      {
+        "test": "test_mcp_write_persists_entity_ids_and_searches_default_tag",
+        "line": 244,
+        "kind": "other",
+        "expr": "row is not None"
+      },
+      {
+        "test": "test_mcp_write_persists_entity_ids_and_searches_default_tag",
+        "line": 245,
+        "kind": "other",
+        "expr": "row.category_sync_id == category_id"
+      },
+      {
+        "test": "test_mcp_write_persists_entity_ids_and_searches_default_tag",
+        "line": 246,
+        "kind": "other",
+        "expr": "row.account_sync_id == account_id"
+      },
+      {
+        "test": "test_mcp_write_persists_entity_ids_and_searches_default_tag",
+        "line": 250,
+        "kind": "other",
+        "expr": "tx[\"category_id\"] == category_id"
+      },
+      {
+        "test": "test_mcp_write_persists_entity_ids_and_searches_default_tag",
+        "line": 251,
+        "kind": "other",
+        "expr": "tx[\"account_id\"] == account_id"
+      },
+      {
+        "test": "test_mcp_write_persists_entity_ids_and_searches_default_tag",
+        "line": 253,
+        "kind": "other",
+        "expr": "any(item[\"sync_id\"] == result[\"sync_id\"] for item in read_tools.search(user, q=\"MCP\"))"
+      },
+      {
+        "test": "test_mcp_write_persists_entity_ids_and_searches_default_tag",
+        "line": 254,
+        "kind": "other",
+        "expr": "any("
+      },
+      {
+        "test": "test_transaction_type_switch_clears_inactive_account_fields",
+        "line": 285,
+        "kind": "other",
+        "expr": "item[\"accountId\"] == \"acc-expense\""
+      },
+      {
+        "test": "test_transaction_type_switch_clears_inactive_account_fields",
+        "line": 286,
+        "kind": "other",
+        "expr": "item[\"accountName\"] == \"Expense\""
+      },
+      {
+        "test": "test_transaction_type_switch_clears_inactive_account_fields",
+        "line": 287,
+        "kind": "other",
+        "expr": "item[\"fromAccountId\"] is None"
+      },
+      {
+        "test": "test_transaction_type_switch_clears_inactive_account_fields",
+        "line": 288,
+        "kind": "other",
+        "expr": "item[\"fromAccountName\"] is None"
+      },
+      {
+        "test": "test_transaction_type_switch_clears_inactive_account_fields",
+        "line": 289,
+        "kind": "other",
+        "expr": "item[\"toAccountId\"] is None"
+      },
+      {
+        "test": "test_transaction_type_switch_clears_inactive_account_fields",
+        "line": 290,
+        "kind": "other",
+        "expr": "item[\"toAccountName\"] is None"
+      },
+      {
+        "test": "test_transaction_type_switch_clears_inactive_account_fields",
+        "line": 304,
+        "kind": "other",
+        "expr": "item[\"accountId\"] is None"
+      },
+      {
+        "test": "test_transaction_type_switch_clears_inactive_account_fields",
+        "line": 305,
+        "kind": "other",
+        "expr": "item[\"accountName\"] is None"
+      },
+      {
+        "test": "test_transaction_type_switch_clears_inactive_account_fields",
+        "line": 306,
+        "kind": "other",
+        "expr": "item[\"fromAccountId\"] == \"acc-new-from\""
+      },
+      {
+        "test": "test_transaction_type_switch_clears_inactive_account_fields",
+        "line": 307,
+        "kind": "other",
+        "expr": "item[\"toAccountId\"] == \"acc-new-to\""
+      },
+      {
+        "test": "test_invalid_batch_has_no_partial_transactions_or_mcp_tag",
+        "line": 318,
+        "kind": "other",
+        "expr": "db.scalar(select(ReadTxProjection)) is None"
+      },
+      {
+        "test": "test_invalid_batch_has_no_partial_transactions_or_mcp_tag",
+        "line": 319,
+        "kind": "catalog",
+        "expr": "db.scalar(select(UserTagProjection).where(UserTagProjection.name == \"MCP\")) is None"
+      },
+      {
+        "test": "test_invalid_single_has_no_mcp_tag_side_effect",
+        "line": 327,
+        "kind": "catalog",
+        "expr": "db.scalar(select(UserTagProjection).where(UserTagProjection.name == \"MCP\")) is None"
+      },
+      {
+        "test": "test_web_config_public_and_operator_controlled",
+        "line": 335,
+        "kind": "http-status-ok",
+        "expr": "response.status_code == 200"
+      },
+      {
+        "test": "test_web_config_public_and_operator_controlled",
+        "line": 336,
+        "kind": "other",
+        "expr": "response.json() == {\"project_partnerships_enabled\": enabled}"
+      }
+    ],
+    "test_mcp_workflows.py": [
+      {
+        "test": "test_import_preview_execution_source_links_and_safe_undo",
+        "line": 40,
+        "kind": "status-field",
+        "expr": "plan[\"status\"] == \"ready\", plan"
+      },
+      {
+        "test": "test_import_preview_execution_source_links_and_safe_undo",
+        "line": 41,
+        "kind": "count-or-empty",
+        "expr": "rt.list_transactions(ledger.user)[\"total\"] == 0"
+      },
+      {
+        "test": "test_import_preview_execution_source_links_and_safe_undo",
+        "line": 45,
+        "kind": "status-field",
+        "expr": "outcome[\"status\"] == \"completed\", outcome"
+      },
+      {
+        "test": "test_import_preview_execution_source_links_and_safe_undo",
+        "line": 47,
+        "kind": "other",
+        "expr": "("
+      },
+      {
+        "test": "test_import_preview_execution_source_links_and_safe_undo",
+        "line": 54,
+        "kind": "other",
+        "expr": "repeated[\"operation_id\"] == outcome[\"operation_id\"]"
+      },
+      {
+        "test": "test_import_preview_execution_source_links_and_safe_undo",
+        "line": 55,
+        "kind": "other",
+        "expr": "rt.list_transactions(ledger.user)[\"total\"] == 1"
+      },
+      {
+        "test": "test_import_preview_execution_source_links_and_safe_undo",
+        "line": 58,
+        "kind": "status-field",
+        "expr": "undo[\"status\"] == \"conflict\""
+      },
+      {
+        "test": "test_import_preview_execution_source_links_and_safe_undo",
+        "line": 59,
+        "kind": "other",
+        "expr": "rt.get_transaction(ledger.user, sid)[\"note\"] == \"later manual edit\""
+      },
+      {
+        "test": "test_import_undo_removes_only_created_entries_and_sources",
+        "line": 81,
+        "kind": "status-field",
+        "expr": "undone[\"status\"] == \"completed\", undone"
+      },
+      {
+        "test": "test_import_undo_removes_only_created_entries_and_sources",
+        "line": 82,
+        "kind": "other",
+        "expr": "rt.get_transaction(ledger.user, sid) is None"
+      },
+      {
+        "test": "test_import_undo_removes_only_created_entries_and_sources",
+        "line": 83,
+        "kind": "count-or-empty",
+        "expr": "workflows.list_transaction_sources(ledger.user, ledger.ledger_id, sid) == []"
+      },
+      {
+        "test": "test_import_undo_removes_only_created_entries_and_sources",
+        "line": 85,
+        "kind": "other",
+        "expr": "any(item[\"sync_id\"] == sid and item[\"action\"] == \"delete\" for item in changes[\"items\"])"
+      },
+      {
+        "test": "test_import_similarity_needs_review_and_exact_source_is_reused",
+        "line": 93,
+        "kind": "status-field",
+        "expr": "plan[\"status\"] == \"needs_review\""
+      },
+      {
+        "test": "test_import_similarity_needs_review_and_exact_source_is_reused",
+        "line": 94,
+        "kind": "status-field",
+        "expr": "plan[\"data\"][\"items\"][0][\"status\"] == \"review_required\""
+      },
+      {
+        "test": "test_import_similarity_needs_review_and_exact_source_is_reused",
+        "line": 104,
+        "kind": "status-field",
+        "expr": "repeated[\"data\"][\"items\"][0][\"status\"] == \"existing\""
+      },
+      {
+        "test": "test_import_similarity_needs_review_and_exact_source_is_reused",
+        "line": 110,
+        "kind": "status-field",
+        "expr": "outcome[\"status\"] == \"completed\""
+      },
+      {
+        "test": "test_import_similarity_needs_review_and_exact_source_is_reused",
+        "line": 111,
+        "kind": "count-or-empty",
+        "expr": "outcome[\"sync_ids\"] == []"
+      },
+      {
+        "test": "test_import_similarity_needs_review_and_exact_source_is_reused",
+        "line": 112,
+        "kind": "other",
+        "expr": "rt.list_transactions(ledger.user)[\"total\"] == 1"
+      },
+      {
+        "test": "test_import_stale_preview_rejected_before_writes",
+        "line": 120,
+        "kind": "other",
+        "expr": "rt.list_transactions(ledger.user)[\"total\"] == 1"
+      },
+      {
+        "test": "test_record_revisions_reconciliation_and_user_isolation",
+        "line": 133,
+        "kind": "other",
+        "expr": "result[\"reconciled\"] is True"
+      },
+      {
+        "test": "test_record_revisions_reconciliation_and_user_isolation",
+        "line": 134,
+        "kind": "count-or-empty",
+        "expr": "result[\"difference\"] == 0"
+      },
+      {
+        "test": "test_record_revisions_reconciliation_and_user_isolation",
+        "line": 146,
+        "kind": "other",
+        "expr": "saved[\"kind\"] == \"checkpoint\""
+      },
+      {
+        "test": "test_record_revisions_reconciliation_and_user_isolation",
+        "line": 157,
+        "kind": "other",
+        "expr": "changed[\"revision\"] == 2"
+      },
+      {
+        "test": "test_csv_file_preview_export_original_bytes_and_permissions",
+        "line": 180,
+        "kind": "status-field",
+        "expr": "category[\"status\"] == \"completed\""
+      },
+      {
+        "test": "test_csv_file_preview_export_original_bytes_and_permissions",
+        "line": 192,
+        "kind": "other",
+        "expr": "read_raw == raw"
+      },
+      {
+        "test": "test_csv_file_preview_export_original_bytes_and_permissions",
+        "line": 206,
+        "kind": "status-field",
+        "expr": "preview[\"status\"] == \"ready\", preview"
+      },
+      {
+        "test": "test_csv_file_preview_export_original_bytes_and_permissions",
+        "line": 211,
+        "kind": "status-field",
+        "expr": "result[\"status\"] == \"completed\""
+      },
+      {
+        "test": "test_csv_file_preview_export_original_bytes_and_permissions",
+        "line": 213,
+        "kind": "other",
+        "expr": "exported[\"row_count\"] == 1"
+      },
+      {
+        "test": "test_csv_file_preview_export_original_bytes_and_permissions",
+        "line": 216,
+        "kind": "other",
+        "expr": "\"synthetic\" in row.data_json[\"csv\"]"
+      },
+      {
+        "test": "test_csv_file_preview_export_original_bytes_and_permissions",
+        "line": 217,
+        "kind": "other",
+        "expr": "\"currency_code\" in row.data_json[\"csv\"]"
+      },
+      {
+        "test": "test_composable_analysis_uses_local_dates_flags_and_comparison",
+        "line": 242,
+        "kind": "other",
+        "expr": "result[\"totals\"][\"expense\"] == 30"
+      },
+      {
+        "test": "test_composable_analysis_uses_local_dates_flags_and_comparison",
+        "line": 243,
+        "kind": "other",
+        "expr": "result[\"totals\"][\"transaction_count\"] == 2"
+      },
+      {
+        "test": "test_composable_analysis_uses_local_dates_flags_and_comparison",
+        "line": 244,
+        "kind": "other",
+        "expr": "result[\"groups\"][0][\"key\"] == \"2026-01-01\""
+      },
+      {
+        "test": "test_composable_analysis_uses_local_dates_flags_and_comparison",
+        "line": 245,
+        "kind": "count-or-empty",
+        "expr": "result[\"comparison\"][\"totals\"][\"expense\"] == 0"
+      },
+      {
+        "test": "test_month_end_recurrence_catchup_pause_and_retry_are_idempotent",
+        "line": 262,
+        "kind": "other",
+        "expr": "saved[\"next_occurrences\"][:3] == ["
+      },
+      {
+        "test": "test_month_end_recurrence_catchup_pause_and_retry_are_idempotent",
+        "line": 270,
+        "kind": "other",
+        "expr": "first[0][\"operation\"][\"created_count\"] == second[0][\"operation\"][\"created_count\"] == 1"
+      },
+      {
+        "test": "test_month_end_recurrence_catchup_pause_and_retry_are_idempotent",
+        "line": 271,
+        "kind": "count-or-empty",
+        "expr": "run(rules.execute_due_rules(now=due)) == []"
+      },
+      {
+        "test": "test_month_end_recurrence_catchup_pause_and_retry_are_idempotent",
+        "line": 272,
+        "kind": "other",
+        "expr": "rt.list_transactions(ledger.user)[\"total\"] == 2"
+      },
+      {
+        "test": "test_month_end_recurrence_catchup_pause_and_retry_are_idempotent",
+        "line": 274,
+        "kind": "other",
+        "expr": "current[\"data\"][\"executed_count\"] == 2"
+      },
+      {
+        "test": "test_month_end_recurrence_catchup_pause_and_retry_are_idempotent",
+        "line": 285,
+        "kind": "count-or-empty",
+        "expr": "run(rules.execute_due_rules(now=datetime(2026, 4, 1, tzinfo=timezone.utc))) == []"
+      },
+      {
+        "test": "test_invalid_recurring_rule_does_not_block_later_rules",
+        "line": 322,
+        "kind": "status-field",
+        "expr": "removed[\"status\"] == \"completed\""
+      },
+      {
+        "test": "test_invalid_recurring_rule_does_not_block_later_rules",
+        "line": 325,
+        "kind": "status-field",
+        "expr": "by_rule[saved[0][\"id\"]][\"status\"] == \"failed\""
+      },
+      {
+        "test": "test_invalid_recurring_rule_does_not_block_later_rules",
+        "line": 326,
+        "kind": "other",
+        "expr": "by_rule[saved[0][\"id\"]][\"error_code\"] == \"ValueError\""
+      },
+      {
+        "test": "test_invalid_recurring_rule_does_not_block_later_rules",
+        "line": 327,
+        "kind": "status-field",
+        "expr": "by_rule[saved[1][\"id\"]][\"operation\"][\"status\"] == \"created\""
+      },
+      {
+        "test": "test_invalid_recurring_rule_does_not_block_later_rules",
+        "line": 328,
+        "kind": "other",
+        "expr": "rt.list_transactions(ledger.user)[\"total\"] == 1"
+      },
+      {
+        "test": "test_invalid_recurring_rule_does_not_block_later_rules",
+        "line": 329,
+        "kind": "other",
+        "expr": "rt.list_transactions(ledger.user)[\"items\"][0][\"amount\"] == 9"
+      },
+      {
+        "test": "test_recurring_dst_gap_is_skipped_and_ambiguous_policy_is_explicit",
+        "line": 337,
+        "kind": "other",
+        "expr": "rules.occurrence(data, 1) is None"
+      },
+      {
+        "test": "test_recurring_dst_gap_is_skipped_and_ambiguous_policy_is_explicit",
+        "line": 338,
+        "kind": "other",
+        "expr": "rules.occurrence(data, 2).hour == 6"
+      },
+      {
+        "test": "test_recurring_dst_gap_is_skipped_and_ambiguous_policy_is_explicit",
+        "line": 345,
+        "kind": "other",
+        "expr": "(rules.occurrence(data, 1) - first).total_seconds() == 3600"
+      },
+      {
+        "test": "test_classification_preview_freezes_versions_and_protects_user_edits",
+        "line": 372,
+        "kind": "other",
+        "expr": "preview[\"items\"][0][\"before\"][\"category_id\"] is None"
+      },
+      {
+        "test": "test_classification_preview_freezes_versions_and_protects_user_edits",
+        "line": 377,
+        "kind": "status-field",
+        "expr": "attempted[\"status\"] == \"failed\""
+      },
+      {
+        "test": "test_classification_preview_freezes_versions_and_protects_user_edits",
+        "line": 378,
+        "kind": "error-body",
+        "expr": "attempted[\"error\"][\"code\"] == \"REVISION_CONFLICT\""
+      },
+      {
+        "test": "test_classification_preview_freezes_versions_and_protects_user_edits",
+        "line": 379,
+        "kind": "error-body",
+        "expr": "attempted[\"error\"][\"retryable\"] is False"
+      },
+      {
+        "test": "test_classification_preview_freezes_versions_and_protects_user_edits",
+        "line": 380,
+        "kind": "other",
+        "expr": "rt.get_transaction(ledger.user, tx[\"sync_id\"])[\"category_id\"] is None"
+      },
+      {
+        "test": "test_reserved_sources_block_a_competing_import_plan",
+        "line": 397,
+        "kind": "status-field",
+        "expr": "failed[\"status\"] == \"failed\""
+      },
+      {
+        "test": "test_reserved_sources_block_a_competing_import_plan",
+        "line": 408,
+        "kind": "status-field",
+        "expr": "resumed[\"status\"] == \"completed\""
+      },
+      {
+        "test": "test_reserved_sources_block_a_competing_import_plan",
+        "line": 409,
+        "kind": "other",
+        "expr": "rt.list_transactions(ledger.user)[\"total\"] == 1"
+      },
+      {
+        "test": "test_net_worth_keeps_currencies_separate_and_reports_missing_rates",
+        "line": 416,
+        "kind": "other",
+        "expr": "history[\"multi_currency\"] is True"
+      },
+      {
+        "test": "test_net_worth_keeps_currencies_separate_and_reports_missing_rates",
+        "line": 417,
+        "kind": "other",
+        "expr": "history[\"missing_conversion_currencies\"] == [\"USD\"]"
+      },
+      {
+        "test": "test_net_worth_keeps_currencies_separate_and_reports_missing_rates",
+        "line": 418,
+        "kind": "count-or-empty",
+        "expr": "history[\"series\"] == []"
+      },
+      {
+        "test": "test_net_worth_keeps_currencies_separate_and_reports_missing_rates",
+        "line": 419,
+        "kind": "other",
+        "expr": "history[\"series_by_currency\"][-1][\"by_currency\"][\"CNY\"][\"net_worth\"] == 1000"
+      },
+      {
+        "test": "test_net_worth_keeps_currencies_separate_and_reports_missing_rates",
+        "line": 420,
+        "kind": "other",
+        "expr": "history[\"series_by_currency\"][-1][\"by_currency\"][\"USD\"][\"net_worth\"] == 1000"
+      },
+      {
+        "test": "test_net_worth_credit_debt_and_overpayment_use_signed_balances",
+        "line": 439,
+        "kind": "other",
+        "expr": "before[\"series\"][-1][\"liabilities\"] == 100"
+      },
+      {
+        "test": "test_net_worth_credit_debt_and_overpayment_use_signed_balances",
+        "line": 440,
+        "kind": "other",
+        "expr": "before[\"series\"][-1][\"net_worth\"] == -100"
+      },
+      {
+        "test": "test_net_worth_credit_debt_and_overpayment_use_signed_balances",
+        "line": 447,
+        "kind": "count-or-empty",
+        "expr": "after[\"series\"][-1][\"liabilities\"] == 0"
+      },
+      {
+        "test": "test_net_worth_credit_debt_and_overpayment_use_signed_balances",
+        "line": 448,
+        "kind": "other",
+        "expr": "after[\"series\"][-1][\"assets\"] == 50"
+      },
+      {
+        "test": "test_shared_dictionary_reads_and_ai_context_use_ledger_owner",
+        "line": 462,
+        "kind": "catalog",
+        "expr": "any(name == \"Shared owner cash\" for name, _ in accounts)"
+      },
+      {
+        "test": "test_shared_dictionary_reads_and_ai_context_use_ledger_owner",
+        "line": 463,
+        "kind": "other",
+        "expr": "any(item[\"id\"] == aid for item in rt.list_accounts(member, ledger_id=ledger.ledger_id))"
+      },
+      {
+        "test": "test_shared_dictionary_reads_and_ai_context_use_ledger_owner",
+        "line": 464,
+        "kind": "other",
+        "expr": "not any("
+      },
+      {
+        "test": "test_shared_dictionary_reads_and_ai_context_use_ledger_owner",
+        "line": 468,
+        "kind": "other",
+        "expr": "shared_history[\"series\"][-1][\"net_worth\"] == 1000"
+      },
+      {
+        "test": "test_shared_dictionary_reads_and_ai_context_use_ledger_owner",
+        "line": 469,
+        "kind": "other",
+        "expr": "shared_history[\"coverage\"][\"partial\"] is True"
+      },
+      {
+        "test": "test_foreign_transfer_amounts_are_never_added_as_base_currency",
+        "line": 485,
+        "kind": "status-field",
+        "expr": "result[\"status\"] == \"created\""
+      },
+      {
+        "test": "test_foreign_transfer_amounts_are_never_added_as_base_currency",
+        "line": 487,
+        "kind": "other",
+        "expr": "report[\"totals\"][\"transfer_by_currency\"] == {\"USD\": 5}"
+      },
+      {
+        "test": "test_foreign_transfer_amounts_are_never_added_as_base_currency",
+        "line": 488,
+        "kind": "count-or-empty",
+        "expr": "report[\"totals\"][\"transfer\"] == 0"
+      },
+      {
+        "test": "test_foreign_transfer_amounts_are_never_added_as_base_currency",
+        "line": 489,
+        "kind": "count-or-empty",
+        "expr": "report[\"totals\"][\"expense\"] == 0"
+      },
+      {
+        "test": "test_recurring_lost_response_cannot_be_overwritten_by_rule_edit",
+        "line": 517,
+        "kind": "status-field",
+        "expr": "failed[0][\"operation\"][\"status\"] == \"failed\""
+      },
+      {
+        "test": "test_recurring_lost_response_cannot_be_overwritten_by_rule_edit",
+        "line": 530,
+        "kind": "status-field",
+        "expr": "blocked[\"status\"] == \"operation_pending\""
+      },
+      {
+        "test": "test_recurring_lost_response_cannot_be_overwritten_by_rule_edit",
+        "line": 533,
+        "kind": "status-field",
+        "expr": "resumed[0][\"operation\"][\"status\"] == \"created\""
+      },
+      {
+        "test": "test_recurring_lost_response_cannot_be_overwritten_by_rule_edit",
+        "line": 534,
+        "kind": "other",
+        "expr": "rt.list_transactions(ledger.user)[\"total\"] == 1"
+      },
+      {
+        "test": "test_recurring_lost_response_cannot_be_overwritten_by_rule_edit",
+        "line": 535,
+        "kind": "other",
+        "expr": "rt.list_transactions(ledger.user)[\"items\"][0][\"amount\"] == 7"
+      }
+    ]
+  },
+  "totals": {
+    "http-status-ok": 16,
+    "other": 214,
+    "count-or-empty": 45,
+    "catalog": 10,
+    "error-body": 4,
+    "status-field": 34,
+    "protocol": 1,
+    "datetime": 2
+  },
+  "totalAsserts": 326
+}

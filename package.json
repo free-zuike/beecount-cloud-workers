@@ -7,6 +7,8 @@
     "deploy": "wrangler deploy",
     "test": "vitest",
     "check:schema": "node scripts/check-schema-sync.mjs",
+    "parity:extract": "node scripts/parity/extract-upstream-asserts.mjs",
+    "parity:dump": "python scripts/parity/upstream_dump.py tests/fixtures/upstream-golden.json",
     "postinstall": "node scripts/patch-ssh2.js"
   },
   "keywords": [
