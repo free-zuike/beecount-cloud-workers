@@ -28,11 +28,23 @@ NOW = datetime(2026, 5, 20, 4, 0, 0, tzinfo=timezone.utc)
 
 
 def insert(db, model, **kw):
-    """按表结构裁剪后再实例化，避免上游增删列导致脚本崩。"""
+    """按表结构裁剪后插入，并立即 flush。
+
+    立即 flush 是必须的：上游模型之间只有 FK 列、没有 relationship()，
+    SQLAlchemy 的工作单元不保证 users 先于 ledgers 落库，
+    实测 CI 报 `FOREIGN KEY constraint failed`。逐行 flush 让插入顺序等于代码顺序。
+    """
     cols = {c.name for c in model.__table__.columns}
     dropped = set(kw) - cols
     row = model(**{k: v for k, v in kw.items() if k in cols})
     db.add(row)
+    try:
+        db.flush()
+    except Exception as exc:
+        raise RuntimeError(
+            f"插入 {model.__tablename__} 失败（{type(exc).__name__}: {exc}）；"
+            f"已提供={sorted(kw)} 被裁掉={sorted(dropped)}"
+        ) from exc
     return row, dropped
 
 
