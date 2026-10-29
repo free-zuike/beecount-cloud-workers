@@ -26,20 +26,32 @@ export type Json = null | boolean | number | string | Json[] | { [k: string]: Js
  * 所以整串必然不等；但 **payload 是契约**——里面的 filter/id/revision/time
  * 一旦走偏就是真差异。这里只保留解码后的 payload 参与比对。
  */
+/**
+ * 游标是 `base64url(HMAC-SHA256(32 字节) || JSON)`：前面是二进制签名，后面直接接
+ * JSON 文本，**没有分隔符**。HMAC 的密钥两侧不同，所以整串必然不等；但 payload 里
+ * 的 filter/id/revision/time 是契约。这里从首个 '{' 开始解析，只保留 payload。
+ */
 function decodeCursor(text: string): Json {
-  const dot = text.indexOf('.');
-  if (dot < 0) return text;
   try {
-    const b64 = text.slice(dot + 1).replace(/-/g, '+').replace(/_/g, '/');
-    const json = Buffer.from(b64, 'base64').toString('utf8');
-    const payload = JSON.parse(json) as { time?: unknown; [k: string]: unknown };
-    // 上游 SQLite 存 tz-naive datetime，payload.time 是 "2026-05-13T02:30:00"；
-    // 本地列里存的是带 Z 的 ISO。这个后缀差异不是契约（游标对客户端是不透明串），
-    // 但 **秒级时间值本身** 仍然参与比对。
-    if (typeof payload.time === 'string') {
-      payload.time = payload.time.replace(/Z$/, '').replace(/\+00:00$/, '');
+    const raw = Buffer.from(text.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    // 签名是二进制，转成 utf8 会掺进乱码（可能也含 '{'），所以逐个 '{' 试解析，
+    // 取第一个能解析成带 id/filter 的对象的位置
+    for (let at = raw.indexOf('{'); at >= 0; at = raw.indexOf('{', at + 1)) {
+      try {
+        const payload = JSON.parse(raw.slice(at)) as { time?: unknown; id?: unknown; filter?: unknown };
+        if (!payload || typeof payload !== 'object' || payload.id === undefined) continue;
+        // 上游 SQLite 存 tz-naive datetime，payload.time 是 "2026-05-13T02:30:00"；
+        // 本地列里是带 Z 的 ISO。后缀差异不是契约（游标对客户端不透明），
+        // 但秒级时间值本身仍然参与比对。
+        if (typeof payload.time === 'string') {
+          payload.time = payload.time.replace(/Z$/, '').replace(/\+00:00$/, '');
+        }
+        return payload as Json;
+      } catch {
+        /* 这个 '{' 落在二进制区，继续找下一个 */
+      }
     }
-    return payload as Json;
+    return text;
   } catch {
     return text;
   }
