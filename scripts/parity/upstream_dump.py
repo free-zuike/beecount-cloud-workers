@@ -373,7 +373,7 @@ def main(out_path: str) -> int:
         src = src_list[0] if isinstance(src_list, list) and src_list else None
         if src:
             # source 是 pydantic 模型，不能传 dict（上游实现直接取属性）
-            from src.mcp.schemas import SourceInput  # type: ignore
+            from src.mcp.workflow_tools import SourceInput  # type: ignore
 
             step("link_transaction_source_duplicate", lambda: workflow_tools.link_transaction_source(
                 owner, "L1", created_id,
