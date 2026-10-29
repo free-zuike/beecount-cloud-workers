@@ -297,11 +297,20 @@ def main(out_path: str) -> int:
     # 导入执行：不 confirm → confirmation_required；confirm → 真正写交易
     from src.mcp import workflow_tools  # type: ignore
 
+    def plan_revision_of(res):
+        """执行时要带预览时的 base_revision，否则上游报 REVISION_CONFLICT。"""
+        if not isinstance(res, dict):
+            return None
+        plan = res.get("plan")
+        data = plan.get("data") if isinstance(plan, dict) else None
+        return data.get("base_revision") if isinstance(data, dict) else None
+
     plan_id = plan_id_of(state.get("last_raw"))
+    plan_rev = plan_revision_of(state.get("last_raw")) or 0
     step("execute_import_plan_no_confirm", lambda: asyncio.run(workflow_tools.execute_import_plan(
-        owner, plan_id, 0)))
+        owner, plan_id, plan_rev)))
     step("execute_import_plan", lambda: asyncio.run(workflow_tools.execute_import_plan(
-        owner, plan_id, 0, confirm=True)))
+        owner, plan_id, plan_rev, confirm=True)))
     step("list_total_after_import", lambda: {
         "total": read_tools.list_transactions(owner, ledger_id="L1", limit=50).get("total")})
     golden["scenario"] = scenario

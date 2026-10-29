@@ -1615,31 +1615,149 @@
       {
         "name": "preview_import_file",
         "result": {
-          "errors": [
-            {
-              "code": "PARSE_MAPPING_INCOMPLETE",
-              "field_name": null,
-              "message": "required mapping fields missing: category_name",
-              "raw_line": "",
-              "row_number": 0
-            }
-          ],
+          "errors": [],
           "file_id": "f1",
-          "file_sha256": "087538304e001a71b9b4d4b4aa9ec8c581384fb9086b45ad7a56e981db9537db",
+          "file_sha256": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7",
           "headers": [
             "日期",
             "金额",
             "类型",
+            "分类",
             "备注"
           ],
           "next_offset": null,
           "offset": 0,
-          "plan": null,
-          "status": "mapping_or_data_errors",
+          "plan": {
+            "data": {
+              "balance_effects": {},
+              "base_revision": 4,
+              "errors": [],
+              "items": [
+                {
+                  "action": "create",
+                  "allow_similar": false,
+                  "existing_sync_id": null,
+                  "index": 0,
+                  "normalized": {
+                    "amount": 12.5,
+                    "base_change_id": 0,
+                    "category_id": "c1",
+                    "category_kind": "expense",
+                    "category_name": "餐饮",
+                    "exclude_from_budget": false,
+                    "exclude_from_stats": false,
+                    "happened_at": "2026-05-15T16:00:00+00:00",
+                    "note": "午饭",
+                    "tag_ids": [
+                      "<AUTO_TAG>"
+                    ],
+                    "tags": [
+                      "MCP"
+                    ],
+                    "tx_type": "expense"
+                  },
+                  "similar": [],
+                  "sources": [
+                    {
+                      "file_sha256": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7",
+                      "order_id": null,
+                      "row_number": 2,
+                      "source_id": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7:2",
+                      "source_system": "file"
+                    }
+                  ],
+                  "status": "ready",
+                  "transaction": {
+                    "account": null,
+                    "account_id": null,
+                    "amount": 12.5,
+                    "attachments": null,
+                    "category": "餐饮",
+                    "category_id": null,
+                    "currency": null,
+                    "exclude_from_budget": false,
+                    "exclude_from_stats": false,
+                    "from_account": null,
+                    "from_account_id": null,
+                    "happened_at": "2026-05-15T16:00:00+00:00",
+                    "native_amount": null,
+                    "note": "午饭",
+                    "tags": [],
+                    "to_account": null,
+                    "to_account_id": null,
+                    "tx_type": "expense"
+                  }
+                },
+                {
+                  "action": "create",
+                  "allow_similar": false,
+                  "existing_sync_id": null,
+                  "index": 1,
+                  "normalized": {
+                    "amount": 3000.0,
+                    "base_change_id": 0,
+                    "category_id": "c2",
+                    "category_kind": "income",
+                    "category_name": "工资",
+                    "exclude_from_budget": false,
+                    "exclude_from_stats": false,
+                    "happened_at": "2026-05-16T16:00:00+00:00",
+                    "note": "五月工资",
+                    "tag_ids": [
+                      "<AUTO_TAG>"
+                    ],
+                    "tags": [
+                      "MCP"
+                    ],
+                    "tx_type": "income"
+                  },
+                  "similar": [],
+                  "sources": [
+                    {
+                      "file_sha256": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7",
+                      "order_id": null,
+                      "row_number": 3,
+                      "source_id": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7:3",
+                      "source_system": "file"
+                    }
+                  ],
+                  "status": "ready",
+                  "transaction": {
+                    "account": null,
+                    "account_id": null,
+                    "amount": 3000.0,
+                    "attachments": null,
+                    "category": "工资",
+                    "category_id": null,
+                    "currency": null,
+                    "exclude_from_budget": false,
+                    "exclude_from_stats": false,
+                    "from_account": null,
+                    "from_account_id": null,
+                    "happened_at": "2026-05-16T16:00:00+00:00",
+                    "native_amount": null,
+                    "note": "五月工资",
+                    "tags": [],
+                    "to_account": null,
+                    "to_account_id": null,
+                    "tx_type": "income"
+                  }
+                }
+              ],
+              "ready": true,
+              "time_zone": "Asia/Shanghai"
+            },
+            "id": "<UUID>",
+            "kind": "import_plan",
+            "ledger_internal_id": "L1-i",
+            "next_due_at": null,
+            "status": "ready"
+          },
+          "status": "ready",
           "suggested_mapping": {
             "account_name": null,
             "amount": "金额",
-            "category_name": null,
+            "category_name": "分类",
             "currency": null,
             "datetime_format": null,
             "expense_is_negative": false,
@@ -1655,6 +1773,23 @@
           },
           "total_rows": 2,
           "warnings": []
+        }
+      },
+      {
+        "name": "execute_import_plan_no_confirm",
+        "result": {
+          "plan_id": "<UUID>",
+          "status": "confirmation_required"
+        }
+      },
+      {
+        "name": "execute_import_plan",
+        "error": "ValueError: REVISION_CONFLICT: import plan version changed"
+      },
+      {
+        "name": "list_total_after_import",
+        "result": {
+          "total": 7
         }
       }
     ]

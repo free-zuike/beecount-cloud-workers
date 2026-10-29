@@ -321,8 +321,10 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     // 导入预览：附件字节由内存注入（生产是 R2），两侧解析同一份 CSV
     setAttachmentBytesSource(async () => new Uint8Array(IMPORT_BYTES));
     let planId: string | null = null;
+    let lastPreview: unknown = null;
     await run('preview_import_file', async () => {
       const res = await previewImportFile(c, { file_id: 'f1', time_zone: 'Asia/Shanghai' });
+      lastPreview = res;
       const plan = (res as { plan?: Record<string, unknown> }).plan;
       for (const holder of [res as Record<string, unknown>, plan ?? {}]) {
         for (const key of ['plan_id', 'id', 'record_id']) {
@@ -333,11 +335,15 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
       return res;
     });
 
-    // 导入执行：不 confirm → confirmation_required；confirm → 真正写交易
+    // 导入执行：不 confirm → confirmation_required；confirm → 真正写交易。
+    // expected_revision 必须等于预览时的 base_revision，否则上游报 REVISION_CONFLICT
+    const planRev = Number(
+      ((lastPreview as { plan?: { data?: { base_revision?: number } } }).plan?.data?.base_revision) ?? 0,
+    );
     await run('execute_import_plan_no_confirm',
-      () => executeImportPlan(c, { plan_id: planId ?? '', expected_revision: 0 }));
+      () => executeImportPlan(c, { plan_id: planId ?? '', expected_revision: planRev }));
     await run('execute_import_plan',
-      () => executeImportPlan(c, { plan_id: planId ?? '', expected_revision: 0, confirm: true }));
+      () => executeImportPlan(c, { plan_id: planId ?? '', expected_revision: planRev, confirm: true }));
     await run('list_total_after_import', async () => {
       const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
       return { total: page.total };
