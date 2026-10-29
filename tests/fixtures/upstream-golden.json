@@ -2505,6 +2505,43 @@
         }
       },
       {
+        "name": "list_transaction_sources",
+        "result": [
+          {
+            "id": "<UUID>",
+            "metadata": {
+              "file_sha256": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7",
+              "import_plan_id": "<UUID>",
+              "row_number": 2
+            },
+            "source_id": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7:2",
+            "source_system": "file",
+            "sync_id": "<SYNC_ID>"
+          }
+        ]
+      },
+      {
+        "name": "link_transaction_source_duplicate",
+        "error": "AttributeError: 'dict' object has no attribute 'source_system'"
+      },
+      {
+        "name": "unlink_transaction_source_no_confirm",
+        "result": {
+          "status": "confirmation_required"
+        }
+      },
+      {
+        "name": "unlink_transaction_source",
+        "result": {
+          "reference_id": "<UUID>",
+          "status": "unlinked"
+        }
+      },
+      {
+        "name": "list_transaction_sources_after_unlink",
+        "result": []
+      },
+      {
         "name": "undo_import_plan_no_confirm",
         "result": {
           "status": "confirmation_required"

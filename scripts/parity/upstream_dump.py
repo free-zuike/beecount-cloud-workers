@@ -372,9 +372,13 @@ def main(out_path: str) -> int:
         src_list = state.get("last_raw")
         src = src_list[0] if isinstance(src_list, list) and src_list else None
         if src:
+            # source 是 pydantic 模型，不能传 dict（上游实现直接取属性）
+            from src.mcp.schemas import SourceInput  # type: ignore
+
             step("link_transaction_source_duplicate", lambda: workflow_tools.link_transaction_source(
                 owner, "L1", created_id,
-                {"source_system": src.get("source_system"), "source_id": src.get("source_id")}))
+                SourceInput(source_system=src.get("source_system"),
+                            source_id=src.get("source_id"))))
             step("unlink_transaction_source_no_confirm", lambda: workflow_tools.unlink_transaction_source(
                 owner, "L1", src.get("id")))
             step("unlink_transaction_source", lambda: workflow_tools.unlink_transaction_source(
