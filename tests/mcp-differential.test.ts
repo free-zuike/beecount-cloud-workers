@@ -342,21 +342,17 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     );
     await run('execute_import_plan_no_confirm',
       () => executeImportPlan(c, { plan_id: planId ?? '', expected_revision: planRev }));
-    // plan 记录自身的 revision 与 data.base_revision 不一定同值（上游校验的是
-    // row.revision，而预览结果里没暴露它），故依次试 base / base+1
-    const executePlan = async (): Promise<unknown> => {
-      let last: unknown = null;
-      for (const rev of [planRev, planRev + 1]) {
-        try {
-          return await executeImportPlan(c, { plan_id: planId ?? '', expected_revision: rev, confirm: true });
-        } catch (exc: unknown) {
-          last = exc;
-          if (!String((exc as Error).message).includes('REVISION_CONFLICT')) break;
-        }
-      }
-      throw last as Error;
-    };
-    await run('execute_import_plan', executePlan);
+    // 错误 revision 必须被拒（写操作要防"预览之后账本变了"）
+    await run('execute_import_plan_wrong_revision',
+      () => executeImportPlan(c, { plan_id: planId ?? '', expected_revision: 0, confirm: true }));
+
+    // 正确 revision = plan 记录自身的 revision（上游校验的是 row.revision，
+    // 与 data.base_revision 不是同一个值，预览结果里也不暴露）
+    const planRow = h.sqlite.prepare('SELECT revision FROM mcp_state_records WHERE id = ?')
+      .get(planId ?? '') as { revision: number } | undefined;
+    const planRecordRev = planRow?.revision ?? planRev;
+    await run('execute_import_plan',
+      () => executeImportPlan(c, { plan_id: planId ?? '', expected_revision: planRecordRev, confirm: true }));
     await run('list_total_after_import', async () => {
       const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
       return { total: page.total };

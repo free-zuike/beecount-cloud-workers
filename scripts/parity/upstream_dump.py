@@ -310,22 +310,19 @@ def main(out_path: str) -> int:
     step("execute_import_plan_no_confirm", lambda: asyncio.run(workflow_tools.execute_import_plan(
         owner, plan_id, plan_rev)))
 
-    def execute_with_revision(plan_id, revisions):
-        """plan 记录自身的 revision 与 data.base_revision 不一定同值：
-        上游校验的是 row.revision，而预览结果里没有暴露它，故依次试 base / base+1。
-        """
-        last = None
-        for rev in revisions:
-            try:
-                return asyncio.run(workflow_tools.execute_import_plan(
-                    owner, plan_id, rev, confirm=True))
-            except Exception as exc:
-                last = exc
-                if "REVISION_CONFLICT" not in str(exc):
-                    break
-        raise last  # type: ignore[misc]
+    # 错误 revision 必须被拒（这是契约：写操作要防"预览之后账本变了"）
+    step("execute_import_plan_wrong_revision", lambda: asyncio.run(
+        workflow_tools.execute_import_plan(owner, plan_id, 0, confirm=True)))
 
-    step("execute_import_plan", lambda: execute_with_revision(plan_id, [plan_rev, plan_rev + 1]))
+    # 正确 revision = plan 记录自身的 revision（上游校验的是 row.revision，
+    # 与 data.base_revision 不是同一个值，预览结果里也不暴露，只能直接读表）
+    from sqlalchemy import text as sa_text  # type: ignore
+
+    plan_record_rev = db.execute(
+        sa_text("SELECT revision FROM mcp_state_records WHERE id = :i"), {"i": plan_id}
+    ).scalar()
+    step("execute_import_plan", lambda: asyncio.run(workflow_tools.execute_import_plan(
+        owner, plan_id, plan_record_rev, confirm=True)))
     step("list_total_after_import", lambda: {
         "total": read_tools.list_transactions(owner, ledger_id="L1", limit=50).get("total")})
     golden["scenario"] = scenario
