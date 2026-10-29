@@ -104,7 +104,8 @@ export const ALL_TOOL_DEFS: Array<ToolDef & { annotations?: Record<string, boole
 // dict → {...n},总长 ≤200(截 199 + '…');全跳过/空 → null。
 export function summarizeArgs(args: Record<string, unknown> | undefined | null): string | null {
   if (!args) return null;
-  const SENSITIVE = new Set(['note', 'text']);
+  // 对齐上游 _ARG_SKIP_FIELDS：note/text/content_base64/file_name 整字段跳过
+  const SENSITIVE = new Set(['note', 'text', 'content_base64', 'file_name']);
   const parts: string[] = [];
   for (const [k, v] of Object.entries(args)) {
     if (SENSITIVE.has(k)) continue;
@@ -125,6 +126,14 @@ export function summarizeArgs(args: Record<string, unknown> | undefined | null):
   let out = parts.join(', ');
   if (out.length > 200) out = out.slice(0, 199) + '…';
   return out;
+}
+
+/** 对齐上游 _write_call_log：错误记 `类名: 消息`，截断到 500 字符 */
+export function summarizeError(err: unknown): string | null {
+  if (!err) return null;
+  const e = err as Error;
+  const detail = `${e?.constructor?.name ?? 'Error'}: ${e?.message ?? String(err)}`;
+  return detail.slice(0, 500);
 }
 
 // ===========================
@@ -626,7 +635,7 @@ export async function execTool(db: D1Database, env: { JWT_SECRET: string; CLOUD_
     return { content: [{ type: 'text', text: JSON.stringify(r) }] };
   } catch (err) {
     const d = Date.now() - t;
-    try { await db.prepare(`INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, error_message, args_summary, duration_ms, client_ip, called_at) VALUES (?, ?, ?, ?, ?, 'error', ?, ?, ?, ?, ?)`).bind(userId, patId, patPrefix, patName, name, (err as Error).message, summarizeArgs(args), d, clientIp ?? null, nowUtc()).run(); } catch (e) { serverLogger.error('src.routers.mcp', `Failed to log MCP error call: ${(e as Error).message}`); }
+    try { await db.prepare(`INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, error_message, args_summary, duration_ms, client_ip, called_at) VALUES (?, ?, ?, ?, ?, 'error', ?, ?, ?, ?, ?)`).bind(userId, patId, patPrefix, patName, name, summarizeError(err), summarizeArgs(args), d, clientIp ?? null, nowUtc()).run(); } catch (e) { serverLogger.error('src.routers.mcp', `Failed to log MCP error call: ${(e as Error).message}`); }
     throw err; // 抛出异常，由 JSON-RPC 处理层转为 error 响应
   }
 }

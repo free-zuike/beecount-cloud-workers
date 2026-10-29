@@ -196,15 +196,17 @@ await expect(callUpload({ file_name: 'big.png', content_base64: toBase64(big) })
     expect(out.status).toBe('ledger_not_found');
   });
 
-  it('args_summary 不泄漏 note/text 自由文本(对齐上游 _summarize_args)', async () => {
+  it('args_summary 跳过 note/text/content_base64/file_name(对齐上游 _ARG_SKIP_FIELDS)', async () => {
     await callUpload({ file_name: 'secret.png', content_base64: toBase64(new TextEncoder().encode('TOP-SECRET-BYTES')) });
-    const log = sqlite.prepare('SELECT args_summary FROM mcp_call_logs WHERE tool_name = ? ORDER BY id DESC LIMIT 1').get('upload_attachment');
-    // args_summary 是 k=v 逗号分隔字符串(JSON 序列化结果,非 JSON 对象)
-    expect(typeof log.args_summary).toBe('string');
-    expect(log.args_summary).toContain('file_name=secret.png');
-    expect(log.args_summary).toContain('content_base64=');
-    // 原始文件字节绝不进入日志
-    expect(log.args_summary).not.toContain('TOP-SECRET-BYTES');
+    const rows = sqlite.prepare('SELECT args_summary FROM mcp_call_logs WHERE tool_name = ? ORDER BY id DESC LIMIT 1').all('upload_attachment') as Array<{ args_summary: string | null }>;
+    const summary = rows[0].args_summary;
+    // 只有 file_name 与 content_base64 两个入参时整条摘要为空；有内容时也不得含敏感字段
+    if (summary !== null) {
+      expect(summary).not.toContain('secret.png');
+      expect(summary).not.toContain('TOP-SECRET-BYTES');
+      expect(summary).not.toContain('content_base64');
+      expect(summary).not.toContain('file_name');
+    }
   });
 });
 
