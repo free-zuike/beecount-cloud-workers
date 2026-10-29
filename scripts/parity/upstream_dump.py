@@ -59,6 +59,7 @@ def main(out_path: str) -> int:
 
     from src.database import Base, SessionLocal, engine  # type: ignore
     from src.mcp.tools import read_tools  # type: ignore
+    from src.mcp import capability_tools  # type: ignore
     from src.models import (  # type: ignore
         AttachmentFile, Ledger, LedgerMember, ReadTxProjection, User, UserAccountProjection,
         UserCategoryProjection, UserTagProjection,
@@ -226,7 +227,8 @@ def main(out_path: str) -> int:
     owner = db.get(User, "u1")
     golden = {"now": NOW.isoformat(), "droppedSeedKeys": sorted(dropped_keys), "cases": []}
     for tool, args in calls:
-        fn = getattr(read_tools, tool)
+        # 只读工具分散在 read_tools / capability_tools 两个模块
+        fn = getattr(read_tools, tool, None) or getattr(capability_tools, tool)
         try:
             result = normalize(fn(owner, **args))
             golden["cases"].append({"tool": tool, "args": args, "result": result})
