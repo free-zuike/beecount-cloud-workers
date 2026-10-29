@@ -57,16 +57,18 @@ function seed(h: Harness): void {
       ...c, user_id: 'u1', ledger_id: 'L1-i', parent_sync_id: null, last_change_id: 1,
     });
   }
+  // 本地 D1 的 hidden 是 NOT NULL DEFAULT 0（显式 NULL 会被拒），上游可空。
+  // 夹具统一用 0，两侧都可表示；null 语义由 capability-tools 的单测覆盖。
   for (const a of [
     { sync_id: 'a1', name: '现金', account_type: 'cash', currency: 'CNY', hidden: 0 },
-    { sync_id: 'a2', name: '招行', account_type: 'bank', currency: 'CNY', hidden: null },
+    { sync_id: 'a2', name: '招行', account_type: 'bank', currency: 'CNY', hidden: 0 },
   ]) {
     insertRow(h.sqlite, 'user_account_projection', {
       ...a, user_id: 'u1', ledger_id: 'L1-i', note: null, last_change_id: 1,
     });
   }
   insertRow(h.sqlite, 'user_tag_projection', {
-    sync_id: 'g1', user_id: 'u1', ledger_id: 'L1-i', name: '出差', color: '#00bcd4', last_change_id: 1,
+    sync_id: 'g1', user_id: 'u1', ledger_id: 'L1-i', name: '出差', color: '#00bcf2', last_change_id: 1,
   });
   insertRow(h.sqlite, 'user_tag_projection', {
     sync_id: 'g2', user_id: 'u1', ledger_id: 'L1-i', name: '客户', color: '#ff9800', last_change_id: 1,
@@ -75,11 +77,11 @@ function seed(h: Harness): void {
   const txs = [
     ['t1', 'expense', 38, '2026-05-02T03:30:00Z', 'c1', 'a1', '星巴克', null, 'CNY', null],
     ['t2', 'expense', 12.5, '2026-05-02T03:30:00Z', 'c1', 'a1', '同秒第二笔', null, 'CNY', null],
-    ['t3', 'income', 8000, '2026-05-10T01:00:00Z', 'c2', 'a2', null, null, 'CNY', null],
-    ['t4', 'expense', 100, '2026-05-11T02:00:00Z', 'c1', 'a1', null, null, 'CNY', null],
-    ['t5', 'expense', 20, '2026-05-12T02:00:00Z', 'c1', 'a1', null, null, 'CNY', null],
-    ['t6', 'expense', 7.5, '2026-05-13T02:00:00Z', null, 'a1', null, null, 'USD', 1.03],
-    ['t7', 'expense', 30, '2026-05-14T02:00:00Z', 'c1', 'a1', null, '出差,客户', 'CNY', null],
+    ['t3', 'income', 8000, '2026-05-10T02:30:00Z', 'c2', 'a2', null, null, 'CNY', null],
+    ['t4', 'expense', 100, '2026-05-11T02:30:00Z', 'c1', 'a1', null, null, 'CNY', null],
+    ['t5', 'expense', 20, '2026-05-12T02:30:00Z', 'c1', 'a1', null, null, 'CNY', null],
+    ['t6', 'expense', 7.5, '2026-05-13T02:30:00Z', null, 'a1', null, null, 'USD', 1.03],
+    ['t7', 'expense', 30, '2026-05-14T02:30:00Z', 'c1', 'a1', null, '出差,客户', 'CNY', null],
   ] as const;
   for (const [sync, kind, amount, happened, cat, acc, note, tags, cur, native] of txs) {
     insertRow(h.sqlite, 'read_tx_projection', {
@@ -108,6 +110,19 @@ const TOOL_FNS: Record<string, (c: ReturnType<typeof mcpCtx>, args: Record<strin
   get_analytics_summary: getAnalyticsSummary as never,
   search: search as never,
 };
+
+/**
+ * 上游这些工具**没有 ORDER BY**，顺序由数据库决定、不是契约；本地为了结果稳定
+ * 显式排了序。这里按"多重集合"比较（两侧先按规范 JSON 排序），只忽略顺序，
+ * 元素内容与数量仍然逐字段严格比对。
+ */
+const ORDER_UNDEFINED = new Set(['list_categories', 'list_accounts', 'list_tags', 'list_budgets']);
+
+function sortTop(value: Json): Json {
+  if (!Array.isArray(value)) return value;
+  const key = (v: Json) => JSON.stringify(v);
+  return [...value].sort((a, b) => key(a).localeCompare(key(b)));
+}
 
 const hasGolden = existsSync(GOLDEN_PATH);
 
@@ -172,7 +187,11 @@ describe.skipIf(!hasGolden)('MCP 运行时差分（对上游 golden）', () => {
         failures.push(`[${kase.tool}] 上游报错(${kase.error})而本地成功`);
         continue;
       }
-      const diffs = diffJson(normalize(kase.result as Json), local);
+      const unordered = ORDER_UNDEFINED.has(kase.tool);
+      const upstream = normalize(kase.result as Json);
+      const left = unordered ? sortTop(upstream) : upstream;
+      const right = unordered ? sortTop(local) : local;
+      const diffs = diffJson(left, right);
       if (diffs.length) failures.push(formatDiffs(kase.tool, diffs));
     }
     expect(failures.join('\n')).toBe('');

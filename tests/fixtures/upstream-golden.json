@@ -1,0 +1,631 @@
+{
+  "now": "2026-05-20T04:00:00+00:00",
+  "droppedSeedKeys": [
+    "ledger_id"
+  ],
+  "cases": [
+    {
+      "tool": "list_transactions",
+      "args": {
+        "ledger_id": "L1",
+        "limit": 50
+      },
+      "result": {
+        "currency": "CNY",
+        "has_more": false,
+        "items": [
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 30.0,
+            "category_id": "c1",
+            "category_name": "餐饮",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": false,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-14T02:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": null,
+            "revision": 1,
+            "sync_id": "t7",
+            "tag_ids": [],
+            "tags": "出差,客户",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          },
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 7.5,
+            "category_id": null,
+            "category_name": null,
+            "created_by_user_id": "u1",
+            "currency_code": "USD",
+            "exclude_from_budget": false,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-13T02:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": 1.03,
+            "note": null,
+            "revision": 1,
+            "sync_id": "t6",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          },
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 20.0,
+            "category_id": "c1",
+            "category_name": "餐饮",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": true,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-12T02:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": null,
+            "revision": 1,
+            "sync_id": "t5",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          },
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 100.0,
+            "category_id": "c1",
+            "category_name": "餐饮",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": false,
+            "exclude_from_stats": true,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-11T02:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": null,
+            "revision": 1,
+            "sync_id": "t4",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          },
+          {
+            "account_id": "a2",
+            "account_name": "招行",
+            "amount": 8000.0,
+            "category_id": "c2",
+            "category_name": "工资",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": false,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-10T02:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": null,
+            "revision": 1,
+            "sync_id": "t3",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "income"
+          },
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 12.5,
+            "category_id": "c1",
+            "category_name": "餐饮",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": false,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-02T03:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": "同秒第二笔",
+            "revision": 1,
+            "sync_id": "t2",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          },
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 38.0,
+            "category_id": "c1",
+            "category_name": "餐饮",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": false,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-02T03:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": "星巴克",
+            "revision": 1,
+            "sync_id": "t1",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          }
+        ],
+        "ledger": "主账本",
+        "ledger_id": "L1",
+        "next_cursor": null,
+        "revision": 0,
+        "total": 7
+      }
+    },
+    {
+      "tool": "list_transactions",
+      "args": {
+        "ledger_id": "L1",
+        "date_from": "2026-05-02",
+        "date_to": "2026-05-02"
+      },
+      "result": {
+        "currency": "CNY",
+        "has_more": false,
+        "items": [
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 12.5,
+            "category_id": "c1",
+            "category_name": "餐饮",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": false,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-02T03:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": "同秒第二笔",
+            "revision": 1,
+            "sync_id": "t2",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          },
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 38.0,
+            "category_id": "c1",
+            "category_name": "餐饮",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": false,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-02T03:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": "星巴克",
+            "revision": 1,
+            "sync_id": "t1",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          }
+        ],
+        "ledger": "主账本",
+        "ledger_id": "L1",
+        "next_cursor": null,
+        "revision": 0,
+        "total": 2
+      }
+    },
+    {
+      "tool": "list_transactions",
+      "args": {
+        "ledger_id": "L1",
+        "min_amount": 20,
+        "max_amount": 100
+      },
+      "result": {
+        "currency": "CNY",
+        "has_more": false,
+        "items": [
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 30.0,
+            "category_id": "c1",
+            "category_name": "餐饮",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": false,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-14T02:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": null,
+            "revision": 1,
+            "sync_id": "t7",
+            "tag_ids": [],
+            "tags": "出差,客户",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          },
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 20.0,
+            "category_id": "c1",
+            "category_name": "餐饮",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": true,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-12T02:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": null,
+            "revision": 1,
+            "sync_id": "t5",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          },
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 100.0,
+            "category_id": "c1",
+            "category_name": "餐饮",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": false,
+            "exclude_from_stats": true,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-11T02:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": null,
+            "revision": 1,
+            "sync_id": "t4",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          },
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 38.0,
+            "category_id": "c1",
+            "category_name": "餐饮",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": false,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-02T03:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": "星巴克",
+            "revision": 1,
+            "sync_id": "t1",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          }
+        ],
+        "ledger": "主账本",
+        "ledger_id": "L1",
+        "next_cursor": null,
+        "revision": 0,
+        "total": 4
+      }
+    },
+    {
+      "tool": "get_transaction",
+      "args": {
+        "ledger_id": "L1",
+        "sync_id": "t1"
+      },
+      "result": {
+        "account_id": "a1",
+        "account_name": "现金",
+        "amount": 38.0,
+        "attachments": [],
+        "category_id": "c1",
+        "category_name": "餐饮",
+        "created_by_user_id": "u1",
+        "currency_code": "CNY",
+        "exclude_from_budget": false,
+        "exclude_from_stats": false,
+        "from_account_id": null,
+        "from_account_name": null,
+        "happened_at": "2026-05-02T03:30:00+00:00",
+        "last_edited_by_user_id": null,
+        "ledger": "主账本",
+        "ledger_id": "L1",
+        "native_amount": null,
+        "note": "星巴克",
+        "revision": 1,
+        "sync_id": "t1",
+        "tag_ids": [],
+        "tags": "",
+        "to_account_id": null,
+        "to_account_name": null,
+        "tx_type": "expense"
+      }
+    },
+    {
+      "tool": "list_categories",
+      "args": {
+        "ledger_id": "L1"
+      },
+      "result": [
+        {
+          "icon": "🍜",
+          "id": "c1",
+          "kind": "expense",
+          "level": null,
+          "name": "餐饮",
+          "parent_id": null,
+          "parent_name": null
+        },
+        {
+          "icon": null,
+          "id": "c2",
+          "kind": "income",
+          "level": null,
+          "name": "工资",
+          "parent_id": null,
+          "parent_name": null
+        }
+      ]
+    },
+    {
+      "tool": "list_accounts",
+      "args": {
+        "ledger_id": "L1"
+      },
+      "result": [
+        {
+          "account_type": "bank",
+          "bank_name": null,
+          "billing_day": null,
+          "card_last_four": null,
+          "credit_limit": null,
+          "currency": "CNY",
+          "hidden": false,
+          "id": "a2",
+          "initial_balance": 0.0,
+          "name": "招行",
+          "payment_due_day": null
+        },
+        {
+          "account_type": "cash",
+          "bank_name": null,
+          "billing_day": null,
+          "card_last_four": null,
+          "credit_limit": null,
+          "currency": "CNY",
+          "hidden": false,
+          "id": "a1",
+          "initial_balance": 0.0,
+          "name": "现金",
+          "payment_due_day": null
+        }
+      ]
+    },
+    {
+      "tool": "list_tags",
+      "args": {
+        "ledger_id": "L1"
+      },
+      "result": [
+        {
+          "color": "#00bcf2",
+          "id": "g1",
+          "name": "出差"
+        },
+        {
+          "color": "#ff9800",
+          "id": "g2",
+          "name": "客户"
+        }
+      ]
+    },
+    {
+      "tool": "list_budgets",
+      "args": {
+        "ledger_id": "L1"
+      },
+      "result": []
+    },
+    {
+      "tool": "get_ledger_stats",
+      "args": {
+        "ledger_id": "L1"
+      },
+      "result": {
+        "account_count": 2,
+        "budget_count": 0,
+        "category_count": 2,
+        "ledger": "主账本",
+        "tag_count": 2,
+        "transaction_count": 7
+      }
+    },
+    {
+      "tool": "get_analytics_summary",
+      "args": {
+        "ledger_id": "L1",
+        "scope": "month",
+        "period": "2026-05"
+      },
+      "result": {
+        "anomaly_months": [],
+        "balance": 7898.47,
+        "calculation": {
+          "currency": "ledger base; native_amount falls back to amount",
+          "exclude_from_stats": true,
+          "month_start_day": 1,
+          "refund_policy": "income and expense stay separate; no inferred refund pairing",
+          "tz_offset_minutes": 0
+        },
+        "currency": "CNY",
+        "expense": 101.53,
+        "income": 8000.0,
+        "ledger": "主账本",
+        "ledger_id": "L1",
+        "period": "2026-05",
+        "range": {
+          "end_at": "2026-05-31T23:59:59Z",
+          "metric": "expense",
+          "period": "2026-05",
+          "scope": "month",
+          "start_at": "2026-05-01T00:00:00Z"
+        },
+        "scope": "month",
+        "series": [
+          {
+            "balance": -50.5,
+            "bucket": "2026-05-02",
+            "expense": 50.5,
+            "income": 0.0
+          },
+          {
+            "balance": 8000.0,
+            "bucket": "2026-05-10",
+            "expense": 0.0,
+            "income": 8000.0
+          },
+          {
+            "balance": -20.0,
+            "bucket": "2026-05-12",
+            "expense": 20.0,
+            "income": 0.0
+          },
+          {
+            "balance": -1.03,
+            "bucket": "2026-05-13",
+            "expense": 1.03,
+            "income": 0.0
+          },
+          {
+            "balance": -30.0,
+            "bucket": "2026-05-14",
+            "expense": 30.0,
+            "income": 0.0
+          }
+        ],
+        "top_categories": [
+          {
+            "name": "餐饮",
+            "total": 100.5
+          },
+          {
+            "name": "Uncategorized",
+            "total": 1.03
+          }
+        ],
+        "transaction_count": 6
+      }
+    },
+    {
+      "tool": "search",
+      "args": {
+        "q": "星巴克",
+        "limit": 20
+      },
+      "result": [
+        {
+          "account_id": "a1",
+          "account_name": "现金",
+          "amount": 38.0,
+          "category_id": "c1",
+          "category_name": "餐饮",
+          "created_by_user_id": "u1",
+          "currency_code": "CNY",
+          "exclude_from_budget": false,
+          "exclude_from_stats": false,
+          "from_account_id": null,
+          "from_account_name": null,
+          "happened_at": "2026-05-02T03:30:00+00:00",
+          "last_edited_by_user_id": null,
+          "native_amount": null,
+          "note": "星巴克",
+          "revision": 1,
+          "sync_id": "t1",
+          "tag_ids": [],
+          "tags": "",
+          "to_account_id": null,
+          "to_account_name": null,
+          "tx_type": "expense"
+        }
+      ]
+    }
+  ]
+}

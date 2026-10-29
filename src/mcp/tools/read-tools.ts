@@ -24,10 +24,22 @@ function parseDateBoundaryLocal(
   return parseDateBoundary(value, { end, timeZone: timeZone ?? configuredTimeZone ?? undefined });
 }
 
+/**
+ * 等价于 Python `datetime.replace(tzinfo=utc).isoformat()`：
+ * 微秒为 0 时输出 `YYYY-MM-DDTHH:MM:SS+00:00`（不带小数点），否则 6 位微秒。
+ */
+export function pyIsoformat(value: string | number | Date): string {
+  const d = new Date(value);
+  const ms = d.getUTCMilliseconds();
+  const base = d.toISOString().slice(0, 19);
+  return ms === 0 ? `${base}+00:00` : `${base}.${String(ms).padStart(3, '0')}000+00:00`;
+}
+
 /** 序列化交易行（对齐上游 _serialize_tx） */
 export function serializeTx(row: TxRow, categoryName?: string | null): Record<string, unknown> {
-  // 对齐原版：happened_at 输出 ...+00:00（原版 dt.replace(tzinfo=utc).isoformat()，保留毫秒）
-  const happened = row.happened_at ? `${new Date(row.happened_at).toISOString().replace(/Z$/, '+00:00')}` : null;
+  // 对齐原版：happened_at 用 dt.isoformat()。Python 在微秒为 0 时**不带**小数点，
+  // 非 0 时输出 6 位微秒；JS 只有毫秒，所以补齐成 .SSS000。
+  const happened = row.happened_at ? pyIsoformat(row.happened_at) : null;
   let tagIds: string[] = [];
   if (row.tag_sync_ids_json) {
     try { tagIds = JSON.parse(row.tag_sync_ids_json); } catch { tagIds = []; }
@@ -588,9 +600,10 @@ export async function getAnalyticsSummary(
       scope,
       metric: 'expense',
       period: normalizedPeriod,
-      // 对齐上游 workspace：isoformat（+00:00），end_at 取区间末尾前一秒
-      start_at: startAt ? `${new Date(startAt).toISOString().slice(0, 19)}+00:00` : null,
-      end_at: endAt ? `${new Date(new Date(endAt).getTime() - 1000).toISOString().slice(0, 19)}+00:00` : null,
+      // 对齐上游 workspace：range 用 Z 结尾、秒精度（golden 实测
+      // start_at=2026-05-01T00:00:00Z / end_at=2026-05-31T23:59:59Z），end_at 取末尾前一秒
+      start_at: startAt ? `${new Date(startAt).toISOString().slice(0, 19)}Z` : null,
+      end_at: endAt ? `${new Date(new Date(endAt).getTime() - 1000).toISOString().slice(0, 19)}Z` : null,
     },
     calculation: {
       currency: 'ledger base; native_amount falls back to amount',

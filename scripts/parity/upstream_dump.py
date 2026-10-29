@@ -86,8 +86,10 @@ def main(out_path: str) -> int:
         name="工资", kind="income", sort_order=2)
     add(UserAccountProjection, sync_id="a1", ledger_id="L1-i", user_id="u1",
         name="现金", account_type="cash", currency="CNY", hidden=False)
+    # 本地 D1 的 hidden 是 NOT NULL DEFAULT 0（显式 NULL 会被拒），上游可空。
+    # 夹具两侧统一用 False/0，null 语义由 capability-tools 单测覆盖。
     add(UserAccountProjection, sync_id="a2", ledger_id="L1-i", user_id="u1",
-        name="招行", account_type="bank", currency="CNY", hidden=None)
+        name="招行", account_type="bank", currency="CNY", hidden=False)
     add(UserTagProjection, sync_id="g1", ledger_id="L1-i", user_id="u1",
         name="出差", color="#00bcf2")
     add(UserTagProjection, sync_id="g2", ledger_id="L1-i", user_id="u1",
