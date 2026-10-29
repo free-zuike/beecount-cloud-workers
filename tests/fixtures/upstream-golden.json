@@ -1393,6 +1393,281 @@
       ]
     },
     {
+      "tool": "get_account_balances",
+      "args": {},
+      "result": {
+        "accounts": [
+          {
+            "account_id": "a1",
+            "account_type": "cash",
+            "balance": -208.0,
+            "currency": "CNY",
+            "expense": 208.0,
+            "hidden": false,
+            "income": 0.0,
+            "initial_balance": 0.0,
+            "name": "现金",
+            "owner_user_id": "u1",
+            "transfer_in": 0.0,
+            "transfer_out": 0.0
+          },
+          {
+            "account_id": "a2",
+            "account_type": "bank",
+            "balance": 8000.0,
+            "currency": "CNY",
+            "expense": 0.0,
+            "hidden": false,
+            "income": 8000.0,
+            "initial_balance": 0.0,
+            "name": "招行",
+            "owner_user_id": "u1",
+            "transfer_in": 0.0,
+            "transfer_out": 0.0
+          }
+        ],
+        "at": null,
+        "coverage": {
+          "ledger_ids": [
+            "L1",
+            "L3"
+          ],
+          "opening_balance_effective_date": "not recorded in legacy account model",
+          "partial": false,
+          "scope": "personal"
+        },
+        "totals_by_currency": {
+          "CNY": {
+            "assets": 7792.0,
+            "liabilities": 0.0,
+            "net_worth": 7792.0
+          }
+        }
+      }
+    },
+    {
+      "tool": "get_account_balances",
+      "args": {
+        "ledger_id": "L1"
+      },
+      "result": {
+        "accounts": [
+          {
+            "account_id": "a1",
+            "account_type": "cash",
+            "balance": -208.0,
+            "currency": "CNY",
+            "expense": 208.0,
+            "hidden": false,
+            "income": 0.0,
+            "initial_balance": 0.0,
+            "name": "现金",
+            "owner_user_id": "u1",
+            "transfer_in": 0.0,
+            "transfer_out": 0.0
+          },
+          {
+            "account_id": "a2",
+            "account_type": "bank",
+            "balance": 8000.0,
+            "currency": "CNY",
+            "expense": 0.0,
+            "hidden": false,
+            "income": 8000.0,
+            "initial_balance": 0.0,
+            "name": "招行",
+            "owner_user_id": "u1",
+            "transfer_in": 0.0,
+            "transfer_out": 0.0
+          }
+        ],
+        "at": null,
+        "coverage": {
+          "ledger_ids": [
+            "L1"
+          ],
+          "opening_balance_effective_date": "not recorded in legacy account model",
+          "partial": true,
+          "scope": "personal"
+        },
+        "totals_by_currency": {
+          "CNY": {
+            "assets": 7792.0,
+            "liabilities": 0.0,
+            "net_worth": 7792.0
+          }
+        }
+      }
+    },
+    {
+      "tool": "get_account_balances",
+      "args": {
+        "ledger_id": "L1",
+        "scope": "visible"
+      },
+      "result": {
+        "accounts": [
+          {
+            "account_id": "a1",
+            "account_type": "cash",
+            "balance": -208.0,
+            "currency": "CNY",
+            "expense": 208.0,
+            "hidden": false,
+            "income": 0.0,
+            "initial_balance": 0.0,
+            "name": "现金",
+            "owner_user_id": "u1",
+            "transfer_in": 0.0,
+            "transfer_out": 0.0
+          },
+          {
+            "account_id": "a2",
+            "account_type": "bank",
+            "balance": 8000.0,
+            "currency": "CNY",
+            "expense": 0.0,
+            "hidden": false,
+            "income": 8000.0,
+            "initial_balance": 0.0,
+            "name": "招行",
+            "owner_user_id": "u1",
+            "transfer_in": 0.0,
+            "transfer_out": 0.0
+          }
+        ],
+        "at": null,
+        "coverage": {
+          "ledger_ids": [
+            "L1"
+          ],
+          "opening_balance_effective_date": "not recorded in legacy account model",
+          "partial": true,
+          "scope": "visible"
+        },
+        "totals_by_currency": {
+          "CNY": {
+            "assets": 7792.0,
+            "liabilities": 0.0,
+            "net_worth": 7792.0
+          }
+        }
+      }
+    },
+    {
+      "tool": "get_account_balances",
+      "args": {
+        "ledger_id": "L1",
+        "at": "2026-05-02T23:59:59Z",
+        "scope": "visible"
+      },
+      "result": {
+        "accounts": [
+          {
+            "account_id": "a1",
+            "account_type": "cash",
+            "balance": -50.5,
+            "currency": "CNY",
+            "expense": 50.5,
+            "hidden": false,
+            "income": 0.0,
+            "initial_balance": 0.0,
+            "name": "现金",
+            "owner_user_id": "u1",
+            "transfer_in": 0.0,
+            "transfer_out": 0.0
+          },
+          {
+            "account_id": "a2",
+            "account_type": "bank",
+            "balance": 0.0,
+            "currency": "CNY",
+            "expense": 0.0,
+            "hidden": false,
+            "income": 0.0,
+            "initial_balance": 0.0,
+            "name": "招行",
+            "owner_user_id": "u1",
+            "transfer_in": 0.0,
+            "transfer_out": 0.0
+          }
+        ],
+        "at": "2026-05-02T23:59:59Z",
+        "coverage": {
+          "ledger_ids": [
+            "L1"
+          ],
+          "opening_balance_effective_date": "not recorded in legacy account model",
+          "partial": true,
+          "scope": "visible"
+        },
+        "totals_by_currency": {
+          "CNY": {
+            "assets": -50.5,
+            "liabilities": 0.0,
+            "net_worth": -50.5
+          }
+        }
+      }
+    },
+    {
+      "tool": "get_account_balances",
+      "args": {
+        "ledger_id": "L1",
+        "at": "2026-05-02T23:59:59Z",
+        "scope": "visible",
+        "time_zone": "Asia/Kolkata"
+      },
+      "result": {
+        "accounts": [
+          {
+            "account_id": "a1",
+            "account_type": "cash",
+            "balance": -50.5,
+            "currency": "CNY",
+            "expense": 50.5,
+            "hidden": false,
+            "income": 0.0,
+            "initial_balance": 0.0,
+            "name": "现金",
+            "owner_user_id": "u1",
+            "transfer_in": 0.0,
+            "transfer_out": 0.0
+          },
+          {
+            "account_id": "a2",
+            "account_type": "bank",
+            "balance": 0.0,
+            "currency": "CNY",
+            "expense": 0.0,
+            "hidden": false,
+            "income": 0.0,
+            "initial_balance": 0.0,
+            "name": "招行",
+            "owner_user_id": "u1",
+            "transfer_in": 0.0,
+            "transfer_out": 0.0
+          }
+        ],
+        "at": "2026-05-02T23:59:59Z",
+        "coverage": {
+          "ledger_ids": [
+            "L1"
+          ],
+          "opening_balance_effective_date": "not recorded in legacy account model",
+          "partial": true,
+          "scope": "visible"
+        },
+        "totals_by_currency": {
+          "CNY": {
+            "assets": -50.5,
+            "liabilities": 0.0,
+            "net_worth": -50.5
+          }
+        }
+      }
+    },
+    {
       "tool": "list_tags",
       "args": {},
       "result": [
@@ -2230,6 +2505,185 @@
         "name": "list_total_after_import",
         "result": {
           "total": 9
+        }
+      },
+      {
+        "name": "reconcile_account",
+        "result": {
+          "account": {
+            "account_id": "a1",
+            "account_type": "cash",
+            "balance": -50.5,
+            "currency": "CNY",
+            "expense": 50.5,
+            "hidden": false,
+            "income": 0.0,
+            "initial_balance": 0.0,
+            "name": "现金",
+            "owner_user_id": "u1",
+            "transfer_in": 0.0,
+            "transfer_out": 0.0
+          },
+          "actual_balance": 1000.0,
+          "at": "2026-05-02T23:59:59Z",
+          "calculated_balance": -50.5,
+          "coverage": {
+            "ledger_ids": [
+              "L1",
+              "L3"
+            ],
+            "opening_balance_effective_date": "legacy opening balance has no effective date"
+          },
+          "cutoff_exclusive": "2026-05-02T23:59:59+00:00",
+          "difference": 1050.5,
+          "reconciled": false,
+          "time_zone": "UTC",
+          "unassigned_candidates": []
+        }
+      },
+      {
+        "name": "reconcile_account_tz_kolkata",
+        "result": {
+          "account": {
+            "account_id": "a1",
+            "account_type": "cash",
+            "balance": -50.5,
+            "currency": "CNY",
+            "expense": 50.5,
+            "hidden": false,
+            "income": 0.0,
+            "initial_balance": 0.0,
+            "name": "现金",
+            "owner_user_id": "u1",
+            "transfer_in": 0.0,
+            "transfer_out": 0.0
+          },
+          "actual_balance": 1000.0,
+          "at": "2026-05-02T23:59:59Z",
+          "calculated_balance": -50.5,
+          "coverage": {
+            "ledger_ids": [
+              "L1",
+              "L3"
+            ],
+            "opening_balance_effective_date": "legacy opening balance has no effective date"
+          },
+          "cutoff_exclusive": "2026-05-02T23:59:59+00:00",
+          "difference": 1050.5,
+          "reconciled": false,
+          "time_zone": "Asia/Kolkata",
+          "unassigned_candidates": []
+        }
+      },
+      {
+        "name": "reconcile_account_nan",
+        "error": "ValueError: actual_balance must be finite"
+      },
+      {
+        "name": "reconcile_account_bad_account",
+        "error": "ValueError: Account not found"
+      },
+      {
+        "name": "save_reconciliation_checkpoint_no_confirm",
+        "result": {
+          "status": "confirmation_required"
+        }
+      },
+      {
+        "name": "save_reconciliation_checkpoint",
+        "result": {
+          "data": {
+            "account": {
+              "account_id": "a1",
+              "account_type": "cash",
+              "balance": -50.5,
+              "currency": "CNY",
+              "expense": 50.5,
+              "hidden": false,
+              "income": 0.0,
+              "initial_balance": 0.0,
+              "name": "现金",
+              "owner_user_id": "u1",
+              "transfer_in": 0.0,
+              "transfer_out": 0.0
+            },
+            "actual_balance": 1000.0,
+            "at": "2026-05-02T23:59:59Z",
+            "calculated_balance": -50.5,
+            "confirmed_by_user_id": "u1",
+            "coverage": {
+              "ledger_ids": [
+                "L1",
+                "L3"
+              ],
+              "opening_balance_effective_date": "legacy opening balance has no effective date"
+            },
+            "coverage_from": "2026-05-01",
+            "cutoff_exclusive": "2026-05-02T23:59:59+00:00",
+            "difference": 1050.5,
+            "reconciled": false,
+            "source_system": "bank",
+            "time_zone": "UTC",
+            "unassigned_candidates": []
+          },
+          "id": "<UUID>",
+          "kind": "checkpoint",
+          "ledger_internal_id": "L1-i",
+          "next_due_at": null,
+          "status": "confirmed"
+        }
+      },
+      {
+        "name": "save_reconciliation_checkpoint_bad_range",
+        "error": "ValueError: coverage_from must precede the checkpoint end"
+      },
+      {
+        "name": "list_workflow_records_checkpoint",
+        "result": {
+          "items": [
+            {
+              "data": {
+                "account": {
+                  "account_id": "a1",
+                  "account_type": "cash",
+                  "balance": -50.5,
+                  "currency": "CNY",
+                  "expense": 50.5,
+                  "hidden": false,
+                  "income": 0.0,
+                  "initial_balance": 0.0,
+                  "name": "现金",
+                  "owner_user_id": "u1",
+                  "transfer_in": 0.0,
+                  "transfer_out": 0.0
+                },
+                "actual_balance": 1000.0,
+                "at": "2026-05-02T23:59:59Z",
+                "calculated_balance": -50.5,
+                "confirmed_by_user_id": "u1",
+                "coverage": {
+                  "ledger_ids": [
+                    "L1",
+                    "L3"
+                  ],
+                  "opening_balance_effective_date": "legacy opening balance has no effective date"
+                },
+                "coverage_from": "2026-05-01",
+                "cutoff_exclusive": "2026-05-02T23:59:59+00:00",
+                "difference": 1050.5,
+                "reconciled": false,
+                "source_system": "bank",
+                "time_zone": "UTC",
+                "unassigned_candidates": []
+              },
+              "id": "<UUID>",
+              "kind": "checkpoint",
+              "ledger_internal_id": "L1-i",
+              "next_due_at": null,
+              "status": "confirmed"
+            }
+          ],
+          "total": 1
         }
       },
       {
