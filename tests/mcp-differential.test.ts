@@ -154,6 +154,7 @@ const IMPORT_BYTES = Buffer.from(
 );
 const IMPORT_SHA = createHash('sha256').update(IMPORT_BYTES).digest('hex');
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SYNC_ID_RE = /^(tx|acc|cat|tag|bgt)_[0-9a-f]{12}$/;
 
 /**
  * 比对器自检：证明它抓得住真差异（包括"值是 0 而不是 null"这种最容易漏的）。
@@ -269,6 +270,8 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
       if (newId && value === newId) return '<NEW>';
       // 预览 id / 操作批 id 等每次运行都是新 uuid
       if (typeof value === 'string' && UUID_RE.test(value)) return '<UUID>';
+      // 新建实体的 sync_id：上游 {prefix}_{uuid4().hex[:12]}，随机部分每次都不同
+      if (typeof value === 'string' && SYNC_ID_RE.test(value)) return '<SYNC_ID>';
       return value;
     };
 
@@ -318,6 +321,12 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     await run('delete_without_confirm', () => deleteTransaction(c, { sync_id: newId ?? '', ledger_id: 'L1' }));
     await run('delete', () => deleteTransaction(c, { sync_id: newId ?? '', confirm: true, ledger_id: 'L1' }));
     await run('get_after_delete', () => getTransaction(c, { ledger_id: 'L1', sync_id: newId ?? '' }));
+    // 顺序即语义：这一步必须在导入**之前**跑，否则会把导入写入的 2 笔算进来
+    await run('list_total_after', async () => {
+      const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
+      return { total: page.total, has_more: page.has_more };
+    });
+
     // 导入预览：附件字节由内存注入（生产是 R2），两侧解析同一份 CSV
     setAttachmentBytesSource(async () => new Uint8Array(IMPORT_BYTES));
     let planId: string | null = null;
@@ -356,11 +365,6 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     await run('list_total_after_import', async () => {
       const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
       return { total: page.total };
-    });
-
-    await run('list_total_after', async () => {
-      const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
-      return { total: page.total, has_more: page.has_more };
     });
 
     expect(failures.join('\n')).toBe('');

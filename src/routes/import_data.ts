@@ -15,6 +15,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import { newSyncId } from '../lib/sync-id';
 import { parseCsvText, detectSourceFormat, suggestMapping } from '../services/import_data/parser';
 import { applyMapping } from '../services/import_data/transformer';
 import { buildExistingSets, computeStats } from '../services/import_data/stats';
@@ -567,7 +568,7 @@ importRouter.post('/:token/execute', async (c) => {
 
           try {
             const payload = buildTxPayload(tx, autoTagNames);
-            const syncId = randomUUID();
+            const syncId = newSyncId('tx');
             const now = nowUtc();
             const happenedAt = (tx.happenedAt || now).slice(0, 10);
             const allTags = [...new Set([...tx.tagNames, ...autoTagNames])];

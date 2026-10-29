@@ -222,6 +222,7 @@ def main(out_path: str) -> int:
                 "operation_id", "server_timestamp"}
     SEEDED_TAGS = {"g1", "g2"}
     _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+    _SYNC_ID_RE = re.compile(r"^(tx|acc|cat|tag|bgt)_[0-9a-f]{12}$")
 
     def scrub_tag_ids(value, new_id):
         """写工具会自动补「MCP」标签（sync_id 每次不同）；其余按 <AUTO_TAG> 归一后排序。"""
@@ -247,6 +248,9 @@ def main(out_path: str) -> int:
             # 预览 id、操作批 id 等每次运行都是新 uuid
             if _UUID_RE.match(value):
                 return "<UUID>"
+            # 新建实体的 sync_id：{prefix}_{uuid4().hex[:12]}，随机部分每次都不同
+            if _SYNC_ID_RE.match(value):
+                return "<SYNC_ID>"
         return value
 
     scenario = {"name": "write_cycle", "steps": []}

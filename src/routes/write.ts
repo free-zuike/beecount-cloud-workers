@@ -29,6 +29,7 @@
 import { Hono } from 'hono';
 
 import { normalizeTransactionAccounts } from '../lib/transaction-normalization';
+import { newSyncId } from '../lib/sync-id';
 import { resolveCategoryParent } from '../lib/category-parent';
 import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
@@ -864,7 +865,7 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     return c.json({ error: 'No ledger found' }, 400);
   }
 
-  const syncId = randomUUID();
+  const syncId = newSyncId('tx');
   const payload: Record<string, unknown> = {
     syncId: syncId,
     type: req.tx_type,
@@ -1547,7 +1548,7 @@ writeRouter.post('/ledgers/:ledgerId/accounts', zValidator('json', WriteAccountC
     return c.json({ error: 'No ledger found' }, 400);
   }
 
-  const syncId = randomUUID();
+  const syncId = newSyncId('acc');
   const payload: Record<string, unknown> = {
     syncId: syncId,
     name: req.name,
@@ -1648,7 +1649,7 @@ writeRouter.post('/ledgers/:ledgerId/categories', zValidator('json', WriteCatego
     }, 409);
   }
 
-  const syncId = randomUUID();
+  const syncId = newSyncId('cat');
   // 对齐上游 0758b41：parent_sync_id 稳定关联优先，parent_name 唯一解析
   const resolvedParent = await resolveCategoryParent(
     db, userId, req.kind, req.parent_sync_id, req.parent_name, syncId,
@@ -1983,7 +1984,7 @@ writeRouter.post('/ledgers/:ledgerId/tags', zValidator('json', WriteTagCreateSch
     return c.json({ error: 'No ledger found' }, 400);
   }
 
-  const syncId = randomUUID();
+  const syncId = newSyncId('tag');
   const payload: Record<string, unknown> = {
     syncId,
     name: req.name,
@@ -2047,7 +2048,7 @@ writeRouter.post('/ledgers/:ledgerId/budgets', zValidator('json', WriteBudgetCre
     return c.json({ error: 'No ledger found' }, 400);
   }
 
-  const syncId = randomUUID();
+  const syncId = newSyncId('bgt');
   const payload: Record<string, unknown> = {
     syncId: syncId,
     type: req.type,
@@ -2381,7 +2382,7 @@ writeRouter.post('/categories/init-defaults', async (c) => {
       continue;
     }
 
-    const parentSyncId = randomUUID();
+    const parentSyncId = newSyncId('cat');
     parentSyncIds[cat.name] = parentSyncId;
 
     const payload: Record<string, unknown> = {
@@ -2419,7 +2420,7 @@ writeRouter.post('/categories/init-defaults', async (c) => {
 
     if (cat.children) {
       for (const child of cat.children) {
-        const childSyncId = randomUUID();
+        const childSyncId = newSyncId('cat');
         const childPayload: Record<string, unknown> = {
           syncId: childSyncId,
           name: child.name,

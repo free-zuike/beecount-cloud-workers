@@ -17,6 +17,7 @@
 import { Hono } from 'hono';
 
 import { normalizeTransactionAccounts } from '../lib/transaction-normalization';
+import { newSyncId } from '../lib/sync-id';
 import { serverLogger } from '../lib/logger';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
@@ -324,7 +325,7 @@ async function runBatchCreate(c: any, ledgerExternalId: string): Promise<Respons
   }
   for (const name of neededNames) {
     if (tagNameToSyncId.has(name)) continue;
-    const tagSyncId = randomUUID();
+    const tagSyncId = newSyncId('tag');
     // tag 是 user-global：sync_changes 用 scope='user'，投影写 user_tag_projection
     await db.batch([
       db.prepare(
@@ -359,7 +360,7 @@ async function runBatchCreate(c: any, ledgerExternalId: string): Promise<Respons
   }
 
   for (const [txIndex, tx] of req.transactions.entries()) {
-    const txSyncId = randomUUID();
+    const txSyncId = newSyncId('tx');
     const txType = tx.tx_type || 'expense';
 
     // 确保分类存在
