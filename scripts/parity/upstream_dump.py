@@ -182,6 +182,13 @@ def main(out_path: str) -> int:
         ("list_transactions", {"limit": 50}),
         ("list_categories", {}),
         ("list_accounts", {}),
+        # 账户余额：reconcile_account 的 account 字段就来自这里（scope 语义一并覆盖）
+        ("get_account_balances", {}),
+        ("get_account_balances", {"ledger_id": "L1"}),
+        ("get_account_balances", {"ledger_id": "L1", "scope": "visible"}),
+        ("get_account_balances", {"ledger_id": "L1", "at": "2026-05-02T23:59:59Z", "scope": "visible"}),
+        ("get_account_balances", {"ledger_id": "L1", "at": "2026-05-02T23:59:59Z",
+                                  "scope": "visible", "time_zone": "Asia/Kolkata"}),
         ("list_tags", {}),
         ("list_budgets", {}),
         ("get_ledger_stats", {}),

@@ -602,8 +602,9 @@ export async function reconcileAccount(
     difference: args.actual_balance - calculated,
     reconciled: Math.abs(args.actual_balance - calculated) < 0.005,
     at: args.at,
-    // 对齐上游 reconcile_account：isoformat（+00:00），不是 Z 结尾
-    cutoff_exclusive: cutoff.toISOString().replace(/Z$/, '+00:00'),
+    // 对齐上游 reconcile_account：isoformat（+00:00）且**不带毫秒**
+    //（Python 的 isoformat 在微秒为 0 时不输出小数位，JS 的 toISOString 恒为 3 位）
+    cutoff_exclusive: cutoff.toISOString().replace(/\.\d{3}/, '').replace(/Z$/, '+00:00'),
     // 未给 time_zone 时用 Cloud 配置时区（对齐上游 zone(None)）
     time_zone: args.time_zone ?? c.configuredTimeZone ?? 'Cloud default',
     coverage: {

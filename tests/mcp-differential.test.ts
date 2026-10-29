@@ -16,9 +16,10 @@ import { describe, expect, it } from 'vitest';
 import { addMember, bindSelfCall, createLedger, makeHarness, mcpCtx, registerUser, type Harness } from './mcp-harness';
 import { diffJson, formatDiffs, normalize, type Json } from './parity-compare';
 import {
-  getAnalyticsSummary, getLedgerStats, getTransaction, listAccounts, listBudgets,
-  listCategories, listTags, listTransactions, search,
+  getAnalyticsSummary, getLedgerStats, getTransaction, listAccounts,
+  listBudgets, listCategories, listTags, listTransactions, search,
 } from '../src/mcp/tools/read-tools';
+import { getAccountBalances } from '../src/mcp/capability-tools';
 import {
   createTransaction, deleteTransaction, setSelfCall, updateTransaction,
 } from '../src/mcp/tools/write-tools';
@@ -133,6 +134,7 @@ const TOOL_FNS: Record<string, (c: ReturnType<typeof mcpCtx>, args: Record<strin
   list_budgets: listBudgets as never,
   get_ledger_stats: getLedgerStats as never,
   get_analytics_summary: getAnalyticsSummary as never,
+  get_account_balances: getAccountBalances as never,
   search: search as never,
 };
 

@@ -385,8 +385,9 @@ const boundary = parseDateBoundary(args.at, { end: true, timeZone: args.time_zon
       currency: (acc.currency as string) || 'CNY',
       initial_balance: Number(acc.initial_balance ?? 0),
       income: 0, expense: 0, transfer_in: 0, transfer_out: 0,
-      // 对齐上游：hidden 原样存（可为 null），输出同样不布尔化
-      hidden: acc.hidden ?? null,
+      // 对齐上游（1.9.0 实测）：hidden 是布尔（SQLAlchemy Boolean 列），
+      // 只有 null 才保留 null。早期对齐写成"原样存不布尔化"，会吐 0/1
+      hidden: acc.hidden === null || acc.hidden === undefined ? null : Boolean(acc.hidden),
     });
   }
   for (const row of rows.results) {
