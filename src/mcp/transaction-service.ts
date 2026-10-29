@@ -320,7 +320,17 @@ function validateBatchItem(item: Record<string, unknown>, index: number): void {
     }
   }
   const bad = (key: string, expected: string) => `transactions[${index}].${key} must be ${expected}`;
-  if (item.amount !== undefined && item.amount !== null) positiveAmount(item.amount);
+  // 对齐 pydantic extra="forbid"：未知键直接拒绝（拼错字段名时上游会报错，本地曾静默忽略）
+  for (const key of Object.keys(item)) {
+    if (!(BATCH_ITEM_KEYS as readonly string[]).includes(key)) {
+      throw new McpToolError(`transactions[${index}].${key} Extra inputs are not permitted`);
+    }
+  }
+  // 对齐 BatchTransactionItem.amount 为必填（无默认值）
+  if (item.amount === undefined || item.amount === null) {
+    throw new McpToolError(`transactions[${index}].amount Field required`);
+  }
+  positiveAmount(item.amount);
   if (item.native_amount !== undefined && item.native_amount !== null) positiveAmount(item.native_amount);
   if (item.tx_type !== undefined && item.tx_type !== null) {
     enumValue(item.tx_type, ['expense', 'income', 'transfer'] as const, 'tx_type');
