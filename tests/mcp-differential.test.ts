@@ -24,8 +24,8 @@ import {
 } from '../src/mcp/tools/write-tools';
 import { previewImportFile, setAttachmentBytesSource } from '../src/mcp/file-tools';
 import {
-  executeImportPlan, getWorkflowRecord, listTransactionSources, listWorkflowRecords,
-  undoImportPlan,
+  executeImportPlan, getWorkflowRecord, linkTransactionSource, listTransactionSources,
+  listWorkflowRecords, undoImportPlan, unlinkTransactionSource,
 } from '../src/mcp/workflow-tools';
 
 const GOLDEN_PATH = join(process.cwd(), 'tests/fixtures/upstream-golden.json');
@@ -407,10 +407,31 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
       () => listWorkflowRecords(c, { ledger_id: 'L1', kind: 'import_plan' }));
     await run('get_workflow_record', () => getWorkflowRecord(c, { record_id: planId ?? '' }));
 
-    const createdId = (lastExecute as { sync_ids?: string[] } | null)?.sync_ids?.[0] ?? null;
+    // 来源绑定：导入落库后交易应带一条来源（幂等键的落点）；重复绑定必须被拒
+    const createdIds = (lastExecute as { sync_ids?: string[] } | null)?.sync_ids
+      ?? ((lastExecute as { results?: Array<{ created_sync_ids?: string[] }> } | null)
+        ?.results?.[0]?.created_sync_ids ?? []);
+    const createdId = createdIds[0] ?? null;
     if (createdId) {
-      await run('list_transaction_sources',
-        () => listTransactionSources(c, { ledger_id: 'L1', sync_id: createdId }));
+      let lastSources: unknown = null;
+      await run('list_transaction_sources', async () => {
+        const res = await listTransactionSources(c, { ledger_id: 'L1', sync_id: createdId });
+        lastSources = res;
+        return res;
+      });
+      const src = Array.isArray(lastSources) ? (lastSources[0] as Record<string, unknown> | undefined) : undefined;
+      if (src) {
+        await run('link_transaction_source_duplicate', () => linkTransactionSource(c, {
+          ledger_id: 'L1', sync_id: createdId,
+          source: { source_system: src.source_system as string, source_id: src.source_id as string },
+        }));
+        await run('unlink_transaction_source_no_confirm',
+          () => unlinkTransactionSource(c, { ledger_id: 'L1', reference_id: String(src.id) }));
+        await run('unlink_transaction_source',
+          () => unlinkTransactionSource(c, { ledger_id: 'L1', reference_id: String(src.id), confirm: true }));
+        await run('list_transaction_sources_after_unlink',
+          () => listTransactionSources(c, { ledger_id: 'L1', sync_id: createdId }));
+      }
     }
 
     const rev2 = (h.sqlite.prepare('SELECT revision FROM mcp_state_records WHERE id = ?')

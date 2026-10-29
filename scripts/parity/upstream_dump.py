@@ -347,25 +347,40 @@ def main(out_path: str) -> int:
     ).scalar()
     step("execute_import_plan", lambda: asyncio.run(workflow_tools.execute_import_plan(
         owner, plan_id, plan_record_rev, confirm=True)))
+    # 必须在下一个 step 之前取：state["last_raw"] 每一步都会覆盖
+    exec_raw = state.get("last_raw")
     step("list_total_after_import", lambda: {
         "total": read_tools.list_transactions(owner, ledger_id="L1", limit=50).get("total")})
 
-    # ---------------- 工作流状态：计划记录 / 来源绑定 / 撤销 ----------------
-    raw_exec = state.get("last_raw") if isinstance(state.get("last_raw"), dict) else {}
-    created_ids = raw_exec.get("sync_ids") or []
-    if not created_ids:
-        for res in raw_exec.get("results") or []:
+    created_ids = (exec_raw or {}).get("sync_ids") if isinstance(exec_raw, dict) else None
+    created_ids = created_ids or []
+    if not created_ids and isinstance(exec_raw, dict):
+        for res in exec_raw.get("results") or []:
             created_ids = (res or {}).get("created_sync_ids") or []
             if created_ids:
                 break
     created_id = created_ids[0] if created_ids else None
 
+    # ---------------- 工作流状态：计划记录 / 来源绑定 / 撤销 ----------------
     step("list_workflow_records", lambda: workflow_tools.list_workflow_records(
         owner, "L1", "import_plan"))
     step("get_workflow_record", lambda: workflow_tools.get_workflow_record(owner, plan_id))
+    # 来源绑定：导入落库后交易应带一条来源（幂等键的落点）；重复绑定同一来源必须被拒
     if created_id:
         step("list_transaction_sources", lambda: workflow_tools.list_transaction_sources(
             owner, "L1", created_id))
+        src_list = state.get("last_raw")
+        src = src_list[0] if isinstance(src_list, list) and src_list else None
+        if src:
+            step("link_transaction_source_duplicate", lambda: workflow_tools.link_transaction_source(
+                owner, "L1", created_id,
+                {"source_system": src.get("source_system"), "source_id": src.get("source_id")}))
+            step("unlink_transaction_source_no_confirm", lambda: workflow_tools.unlink_transaction_source(
+                owner, "L1", src.get("id")))
+            step("unlink_transaction_source", lambda: workflow_tools.unlink_transaction_source(
+                owner, "L1", src.get("id"), confirm=True))
+            step("list_transaction_sources_after_unlink", lambda: workflow_tools.list_transaction_sources(
+                owner, "L1", created_id))
 
     # 撤销：不 confirm → confirmation_required；confirm → 只删这次导入写入的交易
     plan_record_rev2 = db.execute(
