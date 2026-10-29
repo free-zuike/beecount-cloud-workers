@@ -23,7 +23,10 @@ import {
   createTransaction, deleteTransaction, setSelfCall, updateTransaction,
 } from '../src/mcp/tools/write-tools';
 import { previewImportFile, setAttachmentBytesSource } from '../src/mcp/file-tools';
-import { executeImportPlan } from '../src/mcp/workflow-tools';
+import {
+  executeImportPlan, getWorkflowRecord, listTransactionSources, listWorkflowRecords,
+  undoImportPlan,
+} from '../src/mcp/workflow-tools';
 
 const GOLDEN_PATH = join(process.cwd(), 'tests/fixtures/upstream-golden.json');
 
@@ -348,6 +351,7 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     setAttachmentBytesSource(async () => new Uint8Array(IMPORT_BYTES));
     let planId: string | null = null;
     let lastPreview: unknown = null;
+    let lastExecute: unknown = null;
     await run('preview_import_file', async () => {
       const res = await previewImportFile(c, { file_id: 'f1', time_zone: 'Asia/Shanghai' });
       lastPreview = res;
@@ -377,12 +381,40 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     const planRow = h.sqlite.prepare('SELECT revision FROM mcp_state_records WHERE id = ?')
       .get(planId ?? '') as { revision: number } | undefined;
     const planRecordRev = planRow?.revision ?? planRev;
-    await run('execute_import_plan',
-      () => executeImportPlan(c, { plan_id: planId ?? '', expected_revision: planRecordRev, confirm: true }));
+    await run('execute_import_plan', async () => {
+      const res = await executeImportPlan(c, {
+        plan_id: planId ?? '', expected_revision: planRecordRev, confirm: true,
+      });
+      lastExecute = res;
+      return res;
+    });
     await run('list_total_after_import', async () => {
       const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
       return { total: page.total };
     });
+
+    // 工作流状态：计划记录 / 来源绑定 / 撤销
+    await run('list_workflow_records',
+      () => listWorkflowRecords(c, { ledger_id: 'L1', kind: 'import_plan' }));
+    await run('get_workflow_record', () => getWorkflowRecord(c, { record_id: planId ?? '' }));
+
+    const createdId = (lastExecute as { sync_ids?: string[] } | null)?.sync_ids?.[0] ?? null;
+    if (createdId) {
+      await run('list_transaction_sources',
+        () => listTransactionSources(c, { ledger_id: 'L1', sync_id: createdId }));
+    }
+
+    const rev2 = (h.sqlite.prepare('SELECT revision FROM mcp_state_records WHERE id = ?')
+      .get(planId ?? '') as { revision: number } | undefined)?.revision ?? planRecordRev;
+    await run('undo_import_plan_no_confirm',
+      () => undoImportPlan(c, { plan_id: planId ?? '', expected_revision: rev2 }));
+    await run('undo_import_plan',
+      () => undoImportPlan(c, { plan_id: planId ?? '', expected_revision: rev2, confirm: true }));
+    await run('list_total_after_undo', async () => {
+      const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
+      return { total: page.total };
+    });
+    await run('get_workflow_record_after_undo', () => getWorkflowRecord(c, { record_id: planId ?? '' }));
 
     expect(failures.join('\n')).toBe('');
   });

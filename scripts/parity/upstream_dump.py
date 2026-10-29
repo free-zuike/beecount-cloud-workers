@@ -343,6 +343,30 @@ def main(out_path: str) -> int:
         owner, plan_id, plan_record_rev, confirm=True)))
     step("list_total_after_import", lambda: {
         "total": read_tools.list_transactions(owner, ledger_id="L1", limit=50).get("total")})
+
+    # ---------------- 工作流状态：计划记录 / 来源绑定 / 撤销 ----------------
+    raw_exec = state.get("last_raw")
+    created_ids = (raw_exec or {}).get("sync_ids") if isinstance(raw_exec, dict) else None
+    created_id = created_ids[0] if created_ids else None
+
+    step("list_workflow_records", lambda: workflow_tools.list_workflow_records(
+        owner, "L1", "import_plan"))
+    step("get_workflow_record", lambda: workflow_tools.get_workflow_record(owner, plan_id))
+    if created_id:
+        step("list_transaction_sources", lambda: workflow_tools.list_transaction_sources(
+            owner, "L1", created_id))
+
+    # 撤销：不 confirm → confirmation_required；confirm → 只删这次导入写入的交易
+    plan_record_rev2 = db.execute(
+        sa_text("SELECT revision FROM mcp_state_records WHERE id = :i"), {"i": plan_id}
+    ).scalar()
+    step("undo_import_plan_no_confirm", lambda: asyncio.run(workflow_tools.undo_import_plan(
+        owner, plan_id, plan_record_rev2)))
+    step("undo_import_plan", lambda: asyncio.run(workflow_tools.undo_import_plan(
+        owner, plan_id, plan_record_rev2, confirm=True)))
+    step("list_total_after_undo", lambda: {
+        "total": read_tools.list_transactions(owner, ledger_id="L1", limit=50).get("total")})
+    step("get_workflow_record_after_undo", lambda: workflow_tools.get_workflow_record(owner, plan_id))
     golden["scenario"] = scenario
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
