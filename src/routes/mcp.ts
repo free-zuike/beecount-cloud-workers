@@ -644,10 +644,12 @@ async function checkAuth(c: any): Promise<Response | null> {
     JSON.stringify({ error: { code, message: detail } }),
     { status: code, headers: { 'Content-Type': 'application/json' } },
   );
-  if (!h) return reject(401, 'Invalid token');
+  // 对齐上游 auth.py：缺少 Authorization → 401 Missing Authorization header
+  if (!h) return reject(401, 'Missing Authorization header');
   let t: string;
-  if (h.startsWith('Bearer ')) t = h.slice(7); else return reject(401, 'Invalid token');
-  if (!t.startsWith('bcmcp_')) return reject(401, 'Invalid token');
+  if (h.startsWith('Bearer ')) t = h.slice(7); else return reject(401, 'Missing Authorization header');
+  // 对齐上游：有 bearer 但不是 PAT 格式（looks_like_pat 判定）→ 403，不是 401
+  if (!t.startsWith('bcmcp_')) return reject(403, 'MCP endpoint requires a PAT');
   const hh = await hashToken(t);
   const p = await (c.env.DB as D1Database).prepare(
     `SELECT id, user_id, name, scopes_json, expires_at, revoked_at FROM personal_access_tokens WHERE token_hash = ?`
@@ -657,9 +659,13 @@ async function checkAuth(c: any): Promise<Response | null> {
   if (p.expires_at && p.expires_at < nowUtc()) return reject(401, 'Token expired');
   // 对齐上游：账号禁用 → 403 User disabled
   const owner = await (c.env.DB as D1Database).prepare('SELECT * FROM users WHERE id = ?').bind(p.user_id).first<Record<string, unknown>>();
-  if (owner && Number(owner.is_enabled ?? 1) === 0) return reject(403, 'User disabled');
+  // 对齐上游：用户不存在或被禁用都拒绝（上游是 `if user is None or not user.is_enabled`）
+  if (!owner || Number(owner.is_enabled ?? 1) === 0) return reject(403, 'User disabled');
   c.set('userId', p.user_id); c.set('patId', p.id); c.set('patPrefix', t.substring(0, 14)); c.set('patName', p.name);
-  c.set('patScopes', JSON.parse(p.scopes_json || '[]'));
+  let patScopes: string[] = [];
+  try { patScopes = JSON.parse(p.scopes_json || '[]'); } catch { patScopes = []; }
+  if (!Array.isArray(patScopes)) patScopes = [];
+  c.set('patScopes', patScopes);
   const ip = c.req.header('CF-Connecting-IP') || c.req.header('x-real-ip') || 'unknown';
   c.env.DB.prepare(`UPDATE personal_access_tokens SET last_used_at = ?, last_used_ip = ? WHERE id = ?`).bind(nowUtc(), ip, p.id).run().catch(() => {});
   return null;

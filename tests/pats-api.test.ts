@@ -311,7 +311,10 @@ describe('MCP 端点严格分流', () => {
     const user = await register();
     const token = user.access_token as string;
     const res = await api('GET', '/api/v1/mcp', undefined, token);
-    expect(res.status).toBe(401);
+    // 对齐上游 auth.py：bearer 存在但 looks_like_pat 判定不是 PAT → 403
+    expect(res.status).toBe(403);
+    const body = await res.json() as any;
+    expect(body.error.message).toBe('MCP endpoint requires a PAT');
   });
 
   it('乱写的 bcmcp token 调 MCP 返回 401', async () => {

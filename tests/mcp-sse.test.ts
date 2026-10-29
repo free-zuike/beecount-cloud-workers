@@ -8,6 +8,10 @@ class MockD1Database {
     return {
       bind: (..._params: unknown[]) => ({
         first: async () => {
+          // PAT 对应的用户必须存在且启用（上游 _resolve_pat_sync 要求）
+          if (sql.includes('FROM users')) {
+            return { id: 'user-1', is_enabled: 1, email: 'u1@example.com' };
+          }
           if (sql.includes('FROM personal_access_tokens')) {
             return {
               id: 'pat-1',
