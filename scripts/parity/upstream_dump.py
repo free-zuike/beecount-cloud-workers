@@ -361,6 +361,29 @@ def main(out_path: str) -> int:
                 break
     created_id = created_ids[0] if created_ids else None
 
+    # ---------------- 对账：余额比对 + 检查点 ----------------
+    # a1 = 现金（cash），账户是用户全局的，选哪个账本只决定归属/鉴权
+    step("reconcile_account", lambda: workflow_tools.reconcile_account(
+        owner, "L1", "a1", "2026-05-02T23:59:59Z", 1000.0, "UTC"))
+    step("reconcile_account_tz_kolkata", lambda: workflow_tools.reconcile_account(
+        owner, "L1", "a1", "2026-05-02T23:59:59Z", 1000.0, "Asia/Kolkata"))
+    step("reconcile_account_nan", lambda: workflow_tools.reconcile_account(
+        owner, "L1", "a1", "2026-05-02T23:59:59Z", float("nan"), "UTC"))
+    step("reconcile_account_bad_account", lambda: workflow_tools.reconcile_account(
+        owner, "L1", "nope", "2026-05-02T23:59:59Z", 1000.0, "UTC"))
+    step("save_reconciliation_checkpoint_no_confirm",
+         lambda: workflow_tools.save_reconciliation_checkpoint(
+             owner, "L1", "a1", "2026-05-02T23:59:59Z", 1000.0, "bank", "2026-05-01", "UTC"))
+    step("save_reconciliation_checkpoint",
+         lambda: workflow_tools.save_reconciliation_checkpoint(
+             owner, "L1", "a1", "2026-05-02T23:59:59Z", 1000.0, "bank", "2026-05-01", "UTC", True))
+    # coverage_from 晚于 at 必须被拒
+    step("save_reconciliation_checkpoint_bad_range",
+         lambda: workflow_tools.save_reconciliation_checkpoint(
+             owner, "L1", "a1", "2026-05-02T23:59:59Z", 1000.0, "bank", "2026-06-01", "UTC", True))
+    step("list_workflow_records_checkpoint",
+         lambda: workflow_tools.list_workflow_records(owner, "L1", "checkpoint"))
+
     # ---------------- 工作流状态：计划记录 / 来源绑定 / 撤销 ----------------
     step("list_workflow_records", lambda: workflow_tools.list_workflow_records(
         owner, "L1", "import_plan"))

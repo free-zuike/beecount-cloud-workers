@@ -25,7 +25,8 @@ import {
 import { previewImportFile, setAttachmentBytesSource } from '../src/mcp/file-tools';
 import {
   executeImportPlan, getWorkflowRecord, linkTransactionSource, listTransactionSources,
-  listWorkflowRecords, undoImportPlan, unlinkTransactionSource,
+  listWorkflowRecords, reconcileAccount, saveReconciliationCheckpoint, undoImportPlan,
+  unlinkTransactionSource,
 } from '../src/mcp/workflow-tools';
 
 const GOLDEN_PATH = join(process.cwd(), 'tests/fixtures/upstream-golden.json');
@@ -401,6 +402,37 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
       const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
       return { total: page.total };
     });
+
+    // 对账：余额比对 + 检查点。a1 = 现金（cash）
+    await run('reconcile_account', () => reconcileAccount(c, {
+      ledger_id: 'L1', account_id: 'a1', at: '2026-05-02T23:59:59Z', actual_balance: 1000, time_zone: 'UTC',
+    }));
+    await run('reconcile_account_tz_kolkata', () => reconcileAccount(c, {
+      ledger_id: 'L1', account_id: 'a1', at: '2026-05-02T23:59:59Z', actual_balance: 1000,
+      time_zone: 'Asia/Kolkata',
+    }));
+    await run('reconcile_account_nan', () => reconcileAccount(c, {
+      ledger_id: 'L1', account_id: 'a1', at: '2026-05-02T23:59:59Z', actual_balance: Number.NaN,
+      time_zone: 'UTC',
+    }));
+    await run('reconcile_account_bad_account', () => reconcileAccount(c, {
+      ledger_id: 'L1', account_id: 'nope', at: '2026-05-02T23:59:59Z', actual_balance: 1000,
+      time_zone: 'UTC',
+    }));
+    await run('save_reconciliation_checkpoint_no_confirm', () => saveReconciliationCheckpoint(c, {
+      ledger_id: 'L1', account_id: 'a1', at: '2026-05-02T23:59:59Z', actual_balance: 1000,
+      source_system: 'bank', coverage_from: '2026-05-01', time_zone: 'UTC',
+    }));
+    await run('save_reconciliation_checkpoint', () => saveReconciliationCheckpoint(c, {
+      ledger_id: 'L1', account_id: 'a1', at: '2026-05-02T23:59:59Z', actual_balance: 1000,
+      source_system: 'bank', coverage_from: '2026-05-01', time_zone: 'UTC', confirm: true,
+    }));
+    await run('save_reconciliation_checkpoint_bad_range', () => saveReconciliationCheckpoint(c, {
+      ledger_id: 'L1', account_id: 'a1', at: '2026-05-02T23:59:59Z', actual_balance: 1000,
+      source_system: 'bank', coverage_from: '2026-06-01', time_zone: 'UTC', confirm: true,
+    }));
+    await run('list_workflow_records_checkpoint',
+      () => listWorkflowRecords(c, { ledger_id: 'L1', kind: 'checkpoint' }));
 
     // 工作流状态：计划记录 / 来源绑定 / 撤销
     await run('list_workflow_records',
