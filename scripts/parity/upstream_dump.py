@@ -79,6 +79,10 @@ def main(out_path: str) -> int:
     add(LedgerMember, ledger_id="L1-i", user_id="u1", role="owner")
     add(LedgerMember, ledger_id="L2-i", user_id="u1", role="editor")
     add(LedgerMember, ledger_id="L2-i", user_id="u2", role="owner")
+    # 空账本：验证空集合/零值/None 的形状（最容易在"没数据"时走偏）
+    add(Ledger, id="L3-i", external_id="L3", user_id="u1", name="空账本",
+        currency="JPY", month_start_day=25, created_at=NOW)
+    add(LedgerMember, ledger_id="L3-i", user_id="u1", role="owner")
 
     add(UserCategoryProjection, sync_id="c1", ledger_id="L1-i", user_id="u1",
         name="餐饮", kind="expense", sort_order=1, icon="🍜")
@@ -120,7 +124,9 @@ def main(out_path: str) -> int:
     db.commit()
 
     # ---------------- 调用矩阵（与 TS 侧逐条对应） ----------------
+    # 每条都是一个"同一夹具、同一参数、比完整 JSON"的判定点。
     calls = [
+        # 基础形状
         ("list_transactions", {"ledger_id": "L1", "limit": 50}),
         ("list_transactions", {"ledger_id": "L1", "date_from": "2026-05-02", "date_to": "2026-05-02"}),
         ("list_transactions", {"ledger_id": "L1", "min_amount": 20, "max_amount": 100}),
@@ -132,6 +138,38 @@ def main(out_path: str) -> int:
         ("get_ledger_stats", {"ledger_id": "L1"}),
         ("get_analytics_summary", {"ledger_id": "L1", "scope": "month", "period": "2026-05"}),
         ("search", {"q": "星巴克", "limit": 20}),
+        # 分页：游标编码本身也是对拍点（stableStringify 排序键必须一致）
+        ("list_transactions", {"ledger_id": "L1", "limit": 2}),
+        # 过滤分支
+        ("list_categories", {"ledger_id": "L1", "kind": "income"}),
+        ("list_accounts", {"ledger_id": "L1", "account_type": "bank"}),
+        ("list_transactions", {"ledger_id": "L1", "date_from": "2026-05-11"}),
+        ("list_transactions", {"ledger_id": "L1", "date_to": "2026-05-02"}),
+        # 搜索：命中标签名 / 无命中 / limit 边界
+        ("search", {"q": "出差", "limit": 20}),
+        ("search", {"q": "不存在的关键词xyz", "limit": 20}),
+        ("search", {"q": "星巴克", "limit": 1}),
+        # 不传 ledger_id：默认账本解析路径
+        ("list_transactions", {"limit": 50}),
+        ("list_categories", {}),
+        ("list_accounts", {}),
+        ("list_tags", {}),
+        ("list_budgets", {}),
+        ("get_ledger_stats", {}),
+        # 空账本：空数组 / 0 / null 的形状
+        ("list_transactions", {"ledger_id": "L3", "limit": 50}),
+        ("list_categories", {"ledger_id": "L3"}),
+        ("list_accounts", {"ledger_id": "L3"}),
+        ("list_tags", {"ledger_id": "L3"}),
+        ("list_budgets", {"ledger_id": "L3"}),
+        ("get_ledger_stats", {"ledger_id": "L3"}),
+        ("get_analytics_summary", {"ledger_id": "L3", "scope": "month", "period": "2026-05"}),
+        # 错误路径：两侧必须都报错（消息不比对，但"是否报错"必须一致）
+        ("list_transactions", {"ledger_id": "NOPE"}),
+        ("list_categories", {"ledger_id": "NOPE"}),
+        ("get_ledger_stats", {"ledger_id": "NOPE"}),
+        ("get_transaction", {"ledger_id": "L1", "sync_id": "nope"}),
+        ("get_analytics_summary", {"ledger_id": "L1", "scope": "month", "period": "not-a-period"}),
     ]
 
     def normalize(v):

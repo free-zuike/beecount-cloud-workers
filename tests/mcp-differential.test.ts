@@ -48,6 +48,9 @@ function seed(h: Harness): void {
   addMember(h, 'L1-i', 'u1', 'owner');
   addMember(h, 'L2-i', 'u1', 'editor');
   addMember(h, 'L2-i', 'u2', 'owner');
+  // L3：空账本，验证空数组/0/null 的形状；month_start_day=25 走非 1 号起始的分支
+  createLedger(h, 'u1', 'L3-i', 'L3', '空账本', 'JPY', 25);
+  addMember(h, 'L3-i', 'u1', 'owner');
 
   for (const c of [
     { sync_id: 'c1', name: '餐饮', kind: 'expense', sort_order: 1, icon: '🍜' },
