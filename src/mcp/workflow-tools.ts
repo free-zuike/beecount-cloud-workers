@@ -63,17 +63,20 @@ function isUniqueViolation(err: unknown): boolean {
     && String((err as { message: unknown }).message).includes('UNIQUE');
 }
 
+/** 落库时序列化的 JSON 列，对外输出要还原成对象（对齐上游 record_out / _source_out）。 */
+function parseJsonOrNull(text: string | null): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
 export function recordOut(row: MCPStateRow): Record<string, unknown> {
   // 对齐上游 record_out（1.9.0 实测）：data 是**对象**，只有落库时才序列化成
   // data_json；时间用 isoformat(+00:00)
-  let data: unknown = null;
-  if (row.data_json) {
-    try {
-      data = JSON.parse(row.data_json);
-    } catch {
-      data = row.data_json;
-    }
-  }
+  const data = parseJsonOrNull(row.data_json);
   return {
     id: row.id,
     ledger_internal_id: row.ledger_id,
@@ -178,8 +181,9 @@ function sourceOut(row: MCPSourceRow): Record<string, unknown> {
     sync_id: row.tx_sync_id,
     source_system: row.source_system,
     source_id: row.source_id,
-    // 对齐上游 _source_out：metadata 是原始 JSON 字符串
-    metadata: row.metadata_json ?? null,
+    // 对齐上游 _source_out（1.9.0 实测）：metadata 是**对象**，只有落库时才是
+    // metadata_json 字符串。早期对齐写反了，这里按实测更正
+    metadata: parseJsonOrNull(row.metadata_json),
   };
 }
 
