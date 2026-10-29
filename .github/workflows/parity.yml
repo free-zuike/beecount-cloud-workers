@@ -128,22 +128,36 @@ jobs:
             echo "| 本地用例 | \`tests/mcp-differential.test.ts\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # golden 变化说明上游行为变了：开 PR 让人确认，而不是自动覆盖
+      # golden 变化说明上游行为变了：开 PR 让人确认，而不是自动覆盖。
+      # 先判断是否真的变了 —— 没变化时不做任何 git 写操作
+      # （原先用 peter-evans/create-pull-request，即使无变化也在 CI 里报 error 400）
+      - name: Detect golden drift
+        id: drift
+        run: |
+          if git diff --quiet -- tests/fixtures/upstream-golden.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::golden 与上游一致，无漂移"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git --no-pager diff --stat -- tests/fixtures/upstream-golden.json
+          fi
+
+      - name: Push golden drift branch
+        if: steps.drift.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B parity/upstream-golden
+          git add tests/fixtures/upstream-golden.json
+          git commit -m "chore(parity): 上游 MCP 输出变化（${{ steps.upstream.outputs.ref }}）"
+          git push --force origin parity/upstream-golden
+
       - name: Open PR on upstream drift
-        if: github.event_name != 'pull_request'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          add-paths: tests/fixtures/upstream-golden.json
-          branch: parity/upstream-golden
-          title: "chore(parity): 上游 MCP 输出变化（${{ steps.upstream.outputs.ref }}）"
-          body: |
-            上游 Python 实现的输出发生了变化，golden 已重新生成。
-
-            | 项 | 值 |
-            | --- | --- |
-            | 上游仓库 | `${{ steps.upstream.outputs.repo }}` |
-            | 对齐 ref | `${{ steps.upstream.outputs.ref }}` |
-
-            差异会由 `tests/mcp-differential.test.ts` 列出路径。请确认这些变化是上游有意的
-            行为调整，再合并本 PR；如果是本地实现走偏了，应改本地代码而不是接受新 golden。
+        if: steps.drift.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create --base main --head parity/upstream-golden \
+            --title "chore(parity): 上游 MCP 输出变化（${{ steps.upstream.outputs.ref }}）" \
+            --body "上游 \`${{ steps.upstream.outputs.repo }}\` 的 \`${{ steps.upstream.outputs.ref }}\` 输出发生变化，golden 已重新生成。差异路径见本次运行的 \`Run differential test\` 日志。请确认是上游有意的行为调整再合并；若本地实现走偏，应改本地代码而不是接受新 golden。" \
+            || echo "::notice::PR 已存在或无变化"
