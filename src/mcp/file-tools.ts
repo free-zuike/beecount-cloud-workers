@@ -322,6 +322,26 @@ const SUGGEST_PATTERNS: Array<[keyof ImportMapping, RegExp]> = [
  * 推断建议映射（对齐上游 GenericParser.suggest_mapping）：跳过空列名，
  * 按优先级匹配且一列只被一个字段占用。
  */
+// 对齐上游 transformer 的收支类型关键字表（含中文）
+const TYPE_EXPENSE = new Set(['expense', '支出', '消费', '出', '-', '支']);
+const TYPE_INCOME = new Set(['income', '收入', '收', '+', '入']);
+const TYPE_TRANSFER = new Set(['transfer', '转账', '转出转入', '转']);
+
+/**
+ * 对齐上游 _parse_tx_type：精确匹配优先，未命中再做子串匹配。
+ * 空值：上游在 expense_is_negative 时返 'expense'，否则 None（由调用方记错误）。
+ */
+export function parseTxType(raw: string): string | null {
+  const s = raw.trim().toLowerCase();
+  if (!s) return null;
+  if (TYPE_EXPENSE.has(s)) return 'expense';
+  if (TYPE_INCOME.has(s)) return 'income';
+  if (TYPE_TRANSFER.has(s)) return 'transfer';
+  for (const kw of ['支出', 'expense', '消费']) if (s.includes(kw)) return 'expense';
+  for (const kw of ['收入', 'income']) if (s.includes(kw)) return 'income';
+  return null;
+}
+
 export function suggestMapping(headers: string[]): ImportMapping {
   const nonEmpty = headers.filter(h => (h ?? '').trim() !== '');
   const taken = new Set<string>();
@@ -460,9 +480,10 @@ export async function previewImportFile(
     const r = dataRows[i];
     const transaction: Record<string, unknown> = {};
     if (txTypeCol !== null) {
-      const v = (r[txTypeCol] ?? '').trim().toLowerCase();
-      if (v && ['expense', 'income', 'transfer'].includes(v)) transaction.tx_type = v;
-      else transaction.tx_type = mapping.expense_is_negative ? 'income' : 'expense';
+      // 对齐上游 services/import_data/transformer._parse_tx_type：
+      // 中文类型词必须识别，否则"收入"行会被当成支出（资损级）
+      const parsed = parseTxType(String(r[txTypeCol] ?? '').trim());
+      transaction.tx_type = parsed ?? (mapping.expense_is_negative ? 'expense' : 'expense');
     }
     if (amountCol !== null) {
       let v = String(r[amountCol] ?? '').trim();
