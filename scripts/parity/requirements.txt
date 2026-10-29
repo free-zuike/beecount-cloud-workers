@@ -22,3 +22,6 @@ mcp>=1.27.0,<2
 httpx>=0.27.0
 numpy>=1.26.0
 openpyxl>=3.0
+# Pillow 不是只读工具需要，而是 src.main 的 router 链路（附件/图片）导入时要；
+# 写路径场景必须 late-bind src.main:app 才能走 self-call，故必须装
+Pillow>=10.4.0
