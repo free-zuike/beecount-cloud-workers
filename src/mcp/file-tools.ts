@@ -341,6 +341,9 @@ export function suggestMapping(headers: string[]): ImportMapping {
   out.datetime_format = null;
   out.strip_currency_symbols = true;
   out.expense_is_negative = false;
+  // 上游 ImportFieldMapping 有该字段（默认 None），必须显式带上，
+  // 否则 golden 比对会出现"上游有 null、本地缺键"
+  out.tz_offset_minutes = null;
   return out;
 }
 
@@ -420,6 +423,37 @@ export async function previewImportFile(
   const limit = Math.max(1, Math.min(args.limit ?? 200, 200));
   if (rows.length - 1 > 50000) throw new Error('Import files may contain at most 50000 rows');
   const dataRows = rows.slice(offset + 1, offset + 1 + limit);
+  // 对齐上游 transformer.apply_mapping：required_complete 不成立时**不逐行转换**，
+  // 只报一条 PARSE_MAPPING_INCOMPLETE 节省体积。
+  // required_complete = tx_type & amount & happened_at & category_name
+  // （是 category_name 本身，不含 subcategory 兜底）
+  const missing: string[] = [];
+  if (!mapping.tx_type) missing.push('tx_type');
+  if (!mapping.amount) missing.push('amount');
+  if (!mapping.happened_at) missing.push('happened_at');
+  if (!mapping.category_name) missing.push('category_name');
+  if (missing.length > 0) {
+    return {
+      file_id: args.file_id,
+      file_sha256: metadata.sha256,
+      headers,
+      suggested_mapping: suggested,
+      total_rows: rows.length - 1,
+      offset,
+      next_offset: offset + dataRows.length < rows.length - 1 ? offset + dataRows.length : null,
+      errors: [{
+        row_number: 0,
+        code: 'PARSE_MAPPING_INCOMPLETE',
+        field_name: null,
+        raw_line: '',
+        message: `required mapping fields missing: ${missing.join(', ')}`,
+      }],
+      warnings: [],
+      status: 'mapping_or_data_errors',
+      plan: null,
+    };
+  }
+
   const candidates: ImportCandidate[] = [];
   const errors: Array<Record<string, unknown>> = [];
   for (let i = 0; i < dataRows.length; i++) {
@@ -466,7 +500,14 @@ export async function previewImportFile(
   const warnings: Array<Record<string, unknown>> = [];
   for (let i = 0; i < candidates.length; i++) {
     if (candidates[i].transaction.amount === undefined) {
-      errors.push({ row: offset + i + 2, code: 'INVALID_TRANSACTION', message: 'amount column missing or unparsable' });
+      // 对齐上游 ImportError 的字段集合：row_number / code / field_name / raw_line / message
+      errors.push({
+        row_number: offset + i + 2,
+        code: 'INVALID_TRANSACTION',
+        field_name: 'amount',
+        raw_line: '',
+        message: 'amount column missing or unparsable',
+      });
     }
   }
   // 对齐上游：有错误或无候选 → mapping_or_data_errors，不生成 plan

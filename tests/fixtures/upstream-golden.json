@@ -1484,15 +1484,13 @@
           "kind": "create_transaction",
           "ledger": "主账本",
           "ledger_id": "L1",
-          "operation_id": "a74adeb0-9082-45ed-99e9-32aa8cb8a2ae",
           "results": [
             {
               "base_change_id": 0,
               "entity_id": "<NEW>",
               "idempotency_replayed": false,
               "ledger_id": "L1",
-              "new_change_id": 2,
-              "server_timestamp": "2026-10-29T03:59:54.094635Z"
+              "new_change_id": 2
             }
           ],
           "status": "created",
@@ -1528,8 +1526,8 @@
           "note": "差分写入",
           "sync_id": "<NEW>",
           "tag_ids": [
-            "g1",
-            "tag_c06cee3fa87b"
+            "<AUTO_TAG>",
+            "g1"
           ],
           "tags": "出差,MCP",
           "to_account_id": null,
@@ -1545,8 +1543,7 @@
             "entity_id": "<NEW>",
             "idempotency_replayed": false,
             "ledger_id": "L1",
-            "new_change_id": 3,
-            "server_timestamp": "2026-10-29T03:59:54.108904Z"
+            "new_change_id": 3
           },
           "ledger_id": "L1",
           "sync_id": "<NEW>",
@@ -1579,8 +1576,8 @@
           "note": "改过的备注",
           "sync_id": "<NEW>",
           "tag_ids": [
-            "g1",
-            "tag_c06cee3fa87b"
+            "<AUTO_TAG>",
+            "g1"
           ],
           "tags": "出差,MCP",
           "to_account_id": null,
@@ -1613,6 +1610,51 @@
         "result": {
           "has_more": false,
           "total": 7
+        }
+      },
+      {
+        "name": "preview_import_file",
+        "result": {
+          "errors": [
+            {
+              "code": "PARSE_MAPPING_INCOMPLETE",
+              "field_name": null,
+              "message": "required mapping fields missing: category_name",
+              "raw_line": "",
+              "row_number": 0
+            }
+          ],
+          "file_id": "f1",
+          "file_sha256": "087538304e001a71b9b4d4b4aa9ec8c581384fb9086b45ad7a56e981db9537db",
+          "headers": [
+            "日期",
+            "金额",
+            "类型",
+            "备注"
+          ],
+          "next_offset": null,
+          "offset": 0,
+          "plan": null,
+          "status": "mapping_or_data_errors",
+          "suggested_mapping": {
+            "account_name": null,
+            "amount": "金额",
+            "category_name": null,
+            "currency": null,
+            "datetime_format": null,
+            "expense_is_negative": false,
+            "from_account_name": null,
+            "happened_at": "日期",
+            "note": "备注",
+            "strip_currency_symbols": true,
+            "subcategory_name": null,
+            "tags": [],
+            "to_account_name": null,
+            "tx_type": "类型",
+            "tz_offset_minutes": null
+          },
+          "total_rows": 2,
+          "warnings": []
         }
       }
     ]

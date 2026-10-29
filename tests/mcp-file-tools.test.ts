@@ -109,12 +109,16 @@ describe('preview_import_file（对齐上游 source_id 契约）', () => {
     const c = setup();
     const { sha256 } = await seedFile(
       'f-csv',
-      'date,amount,note\n2026-05-01T10:00:00Z,12.5,lunch\n2026-05-02T10:00:00Z,30,dinner\n',
+      'date,amount,note,type,category\n'
+      + '2026-05-01T10:00:00Z,12.5,lunch,expense,餐饮\n'
+      + '2026-05-02T10:00:00Z,30,dinner,expense,餐饮\n',
       'text/csv',
     );
+    // 必填映射（tx_type / amount / happened_at / category_name）必须齐全，
+    // 否则上游 transformer 直接报 PARSE_MAPPING_INCOMPLETE、不生成 plan
     const out = await previewImportFile(c, {
       file_id: 'f-csv',
-      mapping: { amount: 'amount', happened_at: 'date', note: 'note' },
+      mapping: { amount: 'amount', happened_at: 'date', note: 'note', tx_type: 'type', category_name: 'category' },
     }) as { plan: { data: string } };
     // 对齐上游 record_out：data 是原始 JSON 字符串，需自行解析
     const planData = JSON.parse(out.plan.data as string) as { items: Array<{ sources: Array<{ source_id: string; row_number: number }> }> };
@@ -125,10 +129,10 @@ describe('preview_import_file（对齐上游 source_id 契约）', () => {
 
   it('空 source_id（指定列为空）→ 记错误且不生成 plan', async () => {
     const c = setup();
-    await seedFile('f-csv2', 'date,amount,oid\n2026-05-01T10:00:00Z,12.5,\n', 'text/csv');
+    await seedFile('f-csv2', 'date,amount,oid,type,category\n2026-05-01T10:00:00Z,12.5,,expense,餐饮\n', 'text/csv');
     const out = await previewImportFile(c, {
       file_id: 'f-csv2',
-      mapping: { amount: 'amount', happened_at: 'date' },
+      mapping: { amount: 'amount', happened_at: 'date', tx_type: 'type', category_name: 'category' },
       source_id_column: 'oid',
     }) as { status: string; plan: unknown; errors: Array<{ row_number: number; code: string }> };
     expect(out.status).toBe('mapping_or_data_errors');
