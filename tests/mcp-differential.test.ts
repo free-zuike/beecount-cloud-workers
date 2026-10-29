@@ -18,11 +18,17 @@ import {
   getAnalyticsSummary, getLedgerStats, getTransaction, listAccounts, listBudgets,
   listCategories, listTags, listTransactions, search,
 } from '../src/mcp/tools/read-tools';
+import { createTransaction, deleteTransaction, updateTransaction } from '../src/mcp/tools/write-tools';
 
 const GOLDEN_PATH = join(process.cwd(), 'tests/fixtures/upstream-golden.json');
 
 interface GoldenCase { tool: string; args: Record<string, unknown>; result?: Json; error?: string }
-interface Golden { now: string; cases: GoldenCase[] }
+interface GoldenScenarioStep { name: string; result?: Json; error?: string }
+interface Golden {
+  now: string;
+  cases: GoldenCase[];
+  scenario?: { name: string; steps: GoldenScenarioStep[] };
+}
 
 /**
  * 按表结构插入（PRAGMA 过滤掉该表不存在的列），避免测试与 schema 漂移耦合。
@@ -197,6 +203,90 @@ describe.skipIf(!hasGolden)('MCP 运行时差分（对上游 golden）', () => {
       const diffs = diffJson(left, right);
       if (diffs.length) failures.push(formatDiffs(kase.tool, diffs));
     }
+    expect(failures.join('\n')).toBe('');
+  });
+});
+
+/**
+ * 写路径差分：步骤名与 scripts/parity/upstream_dump.py 的 scenario 一一对应。
+ * 写工具的结果里带新建行的 sync_id（随机 uuid），两侧都归一成 <NEW> 再比。
+ */
+describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () => {
+  it('写入 → 回读 → 更新 → 删除，每一步结果都与上游一致', async () => {
+    const golden = JSON.parse(readFileSync(GOLDEN_PATH, 'utf8')) as Golden;
+    const steps = golden.scenario?.steps ?? [];
+    // golden 里没有 scenario（旧版 golden）→ 明确跳过，不假装通过
+    if (steps.length === 0) return;
+
+    const h: Harness = makeHarness();
+    seed(h);
+    const c = mcpCtx(h, 'u1');
+    c.configuredTimeZone = 'Asia/Shanghai';
+    const failures: string[] = [];
+    let newId: string | null = null;
+
+    const scrub = (value: Json): Json => {
+      if (Array.isArray(value)) return value.map(scrub);
+      if (value && typeof value === 'object') {
+        const out: Record<string, Json> = {};
+        for (const key of Object.keys(value as Record<string, Json>)) {
+          out[key] = scrub((value as Record<string, Json>)[key]);
+        }
+        return out;
+      }
+      return newId && value === newId ? '<NEW>' : value;
+    };
+
+    const newIdOf = (res: unknown): string | null => {
+      const r = (res ?? {}) as Record<string, unknown>;
+      const nested = (r.transaction ?? r.data ?? r.item ?? {}) as Record<string, unknown>;
+      const id = r.sync_id ?? nested.sync_id ?? r.id;
+      return typeof id === 'string' ? id : null;
+    };
+
+    const run = async (name: string, fn: () => Promise<unknown>): Promise<void> => {
+      const expected = steps.find(s => s.name === name);
+      if (!expected) return;
+      let actualJson: Json | null = null;
+      let thrown: string | null = null;
+      try {
+        actualJson = scrub(normalize(JSON.parse(JSON.stringify(await fn())) as Json));
+      } catch (err) {
+        thrown = (err as Error).message;
+      }
+      if (expected.error) {
+        if (thrown === null) failures.push(`[${name}] 上游报错(${expected.error})而本地成功`);
+        return;
+      }
+      if (thrown !== null) {
+        failures.push(`[${name}] 本地抛错而上游成功: ${thrown}`);
+        return;
+      }
+      const diffs = diffJson(normalize(expected.result as Json), actualJson as Json);
+      if (diffs.length) failures.push(formatDiffs(name, diffs));
+    };
+
+    await run('create', async () => {
+      const res = await createTransaction(c, {
+        amount: 42.5, tx_type: 'expense', category: '餐饮', account: '现金',
+        happened_at: '2026-05-15T10:00:00+08:00', note: '差分写入', tags: ['出差'], ledger_id: 'L1',
+      });
+      newId = newIdOf(res);
+      return res;
+    });
+    await run('get_after_create', () => getTransaction(c, { ledger_id: 'L1', sync_id: newId ?? '' }));
+    await run('update', () => updateTransaction(c, {
+      sync_id: newId ?? '', amount: 99.5, note: '改过的备注', ledger_id: 'L1',
+    }));
+    await run('get_after_update', () => getTransaction(c, { ledger_id: 'L1', sync_id: newId ?? '' }));
+    await run('delete_without_confirm', () => deleteTransaction(c, { sync_id: newId ?? '', ledger_id: 'L1' }));
+    await run('delete', () => deleteTransaction(c, { sync_id: newId ?? '', confirm: true, ledger_id: 'L1' }));
+    await run('get_after_delete', () => getTransaction(c, { ledger_id: 'L1', sync_id: newId ?? '' }));
+    await run('list_total_after', async () => {
+      const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
+      return { total: page.total, has_more: page.has_more };
+    });
+
     expect(failures.join('\n')).toBe('');
   });
 });

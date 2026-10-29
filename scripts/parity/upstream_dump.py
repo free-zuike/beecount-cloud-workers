@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -191,6 +192,53 @@ def main(out_path: str) -> int:
         except Exception as exc:  # 上游报错本身也是一条契约
             golden["cases"].append({"tool": tool, "args": args,
                                     "error": f"{type(exc).__name__}: {exc}"})
+
+    # ---------------- 写路径场景：写入 → 回读 → 更新 → 删除 ----------------
+    # 上游写工具通过 in-process ASGI self-call 打自己的 write router，
+    # 所以这里要先把 src.main:app 拉起来（get_internal_client 会 late-bind）。
+    from src.mcp.tools import write_tools  # type: ignore
+
+    VOLATILE = {"revision", "created_at", "updated_at", "source_change_id", "last_change_id"}
+
+    def scrub(value, new_id):
+        """去掉一次运行就变的字段；把新建行的 sync_id 归一成 <NEW>。"""
+        if isinstance(value, dict):
+            return {k: scrub(v, new_id) for k, v in sorted(value.items()) if k not in VOLATILE}
+        if isinstance(value, (list, tuple)):
+            return [scrub(v, new_id) for v in value]
+        if isinstance(value, str) and new_id and value == new_id:
+            return "<NEW>"
+        return value
+
+    scenario = {"name": "write_cycle", "steps": []}
+    state = {"new_id": None}
+
+    def step(name, thunk):
+        try:
+            res = thunk()
+            if name == "create" and isinstance(res, dict):
+                state["new_id"] = res.get("sync_id") or res.get("id")
+            scenario["steps"].append({"name": name, "result": scrub(normalize(res), state["new_id"])})
+        except Exception as exc:
+            scenario["steps"].append({"name": name, "error": f"{type(exc).__name__}: {exc}"})
+
+    step("create", lambda: asyncio.run(write_tools.create_transaction(
+        owner, amount=42.5, tx_type="expense", category="餐饮", account="现金",
+        happened_at="2026-05-15T10:00:00+08:00", note="差分写入", tags=["出差"], ledger_id="L1")))
+    step("get_after_create", lambda: read_tools.get_transaction(owner, state["new_id"], ledger_id="L1"))
+    step("update", lambda: asyncio.run(write_tools.update_transaction(
+        owner, sync_id=state["new_id"], amount=99.5, note="改过的备注", ledger_id="L1")))
+    step("get_after_update", lambda: read_tools.get_transaction(owner, state["new_id"], ledger_id="L1"))
+    step("delete_without_confirm", lambda: asyncio.run(write_tools.delete_transaction(
+        owner, sync_id=state["new_id"], ledger_id="L1")))
+    step("delete", lambda: asyncio.run(write_tools.delete_transaction(
+        owner, sync_id=state["new_id"], confirm=True, ledger_id="L1")))
+    step("get_after_delete", lambda: read_tools.get_transaction(owner, state["new_id"], ledger_id="L1"))
+    step("list_total_after", lambda: {
+        "total": read_tools.list_transactions(owner, ledger_id="L1", limit=50).get("total"),
+        "has_more": read_tools.list_transactions(owner, ledger_id="L1", limit=50).get("has_more"),
+    })
+    golden["scenario"] = scenario
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
