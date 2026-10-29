@@ -114,14 +114,14 @@ describe('MCP workflows（移植上游 test_mcp_workflows.py）', () => {
       await workflows.previewImport(ctx(), { ledger_id: 'L1', candidates: [candidate()] }),
     );
     expect(plan.status).toBe('needs_review');
-    expect((JSON.parse(plan.data as string) as { items: Array<{ status: string }> }).items[0].status).toBe('review_required');
+    expect((plan.data as unknown as { items: Array<{ status: string }> }).items[0].status).toBe('review_required');
     await expect(workflows.executeImportPlan(ctx(), { plan_id: plan.id, expected_revision: plan.revision, confirm: true }))
       .rejects.toThrow(/unresolved/);
     await workflows.linkTransactionSource(ctx(), { ledger_id: 'L1', sync_id: original.sync_id, source: { source_system: 'synthetic-bank', source_id: 'source-1' } });
     const repeated = asObj<{ id: string; revision: number; data: string }>(
       await workflows.previewImport(ctx(), { ledger_id: 'L1', candidates: [candidate()] }),
     );
-    expect((JSON.parse(repeated.data as string) as { items: Array<{ status: string }> }).items[0].status).toBe('existing');
+    expect((repeated.data as unknown as { items: Array<{ status: string }> }).items[0].status).toBe('existing');
     const outcome = asObj<{ status: string; sync_ids: string[] }>(
       await workflows.executeImportPlan(ctx(), { plan_id: repeated.id, expected_revision: repeated.revision, confirm: true }),
     );

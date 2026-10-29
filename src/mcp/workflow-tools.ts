@@ -354,13 +354,15 @@ export async function previewImport(
     time_zone: timeZone,
     ready,
   };
-  return saveRecord(c, ledger, {
+  const saved = await saveRecord(c, ledger, {
     kind: 'import_plan',
     data,
     record_id: args.plan_id ?? null,
     expected_revision: args.expected_revision ?? null,
     status: ready ? 'ready' : 'needs_review',
   });
+  // 上游导入 plan 返回的 data 是**对象**，不是 JSON 字符串（只有落库时才序列化）
+  return { ...(saved as Record<string, unknown>), data };
 }
 
 export async function executeImportPlan(

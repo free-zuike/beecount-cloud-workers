@@ -121,7 +121,8 @@ describe('preview_import_file（对齐上游 source_id 契约）', () => {
       mapping: { amount: 'amount', happened_at: 'date', note: 'note', tx_type: 'type', category_name: 'category' },
     }) as { plan: { data: string } };
     // 对齐上游 record_out：data 是原始 JSON 字符串，需自行解析
-    const planData = JSON.parse(out.plan.data as string) as { items: Array<{ sources: Array<{ source_id: string; row_number: number }> }> };
+    // 上游导入 plan 返回的 data 已经是对象（只有落库的 data_json 才是字符串）
+    const planData = out.plan.data as unknown as { items: Array<{ sources: Array<{ source_id: string; row_number: number }> }> };
     const sources = planData.items.flatMap(cand => cand.sources);
     expect(sources.map(s => s.source_id)).toEqual([`${sha256}:2`, `${sha256}:3`]);
     expect(sources.map(s => s.row_number)).toEqual([2, 3]);
