@@ -252,7 +252,13 @@ def main(out_path: str) -> int:
             for k, v in sorted(value.items()):
                 if k in VOLATILE:
                     continue
-                out[k] = scrub_tag_ids(v, new_id) if k == "tag_ids" else scrub(v, new_id)
+                # created_revisions 是 {随机 sync_id: 版本号}：键随机、值才是契约，
+                # 直接归一键会撞成同一个键（两条变一条），故只取值的多重集合
+                if k == "created_revisions" and isinstance(v, dict):
+                    out[k] = sorted(scrub(x, new_id) for x in v.values())
+                    continue
+                key = "<SYNC_ID>" if _SYNC_ID_RE.match(k) else k
+                out[key] = scrub_tag_ids(v, new_id) if k == "tag_ids" else scrub(v, new_id)
             return out
         if isinstance(value, (list, tuple)):
             return [scrub(v, new_id) for v in value]
@@ -345,8 +351,13 @@ def main(out_path: str) -> int:
         "total": read_tools.list_transactions(owner, ledger_id="L1", limit=50).get("total")})
 
     # ---------------- 工作流状态：计划记录 / 来源绑定 / 撤销 ----------------
-    raw_exec = state.get("last_raw")
-    created_ids = (raw_exec or {}).get("sync_ids") if isinstance(raw_exec, dict) else None
+    raw_exec = state.get("last_raw") if isinstance(state.get("last_raw"), dict) else {}
+    created_ids = raw_exec.get("sync_ids") or []
+    if not created_ids:
+        for res in raw_exec.get("results") or []:
+            created_ids = (res or {}).get("created_sync_ids") or []
+            if created_ids:
+                break
     created_id = created_ids[0] if created_ids else None
 
     step("list_workflow_records", lambda: workflow_tools.list_workflow_records(

@@ -283,7 +283,16 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
         const out: Record<string, Json> = {};
         for (const key of Object.keys(value as Record<string, Json>)) {
           const v = (value as Record<string, Json>)[key];
-          out[key] = key === 'tag_ids' ? scrubTagIds(v) : scrub(v);
+          // created_revisions 这类映射以随机的 sync_id 作**键**，键也要归一
+          // created_revisions 是 {随机 sync_id: 版本号}。键随机、值才是契约，
+          // 且直接把键归一会撞成同一个键（两条变一条），故只取值的多重集合
+          if (key === 'created_revisions' && v && typeof v === 'object' && !Array.isArray(v)) {
+            out[key] = Object.values(v as Record<string, Json>).map(scrub)
+              .sort((a, b) => String(a).localeCompare(String(b)));
+            continue;
+          }
+          const outKey = SYNC_ID_RE.test(key) ? '<SYNC_ID>' : key;
+          out[outKey] = key === 'tag_ids' ? scrubTagIds(v) : scrub(v);
         }
         return out;
       }

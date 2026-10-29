@@ -2231,6 +2231,456 @@
         "result": {
           "total": 9
         }
+      },
+      {
+        "name": "list_workflow_records",
+        "result": {
+          "items": [
+            {
+              "data": {
+                "balance_effects": {},
+                "base_revision": 4,
+                "created_revisions": {
+                  "tx_67d164a078fc": 5,
+                  "tx_eebd5d74a137": 6
+                },
+                "errors": [],
+                "items": [
+                  {
+                    "action": "create",
+                    "allow_similar": false,
+                    "existing_sync_id": null,
+                    "index": 0,
+                    "normalized": {
+                      "amount": 12.5,
+                      "base_change_id": 0,
+                      "category_id": "c1",
+                      "category_kind": "expense",
+                      "category_name": "餐饮",
+                      "exclude_from_budget": false,
+                      "exclude_from_stats": false,
+                      "happened_at": "2026-05-15T16:00:00+00:00",
+                      "note": "午饭",
+                      "tag_ids": [
+                        "<AUTO_TAG>"
+                      ],
+                      "tags": [
+                        "MCP"
+                      ],
+                      "tx_type": "expense"
+                    },
+                    "similar": [],
+                    "sources": [
+                      {
+                        "file_sha256": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7",
+                        "order_id": null,
+                        "row_number": 2,
+                        "source_id": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7:2",
+                        "source_system": "file"
+                      }
+                    ],
+                    "status": "ready",
+                    "transaction": {
+                      "account": null,
+                      "account_id": null,
+                      "amount": 12.5,
+                      "attachments": null,
+                      "category": "餐饮",
+                      "category_id": null,
+                      "currency": null,
+                      "exclude_from_budget": false,
+                      "exclude_from_stats": false,
+                      "from_account": null,
+                      "from_account_id": null,
+                      "happened_at": "2026-05-15T16:00:00+00:00",
+                      "native_amount": null,
+                      "note": "午饭",
+                      "tags": [],
+                      "to_account": null,
+                      "to_account_id": null,
+                      "tx_type": "expense"
+                    }
+                  },
+                  {
+                    "action": "create",
+                    "allow_similar": false,
+                    "existing_sync_id": null,
+                    "index": 1,
+                    "normalized": {
+                      "amount": 3000.0,
+                      "base_change_id": 0,
+                      "category_id": "c2",
+                      "category_kind": "income",
+                      "category_name": "工资",
+                      "exclude_from_budget": false,
+                      "exclude_from_stats": false,
+                      "happened_at": "2026-05-16T16:00:00+00:00",
+                      "note": "五月工资",
+                      "tag_ids": [
+                        "<AUTO_TAG>"
+                      ],
+                      "tags": [
+                        "MCP"
+                      ],
+                      "tx_type": "income"
+                    },
+                    "similar": [],
+                    "sources": [
+                      {
+                        "file_sha256": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7",
+                        "order_id": null,
+                        "row_number": 3,
+                        "source_id": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7:3",
+                        "source_system": "file"
+                      }
+                    ],
+                    "status": "ready",
+                    "transaction": {
+                      "account": null,
+                      "account_id": null,
+                      "amount": 3000.0,
+                      "attachments": null,
+                      "category": "工资",
+                      "category_id": null,
+                      "currency": null,
+                      "exclude_from_budget": false,
+                      "exclude_from_stats": false,
+                      "from_account": null,
+                      "from_account_id": null,
+                      "happened_at": "2026-05-16T16:00:00+00:00",
+                      "native_amount": null,
+                      "note": "五月工资",
+                      "tags": [],
+                      "to_account": null,
+                      "to_account_id": null,
+                      "tx_type": "income"
+                    }
+                  }
+                ],
+                "ready": true,
+                "time_zone": "Asia/Shanghai"
+              },
+              "id": "<UUID>",
+              "kind": "import_plan",
+              "ledger_internal_id": "L1-i",
+              "next_due_at": null,
+              "status": "completed"
+            }
+          ],
+          "total": 1
+        }
+      },
+      {
+        "name": "get_workflow_record",
+        "result": {
+          "data": {
+            "balance_effects": {},
+            "base_revision": 4,
+            "created_revisions": {
+              "tx_67d164a078fc": 5,
+              "tx_eebd5d74a137": 6
+            },
+            "errors": [],
+            "items": [
+              {
+                "action": "create",
+                "allow_similar": false,
+                "existing_sync_id": null,
+                "index": 0,
+                "normalized": {
+                  "amount": 12.5,
+                  "base_change_id": 0,
+                  "category_id": "c1",
+                  "category_kind": "expense",
+                  "category_name": "餐饮",
+                  "exclude_from_budget": false,
+                  "exclude_from_stats": false,
+                  "happened_at": "2026-05-15T16:00:00+00:00",
+                  "note": "午饭",
+                  "tag_ids": [
+                    "<AUTO_TAG>"
+                  ],
+                  "tags": [
+                    "MCP"
+                  ],
+                  "tx_type": "expense"
+                },
+                "similar": [],
+                "sources": [
+                  {
+                    "file_sha256": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7",
+                    "order_id": null,
+                    "row_number": 2,
+                    "source_id": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7:2",
+                    "source_system": "file"
+                  }
+                ],
+                "status": "ready",
+                "transaction": {
+                  "account": null,
+                  "account_id": null,
+                  "amount": 12.5,
+                  "attachments": null,
+                  "category": "餐饮",
+                  "category_id": null,
+                  "currency": null,
+                  "exclude_from_budget": false,
+                  "exclude_from_stats": false,
+                  "from_account": null,
+                  "from_account_id": null,
+                  "happened_at": "2026-05-15T16:00:00+00:00",
+                  "native_amount": null,
+                  "note": "午饭",
+                  "tags": [],
+                  "to_account": null,
+                  "to_account_id": null,
+                  "tx_type": "expense"
+                }
+              },
+              {
+                "action": "create",
+                "allow_similar": false,
+                "existing_sync_id": null,
+                "index": 1,
+                "normalized": {
+                  "amount": 3000.0,
+                  "base_change_id": 0,
+                  "category_id": "c2",
+                  "category_kind": "income",
+                  "category_name": "工资",
+                  "exclude_from_budget": false,
+                  "exclude_from_stats": false,
+                  "happened_at": "2026-05-16T16:00:00+00:00",
+                  "note": "五月工资",
+                  "tag_ids": [
+                    "<AUTO_TAG>"
+                  ],
+                  "tags": [
+                    "MCP"
+                  ],
+                  "tx_type": "income"
+                },
+                "similar": [],
+                "sources": [
+                  {
+                    "file_sha256": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7",
+                    "order_id": null,
+                    "row_number": 3,
+                    "source_id": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7:3",
+                    "source_system": "file"
+                  }
+                ],
+                "status": "ready",
+                "transaction": {
+                  "account": null,
+                  "account_id": null,
+                  "amount": 3000.0,
+                  "attachments": null,
+                  "category": "工资",
+                  "category_id": null,
+                  "currency": null,
+                  "exclude_from_budget": false,
+                  "exclude_from_stats": false,
+                  "from_account": null,
+                  "from_account_id": null,
+                  "happened_at": "2026-05-16T16:00:00+00:00",
+                  "native_amount": null,
+                  "note": "五月工资",
+                  "tags": [],
+                  "to_account": null,
+                  "to_account_id": null,
+                  "tx_type": "income"
+                }
+              }
+            ],
+            "ready": true,
+            "time_zone": "Asia/Shanghai"
+          },
+          "id": "<UUID>",
+          "kind": "import_plan",
+          "ledger_id": "L1",
+          "ledger_internal_id": "L1-i",
+          "next_due_at": null,
+          "status": "completed"
+        }
+      },
+      {
+        "name": "undo_import_plan_no_confirm",
+        "result": {
+          "status": "confirmation_required"
+        }
+      },
+      {
+        "name": "undo_import_plan",
+        "result": {
+          "completed_steps": 2,
+          "error": null,
+          "kind": "undo_import",
+          "plan_id": "<UUID>",
+          "results": [
+            {
+              "base_change_id": 0,
+              "entity_id": "<SYNC_ID>",
+              "idempotency_replayed": false,
+              "ledger_id": "L1",
+              "new_change_id": 7
+            },
+            {
+              "base_change_id": 0,
+              "entity_id": "<SYNC_ID>",
+              "idempotency_replayed": false,
+              "ledger_id": "L1",
+              "new_change_id": 8
+            }
+          ],
+          "status": "completed",
+          "sync_ids": [
+            "<SYNC_ID>",
+            "<SYNC_ID>"
+          ],
+          "total_steps": 2,
+          "transaction_boundary": "Each step commits independently; completed steps are retained on failure"
+        }
+      },
+      {
+        "name": "list_total_after_undo",
+        "result": {
+          "total": 7
+        }
+      },
+      {
+        "name": "get_workflow_record_after_undo",
+        "result": {
+          "data": {
+            "balance_effects": {},
+            "base_revision": 4,
+            "created_revisions": {
+              "tx_67d164a078fc": 5,
+              "tx_eebd5d74a137": 6
+            },
+            "errors": [],
+            "items": [
+              {
+                "action": "create",
+                "allow_similar": false,
+                "existing_sync_id": null,
+                "index": 0,
+                "normalized": {
+                  "amount": 12.5,
+                  "base_change_id": 0,
+                  "category_id": "c1",
+                  "category_kind": "expense",
+                  "category_name": "餐饮",
+                  "exclude_from_budget": false,
+                  "exclude_from_stats": false,
+                  "happened_at": "2026-05-15T16:00:00+00:00",
+                  "note": "午饭",
+                  "tag_ids": [
+                    "<AUTO_TAG>"
+                  ],
+                  "tags": [
+                    "MCP"
+                  ],
+                  "tx_type": "expense"
+                },
+                "similar": [],
+                "sources": [
+                  {
+                    "file_sha256": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7",
+                    "order_id": null,
+                    "row_number": 2,
+                    "source_id": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7:2",
+                    "source_system": "file"
+                  }
+                ],
+                "status": "ready",
+                "transaction": {
+                  "account": null,
+                  "account_id": null,
+                  "amount": 12.5,
+                  "attachments": null,
+                  "category": "餐饮",
+                  "category_id": null,
+                  "currency": null,
+                  "exclude_from_budget": false,
+                  "exclude_from_stats": false,
+                  "from_account": null,
+                  "from_account_id": null,
+                  "happened_at": "2026-05-15T16:00:00+00:00",
+                  "native_amount": null,
+                  "note": "午饭",
+                  "tags": [],
+                  "to_account": null,
+                  "to_account_id": null,
+                  "tx_type": "expense"
+                }
+              },
+              {
+                "action": "create",
+                "allow_similar": false,
+                "existing_sync_id": null,
+                "index": 1,
+                "normalized": {
+                  "amount": 3000.0,
+                  "base_change_id": 0,
+                  "category_id": "c2",
+                  "category_kind": "income",
+                  "category_name": "工资",
+                  "exclude_from_budget": false,
+                  "exclude_from_stats": false,
+                  "happened_at": "2026-05-16T16:00:00+00:00",
+                  "note": "五月工资",
+                  "tag_ids": [
+                    "<AUTO_TAG>"
+                  ],
+                  "tags": [
+                    "MCP"
+                  ],
+                  "tx_type": "income"
+                },
+                "similar": [],
+                "sources": [
+                  {
+                    "file_sha256": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7",
+                    "order_id": null,
+                    "row_number": 3,
+                    "source_id": "0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7:3",
+                    "source_system": "file"
+                  }
+                ],
+                "status": "ready",
+                "transaction": {
+                  "account": null,
+                  "account_id": null,
+                  "amount": 3000.0,
+                  "attachments": null,
+                  "category": "工资",
+                  "category_id": null,
+                  "currency": null,
+                  "exclude_from_budget": false,
+                  "exclude_from_stats": false,
+                  "from_account": null,
+                  "from_account_id": null,
+                  "happened_at": "2026-05-16T16:00:00+00:00",
+                  "native_amount": null,
+                  "note": "五月工资",
+                  "tags": [],
+                  "to_account": null,
+                  "to_account_id": null,
+                  "tx_type": "income"
+                }
+              }
+            ],
+            "ready": true,
+            "time_zone": "Asia/Shanghai"
+          },
+          "id": "<UUID>",
+          "kind": "import_plan",
+          "ledger_id": "L1",
+          "ledger_internal_id": "L1-i",
+          "next_due_at": null,
+          "status": "undone"
+        }
       }
     ]
   }

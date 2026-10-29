@@ -248,8 +248,10 @@ describe('MCP workflows（移植上游 test_mcp_workflows.py）', () => {
     expect(first[0].operation.created_count).toBe(1);
     expect(asObj<Array<unknown>>(await rules.executeDueRules(ctx(), { now: '2026-02-28T02:00:00Z' }))).toEqual([]);
     expect(asObj<{ total: number }>(await listTransactions(ctx(), {})).total).toBe(2);
-    const current = asObj<{ data: string }>(await workflows.getWorkflowRecord(ctx(), { record_id: saved.id }));
-    expect((JSON.parse(current.data as string) as { executed_count: number }).executed_count).toBe(2);
+    // 上游 record_out 返回的 data 是对象（只有落库时才是 JSON 字符串）
+    const current = asObj<{ data: { executed_count: number } }>(
+      await workflows.getWorkflowRecord(ctx(), { record_id: saved.id }));
+    expect(current.data.executed_count).toBe(2);
     await rules.manageRecurringRule(ctx(), {
       action: 'pause', ledger_id: 'L1', record_id: saved.id,
       expected_revision: asObj<{ revision: number }>(current).revision, confirm: true,

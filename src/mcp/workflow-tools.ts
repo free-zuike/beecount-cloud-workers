@@ -64,14 +64,23 @@ function isUniqueViolation(err: unknown): boolean {
 }
 
 export function recordOut(row: MCPStateRow): Record<string, unknown> {
-  // 对齐上游 record_out：data 是原始 JSON 字符串（不做解析）；时间用 isoformat(+00:00)
+  // 对齐上游 record_out（1.9.0 实测）：data 是**对象**，只有落库时才序列化成
+  // data_json；时间用 isoformat(+00:00)
+  let data: unknown = null;
+  if (row.data_json) {
+    try {
+      data = JSON.parse(row.data_json);
+    } catch {
+      data = row.data_json;
+    }
+  }
   return {
     id: row.id,
     ledger_internal_id: row.ledger_id,
     kind: row.kind,
     revision: row.revision,
     status: row.status,
-    data: row.data_json ?? null,
+    data,
     next_due_at: row.next_due_at ? `${new Date(row.next_due_at).toISOString().replace(/Z$/, '+00:00')}` : null,
     created_at: `${new Date(row.created_at).toISOString().replace(/Z$/, '+00:00')}`,
     updated_at: `${new Date(row.updated_at).toISOString().replace(/Z$/, '+00:00')}`,
