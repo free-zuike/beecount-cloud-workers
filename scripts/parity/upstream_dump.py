@@ -179,6 +179,21 @@ def main(out_path: str) -> int:
         ("search", {"q": "出差", "limit": 20}),
         ("search", {"q": "不存在的关键词xyz", "limit": 20}),
         ("search", {"q": "星巴克", "limit": 1}),
+        # 匹配规则：空串 / 纯空白 → 空；分类名、账户名、标签名各自参与匹配
+        ("search", {"q": "", "limit": 20}),
+        ("search", {"q": "   ", "limit": 20}),
+        ("search", {"q": "餐饮", "limit": 20}),   # 分类名
+        ("search", {"q": "现金", "limit": 20}),   # 账户名
+        ("search", {"q": "招行", "limit": 20}),   # 另一账户（含转账的 from/to）
+        ("search", {"q": "客户", "limit": 20}),   # 第二个标签名
+        ("search", {"q": "同秒", "limit": 20}),   # 子串
+        ("search", {"q": "星巴克 出差", "limit": 20}),  # 不是 AND，整串当子串
+        # LIKE 通配符必须被转义：% 与 _ 是通配符，字面量应查不到
+        ("search", {"q": "%", "limit": 20}),
+        ("search", {"q": "_", "limit": 20}),
+        ("search", {"q": "\\", "limit": 20}),
+        ("search", {"q": "星巴克", "limit": 0}),    # 下限夹到 1
+        ("search", {"q": "星巴克", "limit": 999}),  # 上限夹到 100
         # 不传 ledger_id：默认账本解析路径
         ("list_transactions", {"limit": 50}),
         ("list_categories", {}),
