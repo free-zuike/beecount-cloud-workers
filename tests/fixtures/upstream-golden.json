@@ -2240,10 +2240,10 @@
               "data": {
                 "balance_effects": {},
                 "base_revision": 4,
-                "created_revisions": {
-                  "tx_67d164a078fc": 5,
-                  "tx_eebd5d74a137": 6
-                },
+                "created_revisions": [
+                  5,
+                  6
+                ],
                 "errors": [],
                 "items": [
                   {
@@ -2376,10 +2376,10 @@
           "data": {
             "balance_effects": {},
             "base_revision": 4,
-            "created_revisions": {
-              "tx_67d164a078fc": 5,
-              "tx_eebd5d74a137": 6
-            },
+            "created_revisions": [
+              5,
+              6
+            ],
             "errors": [],
             "items": [
               {
@@ -2554,10 +2554,10 @@
           "data": {
             "balance_effects": {},
             "base_revision": 4,
-            "created_revisions": {
-              "tx_67d164a078fc": 5,
-              "tx_eebd5d74a137": 6
-            },
+            "created_revisions": [
+              5,
+              6
+            ],
             "errors": [],
             "items": [
               {
