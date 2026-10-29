@@ -472,6 +472,14 @@ export async function executeImportPlan(
   });
   if (outcome.status !== 'completed') return outcome;
 
+  // 幂等重放标记是 write 路由注入的中间态字段，上游导入结果里不暴露
+  if (Array.isArray(outcome.results)) {
+    outcome.results = (outcome.results as Array<Record<string, unknown>>).map(r => {
+      const { idempotency_replayed: _drop, ...rest } = r as Record<string, unknown>;
+      return rest;
+    });
+  }
+
   const syncIds = (outcome.sync_ids as string[]) ?? [];
   const createdMap = new Map<number, string>();
   creates.forEach((item, i) => createdMap.set(item.index as number, syncIds[i]));
