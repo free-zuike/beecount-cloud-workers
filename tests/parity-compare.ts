@@ -21,13 +21,38 @@ const VOLATILE_KEYS = new Set([
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
 /** 规范化：键排序、去掉易变字段、数字保持原值（不做四舍五入，避免掩盖精度差异） */
+/**
+ * 游标是 `<HMAC>.<base64url(JSON)>`。HMAC 的密钥两侧不同（各自环境变量/配置），
+ * 所以整串必然不等；但 **payload 是契约**——里面的 filter/id/revision/time
+ * 一旦走偏就是真差异。这里只保留解码后的 payload 参与比对。
+ */
+function decodeCursor(text: string): Json {
+  const dot = text.indexOf('.');
+  if (dot < 0) return text;
+  try {
+    const b64 = text.slice(dot + 1).replace(/-/g, '+').replace(/_/g, '/');
+    const json = Buffer.from(b64, 'base64').toString('utf8');
+    const payload = JSON.parse(json) as { time?: unknown; [k: string]: unknown };
+    // 上游 SQLite 存 tz-naive datetime，payload.time 是 "2026-05-13T02:30:00"；
+    // 本地列里存的是带 Z 的 ISO。这个后缀差异不是契约（游标对客户端是不透明串），
+    // 但 **秒级时间值本身** 仍然参与比对。
+    if (typeof payload.time === 'string') {
+      payload.time = payload.time.replace(/Z$/, '').replace(/\+00:00$/, '');
+    }
+    return payload as Json;
+  } catch {
+    return text;
+  }
+}
+
 export function normalize(value: Json): Json {
   if (Array.isArray(value)) return value.map(normalize);
   if (value && typeof value === 'object') {
     const out: { [k: string]: Json } = {};
     for (const key of Object.keys(value).sort()) {
       if (VOLATILE_KEYS.has(key)) continue;
-      out[key] = normalize(value[key] as Json);
+      const v = value[key] as Json;
+      out[key] = key.endsWith('cursor') && typeof v === 'string' ? normalize(decodeCursor(v)) : normalize(v);
     }
     return out;
   }

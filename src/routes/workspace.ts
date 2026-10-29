@@ -74,43 +74,51 @@ export function analyticsRange(
 ): { startAt: string | null; endAt: string | null; normalizedPeriod: string | null } {
   if (scope === 'all') return { startAt: null, endAt: null, normalizedPeriod: null };
 
-  let normalized = period;
+  // 对齐上游 read/_shared.py `_clamp_month_start_day`：钳到 [1, 28]，0/空 → 1
+  const day = Math.max(1, Math.min(28, monthStartDay || 1));
+  const rawPeriod = typeof period === 'string' ? period.trim() : '';
+  const intPart = (text: string): number | null =>
+    /^[+-]?\d+$/.test(text) ? Number(text) : null;
+  const invalid = () => new Error('Invalid analytics period');
+
+  let normalized: string | null = rawPeriod || null;
+
   if (scope === 'month') {
     if (!normalized) {
+      // 默认 = 当前周期：今天还没到起始日时属上个标签月
       const localNow = new Date(now.getTime() + tzOffsetMinutes * 60000);
       let targetYear = localNow.getUTCFullYear();
       let targetMonth = localNow.getUTCMonth() + 1;
-      if (localNow.getUTCDate() < monthStartDay) {
+      if (localNow.getUTCDate() < day) {
         if (targetMonth === 1) { targetYear--; targetMonth = 12; }
         else targetMonth--;
       }
       normalized = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
     }
-    const [yearStr, monthStr] = normalized.split('-');
-    const year = parseInt(yearStr, 10);
-    const month = parseInt(monthStr, 10);
-    if (year && month) {
-      const startAt = new Date(Date.UTC(year, month - 1, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000).toISOString();
-      const endAt = new Date(Date.UTC(year, month, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000).toISOString();
-      return { startAt, endAt, normalizedPeriod: normalized };
-    }
-    return { startAt: null, endAt: null, normalizedPeriod: normalized };
+    // 上游用 target.split("-", 1)：只切第一个 '-'，任一段不可 int() → 400
+    const dash = normalized.indexOf('-');
+    const year = dash < 0 ? null : intPart(normalized.slice(0, dash));
+    const month = dash < 0 ? null : intPart(normalized.slice(dash + 1));
+    if (year === null || month === null) throw invalid();
+    if (month < 1 || month > 12) throw invalid();
+    const startAt = new Date(Date.UTC(year, month - 1, day, 0, 0, 0) - tzOffsetMinutes * 60000).toISOString();
+    const endAt = new Date(Date.UTC(year, month, day, 0, 0, 0) - tzOffsetMinutes * 60000).toISOString();
+    // 上游归一化用 f"{year:04d}-{month:02d}"，所以 "2026-5" → "2026-05"
+    return { startAt, endAt, normalizedPeriod: `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}` };
   }
 
   // scope === 'year'
   if (!normalized) {
     const localNow = new Date(now.getTime() + tzOffsetMinutes * 60000);
     let targetYear = localNow.getUTCFullYear();
-    if (localNow.getUTCMonth() === 0 && localNow.getUTCDate() < monthStartDay) targetYear--;
+    if (localNow.getUTCMonth() === 0 && localNow.getUTCDate() < day) targetYear--;
     normalized = String(targetYear);
   }
-  const year = parseInt(normalized, 10);
-  if (year) {
-    const startAt = new Date(Date.UTC(year, 0, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000).toISOString();
-    const endAt = new Date(Date.UTC(year + 1, 0, monthStartDay, 0, 0, 0) - tzOffsetMinutes * 60000).toISOString();
-    return { startAt, endAt, normalizedPeriod: normalized };
-  }
-  return { startAt: null, endAt: null, normalizedPeriod: normalized };
+  const year = intPart(normalized);
+  if (year === null) throw invalid();
+  const startAt = new Date(Date.UTC(year, 0, day, 0, 0, 0) - tzOffsetMinutes * 60000).toISOString();
+  const endAt = new Date(Date.UTC(year + 1, 0, day, 0, 0, 0) - tzOffsetMinutes * 60000).toISOString();
+  return { startAt, endAt, normalizedPeriod: String(year).padStart(4, '0') };
 }
 
 /**
