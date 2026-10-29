@@ -147,6 +147,15 @@ function sortTop(value: Json): Json {
 
 const hasGolden = existsSync(GOLDEN_PATH);
 
+/**
+ * golden 里的报错形如 `HTTPException: 400: Invalid analytics period`。
+ * 去掉 `类型: 状态码: ` 前缀再比——状态码与异常类是 Python 传输层细节，
+ * MCP 工具对 LLM 的契约是消息文本本身。
+ */
+function errorText(raw: string): string {
+  return raw.replace(/^[A-Za-z_][A-Za-z0-9_.]*(?::\s*\d{3})?:\s*/, '');
+}
+
 // 导入预览的样本文件：上游用 utf-8-sig 写出，本地必须同字节同 sha256
 const IMPORT_BYTES = Buffer.from(
   '\uFEFF日期,金额,类型,分类,备注\n2026-05-16,12.5,支出,餐饮,午饭\n2026-05-17,3000,收入,工资,五月工资\n',
@@ -208,8 +217,16 @@ describe.skipIf(!hasGolden)('MCP 运行时差分（对上游 golden）', () => {
       try {
         local = normalize(JSON.parse(JSON.stringify(await fn(c, kase.args))) as Json);
       } catch (err) {
-        // 上游报错时本地必须报错；上游成功时本地报错算差异
-        if (kase.error) continue;
+        // 上游报错时本地必须报错，且**消息文本**要一致（去掉 Python 侧的
+        // `HTTPException: 400: ` 前缀——那是传输层，MCP 契约是消息本身）
+        if (kase.error) {
+          const expected = errorText(kase.error);
+          const actual = (err as Error).message;
+          if (expected !== actual) {
+            failures.push(`[${kase.tool}] 错误消息不一致\n  上游: ${expected}\n  本地: ${actual}`);
+          }
+          continue;
+        }
         failures.push(`[${kase.tool}] 本地抛错而上游成功: ${(err as Error).message}`);
         continue;
       }

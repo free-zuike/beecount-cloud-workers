@@ -922,6 +922,155 @@
       }
     },
     {
+      "tool": "list_transactions",
+      "args": {
+        "ledger_id": "L1",
+        "tag_id": "g1"
+      },
+      "result": {
+        "currency": "CNY",
+        "has_more": false,
+        "items": [],
+        "ledger": "主账本",
+        "ledger_id": "L1",
+        "next_cursor": null,
+        "revision": 0,
+        "total": 0
+      }
+    },
+    {
+      "tool": "list_transactions",
+      "args": {
+        "ledger_id": "L1",
+        "tx_type": "income"
+      },
+      "result": {
+        "currency": "CNY",
+        "has_more": false,
+        "items": [
+          {
+            "account_id": "a2",
+            "account_name": "招行",
+            "amount": 8000.0,
+            "category_id": "c2",
+            "category_name": "工资",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": false,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-10T02:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": null,
+            "revision": 1,
+            "sync_id": "t3",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "income"
+          }
+        ],
+        "ledger": "主账本",
+        "ledger_id": "L1",
+        "next_cursor": null,
+        "revision": 0,
+        "total": 1
+      }
+    },
+    {
+      "tool": "list_transactions",
+      "args": {
+        "ledger_id": "L1",
+        "date_from": "2026-05-02",
+        "date_to": "2026-05-02",
+        "time_zone": "Asia/Kolkata"
+      },
+      "result": {
+        "currency": "CNY",
+        "has_more": false,
+        "items": [
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 12.5,
+            "category_id": "c1",
+            "category_name": "餐饮",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": false,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-02T03:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": "同秒第二笔",
+            "revision": 1,
+            "sync_id": "t2",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          },
+          {
+            "account_id": "a1",
+            "account_name": "现金",
+            "amount": 38.0,
+            "category_id": "c1",
+            "category_name": "餐饮",
+            "created_by_user_id": "u1",
+            "currency_code": "CNY",
+            "exclude_from_budget": false,
+            "exclude_from_stats": false,
+            "from_account_id": null,
+            "from_account_name": null,
+            "happened_at": "2026-05-02T03:30:00+00:00",
+            "last_edited_by_user_id": null,
+            "ledger_id": "L1",
+            "native_amount": null,
+            "note": "星巴克",
+            "revision": 1,
+            "sync_id": "t1",
+            "tag_ids": [],
+            "tags": "",
+            "to_account_id": null,
+            "to_account_name": null,
+            "tx_type": "expense"
+          }
+        ],
+        "ledger": "主账本",
+        "ledger_id": "L1",
+        "next_cursor": null,
+        "revision": 0,
+        "total": 2
+      }
+    },
+    {
+      "tool": "list_transactions",
+      "args": {
+        "ledger_id": "L1",
+        "date_from": "2026-05-02",
+        "date_to": "2026-05-02",
+        "time_zone": "America/New_York"
+      },
+      "result": {
+        "currency": "CNY",
+        "has_more": false,
+        "items": [],
+        "ledger": "主账本",
+        "ledger_id": "L1",
+        "next_cursor": null,
+        "revision": 0,
+        "total": 0
+      }
+    },
+    {
       "tool": "search",
       "args": {
         "q": "出差",

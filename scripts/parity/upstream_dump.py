@@ -199,6 +199,12 @@ def main(out_path: str) -> int:
         ("get_ledger_stats", {"ledger_id": "NOPE"}),
         ("get_transaction", {"ledger_id": "L1", "sync_id": "nope"}),
         ("get_analytics_summary", {"ledger_id": "L1", "scope": "month", "period": "not-a-period"}),
+        # 错误消息文本也是契约：非法枚举值 / 坏游标 / 越界 limit
+        ("list_transactions", {"ledger_id": "L1", "tx_type": "bogus"}),
+        ("list_transactions", {"ledger_id": "L1", "cursor": "not-a-cursor"}),
+        ("list_transactions", {"ledger_id": "L1", "limit": 0}),
+        ("list_transactions", {"ledger_id": "L1", "limit": 999}),
+        ("get_analytics_summary", {"ledger_id": "L1", "scope": "week", "period": "2026-05"}),
     ]
 
     def normalize(v):
