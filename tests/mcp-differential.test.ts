@@ -10,6 +10,7 @@
  * 来给出不依赖人读的结论。
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { addMember, bindSelfCall, createLedger, makeHarness, mcpCtx, registerUser, type Harness } from './mcp-harness';
@@ -21,6 +22,7 @@ import {
 import {
   createTransaction, deleteTransaction, setSelfCall, updateTransaction,
 } from '../src/mcp/tools/write-tools';
+import { previewImportFile, setAttachmentBytesSource } from '../src/mcp/file-tools';
 
 const GOLDEN_PATH = join(process.cwd(), 'tests/fixtures/upstream-golden.json');
 
@@ -59,6 +61,13 @@ function seed(h: Harness): void {
   // L3：空账本，验证空数组/0/null 的形状；month_start_day=25 走非 1 号起始的分支
   createLedger(h, 'u1', 'L3-i', 'L3', '空账本', 'JPY', 25);
   addMember(h, 'L3-i', 'u1', 'owner');
+
+  // 导入预览用附件：两侧同一份 CSV（utf-8-sig），sha256/size 必须一致
+  insertRow(h.sqlite, 'attachment_files', {
+    id: 'f1', ledger_id: 'L1-i', user_id: 'u1', attachment_kind: 'transaction',
+    file_name: 'seed.csv', mime_type: 'text/csv', storage_path: 'attachments/L1-i/f1_seed.csv',
+    sha256: IMPORT_SHA, size_bytes: IMPORT_BYTES.length, created_at: '2026-05-01T00:00:00Z',
+  });
 
   for (const c of [
     { sync_id: 'c1', name: '餐饮', kind: 'expense', sort_order: 1, icon: '🍜' },
@@ -136,6 +145,14 @@ function sortTop(value: Json): Json {
 }
 
 const hasGolden = existsSync(GOLDEN_PATH);
+
+// 导入预览的样本文件：上游用 utf-8-sig 写出，本地必须同字节同 sha256
+const IMPORT_BYTES = Buffer.from(
+  '\uFEFF日期,金额,类型,备注\n2026-05-16,12.5,支出,午饭\n2026-05-17,3000,收入,工资\n',
+  'utf8',
+);
+const IMPORT_SHA = createHash('sha256').update(IMPORT_BYTES).digest('hex');
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * 比对器自检：证明它抓得住真差异（包括"值是 0 而不是 null"这种最容易漏的）。
@@ -249,6 +266,8 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
         return out;
       }
       if (newId && value === newId) return '<NEW>';
+      // 预览 id / 操作批 id 等每次运行都是新 uuid
+      if (typeof value === 'string' && UUID_RE.test(value)) return '<UUID>';
       return value;
     };
 
@@ -298,6 +317,10 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     await run('delete_without_confirm', () => deleteTransaction(c, { sync_id: newId ?? '', ledger_id: 'L1' }));
     await run('delete', () => deleteTransaction(c, { sync_id: newId ?? '', confirm: true, ledger_id: 'L1' }));
     await run('get_after_delete', () => getTransaction(c, { ledger_id: 'L1', sync_id: newId ?? '' }));
+    // 导入预览：附件字节由内存注入（生产是 R2），两侧解析同一份 CSV
+    setAttachmentBytesSource(async () => new Uint8Array(IMPORT_BYTES));
+    await run('preview_import_file', () => previewImportFile(c, { file_id: 'f1', time_zone: 'Asia/Shanghai' }));
+
     await run('list_total_after', async () => {
       const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
       return { total: page.total, has_more: page.has_more };

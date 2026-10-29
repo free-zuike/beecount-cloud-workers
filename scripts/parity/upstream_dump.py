@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -53,11 +54,13 @@ def insert(db, model, **kw):
 def main(out_path: str) -> int:
     os.environ.setdefault("SCHEDULER_TIMEZONE", "Asia/Shanghai")
     os.environ.setdefault("DATABASE_URL", "sqlite:////tmp/parity.db")
+    # 附件存在磁盘上（config.attachment_storage_dir），导入预览要从这里读字节
+    os.environ.setdefault("ATTACHMENT_STORAGE_DIR", "/tmp/parity-attach")
 
     from src.database import Base, SessionLocal, engine  # type: ignore
     from src.mcp.tools import read_tools  # type: ignore
     from src.models import (  # type: ignore
-        Ledger, LedgerMember, ReadTxProjection, User, UserAccountProjection,
+        AttachmentFile, Ledger, LedgerMember, ReadTxProjection, User, UserAccountProjection,
         UserCategoryProjection, UserTagProjection,
     )
 
@@ -100,6 +103,20 @@ def main(out_path: str) -> int:
         name="出差", color="#00bcf2")
     add(UserTagProjection, sync_id="g2", ledger_id="L1-i", user_id="u1",
         name="客户", color="#ff9800")
+
+    # 导入预览用的附件：上游附件存在磁盘，读取时会校验 sha256 + size_bytes
+    attach_dir = os.environ["ATTACHMENT_STORAGE_DIR"]
+    os.makedirs(attach_dir, exist_ok=True)
+    csv_bytes = ("日期,金额,类型,备注\n"
+                 "2026-05-16,12.5,支出,午饭\n"
+                 "2026-05-17,3000,收入,工资\n").encode("utf-8-sig")
+    csv_path = os.path.join(attach_dir, "seed.csv")
+    with open(csv_path, "wb") as fh:
+        fh.write(csv_bytes)
+    add(AttachmentFile, id="f1", ledger_id="L1-i", user_id="u1",
+        attachment_kind="transaction", file_name="seed.csv", mime_type="text/csv",
+        size_bytes=len(csv_bytes), sha256=hashlib.sha256(csv_bytes).hexdigest(),
+        storage_path=csv_path, created_at=NOW)
 
     txs = [
         ("t1", "expense", 38.0, "2026-05-02", "c1", "a1", "星巴克", None, "CNY", None),
@@ -202,6 +219,7 @@ def main(out_path: str) -> int:
     VOLATILE = {"revision", "created_at", "updated_at", "source_change_id", "last_change_id",
                 "operation_id", "server_timestamp"}
     SEEDED_TAGS = {"g1", "g2"}
+    _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
     def scrub_tag_ids(value, new_id):
         """写工具会自动补「MCP」标签（sync_id 每次不同）；其余按 <AUTO_TAG> 归一后排序。"""
@@ -221,8 +239,12 @@ def main(out_path: str) -> int:
             return out
         if isinstance(value, (list, tuple)):
             return [scrub(v, new_id) for v in value]
-        if isinstance(value, str) and new_id and value == new_id:
-            return "<NEW>"
+        if isinstance(value, str):
+            if new_id and value == new_id:
+                return "<NEW>"
+            # 预览 id、操作批 id 等每次运行都是新 uuid
+            if _UUID_RE.match(value):
+                return "<UUID>"
         return value
 
     scenario = {"name": "write_cycle", "steps": []}
@@ -253,6 +275,11 @@ def main(out_path: str) -> int:
         "total": read_tools.list_transactions(owner, ledger_id="L1", limit=50).get("total"),
         "has_more": read_tools.list_transactions(owner, ledger_id="L1", limit=50).get("has_more"),
     })
+    # 导入预览：解析 CSV → 生成草稿（不写交易）。语义全在解析与字段映射上
+    from src.mcp import file_tools  # type: ignore
+
+    step("preview_import_file", lambda: asyncio.run(file_tools.preview_import_file(
+        owner, "f1", time_zone="Asia/Shanghai")))
     golden["scenario"] = scenario
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
