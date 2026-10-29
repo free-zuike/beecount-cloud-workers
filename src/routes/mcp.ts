@@ -135,6 +135,34 @@ export function summarizeArgs(args: Record<string, unknown> | undefined | null):
   return out;
 }
 
+/**
+ * 资源读取的审计落库（对齐上游 attachment_resource / export_resource 都走 _logged_call）。
+ * 失败静默，不影响读取结果。
+ */
+async function logResourceRead(
+  db: D1Database,
+  meta: { userId: string; patId: string; patPrefix: string; patName: string; clientIp?: string | null },
+  toolName: string,
+  argsSummary: string | null,
+  startedAt: number,
+  error?: unknown,
+): Promise<void> {
+  const duration = Date.now() - startedAt;
+  try {
+    if (error) {
+      await db.prepare(
+        `INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, error_message, args_summary, duration_ms, client_ip, called_at) VALUES (?, ?, ?, ?, ?, 'error', ?, ?, ?, ?, ?)`,
+      ).bind(meta.userId, meta.patId, meta.patPrefix, meta.patName, toolName, summarizeError(error), argsSummary, duration, meta.clientIp ?? null, nowUtc()).run();
+    } else {
+      await db.prepare(
+        `INSERT INTO mcp_call_logs (user_id, pat_id, pat_prefix, pat_name, tool_name, status, args_summary, duration_ms, client_ip, called_at) VALUES (?, ?, ?, ?, ?, 'ok', ?, ?, ?, ?)`,
+      ).bind(meta.userId, meta.patId, meta.patPrefix, meta.patName, toolName, argsSummary, duration, meta.clientIp ?? null, nowUtc()).run();
+    }
+  } catch (e) {
+    serverLogger.error('src.routers.mcp', `Failed to log MCP resource read: ${(e as Error).message}`);
+  }
+}
+
 /** 对齐上游 _write_call_log：错误记 `类名: 消息`，截断到 500 字符 */
 export function summarizeError(err: unknown): string | null {
   if (!err) return null;
@@ -753,7 +781,12 @@ async function jsonRpcHandler(c: any) {
       if (m) {
         await ensureProductionBytesSource(db, c.env);
         const ctx: McpContext = { db, userId, jwtSecret: c.env.JWT_SECRET, baseUrl, scopes: patScopes, configuredTimeZone: c.env.SCHEDULER_TIMEZONE ?? c.env.CLOUD_TIMEZONE ?? c.env.TZ ?? null, env: c.env as unknown as Record<string, unknown> };
-        const { bytes } = await fileAttachmentBytes(ctx, { file_id: m[1] });
+        const startedAt = Date.now();
+        const { bytes } = await fileAttachmentBytes(ctx, { file_id: m[1] }).catch(async (err) => {
+          await logResourceRead(db as D1Database, { userId, patId, patPrefix, patName, clientIp: c.req.header('CF-Connecting-IP') }, 'read_attachment_resource', summarizeArgs({ file_id: m[1] }), startedAt, err);
+          throw err;
+        });
+        await logResourceRead(db as D1Database, { userId, patId, patPrefix, patName, clientIp: c.req.header('CF-Connecting-IP') }, 'read_attachment_resource', summarizeArgs({ file_id: m[1] }), startedAt);
         // 对齐上游 @mcp.resource("beecount://attachments/{file_id}", mime_type="application/octet-stream")：
         // 声明固定为 application/octet-stream，二进制用 blob（base64）而不是 text
         return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', contents: [{ uri, mimeType: 'application/octet-stream', blob: Buffer.from(bytes).toString('base64') }] } }), { headers: { 'Content-Type': 'application/json' } });
@@ -767,6 +800,7 @@ async function jsonRpcHandler(c: any) {
         const visible = await mcpDb.prepare(`SELECT 1 FROM ledgers l LEFT JOIN ledger_members lm ON l.id = lm.ledger_id WHERE l.id = ? AND (l.user_id = ? OR lm.user_id = ?) LIMIT 1`).bind(ledger.id, userId, userId).first();
         if (!visible) throw new Error('Ledger not found');
         const data = JSON.parse(row.data_json) as { csv?: string };
+        await logResourceRead(db as D1Database, { userId, patId, patPrefix, patName, clientIp: c.req.header('CF-Connecting-IP') }, 'read_export_resource', summarizeArgs({ export_id: em[1] }), Date.now());
         return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', contents: [{ uri, mimeType: 'text/csv', text: data.csv ?? '' }] } }), { headers: { 'Content-Type': 'application/json' } });
       }
       throw new Error('Unknown resource URI');
@@ -875,6 +909,7 @@ router.post('/tools/call', async (c) => {
 });
 
 export default router;
+
 
 
 
