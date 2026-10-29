@@ -1,0 +1,125 @@
+name: MCP parity
+
+# 运行时差分：把上游 Python 实现的输出作为 golden，与本地实现逐字段比对。
+#
+# 为什么放在 CI：本地开发机可能没有 Python（Windows 上 python.exe 常常只是
+# Microsoft Store 的占位程序），而 CI 天然有 Python + 可以固定版本。
+#
+# 需要配置（仓库 Settings → Variables）：
+#   PARITY_UPSTREAM_REPO  Python 实现的上游仓库，如 `owner/repo`
+#   PARITY_UPSTREAM_REF   上游分支/标签/SHA，建议填**固定 SHA**（默认 main）
+# 若上游是私有仓库，再加 Secrets：PARITY_UPSTREAM_TOKEN（只读权限即可）
+#
+# 未配置 PARITY_UPSTREAM_REPO 时作业会显式跳过（不是静默通过）。
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/mcp/**'
+      - 'tests/mcp-differential.test.ts'
+      - 'tests/parity-compare.ts'
+      - 'scripts/parity/**'
+      - '.github/workflows/parity.yml'
+
+concurrency:
+  group: mcp-parity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Check configuration
+        id: cfg
+        run: |
+          if [ -z "${{ vars.PARITY_UPSTREAM_REPO }}" ]; then
+            echo "::warning::PARITY_UPSTREAM_REPO 未配置，跳过运行时差分"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout worker
+        if: steps.cfg.outputs.enabled == 'true'
+        uses: actions/checkout@v7
+
+      - name: Checkout upstream (Python)
+        if: steps.cfg.outputs.enabled == 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ vars.PARITY_UPSTREAM_REPO }}
+          ref: ${{ vars.PARITY_UPSTREAM_REF || 'main' }}
+          path: .parity/upstream
+          token: ${{ secrets.PARITY_UPSTREAM_TOKEN || github.token }}
+
+      - name: Setup Python
+        if: steps.cfg.outputs.enabled == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/parity/requirements.txt
+
+      - name: Install upstream deps
+        if: steps.cfg.outputs.enabled == 'true'
+        run: pip install -r scripts/parity/requirements.txt
+
+      - name: Generate golden from upstream
+        if: steps.cfg.outputs.enabled == 'true'
+        working-directory: .parity/upstream
+        env:
+          SCHEDULER_TIMEZONE: Asia/Shanghai
+          DATABASE_URL: sqlite:////tmp/parity.db
+          PYTHONPATH: .
+        run: |
+          python "$GITHUB_WORKSPACE/scripts/parity/upstream_dump.py" \
+                 "$GITHUB_WORKSPACE/tests/fixtures/upstream-golden.json"
+
+      - name: Upload golden
+        if: steps.cfg.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-golden
+          path: tests/fixtures/upstream-golden.json
+          retention-days: 7
+
+      - name: Setup Node
+        if: steps.cfg.outputs.enabled == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install deps
+        if: steps.cfg.outputs.enabled == 'true'
+        run: npm ci
+
+      - name: Run differential test
+        if: steps.cfg.outputs.enabled == 'true'
+        run: npm test -- --run tests/mcp-differential.test.ts
+
+      # golden 发生变化说明上游行为变了：开 PR 让人确认，而不是自动覆盖
+      - name: Open PR on upstream drift
+        if: steps.cfg.outputs.enabled == 'true' && github.event_name != 'pull_request'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          add-paths: tests/fixtures/upstream-golden.json
+          branch: parity/upstream-golden
+          title: "chore(parity): 上游 MCP 输出变化"
+          body: |
+            上游 Python 实现的输出发生了变化，golden 已重新生成。
+
+            - 上游仓库：`${{ vars.PARITY_UPSTREAM_REPO }}`
+            - 上游版本：`${{ vars.PARITY_UPSTREAM_REF || 'main' }}`
+            - 差异用例：`tests/mcp-differential.test.ts`
+
+            请确认这些变化是上游有意的行为调整，再合并本 PR。

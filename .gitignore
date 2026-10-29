@@ -46,3 +46,4 @@ wrangler.toml.bak
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+.parity/

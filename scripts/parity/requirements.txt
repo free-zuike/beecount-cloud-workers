@@ -1,0 +1,26 @@
+# 上游 Python 实现运行 parity:dump 所需依赖。
+#
+# 这份清单不是抄来的（上游导出的源码里没有 requirements.txt / pyproject.toml），
+# 是从 src/ 下所有 .py 的 import 反推出来的，因此**只保证覆盖，不保证版本**：
+#   apscheduler cryptography fastapi httpx jwt mcp numpy openpyxl passlib
+#   PIL pydantic pydantic_settings pyotp pyzipper sqlalchemy starlette tzlocal
+# 不锁版本是刻意的：锁错版本比不锁更难查（上游代码用哪个大版本只能从用法判断）。
+# 首次在 CI/本地跑通后，应把 `pip freeze` 的结果回填成精确 pin，避免上游改动导致漂移。
+fastapi
+sqlalchemy>=2
+pydantic>=2
+pydantic-settings>=2
+mcp
+httpx
+openpyxl
+pillow
+pyzipper
+numpy
+passlib
+pyotp
+cryptography
+apscheduler
+tzlocal
+pyjwt
+python-multipart
+uvicorn

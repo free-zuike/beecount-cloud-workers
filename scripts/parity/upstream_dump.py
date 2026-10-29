@@ -29,10 +29,12 @@ NOW = datetime(2026, 5, 20, 4, 0, 0, tzinfo=timezone.utc)
 
 def main(out_path: str) -> int:
     os.environ.setdefault("SCHEDULER_TIMEZONE", "Asia/Shanghai")
-    os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+    # 上游 config.settings.database_url 默认 sqlite:///./beecount.db，支持 sqlite 方言
+    os.environ.setdefault("DATABASE_URL", "sqlite:////tmp/parity.db")
 
     # 延迟导入：让 --help/语法错误不依赖上游依赖
-    from src.db.session import Base, SessionLocal, engine  # type: ignore
+    # 注意：上游模块布局是 src/database.py（不是 src/db/session.py）
+    from src.database import Base, SessionLocal, engine  # type: ignore
     from src.mcp import read_tools  # type: ignore
     from src.models import (  # type: ignore
         Account, Category, Ledger, LedgerMember, Transaction, User,
