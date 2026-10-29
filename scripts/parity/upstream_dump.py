@@ -166,6 +166,14 @@ def main(out_path: str) -> int:
         ("list_accounts", {"ledger_id": "L1", "account_type": "bank"}),
         ("list_transactions", {"ledger_id": "L1", "date_from": "2026-05-11"}),
         ("list_transactions", {"ledger_id": "L1", "date_to": "2026-05-02"}),
+        # 按标签 / 类型过滤（这两个参数上游确实有，早期版本矩阵里误删过）
+        ("list_transactions", {"ledger_id": "L1", "tag_id": "g1"}),
+        ("list_transactions", {"ledger_id": "L1", "tx_type": "income"}),
+        # 非整点时区：+05:30 与 -04:00（夏令时）的日期边界折算最容易差一小时
+        ("list_transactions", {"ledger_id": "L1", "date_from": "2026-05-02", "date_to": "2026-05-02",
+                               "time_zone": "Asia/Kolkata"}),
+        ("list_transactions", {"ledger_id": "L1", "date_from": "2026-05-02", "date_to": "2026-05-02",
+                               "time_zone": "America/New_York"}),
         # 搜索：命中标签名 / 无命中 / limit 边界
         ("search", {"q": "出差", "limit": 20}),
         ("search", {"q": "不存在的关键词xyz", "limit": 20}),
