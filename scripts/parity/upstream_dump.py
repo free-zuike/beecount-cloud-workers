@@ -107,9 +107,11 @@ def main(out_path: str) -> int:
     # 导入预览用的附件：上游附件存在磁盘，读取时会校验 sha256 + size_bytes
     attach_dir = os.environ["ATTACHMENT_STORAGE_DIR"]
     os.makedirs(attach_dir, exist_ok=True)
-    csv_bytes = ("日期,金额,类型,备注\n"
-                 "2026-05-16,12.5,支出,午饭\n"
-                 "2026-05-17,3000,收入,工资\n").encode("utf-8-sig")
+    # 必须包含 4 个必填字段对应的列（类型/金额/日期/分类），否则 required_complete
+    # 不成立、上游与本地都只报 PARSE_MAPPING_INCOMPLETE，拿不到可执行的 plan
+    csv_bytes = ("日期,金额,类型,分类,备注\n"
+                 "2026-05-16,12.5,支出,餐饮,午饭\n"
+                 "2026-05-17,3000,收入,工资,五月工资\n").encode("utf-8-sig")
     csv_path = os.path.join(attach_dir, "seed.csv")
     with open(csv_path, "wb") as fh:
         fh.write(csv_bytes)
@@ -253,11 +255,22 @@ def main(out_path: str) -> int:
     def step(name, thunk):
         try:
             res = thunk()
+            state["last_raw"] = res
             if name == "create" and isinstance(res, dict):
                 state["new_id"] = res.get("sync_id") or res.get("id")
             scenario["steps"].append({"name": name, "result": scrub(normalize(res), state["new_id"])})
         except Exception as exc:
             scenario["steps"].append({"name": name, "error": f"{type(exc).__name__}: {exc}"})
+
+    def plan_id_of(res):
+        """预览结果里的 plan id：可能在顶层，也可能在 plan 对象里。"""
+        if not isinstance(res, dict):
+            return None
+        for holder in (res, res.get("plan") if isinstance(res.get("plan"), dict) else {}):
+            for key in ("plan_id", "id", "record_id"):
+                if isinstance(holder.get(key), str):
+                    return holder[key]
+        return None
 
     step("create", lambda: asyncio.run(write_tools.create_transaction(
         owner, amount=42.5, tx_type="expense", category="餐饮", account="现金",
@@ -280,6 +293,17 @@ def main(out_path: str) -> int:
 
     step("preview_import_file", lambda: asyncio.run(file_tools.preview_import_file(
         owner, "f1", time_zone="Asia/Shanghai")))
+
+    # 导入执行：不 confirm → confirmation_required；confirm → 真正写交易
+    from src.mcp import workflow_tools  # type: ignore
+
+    plan_id = plan_id_of(state.get("last_raw"))
+    step("execute_import_plan_no_confirm", lambda: asyncio.run(workflow_tools.execute_import_plan(
+        owner, plan_id, 0)))
+    step("execute_import_plan", lambda: asyncio.run(workflow_tools.execute_import_plan(
+        owner, plan_id, 0, confirm=True)))
+    step("list_total_after_import", lambda: {
+        "total": read_tools.list_transactions(owner, ledger_id="L1", limit=50).get("total")})
     golden["scenario"] = scenario
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)

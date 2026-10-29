@@ -23,6 +23,7 @@ import {
   createTransaction, deleteTransaction, setSelfCall, updateTransaction,
 } from '../src/mcp/tools/write-tools';
 import { previewImportFile, setAttachmentBytesSource } from '../src/mcp/file-tools';
+import { executeImportPlan } from '../src/mcp/workflow-tools';
 
 const GOLDEN_PATH = join(process.cwd(), 'tests/fixtures/upstream-golden.json');
 
@@ -148,7 +149,7 @@ const hasGolden = existsSync(GOLDEN_PATH);
 
 // 导入预览的样本文件：上游用 utf-8-sig 写出，本地必须同字节同 sha256
 const IMPORT_BYTES = Buffer.from(
-  '\uFEFF日期,金额,类型,备注\n2026-05-16,12.5,支出,午饭\n2026-05-17,3000,收入,工资\n',
+  '\uFEFF日期,金额,类型,分类,备注\n2026-05-16,12.5,支出,餐饮,午饭\n2026-05-17,3000,收入,工资,五月工资\n',
   'utf8',
 );
 const IMPORT_SHA = createHash('sha256').update(IMPORT_BYTES).digest('hex');
@@ -319,7 +320,28 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     await run('get_after_delete', () => getTransaction(c, { ledger_id: 'L1', sync_id: newId ?? '' }));
     // 导入预览：附件字节由内存注入（生产是 R2），两侧解析同一份 CSV
     setAttachmentBytesSource(async () => new Uint8Array(IMPORT_BYTES));
-    await run('preview_import_file', () => previewImportFile(c, { file_id: 'f1', time_zone: 'Asia/Shanghai' }));
+    let planId: string | null = null;
+    await run('preview_import_file', async () => {
+      const res = await previewImportFile(c, { file_id: 'f1', time_zone: 'Asia/Shanghai' });
+      const plan = (res as { plan?: Record<string, unknown> }).plan;
+      for (const holder of [res as Record<string, unknown>, plan ?? {}]) {
+        for (const key of ['plan_id', 'id', 'record_id']) {
+          if (typeof holder[key] === 'string') { planId = holder[key] as string; break; }
+        }
+        if (planId) break;
+      }
+      return res;
+    });
+
+    // 导入执行：不 confirm → confirmation_required；confirm → 真正写交易
+    await run('execute_import_plan_no_confirm',
+      () => executeImportPlan(c, { plan_id: planId ?? '', expected_revision: 0 }));
+    await run('execute_import_plan',
+      () => executeImportPlan(c, { plan_id: planId ?? '', expected_revision: 0, confirm: true }));
+    await run('list_total_after_import', async () => {
+      const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
+      return { total: page.total };
+    });
 
     await run('list_total_after', async () => {
       const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
