@@ -1783,13 +1783,43 @@
         }
       },
       {
-        "name": "execute_import_plan",
+        "name": "execute_import_plan_wrong_revision",
         "error": "ValueError: REVISION_CONFLICT: import plan version changed"
+      },
+      {
+        "name": "execute_import_plan",
+        "result": {
+          "completed_steps": 1,
+          "error": null,
+          "kind": "import",
+          "plan_id": "<UUID>",
+          "plan_revision": 1,
+          "results": [
+            {
+              "attachment_id": null,
+              "base_change_id": 0,
+              "created_sync_ids": [
+                "tx_9a14509c4220",
+                "tx_a922162aa9bb"
+              ],
+              "ledger_id": "L1",
+              "new_change_id": 6
+            }
+          ],
+          "sources_linked": true,
+          "status": "completed",
+          "sync_ids": [
+            "tx_9a14509c4220",
+            "tx_a922162aa9bb"
+          ],
+          "total_steps": 1,
+          "transaction_boundary": "Each step commits independently; completed steps are retained on failure"
+        }
       },
       {
         "name": "list_total_after_import",
         "result": {
-          "total": 7
+          "total": 9
         }
       }
     ]
