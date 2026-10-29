@@ -23,10 +23,18 @@ describe('tools/list（对齐上游注册面）', () => {
     expect(byName.get('search')?.annotations?.idempotentHint).toBe(true);
   });
 
-  it('破坏性写工具有 destructiveHint；开放式只有 parse_and_create_from_text', () => {
+  it('注解按上游公式：写工具 destructive 且非幂等；开放式只有 AI 解析两个', () => {
     const byName = new Map(ALL_TOOL_DEFS.map(t => [t.name, t]));
     expect(byName.get('delete_transaction')?.annotations?.destructiveHint).toBe(true);
     expect(byName.get('create_transaction')?.annotations?.destructiveHint).toBe(true);
-    expect(byName.get('parse_and_create_from_text')?.annotations?.openWorldHint).toBe(true);
+    // 上游 idempotentHint = 只读（除 export_transactions）或 retry_operation
+    expect(byName.get('create_transaction')?.annotations?.idempotentHint).toBe(false);
+    expect(byName.get('retry_operation')?.annotations?.idempotentHint).toBe(true);
+    // openWorldHint 只有 parse_receipt / preview_text_transactions
+    expect(byName.get('parse_receipt')?.annotations?.openWorldHint).toBe(true);
+    expect(byName.get('preview_text_transactions')?.annotations?.openWorldHint).toBe(true);
+    expect(byName.get('parse_and_create_from_text')?.annotations?.openWorldHint).toBe(false);
+    // export_transactions 虽属读函数，但不标 readOnly
+    expect(byName.get('export_transactions')?.annotations?.readOnlyHint).toBe(false);
   });
 });

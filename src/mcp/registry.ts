@@ -32,13 +32,31 @@ export interface RegisteredTool {
   description: string;
   inputSchema: Record<string, unknown>;
   scope: 'read' | 'write';
+  annotations: Record<string, boolean>;
   handler: (c: McpContext, args: Record<string, unknown>) => Promise<unknown>;
+}
+
+/**
+ * 工具注解（对齐上游 register_capabilities.register_functions 的 ToolAnnotations 公式）：
+ * - readOnlyHint：读工具，**export_transactions 除外**（它会产出快照，不算纯只读）
+ * - destructiveHint：所有写工具
+ * - idempotentHint：只读工具（同样除 export_transactions）+ retry_operation
+ * - openWorldHint：只有 parse_receipt / preview_text_transactions（走外部 AI）
+ */
+export function toolAnnotations(name: string, scope: 'read' | 'write'): Record<string, boolean> {
+  const readOnly = scope === 'read' && name !== 'export_transactions';
+  return {
+    readOnlyHint: readOnly,
+    destructiveHint: scope !== 'read',
+    idempotentHint: readOnly || name === 'retry_operation',
+    openWorldHint: name === 'parse_receipt' || name === 'preview_text_transactions',
+  };
 }
 
 const obj = { type: 'object' as const, properties: {} as Record<string, unknown> };
 
-function tools(items: Array<Omit<RegisteredTool, 'handler'> & { handler: (c: McpContext, args: Record<string, unknown>) => Promise<unknown> }>): RegisteredTool[] {
-  return items as RegisteredTool[];
+function tools(items: Array<Omit<RegisteredTool, 'annotations'> & { handler: (c: McpContext, args: Record<string, unknown>) => Promise<unknown> }>): RegisteredTool[] {
+  return items.map(i => ({ ...i, annotations: toolAnnotations(i.name, i.scope) })) as RegisteredTool[];
 }
 
 export const REGISTERED_TOOLS: RegisteredTool[] = tools([

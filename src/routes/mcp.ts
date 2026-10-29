@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto';
 import { createAccessToken } from '../auth';
 import { uploadToStorage } from '../lib/storage-adapter';
 import { sweepDuplicateAttachments } from '../lib/attachment-dedup';
-import { REGISTERED_TOOLS, getRegisteredTool } from '../mcp/registry';
+import { REGISTERED_TOOLS, getRegisteredTool, toolAnnotations } from '../mcp/registry';
 import { ensureProductionBytesSource, attachmentBytes as fileAttachmentBytes } from '../mcp/file-tools';
 import * as readTools from '../mcp/tools/read-tools';
 import * as writeTools from '../mcp/tools/write-tools';
@@ -83,28 +83,20 @@ export const TOOL_DEFS: ToolDef[] = [
   ...REGISTERED_TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
 ];
 
-/** 工具注解（对齐上游 register_capabilities 里的 _ANNOTATIONS 映射） */
-function toolAnnotations(name: string, write: boolean): Record<string, boolean> {
-  if (write) {
-    return {
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: true,
-      openWorldHint: name === 'parse_and_create_from_text',
-    };
-  }
-  return { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
-}
-
 /** tools/list 的完整清单：基础工具 + 注册表里注册的全部模块工具，并带上注解 */
 export const ALL_TOOL_DEFS: Array<ToolDef & { annotations?: Record<string, boolean> }> = [
   ...BASE_TOOL_NAMES.map(name => ({
     name,
     description: TOOL_DEFS.find(d => d.name === name)?.description ?? '',
     inputSchema: TOOL_DEFS.find(d => d.name === name)?.inputSchema ?? { type: 'object', properties: {} },
-    annotations: toolAnnotations(name, BASE_WRITE_TOOLS.includes(name)),
+    annotations: toolAnnotations(name, BASE_WRITE_TOOLS.includes(name) ? 'write' : 'read'),
   })),
-  ...REGISTERED_TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+  ...REGISTERED_TOOLS.map(t => ({
+    name: t.name,
+    description: t.description,
+    inputSchema: t.inputSchema,
+    annotations: t.annotations,
+  })),
 ];
 
 // 上游 _summarize_args 等价:args_summary 用 k=v、join ', ',跳过敏感字段
