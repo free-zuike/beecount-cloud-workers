@@ -23,18 +23,33 @@ describe('tools/list（对齐上游注册面）', () => {
     expect(byName.get('search')?.annotations?.idempotentHint).toBe(true);
   });
 
-  it('注解按上游公式：写工具 destructive 且非幂等；开放式只有 AI 解析两个', () => {
+  it('基础工具注解按上游 server.py 覆盖公式', () => {
     const byName = new Map(ALL_TOOL_DEFS.map(t => [t.name, t]));
-    expect(byName.get('delete_transaction')?.annotations?.destructiveHint).toBe(true);
-    expect(byName.get('create_transaction')?.annotations?.destructiveHint).toBe(true);
-    // 上游 idempotentHint = 只读（除 export_transactions）或 retry_operation
+    // 写工具里只有这三个是 destructive 且幂等
+    for (const n of ['update_transaction', 'delete_transaction', 'update_budget']) {
+      expect(byName.get(n)?.annotations?.destructiveHint).toBe(true);
+      expect(byName.get(n)?.annotations?.idempotentHint).toBe(true);
+    }
+    // create_* 不是 destructive、也不是幂等
+    expect(byName.get('create_transaction')?.annotations?.destructiveHint).toBe(false);
     expect(byName.get('create_transaction')?.annotations?.idempotentHint).toBe(false);
-    expect(byName.get('retry_operation')?.annotations?.idempotentHint).toBe(true);
-    // openWorldHint 只有 parse_receipt / preview_text_transactions
+    // 基础写工具里 openWorld 只有 parse_and_create_from_text
+    expect(byName.get('parse_and_create_from_text')?.annotations?.openWorldHint).toBe(true);
+    expect(byName.get('upload_attachment')?.annotations?.openWorldHint).toBe(false);
+  });
+
+  it('注册表工具注解按 register_capabilities 公式', () => {
+    const byName = new Map(ALL_TOOL_DEFS.map(t => [t.name, t]));
+    // 这两个走外部 AI，openWorld=true
     expect(byName.get('parse_receipt')?.annotations?.openWorldHint).toBe(true);
     expect(byName.get('preview_text_transactions')?.annotations?.openWorldHint).toBe(true);
-    expect(byName.get('parse_and_create_from_text')?.annotations?.openWorldHint).toBe(false);
-    // export_transactions 虽属读函数，但不标 readOnly
+    // retry_operation 是写工具但幂等
+    expect(byName.get('retry_operation')?.annotations?.idempotentHint).toBe(true);
+    expect(byName.get('retry_operation')?.annotations?.destructiveHint).toBe(true);
+    // export_transactions 属读函数但不标 readOnly、也不幂等
     expect(byName.get('export_transactions')?.annotations?.readOnlyHint).toBe(false);
+    expect(byName.get('export_transactions')?.annotations?.idempotentHint).toBe(false);
+    // 普通注册读工具
+    expect(byName.get('list_operations')?.annotations?.readOnlyHint).toBe(true);
   });
 });

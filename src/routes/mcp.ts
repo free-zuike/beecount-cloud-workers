@@ -90,13 +90,35 @@ export const TOOL_DEFS: ToolDef[] = [
   ...REGISTERED_TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
 ];
 
+/**
+ * 基础工具（server.py 里手写的 19 个）的注解：上游在注册完所有工具后**又覆盖了一遍**
+ * （server.py:531-542），公式与 register_capabilities 那套不同：
+ * - 读工具：readOnly=true, destructive=false, idempotent=true, openWorld=false
+ * - 写工具：destructive/idempotent 仅 update_transaction / delete_transaction / update_budget；
+ *   openWorld 仅 parse_and_create_from_text
+ */
+const BASE_DESTRUCTIVE_TOOLS = new Set(['update_transaction', 'delete_transaction', 'update_budget']);
+
+function baseToolAnnotations(name: string, write: boolean): Record<string, boolean> {
+  if (!write) {
+    return { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+  }
+  const destructive = BASE_DESTRUCTIVE_TOOLS.has(name);
+  return {
+    readOnlyHint: false,
+    destructiveHint: destructive,
+    idempotentHint: destructive,
+    openWorldHint: name === 'parse_and_create_from_text',
+  };
+}
+
 /** tools/list 的完整清单：基础工具 + 注册表里注册的全部模块工具，并带上注解 */
 export const ALL_TOOL_DEFS: Array<ToolDef & { annotations?: Record<string, boolean> }> = [
   ...BASE_TOOL_NAMES.map(name => ({
     name,
     description: TOOL_DEFS.find(d => d.name === name)?.description ?? '',
     inputSchema: TOOL_DEFS.find(d => d.name === name)?.inputSchema ?? { type: 'object', properties: {} },
-    annotations: toolAnnotations(name, BASE_WRITE_TOOLS.includes(name) ? 'write' : 'read'),
+    annotations: baseToolAnnotations(name, BASE_WRITE_TOOLS.includes(name)),
   })),
   ...REGISTERED_TOOLS.map(t => ({
     name: t.name,
