@@ -753,8 +753,10 @@ async function jsonRpcHandler(c: any) {
       if (m) {
         await ensureProductionBytesSource(db, c.env);
         const ctx: McpContext = { db, userId, jwtSecret: c.env.JWT_SECRET, baseUrl, scopes: patScopes, configuredTimeZone: c.env.SCHEDULER_TIMEZONE ?? c.env.CLOUD_TIMEZONE ?? c.env.TZ ?? null, env: c.env as unknown as Record<string, unknown> };
-        const { metadata, bytes } = await fileAttachmentBytes(ctx, { file_id: m[1] });
-        return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', contents: [{ uri, mimeType: metadata.mime_type, text: Buffer.from(bytes).toString('base64') }] } }), { headers: { 'Content-Type': 'application/json' } });
+        const { bytes } = await fileAttachmentBytes(ctx, { file_id: m[1] });
+        // 对齐上游 @mcp.resource("beecount://attachments/{file_id}", mime_type="application/octet-stream")：
+        // 声明固定为 application/octet-stream，二进制用 blob（base64）而不是 text
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: { resultType: 'complete', contents: [{ uri, mimeType: 'application/octet-stream', blob: Buffer.from(bytes).toString('base64') }] } }), { headers: { 'Content-Type': 'application/json' } });
       }
       if (em) {
         const mcpDb = db as D1Database;
