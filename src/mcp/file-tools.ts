@@ -331,6 +331,19 @@ const TYPE_TRANSFER = new Set(['transfer', '转账', '转出转入', '转']);
  * 对齐上游 _parse_tx_type：精确匹配优先，未命中再做子串匹配。
  * 空值：上游在 expense_is_negative 时返 'expense'，否则 None（由调用方记错误）。
  */
+/** 某个 UTC 时刻在指定时区的墙上时间减去该时刻本身 = 该时区当时的 UTC 偏移（毫秒）。 */
+function tzOffsetMs(atUtc: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(atUtc);
+  const p: Record<string, string> = {};
+  for (const part of parts) p[part.type] = p[part.type] ?? part.value;
+  const asUtc = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day),
+    Number(p.hour) % 24, Number(p.minute), Number(p.second));
+  return asUtc - atUtc.getTime();
+}
+
 export function parseTxType(raw: string): string | null {
   const s = raw.trim().toLowerCase();
   if (!s) return null;
@@ -493,14 +506,28 @@ export async function previewImportFile(
         transaction.amount = mapping.expense_is_negative && n < 0 ? -n : Math.abs(n);
       }
     }
-    if (happenedAtCol !== null && (r[happenedAtCol] ?? '').trim()) transaction.happened_at = String(r[happenedAtCol]).trim();
+    if (happenedAtCol !== null && (r[happenedAtCol] ?? '').trim()) {
+      // 对齐上游 datetime_utils.parse_transaction_datetime：纯日期 YYYY-MM-DD 表示
+      // **所在时区当天零点**，要按 time_zone 折算成 UTC 再存。
+      // 例：2026-05-16 @ Asia/Shanghai(+08) → 2026-05-15T16:00:00+00:00
+      const raw = String(r[happenedAtCol]).trim();
+      const zone = args.time_zone ?? c.configuredTimeZone ?? 'Asia/Shanghai';
+      const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+      transaction.happened_at = dateOnly
+        ? `${new Date(Date.UTC(+dateOnly[1], +dateOnly[2] - 1, +dateOnly[3], 0, 0, 0)
+          - tzOffsetMs(new Date(Date.UTC(+dateOnly[1], +dateOnly[2] - 1, +dateOnly[3], 12, 0, 0)), zone))
+          .toISOString().slice(0, 19)}+00:00`
+        : raw;
+    }
     if (categoryCol !== null && (r[categoryCol] ?? '').trim()) transaction.category = String(r[categoryCol]).trim();
     if (accountCol !== null && (r[accountCol] ?? '').trim()) transaction.account = String(r[accountCol]).trim();
     if (fromCol !== null && (r[fromCol] ?? '').trim()) transaction.from_account = String(r[fromCol]).trim();
     if (toCol !== null && (r[toCol] ?? '').trim()) transaction.to_account = String(r[toCol]).trim();
     if (noteCol !== null && (r[noteCol] ?? '').trim()) transaction.note = String(r[noteCol]).trim();
     if (currencyCol !== null && (r[currencyCol] ?? '').trim()) transaction.currency = String(r[currencyCol]).trim();
+    // 上游没有标签列时 tags 是空数组（不是 null）
     if (mapping.tags && mapping.tags.length > 0) transaction.tags = mapping.tags;
+    else transaction.tags = [];
     const sourceId = sourceIdCol !== null ? String(r[sourceIdCol] ?? '').trim() : null;
     // 对齐上游：空 source_id 记错误并跳过该行（不中断整批）
     if (sourceId !== null && sourceId === '') {

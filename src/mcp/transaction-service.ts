@@ -428,8 +428,13 @@ export async function prepareTransaction(
   if (!partial || (raw.amount !== undefined && raw.amount !== null)) body.amount = positiveAmount(raw.amount);
   // 对齐上游：happened_at 用 isoformat（+00:00），不是 Z 结尾
   if (raw.happened_at !== undefined && raw.happened_at !== null) {
-    body.happened_at = parseTxDatetime(String(raw.happened_at), opts.time_zone, c.configuredTimeZone ?? null)
-      .replace(/Z$/, '+00:00');
+    // 对齐上游 prepare_transaction：happened_at 用 dt.isoformat()，零微秒时不带
+    // 小数点（.000），非零时补成 6 位微秒
+    const isoAt = parseTxDatetime(String(raw.happened_at), opts.time_zone, c.configuredTimeZone ?? null);
+    const isoMs = new Date(isoAt).getUTCMilliseconds();
+    body.happened_at = isoMs === 0
+      ? `${isoAt.slice(0, 19)}+00:00`
+      : `${isoAt.slice(0, 19)}.${String(isoMs).padStart(3, '0')}000+00:00`;
   } else if (!partial) {
     body.happened_at = `${new Date().toISOString().replace(/Z$/, '+00:00')}`;
   }

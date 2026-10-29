@@ -273,8 +273,31 @@ export async function previewImport(
 
   for (let index = 0; index < args.candidates.length; index++) {
     const candidate = args.candidates[index];
+    // item 是候选对象的完整快照（上游 candidate.model_dump(mode="json")），
+    // 所以字段与默认值必须与 ImportCandidate 一致：action/existing_sync_id/
+    // allow_similar 有默认值，sources 里 order_id/file_sha256 也要显式给 null
+    const sources = (candidate.sources ?? []).map(s => ({
+      source_system: s.source_system,
+      source_id: s.source_id,
+      order_id: s.order_id ?? null,
+      file_sha256: s.file_sha256 ?? null,
+      row_number: s.row_number ?? null,
+    }));
     const item: Record<string, unknown> = {
-      ...(candidate as unknown as Record<string, unknown>),
+      // transaction 是 BatchTransactionItem 的完整 model_dump：缺省字段也要显式 null，
+      // 不能只放 CSV 里出现的列
+      transaction: {
+        amount: 0, tx_type: 'expense', happened_at: null, note: null, category: null,
+        account: null, tags: null, currency: null, category_id: null, account_id: null,
+        from_account_id: null, to_account_id: null, from_account: null, to_account: null,
+        native_amount: null, exclude_from_stats: false, exclude_from_budget: false,
+        attachments: null,
+        ...(candidate.transaction ?? {}),
+      },
+      sources,
+      action: candidate.action ?? 'create',
+      existing_sync_id: candidate.existing_sync_id ?? null,
+      allow_similar: candidate.allow_similar ?? false,
       index,
       status: candidate.action === 'skip' ? 'skip' : 'ready',
       similar: [],
