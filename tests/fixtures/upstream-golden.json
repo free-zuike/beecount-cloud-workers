@@ -1799,8 +1799,8 @@
               "attachment_id": null,
               "base_change_id": 0,
               "created_sync_ids": [
-                "tx_9a14509c4220",
-                "tx_a922162aa9bb"
+                "<SYNC_ID>",
+                "<SYNC_ID>"
               ],
               "ledger_id": "L1",
               "new_change_id": 6
@@ -1809,8 +1809,8 @@
           "sources_linked": true,
           "status": "completed",
           "sync_ids": [
-            "tx_9a14509c4220",
-            "tx_a922162aa9bb"
+            "<SYNC_ID>",
+            "<SYNC_ID>"
           ],
           "total_steps": 1,
           "transaction_boundary": "Each step commits independently; completed steps are retained on failure"
