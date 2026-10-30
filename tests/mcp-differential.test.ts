@@ -19,6 +19,7 @@ import {
   getActiveLedger, getAnalyticsSummary, getLedgerStats, getTransaction, listAccounts,
   listBudgets, listCategories, listLedgers, listTags, listTransactions, search,
 } from '../src/mcp/tools/read-tools';
+import { listAttachments } from '../src/mcp/file-tools';
 import { getAccountBalances } from '../src/mcp/capability-tools';
 import {
   createTransaction, deleteTransaction, setSelfCall, updateTransaction,
@@ -137,6 +138,7 @@ const TOOL_FNS: Record<string, (c: ReturnType<typeof mcpCtx>, args: Record<strin
   get_account_balances: getAccountBalances as never,
   list_ledgers: listLedgers as never,
   get_active_ledger: getActiveLedger as never,
+  list_attachments: listAttachments as never,
   search: search as never,
 };
 

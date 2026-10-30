@@ -66,6 +66,7 @@ def main(out_path: str) -> int:
         from src.database import Base, SessionLocal, engine  # type: ignore
         from src.mcp.tools import read_tools  # type: ignore
         from src.mcp import capability_tools  # type: ignore
+        from src.mcp import file_tools  # type: ignore
         from src.models import (  # type: ignore
             AttachmentFile, Ledger, LedgerMember, ReadTxProjection, User, UserAccountProjection,
             UserCategoryProjection, UserTagProjection,
@@ -250,6 +251,11 @@ def main(out_path: str) -> int:
         ("list_transactions", {"ledger_id": "L1", "limit": 0}),
         ("list_transactions", {"ledger_id": "L1", "limit": 999}),
         ("get_analytics_summary", {"ledger_id": "L1", "scope": "week", "period": "2026-05"}),
+        # 附件画廊：夹具没有挂附件的交易 → 空画廊（items/total/transaction_total 形状）
+        ("list_attachments", {"ledger_id": "L1"}),
+        ("list_attachments", {"ledger_id": "L1", "q": "foo"}),
+        ("list_attachments", {"ledger_id": "L1", "limit": 10, "offset": 0}),
+        ("list_attachments", {"ledger_id": "NOPE"}),
     ]
 
     def normalize(v):
@@ -264,8 +270,9 @@ def main(out_path: str) -> int:
     owner = db.get(User, "u1")
     golden = {"now": NOW.isoformat(), "droppedSeedKeys": sorted(dropped_keys), "cases": []}
     for tool, args in calls:
-        # 只读工具分散在 read_tools / capability_tools 两个模块
-        fn = getattr(read_tools, tool, None) or getattr(capability_tools, tool)
+        # 只读工具分散在 read_tools / capability_tools / file_tools 三个模块
+        fn = getattr(read_tools, tool, None) or getattr(capability_tools, tool) \
+            or getattr(file_tools, tool)
         try:
             result = normalize(fn(owner, **args))
             golden["cases"].append({"tool": tool, "args": args, "result": result})
