@@ -72,7 +72,7 @@
           {
             "txType": "expense",
             "amount": 12.5,
-            "happenedAt": "2026-05-16 00:00:00+00:00",
+            "happenedAt": "2026-05-16T00:00:00+00:00",
             "currencyCode": null,
             "note": "午饭",
             "categoryName": "餐饮",
@@ -125,7 +125,7 @@
           {
             "txType": "expense",
             "amount": 30.0,
-            "happenedAt": "2026-05-17 00:00:00+00:00",
+            "happenedAt": "2026-05-17T00:00:00+00:00",
             "currencyCode": null,
             "note": null,
             "categoryName": "工资",
@@ -176,7 +176,7 @@
           {
             "txType": "expense",
             "amount": 1234.5,
-            "happenedAt": "2026-05-18 00:00:00+00:00",
+            "happenedAt": "2026-05-18T00:00:00+00:00",
             "currencyCode": null,
             "note": null,
             "categoryName": "餐饮",
