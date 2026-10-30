@@ -569,8 +569,9 @@ def main(out_path: str) -> int:
             ("english_headers", "date,amount,type,category,note\n2026-05-16,12.5,expense,food,lunch\n"),
             # 管道符分隔（同属上游 Sniffer 的 delimiter 集合）
             ("pipe", "日期|金额|类型|分类\n2026-05-16|12.5|支出|餐饮\n"),
-            # beecount 自家导出格式（类型 + 分类 触发 sniff）
-            ("beecount", "类型,金额,分类,币种,账户,时间,备注\n支出,12.5,餐饮,CNY,现金,2026-05-16,午饭\n"),
+            # beecount 自家导出格式（完整 12 列表头，score>=8 才识别为 beecount）
+            ("beecount", "类型,二级分类,分类,金额,币种,账户,转出账户,转入账户,备注,时间,标签,附件\n"
+                         "支出,,餐饮,12.5,CNY,现金,,,午饭,2026-05-16,餐饮tag,\n"),
             # 空输入
             ("empty", ""),
         ]

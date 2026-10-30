@@ -31,12 +31,15 @@ export class BeeCountParser {
   name = 'beecount';
 
   sniff(sampleLower: string): boolean {
-    // BeeCount 格式第一行是表头，检查是否包含所有关键列
-    const firstLine = sampleLower.split('\n')[0] || '';
-    return (
-      headerMatch(firstLine.split(',')[0] || '', HEADER_VARIANTS.type) &&
-      HEADER_VARIANTS.category.some(v => firstLine.includes(v.toLowerCase()))
-    );
+    // 对齐上游 parsers/beecount.py：11+ 列里至少能识别 8 个才算 beecount，而不是
+    // 只要出现"类型"+"分类"就误判。只靠两个列名匹配会把任何带「类型/分类」表头
+    // 的普通 CSV 也标成 beecount，导致后续 suggestMapping 走错分支。
+    const lower = sampleLower.toLowerCase();
+    let score = 0;
+    for (const variants of Object.values(HEADER_VARIANTS)) {
+      if (variants.some(v => lower.includes(v.toLowerCase()))) score++;
+    }
+    return score >= 8;
   }
 
   findHeaderRow(rows: string[][]): number {
