@@ -20,8 +20,10 @@ on:
     paths:
       - 'src/mcp/**'
       - 'src/routes/**'
+      - 'src/services/import_data/**'
       - 'tests/mcp-differential.test.ts'
       - 'tests/rest-differential.test.ts'
+      - 'tests/import-differential.test.ts'
       - 'tests/mcp-harness.ts'
       - 'tests/parity-compare.ts'
       - 'scripts/parity/**'
@@ -89,6 +91,7 @@ jobs:
         run: |
           python -c "import src.database, src.mcp.tools.read_tools; print('read imports ok')"
           python -c "import src.routers.read.summary, src.routers.read.ledgers, src.routers.read.rates, src.routers.read.attachment_gallery; print('rest imports ok')"
+          python -c "import src.services.import_data.parser; print('import parser ok')"
 
       - name: Generate golden from upstream
         working-directory: .parity/upstream
@@ -122,6 +125,9 @@ jobs:
       - name: Run REST differential test
         run: npm test -- --run tests/rest-differential.test.ts
 
+      - name: Run import differential test
+        run: npm test -- --run tests/import-differential.test.ts
+
       - name: Job summary
         if: always()
         run: |
@@ -132,7 +138,7 @@ jobs:
             echo "| --- | --- |"
             echo "| 上游 | \`${{ steps.upstream.outputs.repo }}\` |"
             echo "| 对齐 ref | \`${{ steps.upstream.outputs.ref }}\` |"
-            echo "| 本地用例 | \`tests/mcp-differential.test.ts\` |"
+            echo "| 本地用例 | \`tests/mcp-differential.test.ts\` \`tests/rest-differential.test.ts\` \`tests/import-differential.test.ts\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # golden 变化说明上游行为变了：开 PR 让人确认，而不是自动覆盖。
@@ -141,12 +147,12 @@ jobs:
       - name: Detect golden drift
         id: drift
         run: |
-          if git diff --quiet -- tests/fixtures/upstream-golden.json tests/fixtures/upstream-rest-golden.json; then
+          if git diff --quiet -- tests/fixtures/upstream-golden.json tests/fixtures/upstream-rest-golden.json tests/fixtures/upstream-import-golden.json; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "::notice::golden 与上游一致，无漂移"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            git --no-pager diff --stat -- tests/fixtures/upstream-golden.json tests/fixtures/upstream-rest-golden.json
+            git --no-pager diff --stat -- tests/fixtures/upstream-golden.json tests/fixtures/upstream-rest-golden.json tests/fixtures/upstream-import-golden.json
           fi
 
       - name: Push golden drift branch
@@ -155,7 +161,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B parity/upstream-golden
-          git add tests/fixtures/upstream-golden.json tests/fixtures/upstream-rest-golden.json
+          git add tests/fixtures/upstream-golden.json tests/fixtures/upstream-rest-golden.json tests/fixtures/upstream-import-golden.json
           git commit -m "chore(parity): 上游 MCP 输出变化（${{ steps.upstream.outputs.ref }}）"
           git push --force origin parity/upstream-golden
 
@@ -166,5 +172,5 @@ jobs:
         run: |
           gh pr create --base main --head parity/upstream-golden \
             --title "chore(parity): 上游 MCP 输出变化（${{ steps.upstream.outputs.ref }}）" \
-            --body "上游 \`${{ steps.upstream.outputs.repo }}\` 的 \`${{ steps.upstream.outputs.ref }}\` 输出发生变化，golden 已重新生成。差异路径见本次运行的 \`Run MCP/REST differential test\` 日志。请确认是上游有意的行为调整再合并；若本地实现走偏，应改本地代码而不是接受新 Golden。" \
+            --body "上游 \`${{ steps.upstream.outputs.repo }}\` 的 \`${{ steps.upstream.outputs.ref }}\` 输出发生变化，golden 已重新生成。差异路径见本次运行的 \`Run MCP/REST/import differential test\` 日志。请确认是上游有意的行为调整再合并；若本地实现走偏，应改本地代码而不是接受新 Golden。" \
             || echo "::notice::PR 已存在或无变化"

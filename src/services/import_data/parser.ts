@@ -27,9 +27,20 @@ export function parseCsvText(rawText: string, forcedSource?: SourceFormat): Impo
 }
 
 function detectDelimiter(text: string): string {
+  // 对齐上游 csv.Sniffer 的 delimiters=",;\t|"：取首行出现次数最多的候选分隔符，
+  // 都不出现时退回 ','。原来只认 '\t' 和默认 ','，分号 / 竖线 CSV 会被当成
+  // 单列（整行一个值），与上游解析结果严重不符。
   const firstLine = text.split('\n')[0] || '';
-  if (firstLine.includes('\t')) return '\t';
-  return ','; // default CSV
+  let best = ',';
+  let bestCount = 0;
+  for (const c of [',', ';', '\t', '|']) {
+    const count = firstLine.split(c).length - 1;
+    if (count > bestCount) {
+      bestCount = count;
+      best = c;
+    }
+  }
+  return best;
 }
 
 export function suggestMapping(headers: string[], source: SourceFormat): ImportFieldMapping {

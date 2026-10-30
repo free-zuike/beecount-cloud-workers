@@ -520,6 +520,75 @@ def main(out_path: str) -> int:
     except Exception as exc:
         print(f"[warn] REST golden 跳过（上游路由 import 失败）：{type(exc).__name__}: {exc}")
 
+    # ---------------- 导入解析 golden（parse_csv_text）----------------
+    # workers 在 src/services/import_data/parser.ts 里**独立重写**了 CSV/TSV 解析 +
+    # 列名模糊匹配（带"对齐原版 Python"注释）。这是最可能重演"早期错误对齐"的环节：
+    # 分隔符检测（上游 Sniffer 支持 ; |，workers 旧实现只认 \t 和默认 ,）、BOM 剥离、
+    # 表头行探测、beecount/generic 格式识别、列名 alias 匹配。单独产一份 golden，本地
+    # 直接调 workers 的 parseCsvText 做纯函数级差分（无 HTTP / 无 DB）。
+    # 隔离在 try 里：上游 parser 若 import 失败，不影响主管线 golden。
+    import_golden = {"cases": []}
+    try:
+        from src.services.import_data.parser import parse_csv_text  # type: ignore
+
+        def _norm_mapping(m):
+            return {
+                "txType": m.tx_type,
+                "amount": m.amount,
+                "happenedAt": m.happened_at,
+                "categoryName": m.category_name,
+                "subcategoryName": m.subcategory_name,
+                "accountName": m.account_name,
+                "fromAccountName": m.from_account_name,
+                "toAccountName": m.to_account_name,
+                "note": m.note,
+                "currency": m.currency,
+                "tags": m.tags,
+                "datetimeFormat": m.datetime_format,
+                "stripCurrencySymbols": m.strip_currency_symbols,
+                "expenseIsNegative": m.expense_is_negative,
+                "tzOffsetMinutes": m.tz_offset_minutes,
+            }
+
+        def _norm_data(d):
+            return {
+                "sourceFormat": d.source_format,
+                "headers": d.headers,
+                "rows": [{"rowNumber": r.row_number, "cells": r.cells} for r in d.rows],
+                "suggestedMapping": _norm_mapping(d.suggested_mapping),
+            }
+
+        import_cases = [
+            # 基础 CSV + BOM（utf-8-sig）：剥离 BOM + 中文列名模糊匹配
+            ("basic_bom", "﻿" + "日期,金额,类型,分类,备注\n2026-05-16,12.5,支出,餐饮,午饭\n2026-05-17,3000,收入,工资,五月工资\n"),
+            # 分号分隔：上游 Sniffer 识别，workers 旧实现只认 \t 和默认 ,
+            ("semicolon", "日期;金额;类型;分类\n2026-05-16;12.5;支出;餐饮\n"),
+            # 制表符分隔
+            ("tsv", "日期\t金额\t类型\n2026-05-16\t12.5\t支出\n"),
+            # 英文列名模糊匹配
+            ("english_headers", "date,amount,type,category,note\n2026-05-16,12.5,expense,food,lunch\n"),
+            # 管道符分隔（同属上游 Sniffer 的 delimiter 集合）
+            ("pipe", "日期|金额|类型|分类\n2026-05-16|12.5|支出|餐饮\n"),
+            # beecount 自家导出格式（类型 + 分类 触发 sniff）
+            ("beecount", "类型,金额,分类,币种,账户,时间,备注\n支出,12.5,餐饮,CNY,现金,2026-05-16,午饭\n"),
+            # 空输入
+            ("empty", ""),
+        ]
+        for name, text in import_cases:
+            try:
+                import_golden["cases"].append(
+                    {"name": name, "text": text, "result": _norm_data(parse_csv_text(text))})
+            except Exception as exc:
+                import_golden["cases"].append(
+                    {"name": name, "text": text, "error": f"{type(exc).__name__}: {exc}"})
+        import_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-import-golden.json")
+        with open(import_path, "w", encoding="utf-8") as ifh:
+            json.dump(import_golden, ifh, ensure_ascii=False, indent=2, default=str)
+            ifh.write("\n")
+        print(f"wrote {len(import_golden['cases'])} import cases -> {import_path}")
+    except Exception as exc:
+        print(f"[warn] import golden 跳过（上游 parser import 失败）：{type(exc).__name__}: {exc}")
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(golden, fh, ensure_ascii=False, indent=2, default=str)
