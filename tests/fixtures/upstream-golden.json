@@ -2348,6 +2348,48 @@
       }
     },
     {
+      "tool": "list_ledgers",
+      "args": {},
+      "result": [
+        {
+          "created_at": "2026-05-20T04:00:00",
+          "currency": "CNY",
+          "id": "L1",
+          "month_start_day": 1,
+          "name": "主账本",
+          "owner_user_id": "u1",
+          "shared": false
+        },
+        {
+          "created_at": "2026-05-20T04:00:00",
+          "currency": "USD",
+          "id": "L2",
+          "month_start_day": 1,
+          "name": "共享账本",
+          "owner_user_id": "u2",
+          "shared": true
+        },
+        {
+          "created_at": "2026-05-20T04:00:00",
+          "currency": "JPY",
+          "id": "L3",
+          "month_start_day": 25,
+          "name": "空账本",
+          "owner_user_id": "u1",
+          "shared": false
+        }
+      ]
+    },
+    {
+      "tool": "get_active_ledger",
+      "args": {},
+      "result": {
+        "currency": "CNY",
+        "id": "L1",
+        "name": "主账本"
+      }
+    },
+    {
       "tool": "list_transactions",
       "args": {
         "ledger_id": "NOPE"
