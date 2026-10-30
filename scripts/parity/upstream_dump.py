@@ -498,8 +498,6 @@ def main(out_path: str) -> int:
             ("list_budgets_usage", dict(ledger_external_id="L1", _scopes=set(), current_user=owner, db=db)),
             ("list_budgets_usage", dict(ledger_external_id="L3", _scopes=set(), current_user=owner, db=db)),
             ("list_exchange_rate_overrides", dict(_scopes=set(), current_user=owner, db=db)),
-            ("list_gallery_attachments", dict(ledger_id="L1", _scopes=set(), current_user=owner, db=db)),
-            ("list_gallery_attachments", dict(ledger_id="L1", q="foo", _scopes=set(), current_user=owner, db=db)),
         ]
         for tool, args in rest_calls:
             fn = {"get_summary": get_summary, "list_budgets_usage": list_budgets_usage,
