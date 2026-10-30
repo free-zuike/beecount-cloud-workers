@@ -1,0 +1,56 @@
+{
+  "now": "2026-05-20T04:00:00+00:00",
+  "cases": [
+    {
+      "tool": "get_summary",
+      "args": {
+        "ledger_id": "L1"
+      },
+      "result": {
+        "balance": 7798.47,
+        "expense_total": 101.53,
+        "income_total": 8000.0,
+        "latest_happened_at": "2026-05-14T02:30:00Z",
+        "ledger_id": "L1",
+        "transaction_count": 7
+      }
+    },
+    {
+      "tool": "get_summary",
+      "args": {
+        "ledger_id": "L3"
+      },
+      "result": {
+        "balance": 0.0,
+        "expense_total": 0.0,
+        "income_total": 0.0,
+        "latest_happened_at": null,
+        "ledger_id": "L3",
+        "transaction_count": 0
+      }
+    },
+    {
+      "tool": "list_budgets_usage",
+      "args": {
+        "ledger_external_id": "L1"
+      },
+      "result": {
+        "items": []
+      }
+    },
+    {
+      "tool": "list_budgets_usage",
+      "args": {
+        "ledger_external_id": "L3"
+      },
+      "result": {
+        "items": []
+      }
+    },
+    {
+      "tool": "list_exchange_rate_overrides",
+      "args": {},
+      "result": []
+    }
+  ]
+}
