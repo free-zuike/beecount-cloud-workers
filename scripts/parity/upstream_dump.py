@@ -271,7 +271,7 @@ def main(out_path: str) -> int:
     golden = {"now": NOW.isoformat(), "droppedSeedKeys": sorted(dropped_keys), "cases": []}
     for tool, args in calls:
         # 只读工具分散在 read_tools / capability_tools / file_tools 三个模块
-        fn = getattr(read_tools, tool, None) or getattr(capability_tools, tool) \
+        fn = getattr(read_tools, tool, None) or getattr(capability_tools, tool, None) \
             or getattr(file_tools, tool)
         try:
             result = normalize(fn(owner, **args))
