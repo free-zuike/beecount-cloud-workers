@@ -475,6 +475,53 @@ def main(out_path: str) -> int:
     step("get_workflow_record_after_undo", lambda: workflow_tools.get_workflow_record(owner, plan_id))
     golden["scenario"] = scenario
 
+    # ---------------- REST 只读计算 golden（summary / budgets-usage / rates / gallery）--------
+    # 这些上游实现分布在 routers/read/*，workers 在 routes/read.ts / summary.ts 里**独立重写**
+    # 了同样的 SQL/计算（且带"对齐上游"注释），是最可能重演 MCP 那几类"早期错误对齐"的地方。
+    # 单独产一份 golden，本地用真实路由做 HTTP 级差分（见 tests/rest-differential.test.ts）。
+    # 隔离在 try 里：上游路由若因依赖缺失 import 失败，不影响主管线的 golden。
+    rest_golden = {"now": NOW.isoformat(), "cases": []}
+    try:
+        from src.routers.read.summary import get_summary  # type: ignore
+        from src.routers.read.ledgers import list_budgets_usage  # type: ignore
+        from src.routers.read.rates import list_exchange_rate_overrides  # type: ignore
+        from src.routers.read.attachment_gallery import list_gallery_attachments  # type: ignore
+
+        def dump_model(obj):
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump(mode="json")
+            return obj
+
+        rest_calls = [
+            ("get_summary", dict(ledger_id="L1", _scopes=set(), current_user=owner, db=db)),
+            ("get_summary", dict(ledger_id="L3", _scopes=set(), current_user=owner, db=db)),
+            ("list_budgets_usage", dict(ledger_external_id="L1", _scopes=set(), current_user=owner, db=db)),
+            ("list_budgets_usage", dict(ledger_external_id="L3", _scopes=set(), current_user=owner, db=db)),
+            ("list_exchange_rate_overrides", dict(_scopes=set(), current_user=owner, db=db)),
+            ("list_gallery_attachments", dict(ledger_id="L1", _scopes=set(), current_user=owner, db=db)),
+            ("list_gallery_attachments", dict(ledger_id="L1", q="foo", _scopes=set(), current_user=owner, db=db)),
+        ]
+        for tool, args in rest_calls:
+            fn = {"get_summary": get_summary, "list_budgets_usage": list_budgets_usage,
+                   "list_exchange_rate_overrides": list_exchange_rate_overrides,
+                   "list_gallery_attachments": list_gallery_attachments}[tool]
+            try:
+                res = dump_model(fn(**args))
+                rest_golden["cases"].append(
+                    {"tool": tool, "args": {k: v for k, v in args.items() if k not in ("db", "_scopes", "current_user")},
+                     "result": normalize(res)})
+            except Exception as exc:
+                rest_golden["cases"].append(
+                    {"tool": tool, "args": {k: v for k, v in args.items() if k not in ("db", "_scopes", "current_user")},
+                     "error": f"{type(exc).__name__}: {exc}"})
+        rest_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-rest-golden.json")
+        with open(rest_path, "w", encoding="utf-8") as rfh:
+            json.dump(rest_golden, rfh, ensure_ascii=False, indent=2, default=str)
+            rfh.write("\n")
+        print(f"wrote {len(rest_golden['cases'])} rest cases -> {rest_path}")
+    except Exception as exc:
+        print(f"[warn] REST golden 跳过（上游路由 import 失败）：{type(exc).__name__}: {exc}")
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(golden, fh, ensure_ascii=False, indent=2, default=str)

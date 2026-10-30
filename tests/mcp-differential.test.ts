@@ -10,10 +10,9 @@
  * 来给出不依赖人读的结论。
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { addMember, bindSelfCall, createLedger, makeHarness, mcpCtx, registerUser, type Harness } from './mcp-harness';
+import { bindSelfCall, IMPORT_BYTES, IMPORT_SHA, makeHarness, mcpCtx, seed, type Harness } from './mcp-harness';
 import { diffJson, formatDiffs, normalize, type Json } from './parity-compare';
 import {
   getActiveLedger, getAnalyticsSummary, getLedgerStats, getTransaction, listAccounts,
@@ -39,91 +38,6 @@ interface Golden {
   now: string;
   cases: GoldenCase[];
   scenario?: { name: string; steps: GoldenScenarioStep[] };
-}
-
-/**
- * 按表结构插入（PRAGMA 过滤掉该表不存在的列），避免测试与 schema 漂移耦合。
- */
-function insertRow(sqlite: import('node:sqlite').DatabaseSync, table: string, row: Record<string, unknown>): void {
-  const cols = (sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(c => c.name);
-  const keys = Object.keys(row).filter(k => cols.includes(k));
-  if (keys.length === 0) return;
-  const sql = `INSERT INTO ${table} (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`;
-  sqlite.prepare(sql).run(...keys.map(k => row[k] as never));
-}
-
-/** 与 upstream_dump.py 完全对应的夹具 */
-function seed(h: Harness): void {
-  registerUser(h, 'u1', 'u1@example.com');
-  registerUser(h, 'u2', 'u2@example.com');
-  createLedger(h, 'u1', 'L1-i', 'L1', '主账本', 'CNY');
-  // L2 属于 u2，u1 是 editor（共享账本可见性）
-  insertRow(h.sqlite, 'ledgers', {
-    id: 'L2-i', external_id: 'L2', user_id: 'u2', name: '共享账本', currency: 'USD',
-    month_start_day: 1, created_at: '2026-05-20T04:00:00Z', deleted_at: null,
-  });
-  addMember(h, 'L1-i', 'u1', 'owner');
-  addMember(h, 'L2-i', 'u1', 'editor');
-  addMember(h, 'L2-i', 'u2', 'owner');
-  // L3：空账本，验证空数组/0/null 的形状；month_start_day=25 走非 1 号起始的分支
-  createLedger(h, 'u1', 'L3-i', 'L3', '空账本', 'JPY', 25);
-  addMember(h, 'L3-i', 'u1', 'owner');
-
-  // 导入预览用附件：两侧同一份 CSV（utf-8-sig），sha256/size 必须一致
-  insertRow(h.sqlite, 'attachment_files', {
-    id: 'f1', ledger_id: 'L1-i', user_id: 'u1', attachment_kind: 'transaction',
-    file_name: 'seed.csv', mime_type: 'text/csv', storage_path: 'attachments/L1-i/f1_seed.csv',
-    sha256: IMPORT_SHA, size_bytes: IMPORT_BYTES.length, created_at: '2026-05-01T00:00:00Z',
-  });
-
-  for (const c of [
-    { sync_id: 'c1', name: '餐饮', kind: 'expense', sort_order: 1, icon: '🍜' },
-    { sync_id: 'c2', name: '工资', kind: 'income', sort_order: 2 },
-  ]) {
-    insertRow(h.sqlite, 'user_category_projection', {
-      ...c, user_id: 'u1', ledger_id: 'L1-i', parent_sync_id: null, last_change_id: 1,
-    });
-  }
-  // 本地 D1 的 hidden 是 NOT NULL DEFAULT 0（显式 NULL 会被拒），上游可空。
-  // 夹具统一用 0，两侧都可表示；null 语义由 capability-tools 的单测覆盖。
-  for (const a of [
-    { sync_id: 'a1', name: '现金', account_type: 'cash', currency: 'CNY', hidden: 0 },
-    { sync_id: 'a2', name: '招行', account_type: 'bank', currency: 'CNY', hidden: 0 },
-  ]) {
-    insertRow(h.sqlite, 'user_account_projection', {
-      ...a, user_id: 'u1', ledger_id: 'L1-i', note: null, last_change_id: 1,
-    });
-  }
-  insertRow(h.sqlite, 'user_tag_projection', {
-    sync_id: 'g1', user_id: 'u1', ledger_id: 'L1-i', name: '出差', color: '#00bcf2', last_change_id: 1,
-  });
-  insertRow(h.sqlite, 'user_tag_projection', {
-    sync_id: 'g2', user_id: 'u1', ledger_id: 'L1-i', name: '客户', color: '#ff9800', last_change_id: 1,
-  });
-
-  const txs = [
-    ['t1', 'expense', 38, '2026-05-02T03:30:00Z', 'c1', 'a1', '星巴克', null, 'CNY', null],
-    ['t2', 'expense', 12.5, '2026-05-02T03:30:00Z', 'c1', 'a1', '同秒第二笔', null, 'CNY', null],
-    ['t3', 'income', 8000, '2026-05-10T02:30:00Z', 'c2', 'a2', null, null, 'CNY', null],
-    ['t4', 'expense', 100, '2026-05-11T02:30:00Z', 'c1', 'a1', null, null, 'CNY', null],
-    ['t5', 'expense', 20, '2026-05-12T02:30:00Z', 'c1', 'a1', null, null, 'CNY', null],
-    ['t6', 'expense', 7.5, '2026-05-13T02:30:00Z', null, 'a1', null, null, 'USD', 1.03],
-    ['t7', 'expense', 30, '2026-05-14T02:30:00Z', 'c1', 'a1', null, '出差,客户', 'CNY', null],
-  ] as const;
-  for (const [sync, kind, amount, happened, cat, acc, note, tags, cur, native] of txs) {
-    insertRow(h.sqlite, 'read_tx_projection', {
-      sync_id: sync, user_id: 'u1', ledger_id: 'L1-i', tx_type: kind, amount,
-      happened_at: happened, category_sync_id: cat, account_sync_id: acc,
-      category_name: cat === 'c1' ? '餐饮' : cat === 'c2' ? '工资' : null,
-      account_name: acc === 'a1' ? '现金' : acc === 'a2' ? '招行' : null,
-      note, tags_csv: tags, currency_code: cur, native_amount: native,
-      from_account_id: null, to_account_id: null, from_account_name: null, to_account_name: null,
-      exclude_from_stats: sync === 't4' ? 1 : 0,
-      exclude_from_budget: sync === 't5' ? 1 : 0,
-      source_change_id: 1, created_by_user_id: 'u1', created_at: happened, updated_at: happened,
-      tags_sync_ids_json: null, tag_sync_ids_json: null,
-    });
-  }
 }
 
 const TOOL_FNS: Record<string, (c: ReturnType<typeof mcpCtx>, args: Record<string, unknown>) => Promise<unknown>> = {
@@ -169,12 +83,6 @@ function errorText(raw: string): string {
   return raw.replace(/^[A-Za-z_][A-Za-z0-9_.]*(?::\s*\d{3})?:\s*/, '');
 }
 
-// 导入预览的样本文件：上游用 utf-8-sig 写出，本地必须同字节同 sha256
-const IMPORT_BYTES = Buffer.from(
-  '\uFEFF日期,金额,类型,分类,备注\n2026-05-16,12.5,支出,餐饮,午饭\n2026-05-17,3000,收入,工资,五月工资\n',
-  'utf8',
-);
-const IMPORT_SHA = createHash('sha256').update(IMPORT_BYTES).digest('hex');
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SYNC_ID_RE = /^(tx|acc|cat|tag|bgt)_[0-9a-f]{12}$/;
 
