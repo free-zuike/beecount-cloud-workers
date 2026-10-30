@@ -1,76 +1,80 @@
 /**
  * BeeCount 自家格式解析器 — 对齐原版 Python parsers/beecount.py
- * 跟 web/mobile export 严格对齐（11 列 + header 在 row 0 + 表头本地化）
+ *
+ * 关键对齐点（早期重写走了样，已按 1.9.0 实测更正）：
+ * - sniff：11+ 列里至少识别 8 个才算 beecount，不是「有类型+分类两列」就误判；
+ * - 别名表与上游 _HEADER_ALIASES 完全一致——**没有** currency / attachments 键，
+ *   subcategory 仅含「子分类」（不含「二级分类」）；
+ * - suggest_mapping：**不映射 currency**（上游 _HEADER_ALIASES 没有 currency 键），
+ *   且 BeeCount 导出不含币种符号 → strip_currency_symbols=False。
  */
 
 import type { ImportFieldMapping } from '../schema';
 import { makeDefaultMapping } from '../schema';
 
-// BeeCount 导出格式的 12 列表头（多语言）
-const HEADER_VARIANTS: Record<string, string[]> = {
-  type: ['类型', '類型', 'Type'],
-  category: ['分类', '分類', 'Category'],
-  subcategory: ['二级分类', '二級分類', 'Subcategory'],
-  amount: ['金额', '金額', 'Amount'],
-  currency: ['币种', '幣種', 'Currency'],
-  account: ['账户', '帳戶', 'Account'],
-  fromAccount: ['转出账户', '轉出帳戶', 'From Account'],
-  toAccount: ['转入账户', '轉入帳戶', 'To Account'],
-  note: ['备注', '備註', 'Note'],
-  time: ['时间', '時間', 'Time'],
-  tags: ['标签', '標籤', 'Tags'],
-  attachments: ['附件', '附件', 'Attachments'],
+// 对齐上游 _HEADER_ALIASES（大小写不敏感；注意没有 currency / attachments 键）
+const ALIASES: Record<string, string[]> = {
+  type: ['type', '类型', '類型'],
+  category: ['category', '分类', '分類'],
+  subcategory: ['subcategory', '子分类', '子分類'],
+  amount: ['amount', '金额', '金額'],
+  account: ['account', '账户', '帳戶'],
+  fromAccount: ['from_account', 'from account', '转出账户', '轉出帳戶'],
+  toAccount: ['to_account', 'to account', '转入账户', '轉入帳戶'],
+  note: ['note', '备注', '備註'],
+  time: ['time', '时间', '時間'],
+  tags: ['tags', '标签', '標籤'],
 };
 
-function headerMatch(col: string, variants: string[]): boolean {
-  const trimmed = col.trim().toLowerCase();
-  return variants.some(v => v.toLowerCase() === trimmed);
+function headerAliasHit(headers: string[], aliases: string[]): string | null {
+  const lowerAliases = aliases.map(a => a.toLowerCase());
+  for (const h of headers) {
+    if (lowerAliases.includes((h || '').trim().toLowerCase())) return h;
+  }
+  return null;
 }
 
 export class BeeCountParser {
   name = 'beecount';
 
   sniff(sampleLower: string): boolean {
-    // 对齐上游 parsers/beecount.py：11+ 列里至少能识别 8 个才算 beecount，而不是
-    // 只要出现"类型"+"分类"就误判。只靠两个列名匹配会把任何带「类型/分类」表头
-    // 的普通 CSV 也标成 beecount，导致后续 suggestMapping 走错分支。
+    // 对齐上游 parsers/beecount.py：11+ 列里至少能识别 8 个才算 beecount，
+    // 否则任何带「类型/分类」表头的普通 CSV 都会被误判。
     const lower = sampleLower.toLowerCase();
     let score = 0;
-    for (const variants of Object.values(HEADER_VARIANTS)) {
-      if (variants.some(v => lower.includes(v.toLowerCase()))) score++;
+    for (const aliases of Object.values(ALIASES)) {
+      if (aliases.some(a => lower.includes(a.toLowerCase()))) score++;
     }
     return score >= 8;
   }
 
   findHeaderRow(rows: string[][]): number {
-    // BeeCount 格式表头总是在第 0 行
+    // BeeCount 导出 header 一定在第 0 行（没有顶部说明文字）。
     if (!rows.length) return -1;
     const firstRow = rows[0].map(h => h.trim().toLowerCase());
-    const typeVariants = HEADER_VARIANTS.type.map(v => v.toLowerCase());
-    if (firstRow.some(h => typeVariants.includes(h))) return 0;
-    // 不在第 0 行则 fallback 到 generic 查找
+    const typeAliases = ALIASES.type.map(v => v.toLowerCase());
+    if (firstRow.some(h => typeAliases.includes(h))) return 0;
     return -1;
   }
 
   suggestMapping(headers: string[]): ImportFieldMapping {
     const mapping = makeDefaultMapping();
-    const lower = headers.map(h => h.trim().toLowerCase());
-
-    for (let i = 0; i < headers.length; i++) {
-      const h = lower[i];
-      if (HEADER_VARIANTS.type.some(v => v.toLowerCase() === h)) mapping.txType = headers[i];
-      else if (HEADER_VARIANTS.amount.some(v => v.toLowerCase() === h)) mapping.amount = headers[i];
-      else if (HEADER_VARIANTS.currency.some(v => v.toLowerCase() === h)) mapping.currency = headers[i];
-      else if (HEADER_VARIANTS.time.some(v => v.toLowerCase() === h)) mapping.happenedAt = headers[i];
-      else if (HEADER_VARIANTS.category.some(v => v.toLowerCase() === h)) mapping.categoryName = headers[i];
-      else if (HEADER_VARIANTS.subcategory.some(v => v.toLowerCase() === h)) mapping.subcategoryName = headers[i];
-      else if (HEADER_VARIANTS.account.some(v => v.toLowerCase() === h)) mapping.accountName = headers[i];
-      else if (HEADER_VARIANTS.fromAccount.some(v => v.toLowerCase() === h)) mapping.fromAccountName = headers[i];
-      else if (HEADER_VARIANTS.toAccount.some(v => v.toLowerCase() === h)) mapping.toAccountName = headers[i];
-      else if (HEADER_VARIANTS.note.some(v => v.toLowerCase() === h)) mapping.note = headers[i];
-      else if (HEADER_VARIANTS.tags.some(v => v.toLowerCase() === h)) mapping.tags = [headers[i]];
-    }
-
+    mapping.txType = headerAliasHit(headers, ALIASES.type);
+    mapping.amount = headerAliasHit(headers, ALIASES.amount);
+    mapping.happenedAt = headerAliasHit(headers, ALIASES.time);
+    mapping.categoryName = headerAliasHit(headers, ALIASES.category);
+    mapping.subcategoryName = headerAliasHit(headers, ALIASES.subcategory);
+    mapping.accountName = headerAliasHit(headers, ALIASES.account);
+    mapping.fromAccountName = headerAliasHit(headers, ALIASES.fromAccount);
+    mapping.toAccountName = headerAliasHit(headers, ALIASES.toAccount);
+    mapping.note = headerAliasHit(headers, ALIASES.note);
+    const tag = headerAliasHit(headers, ALIASES.tags);
+    mapping.tags = tag ? [tag] : [];
+    // 对齐上游 beecount suggest_mapping：不映射 currency（上游别名表无 currency 键），
+    // BeeCount 导出不含币种符号 → stripCurrencySymbols=False。
+    mapping.datetimeFormat = null;
+    mapping.stripCurrencySymbols = false;
+    mapping.expenseIsNegative = false;
     return mapping;
   }
 }
