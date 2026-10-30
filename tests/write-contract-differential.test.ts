@@ -44,6 +44,7 @@ function describeZod(schema: any): Record<string, FieldInfo> {
     while (z && z._def) {
       const tn = z._def.typeName as string;
       if (tn === 'ZodOptional' || tn === 'ZodDefault') optional = true;
+      if (tn === 'ZodArray') break; // 不展开数组元素类型（z.array(z.record(...)) 仍视为 array）
       const inner = z._def.innerType ?? z._def.schema ?? z._def.type;
       if (!inner || inner === z) break;
       z = inner;
@@ -67,6 +68,14 @@ function typeCompatible(a: string, b: string): boolean {
   // tags：workers union(string|array) ≈ 上游 list[str]；happened_at：workers union(string|date) ≈ 上游 datetime
   return (s.has('array') && s.has('union')) || (s.has('datetime') && s.has('union'));
 }
+
+// 传输/并发层字段：base_change_id（上游要求放 body，workers 服务端自行取最新 change_id）、
+// device_id / request_id / idempotency_key / client_timestamp / change_id / server_timestamp 等，
+// 两侧实现不同，不属于「业务契约」，不参与比对。
+const TRANSPORT_FIELDS = new Set([
+  'base_change_id', 'device_id', 'request_id', 'idempotency_key',
+  'client_timestamp', 'change_id', 'server_timestamp', 'ledger_id', 'ledger_external_id',
+]);
 
 const GOLDEN = join(__dirname, 'fixtures', 'upstream-write-schema-golden.json');
 const hasGolden = existsSync(GOLDEN);
@@ -101,6 +110,7 @@ describe('write request contract differential (workers zod vs upstream pydantic)
         const fields = new Set([...Object.keys(up), ...Object.keys(wkNorm)]);
         const divergences: string[] = [];
         for (const f of fields) {
+          if (TRANSPORT_FIELDS.has(f)) continue;
           const u = up[f];
           const w = wkNorm[f];
           if (!u) {

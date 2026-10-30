@@ -718,6 +718,11 @@ def main(out_path: str) -> int:
         )
 
         def _logical_type(ann):
+            origin = typing.get_origin(ann)
+            if origin is typing.Literal:
+                return "enum"
+            if origin is list:
+                return "array"
             args = typing.get_args(ann)
             if args:
                 real = [a for a in args if a is not type(None)]
