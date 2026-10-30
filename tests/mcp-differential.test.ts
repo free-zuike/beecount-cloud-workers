@@ -143,7 +143,10 @@ const TOOL_FNS: Record<string, (c: ReturnType<typeof mcpCtx>, args: Record<strin
  * 显式排了序。这里按"多重集合"比较（两侧先按规范 JSON 排序），只忽略顺序，
  * 元素内容与数量仍然逐字段严格比对。
  */
-const ORDER_UNDEFINED = new Set(['list_categories', 'list_accounts', 'list_tags', 'list_budgets']);
+// 这些工具返回数组的"顺序"不是契约：list_* 上游没有 ORDER BY；search 只按
+// happened_at desc 排序，同刻记录的顺序未定义（SQLite 与 D1 可能不同）。
+// 都按多重集合比较，只忽略顺序，元素内容与数量仍逐字段严格比对。
+const ORDER_UNDEFINED = new Set(['list_categories', 'list_accounts', 'list_tags', 'list_budgets', 'search']);
 
 function sortTop(value: Json): Json {
   if (!Array.isArray(value)) return value;
