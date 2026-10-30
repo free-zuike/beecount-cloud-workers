@@ -590,6 +590,102 @@ def main(out_path: str) -> int:
     except Exception as exc:
         print(f"[warn] import golden 跳过（上游 parser import 失败）：{type(exc).__name__}: {exc}")
 
+    # ---------------- 导入转换 golden（apply_mapping / transformers）----------------
+    # workers 在 transformer.ts 里**独立重写**了逐行 transform（金额符号、txType 推断、
+    # 日期解析、required_complete、tags 拆分），注释"对齐原版 Python transformer.py"。
+    # 这里直接调上游 apply_mapping 生成 golden，本地调 workers 的 applyMapping 逐字段比。
+    # 隔离在 try 里：上游 transformer import 失败则跳过。
+    transform_golden = {"cases": []}
+    try:
+        from src.services.import_data.transformer import apply_mapping  # type: ignore
+        from src.services.import_data.schema import ImportFieldMapping, ParsedRow  # type: ignore
+
+        def _norm_dt(v):
+            if not v:
+                return None
+            s = str(v)
+            s = re.sub(r"\.\d+", "", s)  # 去微/毫秒
+            return s.rstrip("Z")
+
+        def _norm_tx(tx):
+            return {
+                "txType": tx.tx_type,
+                "amount": float(tx.amount) if tx.amount is not None else None,
+                "happenedAt": _norm_dt(tx.happened_at),
+                "currencyCode": tx.currency_code,
+                "note": tx.note,
+                "categoryName": tx.category_name,
+                "parentCategoryName": tx.parent_category_name,
+                "accountName": tx.account_name,
+                "fromAccountName": tx.from_account_name,
+                "toAccountName": tx.to_account_name,
+                "tagNames": tx.tag_names,
+                "sourceRowNumber": tx.source_row_number,
+            }
+
+        def _norm_mapping(m):
+            def g(a):
+                return getattr(m, a, None)
+            return {
+                "txType": g("tx_type"), "amount": g("amount"), "happenedAt": g("happened_at"),
+                "categoryName": g("category_name"), "subcategoryName": g("subcategory_name"),
+                "accountName": g("account_name"), "fromAccountName": g("from_account_name"),
+                "toAccountName": g("to_account_name"), "note": g("note"), "currency": g("currency"),
+                "tags": g("tags") or [], "datetimeFormat": g("datetime_format"),
+                "stripCurrencySymbols": g("strip_currency_symbols"), "expenseIsNegative": g("expense_is_negative"),
+                "tzOffsetMinutes": g("tz_offset_minutes"), "requiredComplete": g("required_complete"),
+            }
+
+        def _mk_rows(cells_list):
+            return [ParsedRow(row_number=i + 1, cells=cells, raw_line="") for i, cells in enumerate(cells_list)]
+
+        def _full_map(**over):
+            base = dict(tx_type="类型", amount="金额", happened_at="时间", category_name="分类",
+                        account_name="账户", note="备注", tags=["标签"],
+                        required_complete=True, expense_is_negative=False,
+                        strip_currency_symbols=False, datetime_format=None, tz_offset_minutes=None)
+            base.update(over)
+            return ImportFieldMapping(**base)
+
+        transform_cases = [
+            # required_complete=False → 上游报 PARSE_MAPPING_INCOMPLETE，本地返回空
+            ("incomplete",
+             ImportFieldMapping(required_complete=False),
+             _mk_rows([{"类型": "支出", "金额": "12.5", "时间": "2026-05-16", "分类": "餐饮", "账户": "现金"}])),
+            # 正常支出
+            ("expense_normal",
+             _full_map(),
+             _mk_rows([{"类型": "支出", "金额": "12.5", "时间": "2026-05-16", "分类": "餐饮", "账户": "现金", "备注": "午饭", "标签": "出差"}])),
+            # 收入列但金额为负 → 视为支出取绝对值（上游逻辑）
+            ("income_negative_amount",
+             _full_map(),
+             _mk_rows([{"类型": "收入", "金额": "-30", "时间": "2026-05-17", "分类": "工资", "账户": "招行"}])),
+            # 金额带币种符号剥离（strip_currency_symbols=True）
+            ("strip_currency",
+             _full_map(strip_currency_symbols=True),
+             _mk_rows([{"类型": "支出", "金额": "¥1,234.5", "时间": "2026-05-18", "分类": "餐饮", "账户": "现金"}])),
+        ]
+        for name, mapping, rows in transform_cases:
+            try:
+                txs, errors, warnings = apply_mapping(rows=rows, mapping=mapping)
+                transform_golden["cases"].append({
+                    "name": name,
+                    "mapping": _norm_mapping(mapping),
+                    "rows": [r.cells for r in rows],
+                    "result": {"txs": [_norm_tx(t) for t in txs], "errorCount": len(errors)},
+                })
+            except Exception as exc:
+                transform_golden["cases"].append({
+                    "name": name, "mapping": _norm_mapping(mapping), "rows": [r.cells for r in rows],
+                    "error": f"{type(exc).__name__}: {exc}"})
+        transform_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-transform-golden.json")
+        with open(transform_path, "w", encoding="utf-8") as tfh:
+            json.dump(transform_golden, tfh, ensure_ascii=False, indent=2, default=str)
+            tfh.write("\n")
+        print(f"wrote {len(transform_golden['cases'])} transform cases -> {transform_path}")
+    except Exception as exc:
+        print(f"[warn] transform golden 跳过：{type(exc).__name__}: {exc}")
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(golden, fh, ensure_ascii=False, indent=2, default=str)
