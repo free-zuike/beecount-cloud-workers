@@ -249,6 +249,70 @@
         "required": false,
         "type": "bool"
       }
+    },
+    "twoFAConfirm": {
+      "code": {
+        "required": true,
+        "type": "str"
+      }
+    },
+    "twoFAVerify": {
+      "challenge_token": {
+        "required": true,
+        "type": "str"
+      },
+      "method": {
+        "required": false,
+        "type": "enum"
+      },
+      "code": {
+        "required": true,
+        "type": "str"
+      },
+      "device_id": {
+        "required": false,
+        "type": "str"
+      },
+      "device_name": {
+        "required": false,
+        "type": "str"
+      },
+      "platform": {
+        "required": false,
+        "type": "str"
+      },
+      "app_version": {
+        "required": false,
+        "type": "str"
+      },
+      "os_version": {
+        "required": false,
+        "type": "str"
+      },
+      "device_model": {
+        "required": false,
+        "type": "str"
+      },
+      "client_type": {
+        "required": false,
+        "type": "enum"
+      }
+    },
+    "twoFADisable": {
+      "password": {
+        "required": true,
+        "type": "str"
+      },
+      "code": {
+        "required": true,
+        "type": "str"
+      }
+    },
+    "twoFARegenerate": {
+      "code": {
+        "required": true,
+        "type": "str"
+      }
     }
   }
 }
