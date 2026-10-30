@@ -1,0 +1,254 @@
+{
+  "models": {
+    "transactionCreate": {
+      "base_change_id": {
+        "required": true,
+        "type": "number"
+      },
+      "request_id": {
+        "required": false,
+        "type": "str"
+      },
+      "tx_type": {
+        "required": false,
+        "type": "enum"
+      },
+      "amount": {
+        "required": true,
+        "type": "number"
+      },
+      "happened_at": {
+        "required": true,
+        "type": "datetime"
+      },
+      "note": {
+        "required": false,
+        "type": "str"
+      },
+      "category_name": {
+        "required": false,
+        "type": "str"
+      },
+      "category_kind": {
+        "required": false,
+        "type": "enum"
+      },
+      "account_name": {
+        "required": false,
+        "type": "str"
+      },
+      "from_account_name": {
+        "required": false,
+        "type": "str"
+      },
+      "to_account_name": {
+        "required": false,
+        "type": "str"
+      },
+      "category_id": {
+        "required": false,
+        "type": "str"
+      },
+      "account_id": {
+        "required": false,
+        "type": "str"
+      },
+      "from_account_id": {
+        "required": false,
+        "type": "str"
+      },
+      "to_account_id": {
+        "required": false,
+        "type": "str"
+      },
+      "tags": {
+        "required": false,
+        "type": "array"
+      },
+      "tag_ids": {
+        "required": false,
+        "type": "array"
+      },
+      "attachments": {
+        "required": false,
+        "type": "array"
+      },
+      "exclude_from_stats": {
+        "required": false,
+        "type": "bool"
+      },
+      "exclude_from_budget": {
+        "required": false,
+        "type": "bool"
+      },
+      "currency_code": {
+        "required": false,
+        "type": "str"
+      },
+      "native_amount": {
+        "required": false,
+        "type": "number"
+      }
+    },
+    "categoryCreate": {
+      "base_change_id": {
+        "required": true,
+        "type": "number"
+      },
+      "request_id": {
+        "required": false,
+        "type": "str"
+      },
+      "name": {
+        "required": true,
+        "type": "str"
+      },
+      "kind": {
+        "required": true,
+        "type": "enum"
+      },
+      "level": {
+        "required": false,
+        "type": "number"
+      },
+      "sort_order": {
+        "required": false,
+        "type": "number"
+      },
+      "icon": {
+        "required": false,
+        "type": "str"
+      },
+      "icon_type": {
+        "required": false,
+        "type": "str"
+      },
+      "custom_icon_path": {
+        "required": false,
+        "type": "str"
+      },
+      "icon_cloud_file_id": {
+        "required": false,
+        "type": "str"
+      },
+      "icon_cloud_sha256": {
+        "required": false,
+        "type": "str"
+      },
+      "parent_name": {
+        "required": false,
+        "type": "str"
+      },
+      "parent_sync_id": {
+        "required": false,
+        "type": "str"
+      }
+    },
+    "accountCreate": {
+      "base_change_id": {
+        "required": true,
+        "type": "number"
+      },
+      "request_id": {
+        "required": false,
+        "type": "str"
+      },
+      "name": {
+        "required": true,
+        "type": "str"
+      },
+      "account_type": {
+        "required": false,
+        "type": "str"
+      },
+      "currency": {
+        "required": false,
+        "type": "str"
+      },
+      "initial_balance": {
+        "required": false,
+        "type": "number"
+      },
+      "note": {
+        "required": false,
+        "type": "str"
+      },
+      "credit_limit": {
+        "required": false,
+        "type": "number"
+      },
+      "billing_day": {
+        "required": false,
+        "type": "number"
+      },
+      "payment_due_day": {
+        "required": false,
+        "type": "number"
+      },
+      "bank_name": {
+        "required": false,
+        "type": "str"
+      },
+      "card_last_four": {
+        "required": false,
+        "type": "str"
+      },
+      "hidden": {
+        "required": false,
+        "type": "bool"
+      }
+    },
+    "tagCreate": {
+      "base_change_id": {
+        "required": true,
+        "type": "number"
+      },
+      "request_id": {
+        "required": false,
+        "type": "str"
+      },
+      "name": {
+        "required": true,
+        "type": "str"
+      },
+      "color": {
+        "required": false,
+        "type": "str"
+      }
+    },
+    "budgetCreate": {
+      "base_change_id": {
+        "required": true,
+        "type": "number"
+      },
+      "request_id": {
+        "required": false,
+        "type": "str"
+      },
+      "type": {
+        "required": true,
+        "type": "enum"
+      },
+      "category_id": {
+        "required": false,
+        "type": "str"
+      },
+      "amount": {
+        "required": true,
+        "type": "number"
+      },
+      "period": {
+        "required": false,
+        "type": "enum"
+      },
+      "start_day": {
+        "required": false,
+        "type": "number"
+      },
+      "enabled": {
+        "required": false,
+        "type": "bool"
+      }
+    }
+  }
+}
