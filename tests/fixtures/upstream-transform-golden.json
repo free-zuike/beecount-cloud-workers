@@ -190,6 +190,162 @@
         ],
         "errorCount": 0
       }
+    },
+    {
+      "name": "expense_with_currency",
+      "mapping": {
+        "txType": "类型",
+        "amount": "金额",
+        "happenedAt": "时间",
+        "categoryName": "分类",
+        "subcategoryName": null,
+        "accountName": "账户",
+        "fromAccountName": null,
+        "toAccountName": null,
+        "note": "备注",
+        "currency": "币种",
+        "tags": [
+          "标签"
+        ],
+        "datetimeFormat": null,
+        "stripCurrencySymbols": false,
+        "expenseIsNegative": false,
+        "tzOffsetMinutes": null,
+        "requiredComplete": true
+      },
+      "rows": [
+        {
+          "类型": "支出",
+          "金额": "12.5",
+          "时间": "2026-05-19",
+          "分类": "餐饮",
+          "账户": "现金",
+          "币种": "CNY"
+        }
+      ],
+      "result": {
+        "txs": [
+          {
+            "txType": "expense",
+            "amount": 12.5,
+            "happenedAt": "2026-05-19T00:00:00+00:00",
+            "currencyCode": "CNY",
+            "note": null,
+            "categoryName": "餐饮",
+            "parentCategoryName": null,
+            "accountName": "现金",
+            "fromAccountName": null,
+            "toAccountName": null,
+            "tagNames": [],
+            "sourceRowNumber": 1
+          }
+        ],
+        "errorCount": 0
+      }
+    },
+    {
+      "name": "currency_lowercase",
+      "mapping": {
+        "txType": "类型",
+        "amount": "金额",
+        "happenedAt": "时间",
+        "categoryName": "分类",
+        "subcategoryName": null,
+        "accountName": "账户",
+        "fromAccountName": null,
+        "toAccountName": null,
+        "note": "备注",
+        "currency": "币种",
+        "tags": [
+          "标签"
+        ],
+        "datetimeFormat": null,
+        "stripCurrencySymbols": false,
+        "expenseIsNegative": false,
+        "tzOffsetMinutes": null,
+        "requiredComplete": true
+      },
+      "rows": [
+        {
+          "类型": "支出",
+          "金额": "12.5",
+          "时间": "2026-05-20",
+          "分类": "餐饮",
+          "账户": "现金",
+          "币种": "cny"
+        }
+      ],
+      "result": {
+        "txs": [
+          {
+            "txType": "expense",
+            "amount": 12.5,
+            "happenedAt": "2026-05-20T00:00:00+00:00",
+            "currencyCode": "CNY",
+            "note": null,
+            "categoryName": "餐饮",
+            "parentCategoryName": null,
+            "accountName": "现金",
+            "fromAccountName": null,
+            "toAccountName": null,
+            "tagNames": [],
+            "sourceRowNumber": 1
+          }
+        ],
+        "errorCount": 0
+      }
+    },
+    {
+      "name": "currency_invalid_cjk",
+      "mapping": {
+        "txType": "类型",
+        "amount": "金额",
+        "happenedAt": "时间",
+        "categoryName": "分类",
+        "subcategoryName": null,
+        "accountName": "账户",
+        "fromAccountName": null,
+        "toAccountName": null,
+        "note": "备注",
+        "currency": "币种",
+        "tags": [
+          "标签"
+        ],
+        "datetimeFormat": null,
+        "stripCurrencySymbols": false,
+        "expenseIsNegative": false,
+        "tzOffsetMinutes": null,
+        "requiredComplete": true
+      },
+      "rows": [
+        {
+          "类型": "支出",
+          "金额": "12.5",
+          "时间": "2026-05-21",
+          "分类": "餐饮",
+          "账户": "现金",
+          "币种": "人民币"
+        }
+      ],
+      "result": {
+        "txs": [
+          {
+            "txType": "expense",
+            "amount": 12.5,
+            "happenedAt": "2026-05-21T00:00:00+00:00",
+            "currencyCode": null,
+            "note": null,
+            "categoryName": "餐饮",
+            "parentCategoryName": null,
+            "accountName": "现金",
+            "fromAccountName": null,
+            "toAccountName": null,
+            "tagNames": [],
+            "sourceRowNumber": 1
+          }
+        ],
+        "errorCount": 0
+      }
     }
   ]
 }
