@@ -642,17 +642,17 @@ def main(out_path: str) -> int:
         def _full_map(**over):
             base = dict(tx_type="类型", amount="金额", happened_at="时间", category_name="分类",
                         account_name="账户", note="备注", tags=["标签"],
-                        required_complete=True, expense_is_negative=False,
+                        expense_is_negative=False,
                         strip_currency_symbols=False, datetime_format=None, tz_offset_minutes=None)
             base.update(over)
             return ImportFieldMapping(**base)
 
         transform_cases = [
-            # required_complete=False → 上游报 PARSE_MAPPING_INCOMPLETE，本地返回空
+            # 必填字段全空 → required_complete 自动为 False，上游报 PARSE_MAPPING_INCOMPLETE，本地返回空
             ("incomplete",
-             ImportFieldMapping(required_complete=False),
+             ImportFieldMapping(),
              _mk_rows([{"类型": "支出", "金额": "12.5", "时间": "2026-05-16", "分类": "餐饮", "账户": "现金"}])),
-            # 正常支出
+            # 正常支出（tx_type/amount/happened_at 都设 → required_complete 自动 True）
             ("expense_normal",
              _full_map(),
              _mk_rows([{"类型": "支出", "金额": "12.5", "时间": "2026-05-16", "分类": "餐饮", "账户": "现金", "备注": "午饭", "标签": "出差"}])),
