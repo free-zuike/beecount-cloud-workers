@@ -670,6 +670,18 @@ def main(out_path: str) -> int:
             ("strip_currency",
              _full_map(strip_currency_symbols=True),
              _mk_rows([{"类型": "支出", "金额": "¥1,234.5", "时间": "2026-05-18", "分类": "餐饮", "账户": "现金"}])),
+            # 多币种：币种列合法 ISO 码 → 采纳为 currency_code（CNY）
+            ("expense_with_currency",
+             _full_map(currency="币种"),
+             _mk_rows([{"类型": "支出", "金额": "12.5", "时间": "2026-05-19", "分类": "餐饮", "账户": "现金", "币种": "CNY"}])),
+            # 小写合法码 → 上游大写采纳为 CNY（验证大小写归一）
+            ("currency_lowercase",
+             _full_map(currency="币种"),
+             _mk_rows([{"类型": "支出", "金额": "12.5", "时间": "2026-05-20", "分类": "餐饮", "账户": "现金", "币种": "cny"}])),
+            # 非 ISO 值（中文）→ 上游丢弃为 None；workers 旧实现会错误保留（逼出 ISO 校验修复）
+            ("currency_invalid_cjk",
+             _full_map(currency="币种"),
+             _mk_rows([{"类型": "支出", "金额": "12.5", "时间": "2026-05-21", "分类": "餐饮", "账户": "现金", "币种": "人民币"}])),
         ]
         for name, mapping, rows in transform_cases:
             try:

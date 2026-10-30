@@ -172,7 +172,12 @@ export function applyMapping(rows: ParsedRow[], mapping: ImportFieldMapping): Im
     const fromAccountName = mapping.fromAccountName ? get(mapping.fromAccountName) || null : null;
     const toAccountName = mapping.toAccountName ? get(mapping.toAccountName) || null : null;
     const note = mapping.note ? get(mapping.note) || null : null;
-    const currencyCode = mapping.currency ? get(mapping.currency) || null : null;
+    // 对齐上游 transformer.py：币种值须像 ISO code（3-8 位字母）才被采纳，否则回落
+    // 为 None（账本基础币种）；采纳时大写。非字母/位数不符（如"人民币"、"CNY1"、"US"）
+    // 一律丢弃。注意：上游不做 trim，这里也不 trim，保持与上游逐字符一致的判定。
+    const rawCurrency = mapping.currency ? get(mapping.currency) : null;
+    const currencyCode =
+      rawCurrency && /^[A-Za-z]{3,8}$/.test(rawCurrency) ? rawCurrency.toUpperCase() : null;
 
     // Tags: 可以多列合并
     const tagNames: string[] = [];
