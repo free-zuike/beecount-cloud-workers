@@ -1,0 +1,306 @@
+{
+  "cases": [
+    {
+      "name": "basic_bom",
+      "text": "﻿日期,金额,类型,分类,备注\n2026-05-16,12.5,支出,餐饮,午饭\n2026-05-17,3000,收入,工资,五月工资\n",
+      "result": {
+        "sourceFormat": "generic",
+        "headers": [
+          "日期",
+          "金额",
+          "类型",
+          "分类",
+          "备注"
+        ],
+        "rows": [
+          {
+            "rowNumber": 2,
+            "cells": {
+              "日期": "2026-05-16",
+              "金额": "12.5",
+              "类型": "支出",
+              "分类": "餐饮",
+              "备注": "午饭"
+            }
+          },
+          {
+            "rowNumber": 3,
+            "cells": {
+              "日期": "2026-05-17",
+              "金额": "3000",
+              "类型": "收入",
+              "分类": "工资",
+              "备注": "五月工资"
+            }
+          }
+        ],
+        "suggestedMapping": {
+          "txType": "类型",
+          "amount": "金额",
+          "happenedAt": "日期",
+          "categoryName": "分类",
+          "subcategoryName": null,
+          "accountName": null,
+          "fromAccountName": null,
+          "toAccountName": null,
+          "note": "备注",
+          "currency": null,
+          "tags": [],
+          "datetimeFormat": null,
+          "stripCurrencySymbols": true,
+          "expenseIsNegative": false,
+          "tzOffsetMinutes": null
+        }
+      }
+    },
+    {
+      "name": "semicolon",
+      "text": "日期;金额;类型;分类\n2026-05-16;12.5;支出;餐饮\n",
+      "result": {
+        "sourceFormat": "generic",
+        "headers": [
+          "日期",
+          "金额",
+          "类型",
+          "分类"
+        ],
+        "rows": [
+          {
+            "rowNumber": 2,
+            "cells": {
+              "日期": "2026-05-16",
+              "金额": "12.5",
+              "类型": "支出",
+              "分类": "餐饮"
+            }
+          }
+        ],
+        "suggestedMapping": {
+          "txType": "类型",
+          "amount": "金额",
+          "happenedAt": "日期",
+          "categoryName": "分类",
+          "subcategoryName": null,
+          "accountName": null,
+          "fromAccountName": null,
+          "toAccountName": null,
+          "note": null,
+          "currency": null,
+          "tags": [],
+          "datetimeFormat": null,
+          "stripCurrencySymbols": true,
+          "expenseIsNegative": false,
+          "tzOffsetMinutes": null
+        }
+      }
+    },
+    {
+      "name": "tsv",
+      "text": "日期\t金额\t类型\n2026-05-16\t12.5\t支出\n",
+      "result": {
+        "sourceFormat": "generic",
+        "headers": [
+          "日期",
+          "金额",
+          "类型"
+        ],
+        "rows": [
+          {
+            "rowNumber": 2,
+            "cells": {
+              "日期": "2026-05-16",
+              "金额": "12.5",
+              "类型": "支出"
+            }
+          }
+        ],
+        "suggestedMapping": {
+          "txType": "类型",
+          "amount": "金额",
+          "happenedAt": "日期",
+          "categoryName": null,
+          "subcategoryName": null,
+          "accountName": null,
+          "fromAccountName": null,
+          "toAccountName": null,
+          "note": null,
+          "currency": null,
+          "tags": [],
+          "datetimeFormat": null,
+          "stripCurrencySymbols": true,
+          "expenseIsNegative": false,
+          "tzOffsetMinutes": null
+        }
+      }
+    },
+    {
+      "name": "english_headers",
+      "text": "date,amount,type,category,note\n2026-05-16,12.5,expense,food,lunch\n",
+      "result": {
+        "sourceFormat": "generic",
+        "headers": [
+          "date",
+          "amount",
+          "type",
+          "category",
+          "note"
+        ],
+        "rows": [
+          {
+            "rowNumber": 2,
+            "cells": {
+              "date": "2026-05-16",
+              "amount": "12.5",
+              "type": "expense",
+              "category": "food",
+              "note": "lunch"
+            }
+          }
+        ],
+        "suggestedMapping": {
+          "txType": "type",
+          "amount": "amount",
+          "happenedAt": "date",
+          "categoryName": "category",
+          "subcategoryName": null,
+          "accountName": null,
+          "fromAccountName": null,
+          "toAccountName": null,
+          "note": "note",
+          "currency": null,
+          "tags": [],
+          "datetimeFormat": null,
+          "stripCurrencySymbols": true,
+          "expenseIsNegative": false,
+          "tzOffsetMinutes": null
+        }
+      }
+    },
+    {
+      "name": "pipe",
+      "text": "日期|金额|类型|分类\n2026-05-16|12.5|支出|餐饮\n",
+      "result": {
+        "sourceFormat": "generic",
+        "headers": [
+          "日期",
+          "金额",
+          "类型",
+          "分类"
+        ],
+        "rows": [
+          {
+            "rowNumber": 2,
+            "cells": {
+              "日期": "2026-05-16",
+              "金额": "12.5",
+              "类型": "支出",
+              "分类": "餐饮"
+            }
+          }
+        ],
+        "suggestedMapping": {
+          "txType": "类型",
+          "amount": "金额",
+          "happenedAt": "日期",
+          "categoryName": "分类",
+          "subcategoryName": null,
+          "accountName": null,
+          "fromAccountName": null,
+          "toAccountName": null,
+          "note": null,
+          "currency": null,
+          "tags": [],
+          "datetimeFormat": null,
+          "stripCurrencySymbols": true,
+          "expenseIsNegative": false,
+          "tzOffsetMinutes": null
+        }
+      }
+    },
+    {
+      "name": "beecount",
+      "text": "类型,二级分类,分类,金额,币种,账户,转出账户,转入账户,备注,时间,标签,附件\n支出,,餐饮,12.5,CNY,现金,,,午饭,2026-05-16,餐饮tag,\n",
+      "result": {
+        "sourceFormat": "beecount",
+        "headers": [
+          "类型",
+          "二级分类",
+          "分类",
+          "金额",
+          "币种",
+          "账户",
+          "转出账户",
+          "转入账户",
+          "备注",
+          "时间",
+          "标签",
+          "附件"
+        ],
+        "rows": [
+          {
+            "rowNumber": 2,
+            "cells": {
+              "类型": "支出",
+              "二级分类": "",
+              "分类": "餐饮",
+              "金额": "12.5",
+              "币种": "CNY",
+              "账户": "现金",
+              "转出账户": "",
+              "转入账户": "",
+              "备注": "午饭",
+              "时间": "2026-05-16",
+              "标签": "餐饮tag",
+              "附件": ""
+            }
+          }
+        ],
+        "suggestedMapping": {
+          "txType": "类型",
+          "amount": "金额",
+          "happenedAt": "时间",
+          "categoryName": "分类",
+          "subcategoryName": null,
+          "accountName": "账户",
+          "fromAccountName": "转出账户",
+          "toAccountName": "转入账户",
+          "note": "备注",
+          "currency": null,
+          "tags": [
+            "标签"
+          ],
+          "datetimeFormat": null,
+          "stripCurrencySymbols": false,
+          "expenseIsNegative": false,
+          "tzOffsetMinutes": null
+        }
+      }
+    },
+    {
+      "name": "empty",
+      "text": "",
+      "result": {
+        "sourceFormat": "generic",
+        "headers": [],
+        "rows": [],
+        "suggestedMapping": {
+          "txType": null,
+          "amount": null,
+          "happenedAt": null,
+          "categoryName": null,
+          "subcategoryName": null,
+          "accountName": null,
+          "fromAccountName": null,
+          "toAccountName": null,
+          "note": null,
+          "currency": null,
+          "tags": [],
+          "datetimeFormat": null,
+          "stripCurrencySymbols": true,
+          "expenseIsNegative": false,
+          "tzOffsetMinutes": null
+        }
+      }
+    }
+  ]
+}
