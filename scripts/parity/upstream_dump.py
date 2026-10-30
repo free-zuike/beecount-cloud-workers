@@ -577,7 +577,7 @@ def main(out_path: str) -> int:
         for name, text in import_cases:
             try:
                 import_golden["cases"].append(
-                    {"name": name, "text": text, "result": _norm_data(parse_csv_text(text))})
+                    {"name": name, "text": text, "result": _norm_data(parse_csv_text(raw_text=text))})
             except Exception as exc:
                 import_golden["cases"].append(
                     {"name": name, "text": text, "error": f"{type(exc).__name__}: {exc}"})

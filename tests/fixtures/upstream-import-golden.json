@@ -1,0 +1,39 @@
+{
+  "cases": [
+    {
+      "name": "basic_bom",
+      "text": "﻿日期,金额,类型,分类,备注\n2026-05-16,12.5,支出,餐饮,午饭\n2026-05-17,3000,收入,工资,五月工资\n",
+      "error": "TypeError: parse_csv_text() takes 0 positional arguments but 1 was given"
+    },
+    {
+      "name": "semicolon",
+      "text": "日期;金额;类型;分类\n2026-05-16;12.5;支出;餐饮\n",
+      "error": "TypeError: parse_csv_text() takes 0 positional arguments but 1 was given"
+    },
+    {
+      "name": "tsv",
+      "text": "日期\t金额\t类型\n2026-05-16\t12.5\t支出\n",
+      "error": "TypeError: parse_csv_text() takes 0 positional arguments but 1 was given"
+    },
+    {
+      "name": "english_headers",
+      "text": "date,amount,type,category,note\n2026-05-16,12.5,expense,food,lunch\n",
+      "error": "TypeError: parse_csv_text() takes 0 positional arguments but 1 was given"
+    },
+    {
+      "name": "pipe",
+      "text": "日期|金额|类型|分类\n2026-05-16|12.5|支出|餐饮\n",
+      "error": "TypeError: parse_csv_text() takes 0 positional arguments but 1 was given"
+    },
+    {
+      "name": "beecount",
+      "text": "类型,金额,分类,币种,账户,时间,备注\n支出,12.5,餐饮,CNY,现金,2026-05-16,午饭\n",
+      "error": "TypeError: parse_csv_text() takes 0 positional arguments but 1 was given"
+    },
+    {
+      "name": "empty",
+      "text": "",
+      "error": "TypeError: parse_csv_text() takes 0 positional arguments but 1 was given"
+    }
+  ]
+}
