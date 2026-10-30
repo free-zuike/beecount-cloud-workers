@@ -57,13 +57,32 @@ def main(out_path: str) -> int:
     # 附件存在磁盘上（config.attachment_storage_dir），导入预览要从这里读字节
     os.environ.setdefault("ATTACHMENT_STORAGE_DIR", "/tmp/parity-attach")
 
-    from src.database import Base, SessionLocal, engine  # type: ignore
-    from src.mcp.tools import read_tools  # type: ignore
-    from src.mcp import capability_tools  # type: ignore
-    from src.models import (  # type: ignore
-        AttachmentFile, Ledger, LedgerMember, ReadTxProjection, User, UserAccountProjection,
-        UserCategoryProjection, UserTagProjection,
-    )
+    # 这个脚本**不是**在 workers 仓库里独立运行的：它要导入"上游 Python 仓库"
+    # （TNT-Likely/BeeCount-Cloud）里的 src.* 模块。CI 里上游被 checkout 到
+    # .parity/upstream 并设为 PYTHONPATH。本地若直接 `python scripts/parity/upstream_dump.py`
+    # 而没把上游仓库放到 PYTHONPATH，会 ImportError。这里给一句人话提示，而不是一堆
+    # 看不懂的 traceback。
+    try:
+        from src.database import Base, SessionLocal, engine  # type: ignore
+        from src.mcp.tools import read_tools  # type: ignore
+        from src.mcp import capability_tools  # type: ignore
+        from src.models import (  # type: ignore
+            AttachmentFile, Ledger, LedgerMember, ReadTxProjection, User, UserAccountProjection,
+            UserCategoryProjection, UserTagProjection,
+        )
+    except ImportError as exc:  # 绝大多数情况是"没把上游仓库放进 PYTHONPATH"
+        sys.stderr.write(
+            "无法导入 src.* —— 这个脚本需要上游 Python 仓库（TNT-Likely/BeeCount-Cloud）"
+            "作为 PYTHONPATH。\n"
+            "正确运行方式（CI 见 .github/workflows/parity.yml）：\n"
+            "  git clone <上游仓库> /tmp/upstream\n"
+            "  cd /tmp/upstream\n"
+            "  pip install -r <workers>/scripts/parity/requirements.txt\n"
+            "  PYTHONPATH=. DATABASE_URL=sqlite:////tmp/parity.db \\\n"
+            "    python <workers>/scripts/parity/upstream_dump.py /tmp/golden.json\n"
+            f"原始错误：{type(exc).__name__}: {exc}\n"
+        )
+        return 2
 
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
