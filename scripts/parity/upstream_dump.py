@@ -704,6 +704,68 @@ def main(out_path: str) -> int:
     except Exception as exc:
         print(f"[warn] transform golden 跳过：{type(exc).__name__}: {exc}")
 
+    # ---------------- 写请求契约 golden（pydantic 模型 introspection）----------------
+    # workers 用 camelCase + zod，上游用 snake_case + pydantic，两套 REST 线格式故意不同，
+    # 且写入逻辑已被 MCP 差分覆盖（workers 写路由与 MCP 共用 transaction-service）。
+    # 这里只比对「契约」：每个写请求模型的字段名 / 是否必填 / 类型，捕捉 zod 与 pydantic
+    # 的必填性 / 类型分歧（如某字段一侧必填另一侧可选）。隔离在 try 里。
+    schema_golden = {"models": {}}
+    try:
+        import typing
+        from src.schemas import (  # type: ignore
+            WriteTransactionCreateRequest, WriteCategoryCreateRequest,
+            WriteAccountCreateRequest, WriteTagCreateRequest, WriteBudgetCreateRequest,
+        )
+
+        def _logical_type(ann):
+            args = typing.get_args(ann)
+            if args:
+                real = [a for a in args if a is not type(None)]
+                if len(real) == 1:
+                    return _logical_type(real[0])
+                return "array" if any(str(a).startswith(("list", "List")) for a in real) else "union"
+            if ann is float or ann is int:
+                return "number"
+            if ann is str:
+                return "str"
+            if ann is bool:
+                return "bool"
+            s = str(ann)
+            if "datetime" in s:
+                return "datetime"
+            if "list" in s or "List" in s:
+                return "array"
+            if "dict" in s or "Dict" in s:
+                return "object"
+            if "Literal" in s:
+                return "enum"
+            return s.split("'")[1] if "'" in s else s
+
+        def _describe(model):
+            out = {}
+            for name, field in model.model_fields.items():
+                out[name] = {
+                    "required": bool(field.is_required()),
+                    "type": _logical_type(field.annotation),
+                }
+            return out
+
+        for label, model in [
+            ("transactionCreate", WriteTransactionCreateRequest),
+            ("categoryCreate", WriteCategoryCreateRequest),
+            ("accountCreate", WriteAccountCreateRequest),
+            ("tagCreate", WriteTagCreateRequest),
+            ("budgetCreate", WriteBudgetCreateRequest),
+        ]:
+            schema_golden["models"][label] = _describe(model)
+        schema_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-write-schema-golden.json")
+        with open(schema_path, "w", encoding="utf-8") as sfh:
+            json.dump(schema_golden, sfh, ensure_ascii=False, indent=2, default=str)
+            sfh.write("\n")
+        print(f"wrote {len(schema_golden['models'])} write schema models -> {schema_path}")
+    except Exception as exc:
+        print(f"[warn] write schema golden 跳过：{type(exc).__name__}: {exc}")
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(golden, fh, ensure_ascii=False, indent=2, default=str)

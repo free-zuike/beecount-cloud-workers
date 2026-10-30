@@ -385,13 +385,22 @@ const WriteTagUpdateSchema = WriteBaseSchema.extend({
 
 /** 创建预算请求 */
 const WriteBudgetCreateSchema = WriteBaseSchema.extend({
-  type: z.enum(['total', 'category']).default('total'),
+  type: z.enum(['total', 'category']),
   category_id: z.string().nullable().optional(),
   amount: z.number().gt(0),
   period: z.enum(['monthly', 'weekly', 'yearly']).default('monthly'),
   start_day: z.number().int().min(1).max(28).default(1),
   enabled: z.boolean().default(true),
 });
+
+/** 导出写请求 schema 供契约差分测试内省（与上游 pydantic 模型比对必填性/类型）。 */
+export const writeRequestSchemas = {
+  transactionCreate: WriteTransactionCreateSchema,
+  categoryCreate: WriteCategoryCreateSchema,
+  accountCreate: WriteAccountCreateSchema,
+  tagCreate: WriteTagCreateSchema,
+  budgetCreate: WriteBudgetCreateSchema,
+};
 
 /** 更新预算请求 */
 const WriteBudgetUpdateSchema = WriteBaseSchema.extend({
