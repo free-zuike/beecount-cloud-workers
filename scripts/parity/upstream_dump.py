@@ -216,6 +216,9 @@ def main(out_path: str) -> int:
         ("list_budgets", {"ledger_id": "L3"}),
         ("get_ledger_stats", {"ledger_id": "L3"}),
         ("get_analytics_summary", {"ledger_id": "L3", "scope": "month", "period": "2026-05"}),
+        # 账本列表：u1 拥有 L1、且被共享 L2/L3（可见账本语义一并覆盖）
+        ("list_ledgers", {}),
+        ("get_active_ledger", {}),
         # 错误路径：两侧必须都报错（消息不比对，但"是否报错"必须一致）
         ("list_transactions", {"ledger_id": "NOPE"}),
         ("list_categories", {"ledger_id": "NOPE"}),

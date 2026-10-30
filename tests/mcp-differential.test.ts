@@ -16,8 +16,8 @@ import { describe, expect, it } from 'vitest';
 import { addMember, bindSelfCall, createLedger, makeHarness, mcpCtx, registerUser, type Harness } from './mcp-harness';
 import { diffJson, formatDiffs, normalize, type Json } from './parity-compare';
 import {
-  getAnalyticsSummary, getLedgerStats, getTransaction, listAccounts,
-  listBudgets, listCategories, listTags, listTransactions, search,
+  getActiveLedger, getAnalyticsSummary, getLedgerStats, getTransaction, listAccounts,
+  listBudgets, listCategories, listLedgers, listTags, listTransactions, search,
 } from '../src/mcp/tools/read-tools';
 import { getAccountBalances } from '../src/mcp/capability-tools';
 import {
@@ -135,6 +135,8 @@ const TOOL_FNS: Record<string, (c: ReturnType<typeof mcpCtx>, args: Record<strin
   get_ledger_stats: getLedgerStats as never,
   get_analytics_summary: getAnalyticsSummary as never,
   get_account_balances: getAccountBalances as never,
+  list_ledgers: listLedgers as never,
+  get_active_ledger: getActiveLedger as never,
   search: search as never,
 };
 
@@ -146,7 +148,7 @@ const TOOL_FNS: Record<string, (c: ReturnType<typeof mcpCtx>, args: Record<strin
 // 这些工具返回数组的"顺序"不是契约：list_* 上游没有 ORDER BY；search 只按
 // happened_at desc 排序，同刻记录的顺序未定义（SQLite 与 D1 可能不同）。
 // 都按多重集合比较，只忽略顺序，元素内容与数量仍逐字段严格比对。
-const ORDER_UNDEFINED = new Set(['list_categories', 'list_accounts', 'list_tags', 'list_budgets', 'search']);
+const ORDER_UNDEFINED = new Set(['list_categories', 'list_accounts', 'list_tags', 'list_budgets', 'search', 'list_ledgers']);
 
 function sortTop(value: Json): Json {
   if (!Array.isArray(value)) return value;
