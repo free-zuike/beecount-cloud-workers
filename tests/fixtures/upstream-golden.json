@@ -2690,6 +2690,55 @@
         "period": "2026-05"
       },
       "error": "ValueError: scope must be month, year or all"
+    },
+    {
+      "tool": "list_attachments",
+      "args": {
+        "ledger_id": "L1"
+      },
+      "result": {
+        "items": [],
+        "limit": 40,
+        "offset": 0,
+        "total": 0,
+        "transaction_total": 0
+      }
+    },
+    {
+      "tool": "list_attachments",
+      "args": {
+        "ledger_id": "L1",
+        "q": "foo"
+      },
+      "result": {
+        "items": [],
+        "limit": 40,
+        "offset": 0,
+        "total": 0,
+        "transaction_total": 0
+      }
+    },
+    {
+      "tool": "list_attachments",
+      "args": {
+        "ledger_id": "L1",
+        "limit": 10,
+        "offset": 0
+      },
+      "result": {
+        "items": [],
+        "limit": 10,
+        "offset": 0,
+        "total": 0,
+        "transaction_total": 0
+      }
+    },
+    {
+      "tool": "list_attachments",
+      "args": {
+        "ledger_id": "NOPE"
+      },
+      "error": "ValueError: Ledger not found"
     }
   ],
   "scenario": {
