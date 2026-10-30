@@ -1,0 +1,195 @@
+{
+  "cases": [
+    {
+      "name": "incomplete",
+      "mapping": {
+        "txType": null,
+        "amount": null,
+        "happenedAt": null,
+        "categoryName": null,
+        "subcategoryName": null,
+        "accountName": null,
+        "fromAccountName": null,
+        "toAccountName": null,
+        "note": null,
+        "currency": null,
+        "tags": [],
+        "datetimeFormat": null,
+        "stripCurrencySymbols": true,
+        "expenseIsNegative": false,
+        "tzOffsetMinutes": null,
+        "requiredComplete": false
+      },
+      "rows": [
+        {
+          "类型": "支出",
+          "金额": "12.5",
+          "时间": "2026-05-16",
+          "分类": "餐饮",
+          "账户": "现金"
+        }
+      ],
+      "result": {
+        "txs": [],
+        "errorCount": 1
+      }
+    },
+    {
+      "name": "expense_normal",
+      "mapping": {
+        "txType": "类型",
+        "amount": "金额",
+        "happenedAt": "时间",
+        "categoryName": "分类",
+        "subcategoryName": null,
+        "accountName": "账户",
+        "fromAccountName": null,
+        "toAccountName": null,
+        "note": "备注",
+        "currency": null,
+        "tags": [
+          "标签"
+        ],
+        "datetimeFormat": null,
+        "stripCurrencySymbols": false,
+        "expenseIsNegative": false,
+        "tzOffsetMinutes": null,
+        "requiredComplete": true
+      },
+      "rows": [
+        {
+          "类型": "支出",
+          "金额": "12.5",
+          "时间": "2026-05-16",
+          "分类": "餐饮",
+          "账户": "现金",
+          "备注": "午饭",
+          "标签": "出差"
+        }
+      ],
+      "result": {
+        "txs": [
+          {
+            "txType": "expense",
+            "amount": 12.5,
+            "happenedAt": "2026-05-16 00:00:00+00:00",
+            "currencyCode": null,
+            "note": "午饭",
+            "categoryName": "餐饮",
+            "parentCategoryName": null,
+            "accountName": "现金",
+            "fromAccountName": null,
+            "toAccountName": null,
+            "tagNames": [
+              "出差"
+            ],
+            "sourceRowNumber": 1
+          }
+        ],
+        "errorCount": 0
+      }
+    },
+    {
+      "name": "income_negative_amount",
+      "mapping": {
+        "txType": "类型",
+        "amount": "金额",
+        "happenedAt": "时间",
+        "categoryName": "分类",
+        "subcategoryName": null,
+        "accountName": "账户",
+        "fromAccountName": null,
+        "toAccountName": null,
+        "note": "备注",
+        "currency": null,
+        "tags": [
+          "标签"
+        ],
+        "datetimeFormat": null,
+        "stripCurrencySymbols": false,
+        "expenseIsNegative": false,
+        "tzOffsetMinutes": null,
+        "requiredComplete": true
+      },
+      "rows": [
+        {
+          "类型": "收入",
+          "金额": "-30",
+          "时间": "2026-05-17",
+          "分类": "工资",
+          "账户": "招行"
+        }
+      ],
+      "result": {
+        "txs": [
+          {
+            "txType": "expense",
+            "amount": 30.0,
+            "happenedAt": "2026-05-17 00:00:00+00:00",
+            "currencyCode": null,
+            "note": null,
+            "categoryName": "工资",
+            "parentCategoryName": null,
+            "accountName": "招行",
+            "fromAccountName": null,
+            "toAccountName": null,
+            "tagNames": [],
+            "sourceRowNumber": 1
+          }
+        ],
+        "errorCount": 0
+      }
+    },
+    {
+      "name": "strip_currency",
+      "mapping": {
+        "txType": "类型",
+        "amount": "金额",
+        "happenedAt": "时间",
+        "categoryName": "分类",
+        "subcategoryName": null,
+        "accountName": "账户",
+        "fromAccountName": null,
+        "toAccountName": null,
+        "note": "备注",
+        "currency": null,
+        "tags": [
+          "标签"
+        ],
+        "datetimeFormat": null,
+        "stripCurrencySymbols": true,
+        "expenseIsNegative": false,
+        "tzOffsetMinutes": null,
+        "requiredComplete": true
+      },
+      "rows": [
+        {
+          "类型": "支出",
+          "金额": "¥1,234.5",
+          "时间": "2026-05-18",
+          "分类": "餐饮",
+          "账户": "现金"
+        }
+      ],
+      "result": {
+        "txs": [
+          {
+            "txType": "expense",
+            "amount": 1234.5,
+            "happenedAt": "2026-05-18 00:00:00+00:00",
+            "currencyCode": null,
+            "note": null,
+            "categoryName": "餐饮",
+            "parentCategoryName": null,
+            "accountName": "现金",
+            "fromAccountName": null,
+            "toAccountName": null,
+            "tagNames": [],
+            "sourceRowNumber": 1
+          }
+        ],
+        "errorCount": 0
+      }
+    }
+  ]
+}

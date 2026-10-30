@@ -603,9 +603,15 @@ def main(out_path: str) -> int:
         def _norm_dt(v):
             if not v:
                 return None
-            s = str(v)
-            s = re.sub(r"\.\d+", "", s)  # 去微/毫秒
-            return s.rstrip("Z")
+            s = str(v).replace(" ", "T")
+            try:
+                dt = datetime.fromisoformat(s)
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(timezone.utc)
+                # 归一到 JS 可解析的 UTC 秒级字符串（T + +00:00），避免 naive / 时区表征差异
+                return dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+            except Exception:
+                return s.replace("+00:00", "").rstrip("Z")
 
         def _norm_tx(tx):
             return {

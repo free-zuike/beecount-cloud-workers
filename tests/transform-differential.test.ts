@@ -36,7 +36,13 @@ const golden: { cases: TransformCase[] } = hasGolden
 
 function normDt(v: unknown): string | null {
   if (!v) return null;
-  return String(v).replace(/\.\d+/, '').replace(/Z$/, '');
+  const s = String(v).replace(' ', 'T');
+  const d = new Date(s);
+  if (isNaN(d.getTime())) {
+    return s.replace('+00:00', '').replace(/\.\d+Z?$/, '');
+  }
+  // 两侧归一到 UTC 秒级（去掉毫秒），避免 naive / 时区表征差异
+  return d.toISOString().replace(/\.\d+Z$/, '');
 }
 
 /** workers 的 ImportTransaction → 与 golden 相同的规范形状（undefined→null，日期去 Z/毫秒）。 */
@@ -85,7 +91,12 @@ describe.skipIf(!hasGolden)('导入转换 applyMapping vs 上游 golden', () => 
         kase.rows.map((c, i) => ({ rowNumber: i + 1, cells: c, rawLine: '' }) as ParsedRow),
         kase.mapping as unknown as ImportFieldMapping,
       ).map(normTx);
-      const want = normalize((kase.result as { txs: Json[] }).txs.map(normalize));
+      const want = normalize(
+        (kase.result as { txs: Json[] }).txs.map(t => {
+          const tx = t as Record<string, unknown>;
+          return { ...tx, happenedAt: normDt(tx.happenedAt) };
+        }),
+      );
       const got = normalize(localTxs);
       const diffs = diffJson(want, got);
       expect(diffs.length ? formatDiffs('transform', diffs) : '').toBe('');
