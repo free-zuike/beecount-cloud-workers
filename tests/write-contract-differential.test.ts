@@ -13,6 +13,16 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeRequestSchemas } from '../src/routes/write';
+import { twoFactorRequestSchemas } from '../src/routes/two_factor';
+
+// 合并各子系统的写请求 schema（按 golden 的逻辑 label 取用）
+const allRequestSchemas: Record<string, any> = {
+  ...(writeRequestSchemas as Record<string, any>),
+  twoFAConfirm: (twoFactorRequestSchemas as any).confirm,
+  twoFAVerify: (twoFactorRequestSchemas as any).verify,
+  twoFADisable: (twoFactorRequestSchemas as any).disable,
+  twoFARegenerate: (twoFactorRequestSchemas as any).regenerate,
+};
 
 type FieldInfo = { required: boolean; type: string };
 
@@ -93,14 +103,14 @@ describe('write request contract differential (workers zod vs upstream pydantic)
 
     it('workers 导出写请求 schema 覆盖全部模型', () => {
       for (const label of labels) {
-        expect((writeRequestSchemas as any)[label], `workers 缺少写模型 ${label}`).toBeTruthy();
+        expect(allRequestSchemas[label], `workers 缺少写模型 ${label}`).toBeTruthy();
       }
     });
 
     for (const label of labels) {
       it(`[${label}] 字段契约与上游一致`, () => {
         const up = golden.models[label];
-        const wk = describeZod((writeRequestSchemas as any)[label]);
+        const wk = describeZod(allRequestSchemas[label]);
         // 归一到逻辑字段名（snake）；同名去重（workers 常同时接受 currency_code / currencyCode 等别名）
         const wkNorm: Record<string, FieldInfo> = {};
         for (const [k, info] of Object.entries(wk)) {

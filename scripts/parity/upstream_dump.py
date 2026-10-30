@@ -715,6 +715,7 @@ def main(out_path: str) -> int:
         from src.schemas import (  # type: ignore
             WriteTransactionCreateRequest, WriteCategoryCreateRequest,
             WriteAccountCreateRequest, WriteTagCreateRequest, WriteBudgetCreateRequest,
+            TwoFAConfirmRequest, TwoFAVerifyRequest, TwoFADisableRequest, TwoFARegenerateRequest,
         )
 
         def _logical_type(ann):
@@ -761,6 +762,10 @@ def main(out_path: str) -> int:
             ("accountCreate", WriteAccountCreateRequest),
             ("tagCreate", WriteTagCreateRequest),
             ("budgetCreate", WriteBudgetCreateRequest),
+            ("twoFAConfirm", TwoFAConfirmRequest),
+            ("twoFAVerify", TwoFAVerifyRequest),
+            ("twoFADisable", TwoFADisableRequest),
+            ("twoFARegenerate", TwoFARegenerateRequest),
         ]:
             schema_golden["models"][label] = _describe(model)
         schema_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-write-schema-golden.json")

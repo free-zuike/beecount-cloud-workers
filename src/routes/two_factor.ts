@@ -170,6 +170,14 @@ const TwoFARegenerateSchema = z.object({
   code: z.string().min(6).max(8),
 });
 
+/** 导出 2FA 写请求 schema 供契约差分测试内省（与上游 pydantic 模型比对必填性/类型）。 */
+export const twoFactorRequestSchemas = {
+  confirm: TwoFAConfirmSchema,
+  verify: TwoFAVerifySchema,
+  disable: TwoFADisableSchema,
+  regenerate: TwoFARegenerateSchema,
+};
+
 // ===========================
 // 路由定义
 // ===========================
