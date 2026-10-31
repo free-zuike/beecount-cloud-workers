@@ -1,0 +1,14 @@
+[
+  {
+    "id": "dev-1",
+    "name": "iPhone",
+    "platform": "ios",
+    "app_version": "1.0.0",
+    "os_version": "17.0",
+    "device_model": "iPhone15,2",
+    "last_ip": "1.2.3.4",
+    "last_seen_at": "2026-10-30T03:30:00",
+    "created_at": "2026-10-30T03:30:00",
+    "session_count": 1
+  }
+]

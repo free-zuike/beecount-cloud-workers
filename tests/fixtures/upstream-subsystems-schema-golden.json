@@ -1,0 +1,96 @@
+{
+  "models": {
+    "adminUserCreate": {
+      "email": {
+        "required": true,
+        "type": "str"
+      },
+      "password": {
+        "required": true,
+        "type": "str"
+      },
+      "is_admin": {
+        "required": false,
+        "type": "bool"
+      },
+      "is_enabled": {
+        "required": false,
+        "type": "bool"
+      }
+    },
+    "adminUserPatch": {
+      "email": {
+        "required": false,
+        "type": "union"
+      },
+      "is_enabled": {
+        "required": false,
+        "type": "union"
+      }
+    },
+    "adminPasswordChange": {
+      "admin_password": {
+        "required": true,
+        "type": "str"
+      },
+      "new_password": {
+        "required": true,
+        "type": "str"
+      }
+    },
+    "adminBackupCreate": {
+      "ledger_id": {
+        "required": true,
+        "type": "str"
+      },
+      "note": {
+        "required": false,
+        "type": "union"
+      }
+    },
+    "adminBackupRestore": {
+      "snapshot_id": {
+        "required": true,
+        "type": "str"
+      },
+      "device_id": {
+        "required": false,
+        "type": "union"
+      }
+    },
+    "aiParseTxText": {
+      "text": {
+        "required": true,
+        "type": "str"
+      },
+      "ledger_id": {
+        "required": false,
+        "type": "union"
+      },
+      "locale": {
+        "required": false,
+        "type": "str"
+      }
+    },
+    "aiAsk": {
+      "query": {
+        "required": true,
+        "type": "str"
+      },
+      "locale": {
+        "required": false,
+        "type": "str"
+      }
+    },
+    "aiTestProvider": {
+      "provider": {
+        "required": true,
+        "type": "union"
+      },
+      "capability": {
+        "required": true,
+        "type": "enum"
+      }
+    }
+  }
+}
