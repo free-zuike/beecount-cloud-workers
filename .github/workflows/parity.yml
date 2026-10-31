@@ -111,15 +111,6 @@ jobs:
           python "$GITHUB_WORKSPACE/scripts/parity/upstream_dump.py" \
                  "$GITHUB_WORKSPACE/tests/fixtures/upstream-golden.json"
 
-      - name: Upload golden
-        uses: actions/upload-artifact@v4
-        with:
-          name: upstream-golden-${{ steps.upstream.outputs.ref }}
-          path: |
-            tests/fixtures/upstream-*.json
-            tests/fixtures/upstream-backup-sample.tar.gz
-          retention-days: 7
-
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
@@ -133,6 +124,15 @@ jobs:
         run: |
           rm -f /tmp/upstream_backup_gen.db
           python "$GITHUB_WORKSPACE/scripts/parity/gen_upstream_backup.py"
+
+      - name: Upload golden
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-golden-${{ steps.upstream.outputs.ref }}
+          path: |
+            tests/fixtures/upstream-*.json
+            tests/fixtures/upstream-backup-sample.tar.gz
+          retention-days: 7
 
       - name: Install deps
         run: npm ci
