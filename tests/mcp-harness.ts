@@ -290,7 +290,7 @@ export function seedSync(h: Harness): void {
   const UPD = '2026-05-16T03:30:00Z';
   for (const r of [
     {
-      change_id: 1, entity_type: 'transaction', entity_sync_id: 't-sync-1', action: 'create',
+      change_id: 1, entity_type: 'transaction', entity_sync_id: 't-sync-1', action: 'upsert',
       payload: {
         sync_id: 't-sync-1', tx_type: 'expense', amount: 12.5, happened_at: UPD, note: '午饭',
         category_sync_id: 'c1', account_sync_id: 'a1', currency_code: 'CNY',
@@ -298,7 +298,7 @@ export function seedSync(h: Harness): void {
       },
     },
     {
-      change_id: 2, entity_type: 'category', entity_sync_id: 'c-sync-1', action: 'create',
+      change_id: 2, entity_type: 'category', entity_sync_id: 'c-sync-1', action: 'upsert',
       payload: { sync_id: 'c-sync-1', name: '餐饮', kind: 'expense', sort_order: 1, icon: '🍜' },
     },
   ] as const) {

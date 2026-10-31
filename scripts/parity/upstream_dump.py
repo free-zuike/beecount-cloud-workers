@@ -806,7 +806,7 @@ def main(out_path: str) -> int:
             }),
         ]:
             add(SyncChange, user_id="u1", ledger_id="L1-i", scope="ledger",
-                entity_type=etype, entity_sync_id=esid, action="create",
+                entity_type=etype, entity_sync_id=esid, action="upsert",
                 payload_json=payload, updated_at=upd,
                 updated_by_device_id=None, updated_by_user_id="u1")
         db.commit()
