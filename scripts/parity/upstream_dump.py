@@ -783,11 +783,17 @@ def main(out_path: str) -> int:
     subsystems_golden: dict = {"models": {}}
 
     def _sub_logical_type(ann):
+        # 拆包 PEP 695 type 别名（如上游 TestProviderProvider = str | ProviderConfig），
+        # 否则 pydantic 存的是别名对象，get_origin/get_args 取不到 Union。
+        if hasattr(ann, "__value__"):
+            ann = ann.__value__
         origin = typing.get_origin(ann)
         if origin is typing.Literal:
             return "enum"
         if origin is list:
             return "array"
+        if origin is typing.Union or origin is getattr(typing, "UnionType", None):
+            return "union"
         args = typing.get_args(ann)
         if args:
             real = [a for a in args if a is not type(None)]

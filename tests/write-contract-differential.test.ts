@@ -88,6 +88,8 @@ function describeZod(schema: any): Record<string, FieldInfo> {
 function typeCompatible(a: string, b: string): boolean {
   if (a === b) return true;
   const s = new Set([a, b]);
+  // union 是宽泛类型，与任何类型都视为兼容（字段具体承载由上游决定）
+  if (s.has('union')) return true;
   // tags：workers union(string|array) ≈ 上游 list[str]；happened_at：workers union(string|date) ≈ 上游 datetime
   return (s.has('array') && s.has('union')) || (s.has('datetime') && s.has('union'));
 }
