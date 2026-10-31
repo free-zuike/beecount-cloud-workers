@@ -25,12 +25,18 @@ const golden = existsSync(GOLDEN_PATH)
 
 type Json = Record<string, any>;
 
-/** 把各种日期表征归一到 UTC 秒级字符串，避免 naive/时区/Z/空格差异。 */
+/** 把各种日期表征归一到 UTC 秒级字符串，避免 naive/时区/Z/空格差异。
+ * 关键点：上游 datetime 存的是 UTC，但 SQLite 不存时区，model_dump 出来的裸时间戳
+ * 没有 Z；workers 存的是带 Z 的 UTC。两者都必须按 UTC 解释，否则在非 UTC 本地
+ * 时区下会分叉（CI 在 UTC 上巧合一致、本地却失败）。 */
 function normDt(v: unknown): string | null {
   if (!v) return null;
-  const s = String(v).replace(' ', 'T');
+  let s = String(v).replace(' ', 'T');
+  if (!/[Zz]$/.test(s) && !/[+\-]\d{2}:?\d{2}$/.test(s)) {
+    s = s + 'Z';
+  }
   const d = new Date(s);
-  if (isNaN(d.getTime())) return s;
+  if (isNaN(d.getTime())) return String(v);
   return d.toISOString().replace(/\.\d+Z$/, '');
 }
 

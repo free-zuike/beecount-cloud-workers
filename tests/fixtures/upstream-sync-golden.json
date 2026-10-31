@@ -1,0 +1,46 @@
+{
+  "changes": [
+    {
+      "change_id": 1,
+      "ledger_id": "L1",
+      "entity_type": "transaction",
+      "entity_sync_id": "t-sync-1",
+      "action": "upsert",
+      "payload": {
+        "sync_id": "t-sync-1",
+        "tx_type": "expense",
+        "amount": 12.5,
+        "happened_at": "2026-05-16T03:30:00Z",
+        "note": "午饭",
+        "category_sync_id": "c1",
+        "account_sync_id": "a1",
+        "currency_code": "CNY",
+        "tags": [],
+        "createdByUserId": "u1",
+        "updatedByUserId": "u1"
+      },
+      "updated_at": "2026-05-16T03:30:00",
+      "updated_by_device_id": null,
+      "scope": "ledger"
+    },
+    {
+      "change_id": 2,
+      "ledger_id": "L1",
+      "entity_type": "category",
+      "entity_sync_id": "c-sync-1",
+      "action": "upsert",
+      "payload": {
+        "sync_id": "c-sync-1",
+        "name": "餐饮",
+        "kind": "expense",
+        "sort_order": 1,
+        "icon": "🍜"
+      },
+      "updated_at": "2026-05-16T03:30:00",
+      "updated_by_device_id": null,
+      "scope": "ledger"
+    }
+  ],
+  "server_cursor": 2,
+  "has_more": false
+}
