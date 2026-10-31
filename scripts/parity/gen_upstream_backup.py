@@ -43,6 +43,15 @@ def main() -> int:
         )
         return 2
 
+    # 备份只是导出数据，FK 校验无关紧要；关闭它以避免自动生成的 ledger id
+    # 与字面量 ledger_id 引用之间的约束报错（上游导出同理不依赖 FK）。
+    from sqlalchemy import event
+
+    def _disable_fk(dbapi_con, _):
+        dbapi_con.execute("PRAGMA foreign_keys=OFF")
+
+    event.listen(engine, "connect", _disable_fk)
+
     if not os.environ.get("DATABASE_URL"):
         os.environ["DATABASE_URL"] = "sqlite:////tmp/upstream_backup_gen.db"
 
