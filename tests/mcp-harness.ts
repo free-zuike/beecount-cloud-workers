@@ -9,6 +9,7 @@ import writeRouter from '../src/routes/write';
 import batchWriteRouter from '../src/routes/batch_write';
 import readRouter from '../src/routes/read';
 import summaryRouter from '../src/routes/summary';
+import syncRouter from '../src/routes/sync';
 import type { McpContext } from '../src/mcp/types';
 
 /** 真实表结构（含 #133 三张新表，与 src/db/schema.ts 对齐） */
@@ -270,6 +271,44 @@ export function buildReadApp(): TestApp {
   a.route('/api/v1/read', readRouter as never);
   a.route('/api/v1/read/summary', summaryRouter as never);
   return a;
+}
+
+/** 挂载真实 sync 路由（pull 等），注入 userId，用于 sync 差分；不传 device_id 以跳过设备校验。 */
+export function buildSyncApp(): TestApp {
+  const a = new Hono<{ Bindings: { DB: D1Database; JWT_SECRET: string }; Variables: { userId: string } }>();
+  a.use('/api/v1/sync/*', async (c, next) => {
+    c.set('userId', c.req.header('X-Test-User') || 'u1');
+    await next();
+  });
+  a.route('/api/v1/sync', syncRouter as never);
+  return a;
+}
+
+/** 往 sync_changes 插与上游 golden 同内容的一条 change（transaction + category），
+ * 用于 sync/pull 响应比对（两侧同种子 → 比响应结构 + payload 原样透传）。 */
+export function seedSync(h: Harness): void {
+  const UPD = '2026-05-16T03:30:00Z';
+  for (const r of [
+    {
+      change_id: 1, entity_type: 'transaction', entity_sync_id: 't-sync-1', action: 'create',
+      payload: {
+        sync_id: 't-sync-1', tx_type: 'expense', amount: 12.5, happened_at: UPD, note: '午饭',
+        category_sync_id: 'c1', account_sync_id: 'a1', currency_code: 'CNY',
+        tags: [], createdByUserId: 'u1', updatedByUserId: 'u1',
+      },
+    },
+    {
+      change_id: 2, entity_type: 'category', entity_sync_id: 'c-sync-1', action: 'create',
+      payload: { sync_id: 'c-sync-1', name: '餐饮', kind: 'expense', sort_order: 1, icon: '🍜' },
+    },
+  ] as const) {
+    insertRow(h.sqlite, 'sync_changes', {
+      change_id: r.change_id, user_id: 'u1', ledger_id: 'L1-i', entity_type: r.entity_type,
+      entity_sync_id: r.entity_sync_id, action: r.action,
+      payload_json: JSON.stringify(r.payload), updated_at: UPD,
+      updated_by_device_id: null, updated_by_user_id: 'u1', scope: 'ledger',
+    });
+  }
 }
 export function registerDevice(h: Harness, userId: string, deviceId = 'dev-1'): void {
   h.sqlite.prepare('INSERT INTO devices (id, user_id, name, platform, created_at) VALUES (?, ?, ?, ?, ?)')
