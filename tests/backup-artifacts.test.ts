@@ -264,4 +264,68 @@ describe('恢复带回整个账本（对齐上游：账户/分类/标签/预算�
     const tx = sqlite.prepare('SELECT sync_id FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?').get('L-full', 'x1');
     expect(tx).toBeTruthy();
   });
+
+  it('端到端：AdminBackupCreate 产出快照 → restore 完整回写 5 类实体（模拟与原版互通的字段格式）', async () => {
+    const owner = await registerApp('e2e-restore@example.com');
+    const ownerToken = owner.access_token as string;
+    const ownerUserId = owner.user.id as string;
+    sqlite.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(ownerUserId);
+    sqlite.prepare("INSERT INTO ledgers (id, user_id, external_id, name, currency) VALUES ('L1-i', ?, 'L1', 'L1', 'CNY')").run(ownerUserId);
+
+    sqlite.prepare(`INSERT INTO user_account_projection (sync_id, user_id, name, account_type, currency, initial_balance) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run('a1', ownerUserId, '现金', 'asset', 'CNY', 0);
+    sqlite.prepare(`INSERT INTO user_category_projection (sync_id, user_id, name, kind) VALUES (?, ?, ?, ?)`)
+      .run('c1', ownerUserId, '餐饮', 'expense');
+    sqlite.prepare(`INSERT INTO user_tag_projection (sync_id, user_id, name, color) VALUES (?, ?, ?, ?)`)
+      .run('t1', ownerUserId, '午饭', '#ffffff');
+    sqlite.prepare(`INSERT INTO read_budget_projection (ledger_id, sync_id, user_id, budget_type, category_sync_id, amount, period, start_day, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run('L1-i', 'b1', ownerUserId, 'monthly', 'c1', 100, 'monthly', 1, 1);
+    sqlite.prepare(`INSERT INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, category_name, category_kind, account_sync_id, account_name, tags_csv, tag_sync_ids_json, tx_index, source_change_id, created_by_user_id, last_edited_by_user_id, currency_code, native_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run('L1-i', 'x1', ownerUserId, 'expense', 10, '2026-05-01T00:00:00Z', 'n', 'c1', '餐饮', 'expense', 'a1', '现金', '午饭', '["t1"]', 0, 0, ownerUserId, ownerUserId, 'CNY', 10);
+
+    // 1) 真实 create 端点产出快照（验证 create 与 restore 的格式一致）
+    const create = await api('POST', '/api/v1/admin/backups/create', { token: ownerToken, body: { ledger_id: 'L1' } });
+    expect(create.status).toBe(201);
+    const snapId = ((await create.json()) as { snapshot_id: string }).snapshot_id;
+
+    // 2) 清空投影表，模拟数据丢失后从快照恢复
+    sqlite.prepare('DELETE FROM read_tx_projection WHERE ledger_id = ?').run('L1-i');
+    sqlite.prepare('DELETE FROM user_account_projection WHERE user_id = ?').run(ownerUserId);
+    sqlite.prepare('DELETE FROM user_category_projection WHERE user_id = ?').run(ownerUserId);
+    sqlite.prepare('DELETE FROM user_tag_projection WHERE user_id = ?').run(ownerUserId);
+    sqlite.prepare('DELETE FROM read_budget_projection WHERE ledger_id = ?').run('L1-i');
+
+    // 3) restore
+    const restore = await api('POST', '/api/v1/admin/backups/restore', { token: ownerToken, body: { snapshot_id: snapId } });
+    expect(restore.status).toBe(200);
+
+    // 4) 5 类实体全部找回
+    expect(sqlite.prepare('SELECT sync_id FROM read_tx_projection WHERE ledger_id=? AND sync_id=?').get('L1-i', 'x1')).toBeTruthy();
+    expect(sqlite.prepare('SELECT sync_id FROM user_account_projection WHERE user_id=? AND sync_id=?').get(ownerUserId, 'a1')).toBeTruthy();
+    expect(sqlite.prepare('SELECT sync_id FROM user_category_projection WHERE user_id=? AND sync_id=?').get(ownerUserId, 'c1')).toBeTruthy();
+    expect(sqlite.prepare('SELECT sync_id FROM user_tag_projection WHERE user_id=? AND sync_id=?').get(ownerUserId, 't1')).toBeTruthy();
+    expect(sqlite.prepare('SELECT sync_id FROM read_budget_projection WHERE ledger_id=? AND sync_id=?').get('L1-i', 'b1')).toBeTruthy();
+  });
+
+  it('向后兼容：仅含 transactions 的部分快照也能安全恢复（缺失实体数组不报错）', async () => {
+    const owner = await registerApp('legacy-restore@example.com');
+    const ownerToken = owner.access_token as string;
+    const ownerUserId = owner.user.id as string;
+    sqlite.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(ownerUserId);
+    sqlite.prepare("INSERT INTO ledgers (id, user_id, external_id, name, currency) VALUES ('L2-i', ?, 'L2', 'L2', 'CNY')").run(ownerUserId);
+    sqlite.prepare(`INSERT INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note, category_sync_id, category_name, category_kind, account_sync_id, account_name, tags_csv, tag_sync_ids_json, tx_index, source_change_id, created_by_user_id, last_edited_by_user_id, currency_code, native_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run('L2-i', 'x2', ownerUserId, 'expense', 10, '2026-05-01T00:00:00Z', 'n', 'c1', '餐饮', 'expense', 'a1', '现金', '午饭', '["t1"]', 0, 0, ownerUserId, ownerUserId, 'CNY', 10);
+
+    // 旧式/部分快照：只有 transactions，没有 accounts/categories/tags/budgets（模拟旧上游或早期格式）
+    const snapshot = {
+      ledger_external_id: 'L2',
+      transactions: [{ sync_id: 'x2', tx_type: 'expense', amount: 10, happened_at: '2026-05-01T00:00:00Z', note: 'n', category_sync_id: 'c1', category_name: '餐饮', category_kind: 'expense', account_sync_id: 'a1', account_name: '现金', tags_csv: '午饭', tag_sync_ids_json: '["t1"]', tx_index: 0, source_change_id: 0, created_by_user_id: ownerUserId, last_edited_by_user_id: ownerUserId, currency_code: 'CNY', native_amount: 10 }],
+    };
+    sqlite.prepare('INSERT INTO backup_snapshots (id, user_id, ledger_id, snapshot_json) VALUES (?, ?, ?, ?)')
+      .run('snap-legacy', ownerUserId, 'L2-i', JSON.stringify(snapshot));
+
+    const restore = await api('POST', '/api/v1/admin/backups/restore', { token: ownerToken, body: { snapshot_id: 'snap-legacy' } });
+    expect(restore.status).toBe(200);
+    expect(sqlite.prepare('SELECT sync_id FROM read_tx_projection WHERE ledger_id=? AND sync_id=?').get('L2-i', 'x2')).toBeTruthy();
+  });
 });
