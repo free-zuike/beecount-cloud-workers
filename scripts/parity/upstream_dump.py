@@ -816,7 +816,9 @@ def main(out_path: str) -> int:
             return "object"
         if "Literal" in s:
             return "enum"
-        return s.split("'")[1] if "'" in s else s
+        # 兜底：任何无法归类的类型（类对象 / PEP695 type 别名等）一律按 union 处理，
+        # 与 workers 的 union 宽泛兼容，避免因别名未被拆包而误报类型分歧。
+        return "union"
 
     def _sub_describe(model):
         out = {}
