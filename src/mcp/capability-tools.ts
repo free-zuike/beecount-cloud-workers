@@ -293,9 +293,9 @@ export async function retryOperation(c: McpContext, args: { operation_id: string
 export async function listOperations(
   c: McpContext,
   args: { ledger_id: string; limit?: number },
-): Promise<Record<string, unknown>[]> {
+): Promise<{ operations: unknown[] }> {
   const ledger = await requireLedger(c, args.ledger_id);
-  return opsListOperations(c.db, c.userId, ledger.id, args.limit ?? 30);
+  return { operations: await opsListOperations(c.db, c.userId, ledger.id, args.limit ?? 30) };
 }
 
 /** 增量变更（含删除 tombstone），签名游标（对齐上游 list_changes） */

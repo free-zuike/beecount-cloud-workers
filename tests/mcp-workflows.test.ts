@@ -3,7 +3,8 @@
 // 对账与检查点、CSV 文件导入导出与权限、组合分析本地日期/标记、月末周期规则幂等、
 // 失效规则不阻塞、DST 间隙/歧义策略、分类规则冻结版本、保留来源互斥、净资产多币种、
 // 共享账本字典/AI 上下文、外币转账、丢响应后规则编辑保护。
-// 当前阶段：测试先行——4 个工具模块为签名骨架，全部用例应红（MCP_TODO）。
+// 注：workflow/rule 工具（导入预览/执行/撤销、对账、分类规则、周期规则）均已实现并接线，
+// 17 例全绿；本条注释原为脚手架期占位，现已不实。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
