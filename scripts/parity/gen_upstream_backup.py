@@ -53,7 +53,7 @@ def main() -> int:
     # 与 restore-cross 测试断言的 sync_id 对齐：账户 a1 / 分类 c1 / 标签 g1 / 预算 b1 / 交易 t1
     db.add(User(id="u1", email="u1@example.com", password_hash="x", is_enabled=True))
     db.add(Ledger(id="L1-i", external_id="L1", user_id="u1", name="主账本",
-                  currency="CNY", month_start_day=1, created_at=now))
+                  currency="CNY", month_start_day=1, created_at=datetime(2026, 1, 1, 0, 0, 0)))
     db.add(LedgerMember(ledger_id="L1-i", user_id="u1", role="owner"))
     db.add(UserCategoryProjection(sync_id="c1", user_id="u1", name="餐饮",
                                   kind="expense", sort_order=1, icon="🍜"))
@@ -65,7 +65,7 @@ def main() -> int:
                                period="monthly", start_day=1, enabled=True))
     db.add(ReadTxProjection(
         sync_id="t1", ledger_id="L1-i", user_id="u1", tx_type="expense", amount=38.0,
-        happened_at=datetime.fromisoformat("2026-05-02T03:30:00+00:00"), note="星巴克",
+        happened_at=datetime(2026, 5, 2, 3, 30, 0), note="星巴克",
         category_sync_id="c1", category_name="餐饮", category_kind="expense",
         account_sync_id="a1", account_name="现金", currency_code="CNY", native_amount=38.0,
         tx_index=0, created_by_user_id="u1", source_change_id=1,
