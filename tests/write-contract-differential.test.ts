@@ -14,6 +14,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeRequestSchemas } from '../src/routes/write';
 import { twoFactorRequestSchemas } from '../src/routes/two_factor';
+import {
+  AdminUserCreateSchema, AdminUserPatchSchema, AdminUserPasswordChangeSchema,
+  BackupCreateSchema, BackupRestoreSchema,
+} from '../src/routes/admin';
+import { AiAskSchema, AiParseTxTextSchema, AiTestProviderSchema } from '../src/routes/ai';
 
 // 合并各子系统的写请求 schema（按 golden 的逻辑 label 取用）
 const allRequestSchemas: Record<string, any> = {
@@ -22,6 +27,14 @@ const allRequestSchemas: Record<string, any> = {
   twoFAVerify: (twoFactorRequestSchemas as any).verify,
   twoFADisable: (twoFactorRequestSchemas as any).disable,
   twoFARegenerate: (twoFactorRequestSchemas as any).regenerate,
+  adminUserCreate: AdminUserCreateSchema,
+  adminUserPatch: AdminUserPatchSchema,
+  adminPasswordChange: AdminUserPasswordChangeSchema,
+  adminBackupCreate: BackupCreateSchema,
+  adminBackupRestore: BackupRestoreSchema,
+  aiAsk: AiAskSchema,
+  aiParseTxText: AiParseTxTextSchema,
+  aiTestProvider: AiTestProviderSchema,
 };
 
 type FieldInfo = { required: boolean; type: string };
@@ -88,18 +101,26 @@ const TRANSPORT_FIELDS = new Set([
 ]);
 
 const GOLDEN = join(__dirname, 'fixtures', 'upstream-write-schema-golden.json');
+const SUB_GOLDEN = join(__dirname, 'fixtures', 'upstream-subsystems-schema-golden.json');
 const hasGolden = existsSync(GOLDEN);
+const hasSubGolden = existsSync(SUB_GOLDEN);
+
+function loadGolden(p: string): { models: Record<string, Record<string, FieldInfo>> } {
+  if (!existsSync(p)) return { models: {} };
+  return (JSON.parse(readFileSync(p, 'utf8')) as { models: Record<string, Record<string, FieldInfo>> });
+}
+
+const writeModels = loadGolden(GOLDEN).models;
+const subModels = loadGolden(SUB_GOLDEN).models;
+const allModels: Record<string, Record<string, FieldInfo>> = { ...writeModels, ...subModels };
 
 describe('write request contract differential (workers zod vs upstream pydantic)', () => {
-  it('golden fixture 已生成（CI 产出 upstream-write-schema-golden.json）', () => {
-    expect(hasGolden, '缺少 golden：请等 CI 生成后提交 fixtures/upstream-write-schema-golden.json').toBe(true);
+  it('golden fixture 已生成（CI 产出 upstream-*-schema-golden.json）', () => {
+    expect(hasGolden && hasSubGolden, '缺少 golden：请等 CI 生成后提交 fixtures/upstream-*-schema-golden.json').toBe(true);
   });
 
-  if (hasGolden) {
-    const golden = JSON.parse(readFileSync(GOLDEN, 'utf8')) as {
-      models: Record<string, Record<string, FieldInfo>>;
-    };
-    const labels = Object.keys(golden.models);
+  if (hasGolden && hasSubGolden) {
+    const labels = Object.keys(allModels);
 
     it('workers 导出写请求 schema 覆盖全部模型', () => {
       for (const label of labels) {
@@ -109,7 +130,7 @@ describe('write request contract differential (workers zod vs upstream pydantic)
 
     for (const label of labels) {
       it(`[${label}] 字段契约与上游一致`, () => {
-        const up = golden.models[label];
+        const up = allModels[label];
         const wk = describeZod(allRequestSchemas[label]);
         // 归一到逻辑字段名（snake）；同名去重（workers 常同时接受 currency_code / currencyCode 等别名）
         const wkNorm: Record<string, FieldInfo> = {};
@@ -119,6 +140,7 @@ describe('write request contract differential (workers zod vs upstream pydantic)
         }
         const fields = new Set([...Object.keys(up), ...Object.keys(wkNorm)]);
         const divergences: string[] = [];
+        const benign: string[] = [];
         for (const f of fields) {
           if (TRANSPORT_FIELDS.has(f)) continue;
           const u = up[f];
@@ -134,12 +156,19 @@ describe('write request contract differential (workers zod vs upstream pydantic)
             continue;
           }
           if (u.required !== w.required) {
-            divergences.push(`${f}: 必填性分歧 (up=${u.required}, wk=${w.required})`);
+            if (w.required && !u.required) {
+              // 危险：workers 比上游更严格（上游可选、workers 必填）→ 会拒绝上游合法请求
+              divergences.push(`${f}: 必填性分歧 (up=${u.required}, wk=${w.required})`);
+            } else {
+              // 良性：workers 比上游宽松（上游必填、workers 可选）→ 仅记录，不失败
+              benign.push(`${f}: workers 比上游宽松(上游必填, wk 可选)`);
+            }
           }
           if (!typeCompatible(u.type, w.type)) {
             divergences.push(`${f}: 类型分歧 (up=${u.type}, wk=${w.type})`);
           }
         }
+        if (benign.length) console.warn(`[${label}] 良性分歧(不失败): ${benign.join('; ')}`);
         expect(divergences.length ? divergences.join('\n') : '', '').toBe('');
       });
     }

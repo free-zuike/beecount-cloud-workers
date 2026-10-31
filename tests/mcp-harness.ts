@@ -10,6 +10,7 @@ import batchWriteRouter from '../src/routes/batch_write';
 import readRouter from '../src/routes/read';
 import summaryRouter from '../src/routes/summary';
 import syncRouter from '../src/routes/sync';
+import devicesRouter from '../src/routes/devices';
 import type { McpContext } from '../src/mcp/types';
 
 /** 真实表结构（含 #133 三张新表，与 src/db/schema.ts 对齐） */
@@ -17,7 +18,7 @@ export const DDL = `
   CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL);
   CREATE TABLE ledgers (id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, name TEXT, currency TEXT, month_start_day INTEGER DEFAULT 1, created_at TEXT);
   CREATE TABLE ledger_members (ledger_id TEXT, user_id TEXT, role TEXT, joined_at TEXT);
-  CREATE TABLE devices (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, platform TEXT, last_seen_at TEXT, last_ip TEXT, revoked_at TEXT, created_at TEXT);
+  CREATE TABLE devices (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, platform TEXT, app_version TEXT, os_version TEXT, device_model TEXT, last_seen_at TEXT, last_ip TEXT, revoked_at TEXT, created_at TEXT);
   CREATE TABLE sync_changes (
     change_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ledger_id TEXT, entity_type TEXT,
     entity_sync_id TEXT, action TEXT, payload_json TEXT, updated_at TEXT,
@@ -282,6 +283,27 @@ export function buildSyncApp(): TestApp {
   });
   a.route('/api/v1/sync', syncRouter as never);
   return a;
+}
+
+/** 挂载真实 devices 路由（GET /devices），注入 userId，用于设备 LIST 响应差分。 */
+export function buildDevicesApp(): TestApp {
+  const a = new Hono<{ Bindings: { DB: D1Database; JWT_SECRET: string }; Variables: { userId: string } }>();
+  a.use('/api/v1/devices/*', async (c, next) => {
+    c.set('userId', c.req.header('X-Test-User') || 'u1');
+    await next();
+  });
+  a.route('/api/v1/devices', devicesRouter as never);
+  return a;
+}
+
+/** 往 devices 插一条与上游 golden 同内容的设备，用于 GET /devices 响应比对。 */
+export function seedDevice(h: Harness): void {
+  insertRow(h.sqlite, 'devices', {
+    id: 'dev-1', user_id: 'u1', name: 'iPhone', platform: 'ios',
+    app_version: '1.0.0', os_version: '17.0', device_model: 'iPhone15,2',
+    last_seen_at: '2026-05-16T03:30:00Z', last_ip: '1.2.3.4', revoked_at: null,
+    created_at: '2026-01-01T00:00:00Z',
+  });
 }
 
 /** 往 sync_changes 插与上游 golden 同内容的一条 change（transaction + category），

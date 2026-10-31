@@ -45,14 +45,14 @@ const DEVICE_ONLINE_WINDOW_MS = 10 * 60 * 1000;
 // ===========================
 
 /** 创建用户请求 */
-const AdminUserCreateSchema = z.object({
+export const AdminUserCreateSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
   is_enabled: z.boolean().default(true),
 });
 
 /** 更新用户请求 */
-const AdminUserPatchSchema = z.object({
+export const AdminUserPatchSchema = z.object({
   email: z.string().email().optional(),
   is_enabled: z.boolean().optional(),
 });
@@ -689,10 +689,11 @@ adminRouter.delete('/devices/:id', async (c) => {
  * - 用于管理员排查问题
  */
 // 修改用户密码
-adminRouter.post('/users/:id/password', zValidator('json', z.object({
+export const AdminUserPasswordChangeSchema = z.object({
   admin_password: z.string(),
-  new_password: z.string().min(8)
-})), async (c) => {
+  new_password: z.string().min(8),
+});
+adminRouter.post('/users/:id/password', zValidator('json', AdminUserPasswordChangeSchema), async (c) => {
   const db = c.env.DB;
   const userId = c.req.param('id');
   const { admin_password, new_password } = c.req.valid('json');
@@ -816,8 +817,8 @@ adminRouter.get('/logs', async (c) => {
 // POST /admin/backups/create - 创建本地备份快照
 // ---------------------------------------------------------------------------
 
-const BackupCreateSchema = z.object({
-  ledger_id: z.string().optional(),
+export const BackupCreateSchema = z.object({
+  ledger_id: z.string(),
   note: z.string().optional(),
 });
 
@@ -957,7 +958,7 @@ adminRouter.get('/backups/artifacts', async (c) => {
 // POST /admin/backups/restore - 恢复备份
 // ---------------------------------------------------------------------------
 
-const BackupRestoreSchema = z.object({
+export const BackupRestoreSchema = z.object({
   snapshot_id: z.string(),
   device_id: z.string().optional(),
 });

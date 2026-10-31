@@ -776,6 +776,90 @@ def main(out_path: str) -> int:
     except Exception as exc:
         print(f"[warn] write schema golden 跳过：{type(exc).__name__}: {exc}")
 
+    # ---------------- admin/ai 请求契约 golden ----------------
+    # admin + ai 子系统的写请求模型 introspection（zod vs pydantic 必填性/类型）。
+    # 与写契约同理：这些子系统 workers 已实现，字段须对齐。隔离在 try 里，且 admin
+    # 与 ai 分两个 try（ai 路由 import 可能较重），互不影响。
+    subsystems_golden: dict = {"models": {}}
+
+    def _sub_logical_type(ann):
+        origin = typing.get_origin(ann)
+        if origin is typing.Literal:
+            return "enum"
+        if origin is list:
+            return "array"
+        args = typing.get_args(ann)
+        if args:
+            real = [a for a in args if a is not type(None)]
+            if len(real) == 1:
+                return _sub_logical_type(real[0])
+            return "union"
+        if ann is float or ann is int:
+            return "number"
+        if ann is str:
+            return "str"
+        if ann is bool:
+            return "bool"
+        s = str(ann)
+        if "datetime" in s:
+            return "datetime"
+        if "list" in s or "List" in s:
+            return "array"
+        if "dict" in s or "Dict" in s:
+            return "object"
+        if "Literal" in s:
+            return "enum"
+        return s.split("'")[1] if "'" in s else s
+
+    def _sub_describe(model):
+        out = {}
+        for name, field in model.model_fields.items():
+            out[name] = {
+                "required": bool(field.is_required()),
+                "type": _sub_logical_type(field.annotation),
+            }
+        return out
+
+    try:
+        from src.schemas import (  # type: ignore
+            UserAdminCreateRequest, UserAdminPatchRequest, UserAdminPasswordChangeRequest,
+            AdminBackupCreateRequest, AdminBackupRestoreRequest,
+        )
+        for label, model in [
+            ("adminUserCreate", UserAdminCreateRequest),
+            ("adminUserPatch", UserAdminPatchRequest),
+            ("adminPasswordChange", UserAdminPasswordChangeRequest),
+            ("adminBackupCreate", AdminBackupCreateRequest),
+            ("adminBackupRestore", AdminBackupRestoreRequest),
+        ]:
+            subsystems_golden["models"][label] = _sub_describe(model)
+        print(f"describe admin models ok -> {len(subsystems_golden['models'])}")
+    except Exception as exc:
+        print(f"[warn] admin schema golden 跳过：{type(exc).__name__}: {exc}")
+
+    try:
+        from src.routers.ai.parse_tx_text import ParseTxTextRequest  # type: ignore
+        from src.routers.ai.ask import AskRequest  # type: ignore
+        from src.routers.ai.test_provider import TestProviderRequest  # type: ignore
+        for label, model in [
+            ("aiParseTxText", ParseTxTextRequest),
+            ("aiAsk", AskRequest),
+            ("aiTestProvider", TestProviderRequest),
+        ]:
+            subsystems_golden["models"][label] = _sub_describe(model)
+        print(f"describe ai models ok -> {len(subsystems_golden['models'])}")
+    except Exception as exc:
+        print(f"[warn] ai schema golden 跳过：{type(exc).__name__}: {exc}")
+
+    try:
+        sub_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-subsystems-schema-golden.json")
+        with open(sub_path, "w", encoding="utf-8") as sfh:
+            json.dump(subsystems_golden, sfh, ensure_ascii=False, indent=2, default=str)
+            sfh.write("\n")
+        print(f"wrote {len(subsystems_golden['models'])} subsystems schema models -> {sub_path}")
+    except Exception as exc:
+        print(f"[warn] subsystems schema golden 写入跳过：{type(exc).__name__}: {exc}")
+
     # ---------------- sync/pull 响应 golden ----------------
     # 客户端增量同步协议：两侧响应结构已核对一致（changes[change_id,ledger_id,entity_type,
     # entity_sync_id,action,payload,updated_at,updated_by_device_id,scope] + server_cursor
@@ -820,6 +904,30 @@ def main(out_path: str) -> int:
         print(f"wrote sync pull golden -> {sync_path}")
     except Exception as exc:
         print(f"[warn] sync pull golden 跳过：{type(exc).__name__}: {exc}")
+
+    # ---------------- device LIST 响应 golden ----------------
+    # 设备 LIST（GET /devices）响应结构（DeviceOut 字段集）契约差分。设备登录时自动
+    # 创建、无请求体，所以这里比「响应」而非「请求」。直接调 list_devices。
+    try:
+        from src.models import Device  # type: ignore
+        from src.routers.devices import list_devices  # type: ignore
+
+        upd = datetime(2026, 5, 16, 3, 30, 0, tzinfo=timezone.utc)
+        fake_user = db.get(User, "u1")
+        db.add(Device(id="dev-1", user_id="u1", name="iPhone", platform="ios",
+                      app_version="1.0.0", os_version="17.0", device_model="iPhone15,2",
+                      last_ip="1.2.3.4", last_seen_at=upd, created_at=upd))
+        db.commit()
+        devs = list_devices(view="sessions", active_within_days=30, _scopes=set(),
+                            current_user=fake_user, db=db)
+        device_golden = [d.model_dump(mode="json") for d in devs]
+        dev_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-device-golden.json")
+        with open(dev_path, "w", encoding="utf-8") as sfh:
+            json.dump(device_golden, sfh, ensure_ascii=False, indent=2, default=str)
+            sfh.write("\n")
+        print(f"wrote device list golden -> {dev_path}")
+    except Exception as exc:
+        print(f"[warn] device list golden 跳过：{type(exc).__name__}: {exc}")
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:

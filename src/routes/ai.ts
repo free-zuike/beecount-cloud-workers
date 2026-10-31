@@ -453,19 +453,19 @@ export async function loadLedgerContext(
 // Schema 定义
 // ===========================
 
-const AiAskSchema = z.object({
+export const AiAskSchema = z.object({
   query: z.string().min(1).max(4000),
   locale: z.string().regex(/^(zh|zh-CN|zh-TW|en)$/).default('zh'),
 });
 
 // 对齐原版：parse-tx-image 收 multipart FormData，parse-tx-text 收 JSON
-const AiParseTxTextSchema = z.object({
+export const AiParseTxTextSchema = z.object({
   text: z.string().min(1).max(5000),
   ledger_id: z.string().optional(),
   locale: z.string().optional(),
 });
 
-const AiTestProviderSchema = z.object({
+export const AiTestProviderSchema = z.object({
   provider: z.union([
     z.string(),
     z.object({
@@ -484,7 +484,7 @@ const AiTestProviderSchema = z.object({
   base_url: z.string().optional(),
 });
 
-const AiSpeechToTextSchema = z.object({
+export const AiSpeechToTextSchema = z.object({
   audio_data: z.string().optional(),
   audio_url: z.string().optional(),
   language: z.string().optional(),
