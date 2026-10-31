@@ -76,8 +76,8 @@ describe('list_operations 输出契约（对齐上游 operation_out）', () => {
 describe('list_ledger_members 输出契约（对齐上游 MemberOut）', () => {
   it('返回成员数组，字段集/排序/is_self 与上游一致', async () => {
     const h = makeHarness();
-    registerUser(h, 'u1', 'u1@example.com', 'pw');
-    registerUser(h, 'u2', 'u2@example.com', 'pw');
+    registerUser(h, 'u1', 'u1@example.com');
+    registerUser(h, 'u2', 'u2@example.com');
     // 直接用 insertRow 建 ledger + owner 成员（避免 createLedger 的参绑定问题）
     insertRow(h.sqlite, 'ledgers', {
       id: 'L1-i', user_id: 'u1', external_id: 'L1', name: 'L1', currency: 'CNY',

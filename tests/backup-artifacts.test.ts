@@ -48,6 +48,25 @@ const DDL = `
     storage_path TEXT NOT NULL, content_type TEXT, checksum_sha256 TEXT NOT NULL,
     size_bytes INTEGER DEFAULT 0, metadata_json TEXT, created_at TEXT
   );
+  CREATE TABLE read_tx_projection (
+    ledger_id TEXT, sync_id TEXT, user_id TEXT, tx_type TEXT, amount REAL, happened_at TEXT, note TEXT,
+    category_sync_id TEXT, category_name TEXT, category_kind TEXT,
+    account_sync_id TEXT, account_name TEXT,
+    from_account_sync_id TEXT, from_account_name TEXT,
+    to_account_sync_id TEXT, to_account_name TEXT,
+    tags_csv TEXT, tag_sync_ids_json TEXT, attachments_json TEXT, tx_index INTEGER, source_change_id INTEGER,
+    exclude_from_stats INTEGER, exclude_from_budget INTEGER,
+    created_by_user_id TEXT, last_edited_by_user_id TEXT, currency_code TEXT, native_amount REAL
+  );
+  CREATE TABLE user_account_projection (
+    sync_id TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT, account_type TEXT, currency TEXT,
+    initial_balance REAL, note TEXT, credit_limit REAL, billing_day INTEGER, payment_due_day INTEGER,
+    bank_name TEXT, card_last_four TEXT, hidden INTEGER NOT NULL DEFAULT 0, source_change_id INTEGER DEFAULT 0,
+    PRIMARY KEY (user_id, sync_id)
+  );
+  CREATE TABLE user_category_projection (sync_id TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT, kind TEXT, level INTEGER, sort_order INTEGER, icon TEXT, icon_type TEXT, custom_icon_path TEXT, icon_cloud_file_id TEXT, icon_cloud_sha256 TEXT, parent_name TEXT, parent_sync_id TEXT, source_change_id INTEGER DEFAULT 0, PRIMARY KEY (user_id, sync_id));
+  CREATE TABLE user_tag_projection (sync_id TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT, color TEXT, source_change_id INTEGER, PRIMARY KEY (user_id, sync_id));
+  CREATE TABLE read_budget_projection (ledger_id TEXT, sync_id TEXT, user_id TEXT, budget_type TEXT, category_sync_id TEXT, amount REAL, period TEXT, start_day INTEGER, enabled INTEGER DEFAULT 1, source_change_id INTEGER DEFAULT 0);
 `;
 
 let sqlite: DatabaseSync;
@@ -195,5 +214,54 @@ describe('备份产物与恢复链路', () => {
     expect(restore.status).toBe(404);
     const restoreBody = await restore.json() as any;
     expect(restoreBody.error).toBe('Backup artifact not found');
+  });
+});
+
+describe('恢复带回整个账本（对齐上游：账户/分类/标签/预算一并回写）', () => {
+  it('restore 把快照中的 accounts/categories/tags/budgets 一并写回投影表', async () => {
+    const owner = await registerApp('restore-full@example.com');
+    const ownerToken = owner.access_token as string;
+    const ownerUserId = owner.user.id as string;
+    sqlite.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(ownerUserId);
+    sqlite
+      .prepare("INSERT INTO ledgers (id, user_id, external_id, name, currency) VALUES ('L-full', ?, 'L-full-ext', 'Full', 'CNY')")
+      .run(ownerUserId);
+
+    const snapshot = {
+      ledger_external_id: 'L-full-ext',
+      accounts: [{ sync_id: 'a1', user_id: ownerUserId, name: '现金', account_type: 'asset', currency: 'CNY', initial_balance: 0 }],
+      categories: [{ sync_id: 'c1', user_id: ownerUserId, name: '餐饮', kind: 'expense', level: 0, sort_order: 0, icon: '🍜', icon_type: 'emoji' }],
+      tags: [{ sync_id: 't1', user_id: ownerUserId, name: '午饭', color: '#ffffff' }],
+      budgets: [{ ledger_id: 'L-full', sync_id: 'b1', user_id: ownerUserId, budget_type: 'monthly', category_sync_id: 'c1', amount: 100, period: 'monthly', start_day: 1, enabled: 1 }],
+      transactions: [{
+        sync_id: 'x1', tx_type: 'expense', amount: 10, happened_at: '2026-05-01T00:00:00Z', note: 'n',
+        category_sync_id: 'c1', category_name: '餐饮', category_kind: 'expense',
+        account_sync_id: 'a1', account_name: '现金',
+        from_account_sync_id: null, from_account_name: null, to_account_sync_id: null, to_account_name: null,
+        tags_csv: '午饭', tag_sync_ids_json: '["t1"]', attachments_json: null, tx_index: 0, source_change_id: 0,
+        exclude_from_stats: 0, exclude_from_budget: 0, created_by_user_id: ownerUserId, last_edited_by_user_id: ownerUserId,
+        currency_code: 'CNY', native_amount: 10,
+      }],
+    };
+    sqlite
+      .prepare('INSERT INTO backup_snapshots (id, user_id, ledger_id, snapshot_json) VALUES (?, ?, ?, ?)')
+      .run('snap-full', ownerUserId, 'L-full', JSON.stringify(snapshot));
+
+    const restore = await api('POST', '/api/v1/admin/backups/restore', {
+      token: ownerToken,
+      body: { snapshot_id: 'snap-full' },
+    });
+    expect(restore.status).toBe(200);
+
+    const acc = sqlite.prepare('SELECT sync_id FROM user_account_projection WHERE user_id = ? AND sync_id = ?').get(ownerUserId, 'a1');
+    expect(acc).toBeTruthy();
+    const cat = sqlite.prepare('SELECT sync_id FROM user_category_projection WHERE user_id = ? AND sync_id = ?').get(ownerUserId, 'c1');
+    expect(cat).toBeTruthy();
+    const tag = sqlite.prepare('SELECT sync_id FROM user_tag_projection WHERE user_id = ? AND sync_id = ?').get(ownerUserId, 't1');
+    expect(tag).toBeTruthy();
+    const bud = sqlite.prepare('SELECT sync_id FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?').get('L-full', 'b1');
+    expect(bud).toBeTruthy();
+    const tx = sqlite.prepare('SELECT sync_id FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?').get('L-full', 'x1');
+    expect(tx).toBeTruthy();
   });
 });

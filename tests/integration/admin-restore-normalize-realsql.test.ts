@@ -34,6 +34,9 @@ beforeEach(() => {
     id TEXT PRIMARY KEY, user_id TEXT, ledger_id TEXT, snapshot_json TEXT NOT NULL,
     note TEXT, created_at TEXT DEFAULT (datetime('now')) NOT NULL
   )`);
+  // 还原会整体回写预算投影表；镜像生产 schema 补建 read_budget_projection
+  // （WRITE_PATH_TABLES 已含 read_tx_projection / user_account_projection / user_category_projection / user_tag_projection）
+  sqlite.exec(`CREATE TABLE read_budget_projection (ledger_id TEXT, sync_id TEXT, user_id TEXT, budget_type TEXT, category_sync_id TEXT, amount REAL, period TEXT, start_day INTEGER, enabled INTEGER DEFAULT 1, source_change_id INTEGER DEFAULT 0)`);
   sqlite.prepare("INSERT INTO users (id, email, password_hash, is_admin) VALUES ('user-1', 'a@x.com', 'x', 1)").run();
   sqlite.prepare("INSERT INTO ledgers (id, user_id, external_id, name, currency) VALUES ('ledger-1', 'user-1', 'ledger-1', 'A', 'CNY')").run();
 

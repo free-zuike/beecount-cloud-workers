@@ -963,6 +963,24 @@ export const BackupRestoreSchema = z.object({
   device_id: z.string().optional(),
 });
 
+// 恢复时把快照中的账户/分类/标签/预算整体回写（按 user/ledger 范围 wipe+repopulate），
+// 对齐上游“恢复带回整个账本”的语义；快照行即投影表的完整行，列名一一对应。
+function restoreProjectionEntities(
+  db: D1Database, table: string, rows: unknown, deleteSql: string, deleteArg: string,
+  overrides: Record<string, string> = {},
+): void {
+  db.prepare(deleteSql).bind(deleteArg).run();
+  if (!Array.isArray(rows)) return;
+  for (const raw of rows) {
+    const merged = { ...(raw as Record<string, unknown>), ...overrides };
+    const cols = Object.keys(merged).filter((k) => merged[k] !== undefined && merged[k] !== null);
+    if (cols.length === 0) continue;
+    const placeholders = cols.map(() => '?').join(',');
+    db.prepare(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${placeholders})`)
+      .bind(...cols.map((c) => merged[c] as string | number | null)).run();
+  }
+}
+
 adminRouter.post('/backups/restore', zValidator('json', BackupRestoreSchema), async (c) => {
   const db = c.env.DB;
   const userId = c.get('userId');
@@ -1054,6 +1072,12 @@ adminRouter.post('/backups/restore', zValidator('json', BackupRestoreSchema), as
       restoredTransactions++;
     }
   }
+
+  // 恢复整个账本：账户/分类/标签按 user_id 整体回写，预算按 ledger_id 整体回写
+  restoreProjectionEntities(db, 'user_account_projection', (snapshotData as { accounts?: unknown }).accounts, 'DELETE FROM user_account_projection WHERE user_id = ?', userId, { user_id: userId });
+  restoreProjectionEntities(db, 'user_category_projection', (snapshotData as { categories?: unknown }).categories, 'DELETE FROM user_category_projection WHERE user_id = ?', userId, { user_id: userId });
+  restoreProjectionEntities(db, 'user_tag_projection', (snapshotData as { tags?: unknown }).tags, 'DELETE FROM user_tag_projection WHERE user_id = ?', userId, { user_id: userId });
+  restoreProjectionEntities(db, 'read_budget_projection', (snapshotData as { budgets?: unknown }).budgets, 'DELETE FROM read_budget_projection WHERE ledger_id = ?', targetLedger.id, { ledger_id: targetLedger.id });
 
   await insertAuditLog({
     db, userId, ledgerId: targetLedger.id, action: 'restore', entityType: 'backup_snapshot',
