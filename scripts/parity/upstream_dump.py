@@ -918,13 +918,15 @@ def main(out_path: str) -> int:
         from src.models import Device  # type: ignore
         from src.routers.devices import list_devices  # type: ignore
 
-        upd = datetime(2026, 5, 16, 3, 30, 0, tzinfo=timezone.utc)
+        # 用固定近期时间戳（不要 5 个月前的旧时间，否则 active_within_days 窗口会把它过滤掉，
+        # 两侧都返回空列表）。超大窗口确保设备始终被包含，且值固定可跨时间稳定比对。
+        upd = datetime(2026, 10, 30, 3, 30, 0, tzinfo=timezone.utc)
         fake_user = db.get(User, "u1")
         db.add(Device(id="dev-1", user_id="u1", name="iPhone", platform="ios",
                       app_version="1.0.0", os_version="17.0", device_model="iPhone15,2",
                       last_ip="1.2.3.4", last_seen_at=upd, created_at=upd))
         db.commit()
-        devs = list_devices(view="sessions", active_within_days=30, _scopes=set(),
+        devs = list_devices(view="sessions", active_within_days=73000, _scopes=set(),
                             current_user=fake_user, db=db)
         device_golden = [d.model_dump(mode="json") for d in devs]
         dev_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-device-golden.json")

@@ -49,7 +49,7 @@ describe('device LIST 响应差分（与上游 golden 对比）', () => {
     seedDevice(h);
     const app = buildDevicesApp();
     const res = await app.request(
-      '/api/v1/devices?view=sessions',
+      '/api/v1/devices?view=sessions&active_within_days=73000',
       { method: 'GET', headers: { 'X-Test-User': 'u1' } },
       { DB: h.db, JWT_SECRET: 'test-secret' },
     );
@@ -65,7 +65,7 @@ describe('device LIST 响应差分（与上游 golden 对比）', () => {
     seedDevice(h);
     const app = buildDevicesApp();
     const res = await app.request(
-      '/api/v1/devices?view=sessions',
+      '/api/v1/devices?view=sessions&active_within_days=73000',
       { method: 'GET', headers: { 'X-Test-User': 'u1' } },
       { DB: h.db, JWT_SECRET: 'test-secret' },
     );

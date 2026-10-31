@@ -298,11 +298,12 @@ export function buildDevicesApp(): TestApp {
 
 /** 往 devices 插一条与上游 golden 同内容的设备，用于 GET /devices 响应比对。 */
 export function seedDevice(h: Harness): void {
+  // 固定近期时间戳，且测试侧传超大 active_within_days，确保设备在活动窗口内、值稳定可比。
   insertRow(h.sqlite, 'devices', {
     id: 'dev-1', user_id: 'u1', name: 'iPhone', platform: 'ios',
     app_version: '1.0.0', os_version: '17.0', device_model: 'iPhone15,2',
-    last_seen_at: '2026-05-16T03:30:00Z', last_ip: '1.2.3.4', revoked_at: null,
-    created_at: '2026-01-01T00:00:00Z',
+    last_seen_at: '2026-10-30T03:30:00Z', last_ip: '1.2.3.4', revoked_at: null,
+    created_at: '2026-10-30T03:30:00Z',
   });
 }
 
