@@ -31,6 +31,7 @@ on:
       - 'tests/mcp-harness.ts'
       - 'tests/parity-compare.ts'
       - 'scripts/parity/**'
+      - 'tests/integration/**'
       - '.github/workflows/parity.yml'
 
 concurrency:
@@ -110,11 +111,22 @@ jobs:
           python "$GITHUB_WORKSPACE/scripts/parity/upstream_dump.py" \
                  "$GITHUB_WORKSPACE/tests/fixtures/upstream-golden.json"
 
+      - name: Generate upstream backup archive (real db.sqlite3 tar.gz)
+        working-directory: .parity/upstream
+        env:
+          DATABASE_URL: sqlite:////tmp/upstream_backup_gen.db
+          PYTHONPATH: .
+        run: |
+          rm -f /tmp/upstream_backup_gen.db
+          python "$GITHUB_WORKSPACE/scripts/parity/gen_upstream_backup.py"
+
       - name: Upload golden
         uses: actions/upload-artifact@v4
         with:
           name: upstream-golden-${{ steps.upstream.outputs.ref }}
-          path: tests/fixtures/upstream-*.json
+          path: |
+            tests/fixtures/upstream-*.json
+            tests/fixtures/upstream-backup-sample.tar.gz
           retention-days: 7
 
       - name: Setup Node
@@ -124,6 +136,9 @@ jobs:
 
       - name: Install deps
         run: npm ci
+
+      - name: Run restore cross test (real upstream backup archive)
+        run: npm test -- --run tests/integration/restore-cross.test.ts
 
       - name: Run MCP differential test
         run: npm test -- --run tests/mcp-differential.test.ts

@@ -147,6 +147,17 @@ async function buildUpstreamFormatBackup(): Promise<Uint8Array> {
   return createTarGz(entries);
 }
 
+// 优先使用 CI 用 gen_upstream_backup.py 产出的“原版”备份归档；本地无该文件（没跑 Python）时，
+// 回退到 node:sqlite 自建（结构等价，但非原版 runner 产出）。两者都经真实 performRestore 导入。
+const FIXTURE_PATH = path.resolve(process.cwd(), 'tests/fixtures/upstream-backup-sample.tar.gz');
+async function loadUpstreamBackup(): Promise<Uint8Array> {
+  if (fs.existsSync(FIXTURE_PATH)) {
+    const buf = fs.readFileSync(FIXTURE_PATH);
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  }
+  return buildUpstreamFormatBackup();
+}
+
 describe('Restore - genuine upstream-format db.sqlite3 archive', () => {
   it('从真实 db.sqlite3 tar.gz 完整导入账户/分类/标签/预算/交易', async () => {
     const db = new DatabaseSync(':memory:');
@@ -155,7 +166,7 @@ describe('Restore - genuine upstream-format db.sqlite3 archive', () => {
     db.prepare("INSERT INTO ledgers (id, user_id, external_id, name, currency) VALUES ('L1-i','u1','L1','L1','CNY')").run();
     const d1 = makeD1(db);
     const r2 = new R2Stub();
-    const backupBytes = await buildUpstreamFormatBackup();
+    const backupBytes = await loadUpstreamBackup();
     const result = await performRestore(d1, r2 as unknown as R2Bucket, 'beecount/backups/u1/test/upstream.tar.gz', undefined, undefined, backupBytes);
     expect(result.success).toBe(true);
     expect(result.tablesImported).toBeGreaterThanOrEqual(5);
