@@ -782,24 +782,30 @@ def main(out_path: str) -> int:
     # + has_more）。用「两侧插同一条 change」的方式验证 pull 响应（信封 + change 结构 +
     # payload 原样透传）。直接调 pull_changes（绕过 scope 依赖，与 read golden 同构）。
     try:
+        from sqlalchemy import delete as _sa_delete
         from src.models import SyncChange  # type: ignore
         from src.routers.sync.pull import pull_changes  # type: ignore
 
+        # 前面的 golden 步骤可能会顺带写 sync_changes（占用 change_id），先清空，
+        # 再插入本块要对比的 2 条。不显式指定 change_id（交给自增），因为归一化时
+        # 会丢弃 change_id / server_cursor（游标类易变字段），只比其余结构 + payload。
+        db.execute(_sa_delete(SyncChange))
+        db.flush()
         fake_user = db.get(User, "u1")
         upd = datetime(2026, 5, 16, 3, 30, 0, tzinfo=timezone.utc)
-        for cid, etype, esid, payload in [
-            (1, "transaction", "t-sync-1", {
+        for etype, esid, payload in [
+            ("transaction", "t-sync-1", {
                 "sync_id": "t-sync-1", "tx_type": "expense", "amount": 12.5,
                 "happened_at": "2026-05-16T03:30:00Z", "note": "午饭",
                 "category_sync_id": "c1", "account_sync_id": "a1", "currency_code": "CNY",
                 "tags": [], "createdByUserId": "u1", "updatedByUserId": "u1",
             }),
-            (2, "category", "c-sync-1", {
+            ("category", "c-sync-1", {
                 "sync_id": "c-sync-1", "name": "餐饮", "kind": "expense",
                 "sort_order": 1, "icon": "🍜",
             }),
         ]:
-            add(SyncChange, change_id=cid, user_id="u1", ledger_id="L1-i", scope="ledger",
+            add(SyncChange, user_id="u1", ledger_id="L1-i", scope="ledger",
                 entity_type=etype, entity_sync_id=esid, action="create",
                 payload_json=payload, updated_at=upd,
                 updated_by_device_id=None, updated_by_user_id="u1")
