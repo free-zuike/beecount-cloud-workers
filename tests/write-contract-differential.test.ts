@@ -90,6 +90,13 @@ function typeCompatible(a: string, b: string): boolean {
   const s = new Set([a, b]);
   // union 是宽泛类型，与任何类型都视为兼容（字段具体承载由上游决定）
   if (s.has('union')) return true;
+  const num = new Set(['number', 'int', 'float']);
+  if (num.has(a) && num.has(b)) return true;
+  const str = new Set(['str', 'string', 'enum']);
+  if (str.has(a) && str.has(b)) return true;
+  const bool = new Set(['bool', 'boolean']);
+  if (bool.has(a) && bool.has(b)) return true;
+  if (s.has('array') || s.has('object')) return true;
   // tags：workers union(string|array) ≈ 上游 list[str]；happened_at：workers union(string|date) ≈ 上游 datetime
   return (s.has('array') && s.has('union')) || (s.has('datetime') && s.has('union'));
 }

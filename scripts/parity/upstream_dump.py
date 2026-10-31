@@ -25,6 +25,7 @@ import json
 import os
 import re
 import sys
+import types
 from datetime import datetime, timezone
 
 NOW = datetime(2026, 5, 20, 4, 0, 0, tzinfo=timezone.utc)
@@ -792,7 +793,7 @@ def main(out_path: str) -> int:
             return "enum"
         if origin is list:
             return "array"
-        if origin is typing.Union or origin is getattr(typing, "UnionType", None):
+        if origin is typing.Union or origin is getattr(types, "UnionType", None):
             return "union"
         args = typing.get_args(ann)
         if args:
