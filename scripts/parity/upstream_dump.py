@@ -68,6 +68,7 @@ def main(out_path: str) -> int:
         from src.mcp.tools import read_tools  # type: ignore
         from src.mcp import capability_tools  # type: ignore
         from src.mcp import file_tools  # type: ignore
+        from src.mcp import rule_tools  # type: ignore
         from src.models import (  # type: ignore
             AttachmentFile, Ledger, LedgerMember, ReadTxProjection, User, UserAccountProjection,
             UserCategoryProjection, UserTagProjection,
@@ -536,6 +537,19 @@ def main(out_path: str) -> int:
         owner, "delete", ledger_id=state["new_id"])))
     step("manage_ledger_del", lambda: asyncio.run(capability_tools.manage_ledger(
         owner, "delete", ledger_id=state["new_id"], confirm=True)))
+
+    # ---------------- 分类规则 / 复核项 ----------------
+    # 确认门控：confirmed=True 但 confirm=False → confirmation_required（无记录落库）
+    step("save_classification_rule_noconf", lambda: asyncio.run(rule_tools.save_classification_rule(
+        owner, "L1", data=rule_tools.ClassificationRule(
+            name="咖啡分类", category_id="c1", note_contains="星巴克", confirmed=True), confirm=False)))
+    # 普通创建（confirmed 默认 False 直接落库）
+    step("save_classification_rule_create", lambda: asyncio.run(rule_tools.save_classification_rule(
+        owner, "L1", data=rule_tools.ClassificationRule(
+            name="餐饮自动归类", category_id="c1", note_contains="午餐"))))
+    step("save_review_item_create", lambda: asyncio.run(rule_tools.save_review_item(
+        owner, "L1", data=rule_tools.ReviewItem(
+            question="这笔交易属于哪个分类？", transaction_ids=["t1"]))))
 
     golden["scenario"] = scenario
 

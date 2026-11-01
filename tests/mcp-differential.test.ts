@@ -20,6 +20,7 @@ import {
 } from '../src/mcp/tools/read-tools';
 import { listAttachments } from '../src/mcp/file-tools';
 import { getAccountBalances, getBookkeepingContext, manageAccount, manageCategory, manageTag, manageBudget, manageLedger } from '../src/mcp/capability-tools';
+import { saveClassificationRule, saveReviewItem } from '../src/mcp/rule-tools';
 import {
   createTransaction, deleteTransaction, setSelfCall, updateTransaction,
 } from '../src/mcp/tools/write-tools';
@@ -316,6 +317,17 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     });
     await run('manage_ledger_del_noconf', () => manageLedger(c, { action: 'delete', ledger_id: newId ?? '' }));
     await run('manage_ledger_del', () => manageLedger(c, { action: 'delete', ledger_id: newId ?? '', confirm: true }));
+
+    // 分类规则 / 复核项：确认门控 + 普通创建
+    await run('save_classification_rule_noconf', () => saveClassificationRule(c, {
+      ledger_id: 'L1', name: '咖啡分类', category_id: 'c1', note_contains: '星巴克', confirmed: true, confirm: false,
+    }));
+    await run('save_classification_rule_create', () => saveClassificationRule(c, {
+      ledger_id: 'L1', name: '餐饮自动归类', category_id: 'c1', note_contains: '午餐',
+    }));
+    await run('save_review_item_create', () => saveReviewItem(c, {
+      ledger_id: 'L1', question: '这笔交易属于哪个分类？', transaction_ids: ['t1'],
+    }));
     // 顺序即语义：这一步必须在导入**之前**跑，否则会把导入写入的 2 笔算进来
     await run('list_total_after', async () => {
       const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
