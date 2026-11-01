@@ -378,7 +378,13 @@ def main(out_path: str) -> int:
             state["last_raw"] = res
             # 任何创建类步骤都更新 new_id（事务 create 与管理写 manage_*_create 都算）
             if name == "create" or name.endswith("_create"):
-                state["new_id"] = extract_new_id(res)
+                nid = extract_new_id(res)
+                if nid:
+                    state["new_id"] = nid
+            # 周期规则创建返回 record_out（id 是 uuid，而非 sync_id）：后续删除步骤需要该 id，
+            # 且 record id 不应走普通 extract_new_id（否则分类规则/复核项会被误遮成 <NEW>）。
+            if name == "manage_recurring_rule_create" and isinstance(res, dict) and res.get("id"):
+                state["new_id"] = res["id"]
             scenario["steps"].append({"name": name, "result": scrub(normalize(res), state["new_id"])})
         except Exception as exc:
             scenario["steps"].append({"name": name, "error": f"{type(exc).__name__}: {exc}"})
@@ -579,6 +585,24 @@ def main(out_path: str) -> int:
             {"tx_type": "income", "amount": 9000, "account_id": "a1", "category_id": "c2", "happened_at": "2026-05-20", "note": "批量工资"},
         ],
         ledger_id="L1", time_zone="Asia/Shanghai", idempotency_key="parity-batch-1"))
+
+    # 周期规则：确认门控 + 创建 + 删除确认流（与 manage_* 同构）。
+    # allow_backfill=True 使 next_occurrences 从 starts_at 起算，不依赖运行时的 datetime.now()，保证两侧确定性。
+    _rr = lambda: rule_tools.RecurringRule(
+        name="周期会员费",
+        transaction=rule_tools.BatchTransactionItem(
+            tx_type="expense", amount=10.0, account_id="a1", category_id="c1",
+            happened_at="2026-05-01", note="周期扣费"),
+        frequency="monthly", interval=1, starts_at="2026-05-01", time_zone="Asia/Shanghai",
+        enabled=True, allow_backfill=True, dst_policy="skip")
+    step("manage_recurring_rule_noconf", lambda: _call(rule_tools.manage_recurring_rule,
+        owner, "create", "L1", data=_rr(), confirm=False))
+    step("manage_recurring_rule_create", lambda: _call(rule_tools.manage_recurring_rule,
+        owner, "create", "L1", data=_rr(), confirm=True))
+    step("manage_recurring_rule_del_noconf", lambda: _call(rule_tools.manage_recurring_rule,
+        owner, "delete", "L1", record_id=state["new_id"]))
+    step("manage_recurring_rule_del", lambda: _call(rule_tools.manage_recurring_rule,
+        owner, "delete", "L1", record_id=state["new_id"], confirm=True))
 
     golden["scenario"] = scenario
 
