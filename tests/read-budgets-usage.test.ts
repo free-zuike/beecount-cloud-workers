@@ -88,17 +88,27 @@ describe('read/ledgers/:id/budgets/usage(对齐原版 dedup + abs)', () => {
   it('负数用量取 abs(原版 used=abs(used));total 预算汇总全部 expense', async () => {
     const { sqlite, db } = createRealDb();
     sqlite.exec(TABLES);
+    // 预算用量周期由 read.ts 按本地 new Date() + month_start_day(默认 1) 计算，
+    // 为避免"硬编码某月、跨月即挂"的脆弱性，这里按相同口径动态生成周期内的日期。
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const inMonth1 = `${fmt(new Date(y, m, 5))}T00:00:00Z`; // 当月内
+    const inMonth2 = `${fmt(new Date(y, m, 6))}T00:00:00Z`; // 当月内(负数)
+    const prevMonthLast = `${fmt(new Date(y, m, 0))}T00:00:00Z`; // 上月最后一天,应在周期外
     sqlite.exec(`
       INSERT INTO users (id, email, password_hash, is_enabled) VALUES ('u1', 'abs@x.com', 'x', 1);
       INSERT INTO ledgers (id, external_id, user_id, name) VALUES ('lg1', 'lg1', 'u1', '账本');
       INSERT INTO read_budget_projection (ledger_id, sync_id, user_id, budget_type, category_sync_id, amount)
       VALUES ('lg1', 'bud-1', 'u1', 'total', NULL, 500);
-      -- 当月(2026-10)内 expense:一笔正 40、一笔负 -10 → SUM=30
+      -- 当月内 expense:一笔正 40、一笔负 -10 → SUM=30;上月那笔不在当月周期内
       INSERT INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, category_sync_id)
       VALUES
-        ('lg1', 't1', 'u1', 'expense', 40, '2026-10-05T00:00:00Z', 'cat-a'),
-        ('lg1', 't2', 'u1', 'expense', -10, '2026-10-06T00:00:00Z', 'cat-b'),
-        ('lg1', 't3', 'u1', 'expense', 99, '2026-09-30T00:00:00Z', 'cat-a');
+        ('lg1', 't1', 'u1', 'expense', 40, '${inMonth1}', 'cat-a'),
+        ('lg1', 't2', 'u1', 'expense', -10, '${inMonth2}', 'cat-b'),
+        ('lg1', 't3', 'u1', 'expense', 99, '${prevMonthLast}', 'cat-a');
     `);
     const app = buildApp(db);
     const token = await createAccessToken('u1', SECRET, ['app_write']);
@@ -106,6 +116,6 @@ describe('read/ledgers/:id/budgets/usage(对齐原版 dedup + abs)', () => {
 
     expect(items).toHaveLength(1);
     expect(items[0].budget_id).toBe('bud-1');
-    expect(items[0].used).toBe(30); // 40 + (-10),abs 后仍正;9 月那笔不在当月周期内
+    expect(items[0].used).toBe(30); // 40 + (-10),abs 后仍正;上月那笔不在当月周期内
   });
 });
