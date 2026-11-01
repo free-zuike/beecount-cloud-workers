@@ -352,6 +352,15 @@ def main(out_path: str) -> int:
                     return r["entity_id"]
         return None
 
+    import inspect
+
+    def _call(fn, *args, **kwargs):
+        """自适应调用：上游 1.9.0 中 capability_tools.* 多为 async，而 rule_tools.save_* 为同步；
+        按是否为协程函数决定是否需要 asyncio.run，避免 'a coroutine was expected'。"""
+        if inspect.iscoroutinefunction(fn):
+            return asyncio.run(fn(*args, **kwargs))
+        return fn(*args, **kwargs)
+
     def step(name, thunk):
         try:
             res = thunk()
@@ -540,16 +549,16 @@ def main(out_path: str) -> int:
 
     # ---------------- 分类规则 / 复核项 ----------------
     # 确认门控：confirmed=True 但 confirm=False → confirmation_required（无记录落库）
-    step("save_classification_rule_noconf", lambda: asyncio.run(rule_tools.save_classification_rule(
+    step("save_classification_rule_noconf", lambda: _call(rule_tools.save_classification_rule,
         owner, "L1", data=rule_tools.ClassificationRule(
-            name="咖啡分类", category_id="c1", note_contains="星巴克", confirmed=True), confirm=False)))
+            name="咖啡分类", category_id="c1", note_contains="星巴克", confirmed=True), confirm=False))
     # 普通创建（confirmed 默认 False 直接落库）
-    step("save_classification_rule_create", lambda: asyncio.run(rule_tools.save_classification_rule(
+    step("save_classification_rule_create", lambda: _call(rule_tools.save_classification_rule,
         owner, "L1", data=rule_tools.ClassificationRule(
-            name="餐饮自动归类", category_id="c1", note_contains="午餐"))))
-    step("save_review_item_create", lambda: asyncio.run(rule_tools.save_review_item(
+            name="餐饮自动归类", category_id="c1", note_contains="午餐")))
+    step("save_review_item_create", lambda: _call(rule_tools.save_review_item,
         owner, "L1", data=rule_tools.ReviewItem(
-            question="这笔交易属于哪个分类？", transaction_ids=["t1"]))))
+            question="这笔交易属于哪个分类？", transaction_ids=["t1"])))
 
     golden["scenario"] = scenario
 
