@@ -69,6 +69,7 @@ def main(out_path: str) -> int:
         from src.mcp import capability_tools  # type: ignore
         from src.mcp import file_tools  # type: ignore
         from src.mcp import rule_tools  # type: ignore
+        from src.mcp import analysis_tools  # type: ignore
         from src.models import (  # type: ignore
             AttachmentFile, Ledger, LedgerMember, ReadTxProjection, User, UserAccountProjection,
             UserCategoryProjection, UserTagProjection,
@@ -261,6 +262,10 @@ def main(out_path: str) -> int:
         # 记账上下文：显式选账本 + 默认账本解析（u1 可见 3 账本 → selection_required）
         ("get_bookkeeping_context", {"ledger_id": "L1"}),
         ("get_bookkeeping_context", {}),
+        # 聚合分析（确定性读工具；显式传 time_zone 让两侧分组边界一致）
+        ("analyze_transactions", {"ledger_id": "L1", "group_by": "month", "time_zone": "Asia/Shanghai"}),
+        ("analyze_transactions", {"ledger_id": "L1", "group_by": "category", "time_zone": "Asia/Shanghai"}),
+        ("analyze_transactions", {"ledger_id": "L1", "group_by": "type", "time_zone": "Asia/Shanghai"}),
     ]
 
     def normalize(v):
@@ -277,7 +282,8 @@ def main(out_path: str) -> int:
     for tool, args in calls:
         # 只读工具分散在 read_tools / capability_tools / file_tools 三个模块
         fn = getattr(read_tools, tool, None) or getattr(capability_tools, tool, None) \
-            or getattr(file_tools, tool)
+            or getattr(file_tools, tool, None) or getattr(analysis_tools, tool, None) \
+            or getattr(workflow_tools, tool, None) or getattr(rule_tools, tool, None)
         try:
             result = normalize(fn(owner, **args))
             golden["cases"].append({"tool": tool, "args": args, "result": result})

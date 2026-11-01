@@ -21,6 +21,7 @@ import {
 import { listAttachments } from '../src/mcp/file-tools';
 import { getAccountBalances, getBookkeepingContext, manageAccount, manageCategory, manageTag, manageBudget, manageLedger } from '../src/mcp/capability-tools';
 import { saveClassificationRule, saveReviewItem } from '../src/mcp/rule-tools';
+import { analyzeTransactions } from '../src/mcp/analysis-tools';
 import {
   createTransaction, deleteTransaction, setSelfCall, updateTransaction,
 } from '../src/mcp/tools/write-tools';
@@ -56,6 +57,7 @@ const TOOL_FNS: Record<string, (c: ReturnType<typeof mcpCtx>, args: Record<strin
   get_active_ledger: getActiveLedger as never,
   list_attachments: listAttachments as never,
   search: search as never,
+  analyze_transactions: analyzeTransactions as never,
 };
 
 /**
