@@ -477,6 +477,38 @@ def main(out_path: str) -> int:
     step("list_total_after_undo", lambda: {
         "total": read_tools.list_transactions(owner, ledger_id="L1", limit=50).get("total")})
     step("get_workflow_record_after_undo", lambda: workflow_tools.get_workflow_record(owner, plan_id))
+
+    # ---------------- 管理写：账户 / 分类 / 标签 / 预算 ----------------
+    # 账户字段最丰富，最易在"创建后回显"形状上偏（对照 bookkeeping_context 字典的分歧）
+    step("manage_account_create", lambda: asyncio.run(capability_tools.manage_account(
+        owner, "create", "L1", data=capability_tools.AccountFields(
+            name="新账户", account_type="bank", currency="CNY"))))
+    step("manage_account_del_noconf", lambda: asyncio.run(capability_tools.manage_account(
+        owner, "delete", "L1", account_id=state["new_id"])))
+    step("manage_account_del", lambda: asyncio.run(capability_tools.manage_account(
+        owner, "delete", "L1", account_id=state["new_id"], confirm=True)))
+    step("manage_category_create", lambda: asyncio.run(capability_tools.manage_category(
+        owner, "create", "L1", data=capability_tools.CategoryFields(
+            name="新分类", kind="expense"))))
+    step("manage_category_del_noconf", lambda: asyncio.run(capability_tools.manage_category(
+        owner, "delete", "L1", category_id=state["new_id"])))
+    step("manage_category_del", lambda: asyncio.run(capability_tools.manage_category(
+        owner, "delete", "L1", category_id=state["new_id"], confirm=True)))
+    step("manage_tag_create", lambda: asyncio.run(capability_tools.manage_tag(
+        owner, "create", "L1", data=capability_tools.TagFields(
+            name="新标签", color="#123456"))))
+    step("manage_tag_del_noconf", lambda: asyncio.run(capability_tools.manage_tag(
+        owner, "delete", "L1", tag_id=state["new_id"])))
+    step("manage_tag_del", lambda: asyncio.run(capability_tools.manage_tag(
+        owner, "delete", "L1", tag_id=state["new_id"], confirm=True)))
+    step("manage_budget_create", lambda: asyncio.run(capability_tools.manage_budget(
+        owner, "create", "L1", data=capability_tools.BudgetFields(
+            name="新预算", type="total", amount=100.0, period="monthly", start_day=1))))
+    step("manage_budget_del_noconf", lambda: asyncio.run(capability_tools.manage_budget(
+        owner, "delete", "L1", budget_id=state["new_id"])))
+    step("manage_budget_del", lambda: asyncio.run(capability_tools.manage_budget(
+        owner, "delete", "L1", budget_id=state["new_id"], confirm=True)))
+
     golden["scenario"] = scenario
 
     # ---------------- REST 只读计算 golden（summary / budgets-usage / rates / gallery）--------

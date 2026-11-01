@@ -19,7 +19,7 @@ import {
   listBudgets, listCategories, listLedgers, listTags, listTransactions, search,
 } from '../src/mcp/tools/read-tools';
 import { listAttachments } from '../src/mcp/file-tools';
-import { getAccountBalances, getBookkeepingContext } from '../src/mcp/capability-tools';
+import { getAccountBalances, getBookkeepingContext, manageAccount, manageCategory, manageTag, manageBudget } from '../src/mcp/capability-tools';
 import {
   createTransaction, deleteTransaction, setSelfCall, updateTransaction,
 } from '../src/mcp/tools/write-tools';
@@ -269,6 +269,36 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     await run('delete_without_confirm', () => deleteTransaction(c, { sync_id: newId ?? '', ledger_id: 'L1' }));
     await run('delete', () => deleteTransaction(c, { sync_id: newId ?? '', confirm: true, ledger_id: 'L1' }));
     await run('get_after_delete', () => getTransaction(c, { ledger_id: 'L1', sync_id: newId ?? '' }));
+
+    // 管理写：账户 / 分类 / 标签 / 预算（创建后回显形状 + 删除确认流）
+    await run('manage_account_create', async () => {
+      const res = await manageAccount(c, { action: 'create', ledger_id: 'L1', data: { name: '新账户', account_type: 'bank', currency: 'CNY' } });
+      newId = newIdOf(res);
+      return res;
+    });
+    await run('manage_account_del_noconf', () => manageAccount(c, { action: 'delete', ledger_id: 'L1', account_id: newId ?? '' }));
+    await run('manage_account_del', () => manageAccount(c, { action: 'delete', ledger_id: 'L1', account_id: newId ?? '', confirm: true }));
+    await run('manage_category_create', async () => {
+      const res = await manageCategory(c, { action: 'create', ledger_id: 'L1', data: { name: '新分类', kind: 'expense' } });
+      newId = newIdOf(res);
+      return res;
+    });
+    await run('manage_category_del_noconf', () => manageCategory(c, { action: 'delete', ledger_id: 'L1', category_id: newId ?? '' }));
+    await run('manage_category_del', () => manageCategory(c, { action: 'delete', ledger_id: 'L1', category_id: newId ?? '', confirm: true }));
+    await run('manage_tag_create', async () => {
+      const res = await manageTag(c, { action: 'create', ledger_id: 'L1', data: { name: '新标签', color: '#123456' } });
+      newId = newIdOf(res);
+      return res;
+    });
+    await run('manage_tag_del_noconf', () => manageTag(c, { action: 'delete', ledger_id: 'L1', tag_id: newId ?? '' }));
+    await run('manage_tag_del', () => manageTag(c, { action: 'delete', ledger_id: 'L1', tag_id: newId ?? '', confirm: true }));
+    await run('manage_budget_create', async () => {
+      const res = await manageBudget(c, { action: 'create', ledger_id: 'L1', data: { name: '新预算', type: 'total', amount: 100, period: 'monthly', start_day: 1 } });
+      newId = newIdOf(res);
+      return res;
+    });
+    await run('manage_budget_del_noconf', () => manageBudget(c, { action: 'delete', ledger_id: 'L1', budget_id: newId ?? '' }));
+    await run('manage_budget_del', () => manageBudget(c, { action: 'delete', ledger_id: 'L1', budget_id: newId ?? '', confirm: true }));
     // 顺序即语义：这一步必须在导入**之前**跑，否则会把导入写入的 2 笔算进来
     await run('list_total_after', async () => {
       const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
