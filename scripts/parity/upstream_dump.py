@@ -335,11 +335,12 @@ def main(out_path: str) -> int:
     state = {"new_id": None}
 
     def extract_new_id(res):
-        """从创建结果里取新建实体的 sync_id：兼容顶层 sync_id/id/new_id/entity_id、
-        sync_ids 数组、results[].entity_id（manage 写走 operationOut，无顶层 sync_id）。"""
+        """从创建结果里取新建实体的 sync_id：兼容顶层 sync_id/new_id/entity_id、
+        sync_ids 数组、results[].entity_id（manage 写走 operationOut，无顶层 sync_id）。
+        注意：record 类的 id 是 uuid（易变），不作为 new_id；new_id 仅用于 sync_id 类实体。"""
         if not isinstance(res, dict):
             return None
-        for k in ("sync_id", "id", "new_id", "entity_id"):
+        for k in ("sync_id", "new_id", "entity_id"):
             if res.get(k):
                 return res[k]
         sids = res.get("sync_ids")
