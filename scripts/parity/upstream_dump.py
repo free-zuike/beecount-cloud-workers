@@ -257,6 +257,9 @@ def main(out_path: str) -> int:
         ("list_attachments", {"ledger_id": "L1", "q": "foo"}),
         ("list_attachments", {"ledger_id": "L1", "limit": 10, "offset": 0}),
         ("list_attachments", {"ledger_id": "NOPE"}),
+        # 记账上下文：显式选账本 + 默认账本解析（u1 可见 3 账本 → selection_required）
+        ("get_bookkeeping_context", {"ledger_id": "L1"}),
+        ("get_bookkeeping_context", {}),
     ]
 
     def normalize(v):

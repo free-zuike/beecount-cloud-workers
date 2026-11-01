@@ -19,6 +19,7 @@ const VOLATILE_KEYS = new Set([
   // 写路径：每次调用都新生成的请求 id 与服务器时钟
   'operation_id',
   'server_timestamp',
+  'server_time',
 ]);
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
