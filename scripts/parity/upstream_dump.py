@@ -266,6 +266,9 @@ def main(out_path: str) -> int:
         ("analyze_transactions", {"ledger_id": "L1", "group_by": "month", "time_zone": "Asia/Shanghai"}),
         ("analyze_transactions", {"ledger_id": "L1", "group_by": "category", "time_zone": "Asia/Shanghai"}),
         ("analyze_transactions", {"ledger_id": "L1", "group_by": "type", "time_zone": "Asia/Shanghai"}),
+        # 净资产的确定性历史 + 账本成员；显式 time_zone 保证两侧一致
+        ("get_net_worth_history", {"ledger_id": "L1", "time_zone": "Asia/Shanghai"}),
+        ("list_ledger_members", {"ledger_id": "L1"}),
     ]
 
     def normalize(v):

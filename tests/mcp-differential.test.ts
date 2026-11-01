@@ -19,7 +19,7 @@ import {
   listBudgets, listCategories, listLedgers, listTags, listTransactions, search,
 } from '../src/mcp/tools/read-tools';
 import { listAttachments } from '../src/mcp/file-tools';
-import { getAccountBalances, getBookkeepingContext, manageAccount, manageCategory, manageTag, manageBudget, manageLedger } from '../src/mcp/capability-tools';
+import { getAccountBalances, getBookkeepingContext, manageAccount, manageCategory, manageTag, manageBudget, manageLedger, getNetWorthHistory, listLedgerMembers } from '../src/mcp/capability-tools';
 import { saveClassificationRule, saveReviewItem } from '../src/mcp/rule-tools';
 import { analyzeTransactions } from '../src/mcp/analysis-tools';
 import {
@@ -58,6 +58,8 @@ const TOOL_FNS: Record<string, (c: ReturnType<typeof mcpCtx>, args: Record<strin
   list_attachments: listAttachments as never,
   search: search as never,
   analyze_transactions: analyzeTransactions as never,
+  get_net_worth_history: getNetWorthHistory as never,
+  list_ledger_members: listLedgerMembers as never,
 };
 
 /**
