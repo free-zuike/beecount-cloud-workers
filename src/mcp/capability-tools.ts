@@ -12,7 +12,7 @@ import { saveOperation } from './operations';
 import { encodeCursor, decodeCursor, fingerprint, uuid4, parseDateBoundary, revision as calcRevision } from './query-context';
 import { listLiveLedgers, selfCallAdapter } from './transaction-service';
 import { validateManageData } from './validation';
-import { serializeTx, listCategories, listTags, listBudgets } from './tools/read-tools';
+import { serializeTx, listTags } from './tools/read-tools';
 import type { McpContext, LedgerInfo } from './types';
 
 // ── 角色校验（对齐上游 require_ledger）──
@@ -183,7 +183,6 @@ export async function getBookkeepingContext(
     // 对齐上游：server_time 用 isoformat（+00:00），time_zone 用部署/Cloud 配置时区
     server_time: `${new Date().toISOString().slice(0, 19)}+00:00`,
     time_zone: c.configuredTimeZone ?? 'UTC',
-    pat_scopes: [...(c.scopes ?? [])].sort(),
     // 对齐上游（经 rt.list_ledgers）：补 month_start_day / owner_user_id / shared / created_at
     ledgers: ledgers.map(l => ({
       id: l.external_id,
@@ -217,32 +216,43 @@ export async function getBookkeepingContext(
   };
   if (selected) {
     // 对齐上游 get_shared_resources：返回带 sync_id 的字典，供 Agent 直接引用而非猜名字
-    const [categories, tags, budgets, accRows] = await Promise.all([
-      listCategories(c, { ledger_id: selected.external_id }),
+    const ownerId = selected.user_id;
+    const [tags, catRows, accRows] = await Promise.all([
       listTags(c, { ledger_id: selected.external_id }),
-      listBudgets(c, { ledger_id: selected.external_id }),
-      // 对齐上游 shared_resources：账户按 owner 字典插入序返回（非 list_accounts 的 name 排序）
-      c.db.prepare('SELECT * FROM user_account_projection WHERE user_id = ?').bind(selected.user_id).all<Record<string, unknown>>(),
+      // 对齐上游 shared_resources：分类按 owner 字典、sort_order 升序(null 置后)返回，字段集与 SharedCategoryItem 一致
+      c.db.prepare('SELECT * FROM user_category_projection WHERE user_id = ?').bind(ownerId).all<Record<string, unknown>>(),
+      // 对齐上游 shared_resources：账户按 owner 字典插入序返回（非 list_accounts 的 name 排序），字段集与 SharedAccountItem 一致
+      c.db.prepare('SELECT * FROM user_account_projection WHERE user_id = ?').bind(ownerId).all<Record<string, unknown>>(),
     ]);
     const member = await c.db
       .prepare('SELECT role FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
       .bind(selected.id, c.userId)
       .first<{ role: string | null }>();
-    // 对齐上游 shared_resources.model_dump：字典用 sync_id 键名，并带 owner_user_id
+    const categoryList = (catRows.results as Array<Record<string, unknown>>)
+      .slice()
+      .sort((a, b) => {
+        const sa = a.sort_order ?? null;
+        const sb = b.sort_order ?? null;
+        if (sa == null && sb == null) return 0;
+        if (sa == null) return 1;
+        if (sb == null) return -1;
+        return Number(sa) - Number(sb);
+      });
+    // 对齐上游 shared_resources.model_dump：字典用 sync_id 键名，并带 owner_user_id（上游无 budgets / pat_scopes 字段）
     out.dictionary = {
-      owner_user_id: selected.user_id,
-      categories: categories.map(x => ({
-        sync_id: x.id ?? null,
-        name: x.name ?? null,
-        kind: x.kind ?? null,
-        icon: x.icon ?? null,
-        icon_type: x.icon_type ?? null,
-        icon_cloud_file_id: x.icon_cloud_file_id ?? null,
-        icon_cloud_sha256: x.icon_cloud_sha256 ?? null,
-        sort_order: x.sort_order ?? null,
-        level: x.level ?? null,
-        parent_name: x.parent_name ?? null,
-        parent_sync_id: x.parent_id ?? null,
+      owner_user_id: ownerId,
+      categories: categoryList.map(r => ({
+        sync_id: r.sync_id ?? null,
+        name: r.name ?? null,
+        kind: r.kind ?? null,
+        icon: r.icon ?? null,
+        icon_type: r.icon_type ?? null,
+        icon_cloud_file_id: r.icon_cloud_file_id ?? null,
+        icon_cloud_sha256: r.icon_cloud_sha256 ?? null,
+        sort_order: r.sort_order === null || r.sort_order === undefined ? null : Number(r.sort_order),
+        level: r.level ?? null,
+        parent_name: r.parent_name ?? null,
+        parent_sync_id: r.parent_sync_id ?? null,
       })),
       accounts: (accRows.results as Array<Record<string, unknown>>).map(r => ({
         sync_id: r.sync_id ?? null,
@@ -258,7 +268,6 @@ export async function getBookkeepingContext(
         card_last_four: r.card_last_four ?? null,
       })),
       tags: tags.map(x => ({ sync_id: x.id ?? null, name: x.name ?? null, color: x.color ?? null })),
-      budgets,
     };
     out.currency = selected.currency;
     out.month_start_day = selected.month_start_day ?? null;
