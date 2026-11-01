@@ -12,7 +12,7 @@ import { saveOperation } from './operations';
 import { encodeCursor, decodeCursor, fingerprint, uuid4, parseDateBoundary, revision as calcRevision } from './query-context';
 import { listLiveLedgers, selfCallAdapter } from './transaction-service';
 import { validateManageData } from './validation';
-import { serializeTx, listCategories, listAccounts, listTags, listBudgets } from './tools/read-tools';
+import { serializeTx, listCategories, listTags, listBudgets } from './tools/read-tools';
 import type { McpContext, LedgerInfo } from './types';
 
 // ── 角色校验（对齐上游 require_ledger）──
@@ -217,11 +217,12 @@ export async function getBookkeepingContext(
   };
   if (selected) {
     // 对齐上游 get_shared_resources：返回带 sync_id 的字典，供 Agent 直接引用而非猜名字
-    const [categories, accounts, tags, budgets] = await Promise.all([
+    const [categories, tags, budgets, accRows] = await Promise.all([
       listCategories(c, { ledger_id: selected.external_id }),
-      listAccounts(c, { ledger_id: selected.external_id }),
       listTags(c, { ledger_id: selected.external_id }),
       listBudgets(c, { ledger_id: selected.external_id }),
+      // 对齐上游 shared_resources：账户按 owner 字典插入序返回（非 list_accounts 的 name 排序）
+      c.db.prepare('SELECT * FROM user_account_projection WHERE user_id = ?').bind(selected.user_id).all<Record<string, unknown>>(),
     ]);
     const member = await c.db
       .prepare('SELECT role FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
@@ -239,14 +240,22 @@ export async function getBookkeepingContext(
         icon_cloud_file_id: x.icon_cloud_file_id ?? null,
         icon_cloud_sha256: x.icon_cloud_sha256 ?? null,
         sort_order: x.sort_order ?? null,
+        level: x.level ?? null,
+        parent_name: x.parent_name ?? null,
         parent_sync_id: x.parent_id ?? null,
       })),
-      accounts: accounts.map(x => ({
-        sync_id: x.id ?? null,
-        name: x.name ?? null,
-        account_type: x.account_type ?? null,
-        currency: x.currency ?? null,
-        note: x.note ?? null,
+      accounts: (accRows.results as Array<Record<string, unknown>>).map(r => ({
+        sync_id: r.sync_id ?? null,
+        name: r.name ?? null,
+        account_type: r.account_type ?? null,
+        currency: r.currency ?? null,
+        initial_balance: r.initial_balance === null || r.initial_balance === undefined ? null : Number(r.initial_balance),
+        note: r.note ?? null,
+        credit_limit: r.credit_limit === null || r.credit_limit === undefined ? null : Number(r.credit_limit),
+        billing_day: r.billing_day ?? null,
+        payment_due_day: r.payment_due_day ?? null,
+        bank_name: r.bank_name ?? null,
+        card_last_four: r.card_last_four ?? null,
       })),
       tags: tags.map(x => ({ sync_id: x.id ?? null, name: x.name ?? null, color: x.color ?? null })),
       budgets,

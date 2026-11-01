@@ -199,7 +199,7 @@ export function seed(h: Harness): void {
   // L2 属于 u2，u1 是 editor（共享账本可见性）
   insertRow(h.sqlite, 'ledgers', {
     id: 'L2-i', external_id: 'L2', user_id: 'u2', name: '共享账本', currency: 'USD',
-    month_start_day: 1, created_at: '2026-05-20T04:00:00Z', deleted_at: null,
+    month_start_day: 1, created_at: '2026-01-01T00:00:00Z', deleted_at: null,
   });
   addMember(h, 'L1-i', 'u1', 'owner');
   addMember(h, 'L2-i', 'u1', 'editor');
