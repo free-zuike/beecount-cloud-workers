@@ -196,18 +196,25 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
       return mapped.sort((a, b) => String(a).localeCompare(String(b)));
     };
 
+    // 易失的顺序/时钟计数器：跨两次独立运行（上游 vs workers）必然不同，且仅为水位/序号，
+    // 不参与"形状"契约，必须归一掉（对齐 parity-compare.ts 的 VOLATILE_KEYS 意图）
+    const VOLATILE = new Set([
+      'revision', 'last_change_id', 'source_change_id', 'generated_at', 'created_at',
+      'updated_at', 'next_due_at', 'file_sha256', 'duration_ms', 'operation_id',
+      'server_timestamp', 'server_time', 'new_change_id', 'base_revision', 'change_id',
+    ]);
     const scrub = (value: Json): Json => {
       if (Array.isArray(value)) return value.map(scrub);
       if (value && typeof value === 'object') {
         const out: Record<string, Json> = {};
         for (const key of Object.keys(value as Record<string, Json>)) {
           const v = (value as Record<string, Json>)[key];
-          // created_revisions 这类映射以随机的 sync_id 作**键**，键也要归一
-          // created_revisions 是 {随机 sync_id: 版本号}。键随机、值才是契约，
-          // 且直接把键归一会撞成同一个键（两条变一条），故只取值的多重集合
-          if (key === 'created_revisions' && v && typeof v === 'object' && !Array.isArray(v)) {
-            out[key] = Object.values(v as Record<string, Json>).map(scrub)
-              .sort((a, b) => String(a).localeCompare(String(b)));
+          if (VOLATILE.has(key)) continue;
+          // created_revisions 是 {随机 sync_id: 易失版本号} 或 [易失版本号]（上游与 workers 结构可能不同）：
+          // 键/值都易失，仅保留条目数量（统一归一为等长 null 数组，避免数组/字典结构或类型不一致）
+          if (key === 'created_revisions' && v && typeof v === 'object') {
+            const len = Array.isArray(v) ? v.length : Object.keys(v as Record<string, Json>).length;
+            out[key] = Array.from({ length: len }, () => null);
             continue;
           }
           const outKey = SYNC_ID_RE.test(key) ? '<SYNC_ID>' : key;
@@ -226,7 +233,8 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     const newIdOf = (res: unknown): string | null => {
       const r = (res ?? {}) as Record<string, unknown>;
       const nested = (r.transaction ?? r.data ?? r.item ?? {}) as Record<string, unknown>;
-      const id = r.sync_id ?? nested.sync_id ?? r.id;
+      const direct = r.sync_id ?? nested.sync_id ?? r.id;
+      const id = direct ?? (Array.isArray(r.sync_ids) ? (r.sync_ids as unknown[])[0] : undefined);
       return typeof id === 'string' ? id : null;
     };
 

@@ -333,12 +333,31 @@ def main(out_path: str) -> int:
     scenario = {"name": "write_cycle", "steps": []}
     state = {"new_id": None}
 
+    def extract_new_id(res):
+        """从创建结果里取新建实体的 sync_id：兼容顶层 sync_id/id/new_id/entity_id、
+        sync_ids 数组、results[].entity_id（manage 写走 operationOut，无顶层 sync_id）。"""
+        if not isinstance(res, dict):
+            return None
+        for k in ("sync_id", "id", "new_id", "entity_id"):
+            if res.get(k):
+                return res[k]
+        sids = res.get("sync_ids")
+        if isinstance(sids, list) and sids:
+            return sids[0]
+        results = res.get("results")
+        if isinstance(results, list):
+            for r in results:
+                if isinstance(r, dict) and r.get("entity_id"):
+                    return r["entity_id"]
+        return None
+
     def step(name, thunk):
         try:
             res = thunk()
             state["last_raw"] = res
-            if name == "create" and isinstance(res, dict):
-                state["new_id"] = res.get("sync_id") or res.get("id")
+            # 任何创建类步骤都更新 new_id（事务 create 与管理写 manage_*_create 都算）
+            if name == "create" or name.endswith("_create"):
+                state["new_id"] = extract_new_id(res)
             scenario["steps"].append({"name": name, "result": scrub(normalize(res), state["new_id"])})
         except Exception as exc:
             scenario["steps"].append({"name": name, "error": f"{type(exc).__name__}: {exc}"})
