@@ -522,7 +522,7 @@ def main(out_path: str) -> int:
         owner, "delete", "L1", tag_id=state["new_id"], confirm=True)))
     step("manage_budget_create", lambda: asyncio.run(capability_tools.manage_budget(
         owner, "create", "L1", data=capability_tools.BudgetFields(
-            name="新预算", type="total", amount=100.0, period="monthly", start_day=1))))
+            type="total", amount=100.0, period="monthly"))))
     step("manage_budget_del_noconf", lambda: asyncio.run(capability_tools.manage_budget(
         owner, "delete", "L1", budget_id=state["new_id"])))
     step("manage_budget_del", lambda: asyncio.run(capability_tools.manage_budget(

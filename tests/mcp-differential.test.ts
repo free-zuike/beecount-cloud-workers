@@ -301,7 +301,7 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     await run('manage_tag_del_noconf', () => manageTag(c, { action: 'delete', ledger_id: 'L1', tag_id: newId ?? '' }));
     await run('manage_tag_del', () => manageTag(c, { action: 'delete', ledger_id: 'L1', tag_id: newId ?? '', confirm: true }));
     await run('manage_budget_create', async () => {
-      const res = await manageBudget(c, { action: 'create', ledger_id: 'L1', data: { name: '新预算', type: 'total', amount: 100, period: 'monthly', start_day: 1 } });
+      const res = await manageBudget(c, { action: 'create', ledger_id: 'L1', data: { type: 'total', amount: 100, period: 'monthly' } });
       newId = newIdOf(res);
       return res;
     });
