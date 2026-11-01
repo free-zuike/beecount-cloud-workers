@@ -19,7 +19,7 @@ import {
   listBudgets, listCategories, listLedgers, listTags, listTransactions, search,
 } from '../src/mcp/tools/read-tools';
 import { listAttachments } from '../src/mcp/file-tools';
-import { getAccountBalances, getBookkeepingContext, manageAccount, manageCategory, manageTag, manageBudget } from '../src/mcp/capability-tools';
+import { getAccountBalances, getBookkeepingContext, manageAccount, manageCategory, manageTag, manageBudget, manageLedger } from '../src/mcp/capability-tools';
 import {
   createTransaction, deleteTransaction, setSelfCall, updateTransaction,
 } from '../src/mcp/tools/write-tools';
@@ -233,7 +233,7 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     const newIdOf = (res: unknown): string | null => {
       const r = (res ?? {}) as Record<string, unknown>;
       const nested = (r.transaction ?? r.data ?? r.item ?? {}) as Record<string, unknown>;
-      const direct = r.sync_id ?? nested.sync_id ?? r.id;
+      const direct = r.sync_id ?? nested.sync_id ?? r.id ?? r.entity_id ?? r.ledger_id;
       const id = direct ?? (Array.isArray(r.sync_ids) ? (r.sync_ids as unknown[])[0] : undefined);
       return typeof id === 'string' ? id : null;
     };
@@ -307,6 +307,15 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     });
     await run('manage_budget_del_noconf', () => manageBudget(c, { action: 'delete', ledger_id: 'L1', budget_id: newId ?? '' }));
     await run('manage_budget_del', () => manageBudget(c, { action: 'delete', ledger_id: 'L1', budget_id: newId ?? '', confirm: true }));
+
+    // 账本写：创建新账本 L4 → 删除确认流（create 直接返回 ledger 对象，id 在 entity_id/ledger_id）
+    await run('manage_ledger_create', async () => {
+      const res = await manageLedger(c, { action: 'create', ledger_id: 'L4', data: { ledger_name: '新账本', currency: 'CNY', month_start_day: 1 } });
+      newId = newIdOf(res);
+      return res;
+    });
+    await run('manage_ledger_del_noconf', () => manageLedger(c, { action: 'delete', ledger_id: newId ?? '' }));
+    await run('manage_ledger_del', () => manageLedger(c, { action: 'delete', ledger_id: newId ?? '', confirm: true }));
     // 顺序即语义：这一步必须在导入**之前**跑，否则会把导入写入的 2 笔算进来
     await run('list_total_after', async () => {
       const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });

@@ -528,6 +528,15 @@ def main(out_path: str) -> int:
     step("manage_budget_del", lambda: asyncio.run(capability_tools.manage_budget(
         owner, "delete", "L1", budget_id=state["new_id"], confirm=True)))
 
+    # 账本写：创建新账本 L4 → 删除确认流（create 直接返回 ledger 对象，id 在 entity_id/ledger_id）
+    step("manage_ledger_create", lambda: asyncio.run(capability_tools.manage_ledger(
+        owner, "create", data=capability_tools.LedgerFields(
+            ledger_name="新账本", currency="CNY", month_start_day=1), ledger_id="L4")))
+    step("manage_ledger_del_noconf", lambda: asyncio.run(capability_tools.manage_ledger(
+        owner, "delete", ledger_id=state["new_id"])))
+    step("manage_ledger_del", lambda: asyncio.run(capability_tools.manage_ledger(
+        owner, "delete", ledger_id=state["new_id"], confirm=True)))
+
     golden["scenario"] = scenario
 
     # ---------------- REST 只读计算 golden（summary / budgets-usage / rates / gallery）--------
