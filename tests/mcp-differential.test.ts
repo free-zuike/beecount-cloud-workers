@@ -21,6 +21,7 @@ import {
 import { listAttachments } from '../src/mcp/file-tools';
 import { getAccountBalances, getBookkeepingContext, manageAccount, manageCategory, manageTag, manageBudget, manageLedger, getNetWorthHistory, listLedgerMembers } from '../src/mcp/capability-tools';
 import { saveClassificationRule, saveReviewItem } from '../src/mcp/rule-tools';
+import { createTransactions } from '../src/mcp/tools/write-tools';
 import { analyzeTransactions } from '../src/mcp/analysis-tools';
 import {
   createTransaction, deleteTransaction, setSelfCall, updateTransaction,
@@ -331,6 +332,15 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     }));
     await run('save_review_item_create', () => saveReviewItem(c, {
       ledger_id: 'L1', question: '这笔交易属于哪个分类？', transaction_ids: ['t1'],
+    }));
+
+    // 批量创建交易（对齐上游 create_transactions / 本地 createMany）
+    await run('create_transactions', () => createTransactions(c, {
+      transactions: [
+        { tx_type: 'expense', amount: 12.5, account_id: 'a1', category_id: 'c1', happened_at: '2026-05-13', note: '批量咖啡' },
+        { tx_type: 'income', amount: 9000, account_id: 'a1', category_id: 'c2', happened_at: '2026-05-20', note: '批量工资' },
+      ],
+      ledger_id: 'L1', time_zone: 'Asia/Shanghai', idempotency_key: 'parity-batch-1',
     }));
     // 顺序即语义：这一步必须在导入**之前**跑，否则会把导入写入的 2 笔算进来
     await run('list_total_after', async () => {

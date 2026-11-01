@@ -70,6 +70,7 @@ def main(out_path: str) -> int:
         from src.mcp import file_tools  # type: ignore
         from src.mcp import rule_tools  # type: ignore
         from src.mcp import analysis_tools  # type: ignore
+        from src.mcp.tools import write_tools  # type: ignore
         from src.models import (  # type: ignore
             AttachmentFile, Ledger, LedgerMember, ReadTxProjection, User, UserAccountProjection,
             UserCategoryProjection, UserTagProjection,
@@ -569,6 +570,15 @@ def main(out_path: str) -> int:
     step("save_review_item_create", lambda: _call(rule_tools.save_review_item,
         owner, "L1", data=rule_tools.ReviewItem(
             question="这笔交易属于哪个分类？", transaction_ids=["t1"])))
+
+    # 批量创建交易（对齐上游 create_transactions / 本地 createMany）
+    step("create_transactions", lambda: _call(write_tools.create_transactions,
+        owner,
+        transactions=[
+            {"tx_type": "expense", "amount": 12.5, "account_id": "a1", "category_id": "c1", "happened_at": "2026-05-13", "note": "批量咖啡"},
+            {"tx_type": "income", "amount": 9000, "account_id": "a1", "category_id": "c2", "happened_at": "2026-05-20", "note": "批量工资"},
+        ],
+        ledger_id="L1", time_zone="Asia/Shanghai", idempotency_key="parity-batch-1"))
 
     golden["scenario"] = scenario
 
