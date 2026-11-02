@@ -4,7 +4,6 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { upsertDevice } from '../lib/device-upsert';
-import { DEFAULT_AI_CONFIG } from '../lib/defaults';
 
 interface DefaultCategory {
   name: string;
@@ -204,10 +203,6 @@ authRouter.post('/register', zValidator('json', z.object({
       `INSERT INTO users (id, email, password_hash, is_admin, is_enabled)
        VALUES (?, ?, ?, 0, 1)`
     ).bind(userId, email, passwordHash),
-    db.prepare(
-      `INSERT INTO user_profiles (user_id, display_name, ai_config_json)
-       VALUES (?, ?, ?)`
-    ).bind(userId, email, DEFAULT_AI_CONFIG),
     db.prepare(
       `INSERT INTO devices (id, user_id, name, platform, app_version, os_version, device_model, last_ip, last_seen_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`

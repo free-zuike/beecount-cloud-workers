@@ -1228,7 +1228,8 @@ def main(out_path: str) -> int:
             _prof_steps.append({"name": name, "request": {"method": method.upper(), "path": path, "json": json_body}, "status": resp.status_code, "result": _scrub_profile(body) if body is not None else None})
 
         _pstep("get_me", "get", "/api/v1/profile/me", headers=_phdr)
-        _pstep("put_me", "put", "/api/v1/profile/me", json_body={"display_name": "新昵称", "income_is_red": True, "theme_primary_color": "#123456"}, headers=_phdr)
+        _pstep("patch_me", "patch", "/api/v1/profile/me", json_body={"display_name": "新昵称", "income_is_red": True, "theme_primary_color": "#123456"}, headers=_phdr)
+        _pstep("change_password", "post", "/api/v1/profile/me/change-password", json_body={"current_password": "password123", "new_password": "newpass123"}, headers=_phdr)
 
         _pg = {"steps": _prof_steps}
         _pp = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-profile-golden.json")
