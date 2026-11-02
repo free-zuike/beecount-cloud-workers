@@ -1244,6 +1244,68 @@ def main(out_path: str) -> int:
         print(f"[warn] profile golden 跳过：{type(exc).__name__}: {exc}")
         traceback.print_exc()
 
+    # ---------------- two_factor golden（HTTP /api/v1/two_factor/*）----------------
+    # 2FA 的 TOTP secret 由服务端随机生成，golden 与本地 replay 的 secret 不同，
+    # 无法简单重放 code。故 golden 只记录各步骤的状态码+响应结构（scrub 掉
+    # secret/qr_code_uri/recovery_codes/enabled_at），本地测试自建完整流程逐步骤比对结构。
+    try:
+        from fastapi.testclient import TestClient  # type: ignore
+        from src.main import app as _2fa_app  # type: ignore
+        _2fa_client = TestClient(_2fa_app)
+        _2fa_client.post("/api/v1/auth/register", json={"email": "2fa@example.com", "password": "password123", "client_type": "web", "device_name": "CI"})
+        _2fa_lr = _2fa_client.post("/api/v1/auth/login", json={"email": "2fa@example.com", "password": "password123", "client_type": "web"})
+        _2fa_at = (_2fa_lr.json() or {}).get("access_token")
+        _2fa_hdr = {"Authorization": f"Bearer {_2fa_at}"}
+
+        def _totp_code(secret_b32, digits=6, period=30):
+            import base64 as _b64, hashlib as _hl, hmac as _hm, struct as _st, time as _t
+            s = secret_b32.upper().replace(" ", "")
+            s += "=" * ((8 - len(s) % 8) % 8)
+            key = _b64.b32decode(s)
+            counter = int(_t.time()) // period
+            msg = _st.pack(">Q", counter)
+            h = _hm.new(key, msg, _hl.sha1).digest()
+            o = h[-1] & 0x0f
+            code = (struct.unpack(">I", h[o:o + 4])[0] & 0x7fffffff) % (10 ** digits)
+            return str(code).zfill(digits)
+
+        def _scrub_2fa(v):
+            if isinstance(v, list):
+                return [_scrub_2fa(i) for i in v]
+            if isinstance(v, dict):
+                return {k: _scrub_2fa(x) for k, x in v.items() if k not in ("secret", "qr_code_uri", "recovery_codes", "enabled_at")}
+            return v
+
+        def _add(name, method, path, resp, json_body=None):
+            body = resp.json() if resp.status_code != 204 and resp.content else None
+            _2fa_steps.append({"name": name, "request": {"method": method, "path": path, "json": json_body}, "status": resp.status_code, "result": _scrub_2fa(body) if body is not None else None})
+
+        _2fa_steps = []
+        r_status0 = _2fa_client.get("/api/v1/two_factor/status", headers=_2fa_hdr)
+        _add("status_before", "GET", "/api/v1/two_factor/status", r_status0)
+        r_setup = _2fa_client.post("/api/v1/two_factor/setup", headers=_2fa_hdr)
+        _add("setup", "POST", "/api/v1/two_factor/setup", r_setup)
+        _code = _totp_code(r_setup.json()["secret"])
+        r_confirm = _2fa_client.post("/api/v1/two_factor/confirm", json={"code": _code}, headers=_2fa_hdr)
+        _add("confirm", "POST", "/api/v1/two_factor/confirm", r_confirm, json_body={"code": "<computed>"})
+        r_status1 = _2fa_client.get("/api/v1/two_factor/status", headers=_2fa_hdr)
+        _add("status_enabled", "GET", "/api/v1/two_factor/status", r_status1)
+        r_disable = _2fa_client.post("/api/v1/two_factor/disable", json={"password": "password123"}, headers=_2fa_hdr)
+        _add("disable", "POST", "/api/v1/two_factor/disable", r_disable, json_body={"password": "password123"})
+        r_status2 = _2fa_client.get("/api/v1/two_factor/status", headers=_2fa_hdr)
+        _add("status_after", "GET", "/api/v1/two_factor/status", r_status2)
+
+        _2fa_golden = {"steps": _2fa_steps}
+        _2fa_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-two-factor-golden.json")
+        with open(_2fa_path, "w", encoding="utf-8") as _f:
+            json.dump(_2fa_golden, _f, ensure_ascii=False, indent=2, default=str)
+            _f.write("\n")
+        print(f"wrote {len(_2fa_steps)} two_factor steps -> {_2fa_path}")
+    except Exception as exc:
+        import traceback
+        print(f"[warn] two_factor golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(golden, fh, ensure_ascii=False, indent=2, default=str)
