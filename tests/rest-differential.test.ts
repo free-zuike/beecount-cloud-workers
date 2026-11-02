@@ -91,6 +91,12 @@ describe.skipIf(!hasGolden)('REST 只读计算 vs 上游 golden', () => {
       const left = ORDER_UNDEFINED.has(kase.tool) ? sortTop(body) : body;
       const right = ORDER_UNDEFINED.has(kase.tool) ? sortTop(want) : want;
       const diffs = diffJson(left, right);
+      if (diffs.length && process.env.CI) {
+        const rows = h.sqlite
+          .prepare('SELECT sync_id, ledger_id FROM read_tx_projection ORDER BY sync_id')
+          .all() as Array<{ sync_id: string; ledger_id: string }>;
+        console.log('[CI-DIAG]', kase.tool, JSON.stringify(kase.args), 'rows=', rows.map(r => `${r.sync_id}@${r.ledger_id}`).join(','));
+      }
       expect(diffs.length ? formatDiffs(kase.tool, diffs) : '').toBe('');
     });
   }
