@@ -1281,12 +1281,16 @@ def main(out_path: str) -> int:
             _2fa_steps.append({"name": name, "request": {"method": method, "path": path, "json": json_body}, "status": resp.status_code, "result": _scrub_2fa(body) if body is not None else None})
 
         _2fa_steps = []
-        r_status0 = _2fa_client.get("/api/v1/two_factor/status", headers=_2fa_hdr)
+        r_status0 = _2fa_client.get("/api/v1/auth/2fa/status", headers=_2fa_hdr)
         _add("status_before", "GET", "/api/v1/auth/2fa/status", r_status0)
         r_setup = _2fa_client.post("/api/v1/auth/2fa/setup", headers=_2fa_hdr)
         _add("setup", "POST", "/api/v1/auth/2fa/setup", r_setup)
+        print(f"[2fa-debug] login status={_2fa_lr.status_code} at?={bool(_2fa_at)}")
+        print(f"[2fa-debug] setup status={r_setup.status_code}")
         _code = _totp_code(r_setup.json()["secret"])
+        print(f"[2fa-debug] computed code={_code}")
         r_confirm = _2fa_client.post("/api/v1/auth/2fa/confirm", json={"code": _code}, headers=_2fa_hdr)
+        print(f"[2fa-debug] confirm status={r_confirm.status_code} body={r_confirm.text()[:200]}")
         _add("confirm", "POST", "/api/v1/auth/2fa/confirm", r_confirm, json_body={"code": "<computed>"})
         r_status1 = _2fa_client.get("/api/v1/auth/2fa/status", headers=_2fa_hdr)
         _add("status_enabled", "GET", "/api/v1/auth/2fa/status", r_status1)

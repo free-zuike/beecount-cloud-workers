@@ -113,7 +113,7 @@ describe.skipIf(!hasGolden)('two_factor differential vs upstream', () => {
     const setup = await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: headers() }, env as never);
     const secret = (await setup.json() as { secret: string }).secret;
     await app.request('/api/v1/auth/2fa/confirm', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ code: totpCode(secret) }) }, env as never);
-    await app.request('/api/v1/auth/2fa/disable', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ password: 'password123' }) }, env as never);
+    await app.request('/api/v1/auth/2fa/disable', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ password: 'password123', code: totpCode(secret) }) }, env as never);
     const resp = await app.request('/api/v1/auth/2fa/status', { method: 'GET', headers: headers() }, env as never);
     expect(resp.status).toBe(step('status_after').status);
     expect(scrub(await resp.json())).toEqual(scrub(step('status_after').result));
