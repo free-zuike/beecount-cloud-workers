@@ -71,6 +71,11 @@ summaryRouter.get('/', async (c) => {
     return c.json({ error: 'Ledger not found' }, 404);
   }
 
+  if (process.env.CI) {
+    const dc = await db.prepare('SELECT COUNT(*) c FROM read_tx_projection WHERE ledger_id = ?').bind(ledger.id).first<{ c: number }>();
+    console.log(`[DIAG-summary] ledger=${ledger.id} injectedSet=${injectedDb !== undefined} routeCount=${dc?.c}`);
+  }
+
   // 对齐上游 _projection_totals(_shared.py:429):
   // tx_count/latest 不过滤标记笔;income/expense 排除 exclude_from_stats;
   // balance 用全部收支差(native_amount 回退 amount,「余额=钱的位置」口径)

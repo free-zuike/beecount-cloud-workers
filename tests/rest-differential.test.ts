@@ -71,6 +71,13 @@ describe.skipIf(!hasGolden)('REST 只读计算 vs 上游 golden', () => {
       const app = buildReadApp(h.db);
       const { method, path } = toRequest(kase.tool, kase.args);
 
+      if (kase.tool === 'get_summary' && (kase.args.ledger_id as string) === 'L1') {
+        const diag = h.sqlite.prepare("SELECT sync_id, happened_at, amount, tx_type, ledger_id FROM read_tx_projection WHERE ledger_id='L1-i'").all();
+        console.log('[DIAG-L1] rows after seed:', JSON.stringify(diag));
+        const cnt = h.sqlite.prepare("SELECT COUNT(*) c FROM read_tx_projection WHERE ledger_id='L1-i'").get();
+        console.log('[DIAG-L1] count after seed:', JSON.stringify(cnt));
+      }
+
       const res = await app.request(path, {
         method,
         headers: { 'X-Test-User': userId },
