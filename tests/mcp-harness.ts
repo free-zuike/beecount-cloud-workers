@@ -11,11 +11,12 @@ import { buildReadRouter } from '../src/routes/read';
 import { buildSummaryRouter } from '../src/routes/summary';
 import syncRouter from '../src/routes/sync';
 import devicesRouter from '../src/routes/devices';
+import authRouter from '../src/routes/auth';
 import type { McpContext } from '../src/mcp/types';
 
 /** 真实表结构（含 #133 三张新表，与 src/db/schema.ts 对齐） */
 export const DDL = `
-  CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, display_name TEXT, avatar_url TEXT, avatar_version INTEGER DEFAULT 0);
+  CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, display_name TEXT, avatar_url TEXT, avatar_version INTEGER DEFAULT 0, is_admin INTEGER DEFAULT 0, is_enabled INTEGER DEFAULT 1, totp_enabled INTEGER DEFAULT 0);
   CREATE TABLE ledgers (id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, name TEXT, currency TEXT, month_start_day INTEGER DEFAULT 1, created_at TEXT);
   CREATE TABLE ledger_members (ledger_id TEXT, user_id TEXT, role TEXT, joined_at TEXT, invited_by_user_id TEXT);
   CREATE TABLE devices (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, platform TEXT, app_version TEXT, os_version TEXT, device_model TEXT, last_seen_at TEXT, last_ip TEXT, revoked_at TEXT, created_at TEXT);
@@ -78,10 +79,11 @@ export const DDL = `
     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, pat_id TEXT, pat_prefix TEXT, pat_name TEXT,
     tool_name TEXT, status TEXT, error_message TEXT, args_summary TEXT, duration_ms INTEGER, client_ip TEXT, called_at TEXT
   );
-  CREATE TABLE user_profiles (user_id TEXT PRIMARY KEY, primary_currency TEXT, display_name TEXT, avatar_file_id TEXT, avatar_version INTEGER);
+  CREATE TABLE user_profiles (user_id TEXT PRIMARY KEY, primary_currency TEXT, display_name TEXT, avatar_file_id TEXT, avatar_version INTEGER, ai_config_json TEXT);
   CREATE TABLE user_exchange_rate_projection (user_id TEXT NOT NULL, sync_id TEXT NOT NULL, base_currency TEXT NOT NULL, quote_currency TEXT NOT NULL, rate TEXT NOT NULL, updated_at TEXT NOT NULL, source_change_id INTEGER DEFAULT 0 NOT NULL, PRIMARY KEY (user_id, sync_id));
   CREATE TABLE exchange_rate_cache (base_currency TEXT PRIMARY KEY, rate_date TEXT, source TEXT, payload_json TEXT, fetched_at TEXT);
   CREATE TABLE sync_cursors (user_id TEXT, device_id TEXT, ledger_external_id TEXT, last_cursor INTEGER, updated_at TEXT, PRIMARY KEY (user_id, device_id, ledger_external_id));
+  CREATE TABLE refresh_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, device_id TEXT, token_hash TEXT UNIQUE NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT, created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL);
 `;
 
 export type TestApp = Hono<{ Bindings: { DB: D1Database; JWT_SECRET: string }; Variables: { userId: string } }>;
@@ -303,6 +305,22 @@ export function buildDevicesApp(): TestApp {
   });
   a.route('/api/v1/devices', devicesRouter as never);
   return a;
+}
+
+/** 挂载真实 auth 路由（注册/登录/刷新/登出/me），用于鉴权端点与上游差分。
+ *  REGISTRATION_ENABLED 控制是否开放注册（默认开启，便于 golden 生成注册用例）。 */
+export function buildAuthApp(registrationEnabled = true): TestApp {
+  const a = new Hono<{ Bindings: { DB: D1Database; JWT_SECRET: string; REGISTRATION_ENABLED?: string }; Variables: { userId: string } }>();
+  a.route('/api/v1/auth', authRouter as never);
+  return a;
+}
+
+/** 给 auth 路由构造 env（含 JWT_SECRET 与 REGISTRATION_ENABLED）。
+ *  内部建一张全新的内存库并执行完整 DDL，使 auth 路由可用的表（users/devices/refresh_tokens 等）就绪。 */
+export function authEnv(registrationEnabled = true): { DB: D1Database; JWT_SECRET: string; REGISTRATION_ENABLED: string } {
+  const sqlite = new DatabaseSync(':memory:');
+  sqlite.exec(DDL);
+  return { DB: makeD1(sqlite), JWT_SECRET: 'test-secret-for-parity-0123456789', REGISTRATION_ENABLED: registrationEnabled ? 'true' : 'false' };
 }
 
 /** 往 devices 插一条与上游 golden 同内容的设备，用于 GET /devices 响应比对。 */

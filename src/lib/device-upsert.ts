@@ -40,7 +40,7 @@ export async function upsertDevice(
     await db.prepare(
       `INSERT INTO devices (id, user_id, name, platform, app_version, os_version, device_model, last_ip, last_seen_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(targetId, userId, deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, clientIp, now).run()
+    ).bind(targetId, userId, deviceName, platform, appVersion || null, osVersion || null, deviceModel || null, clientIp ?? null, now).run()
   } else {
     await db.prepare(
       `UPDATE devices SET last_seen_at = ?, last_ip = ?, name = ?, platform = ?, app_version = ?, os_version = ?, device_model = ?${existingDevice.revoked_at ? ', revoked_at = NULL' : ''} WHERE id = ?`

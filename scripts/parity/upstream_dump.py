@@ -1104,6 +1104,90 @@ def main(out_path: str) -> int:
     except Exception as exc:
         print(f"[warn] device list golden 跳过：{type(exc).__name__}: {exc}")
 
+    # ---------------- 鉴权 golden（HTTP /api/v1/auth/*）----------------
+    # 用上游 FastAPI app 的 TestClient 直接打路由，与本地 Hono auth 路由逐场景对拍。
+    # 排除随机字段：access_token/refresh_token/challenge_token/device_id/user.id。
+    try:
+        os.environ.setdefault("JWT_SECRET", "test-secret-for-parity-0123456789")
+        os.environ["REGISTRATION_ENABLED"] = "true"
+        os.environ["APP_ENV"] = "development"
+        try:
+            from src.config import get_settings  # type: ignore
+            get_settings.cache_clear()
+        except Exception:
+            pass
+        from fastapi.testclient import TestClient  # type: ignore
+        from src.main import app as _auth_app  # type: ignore
+        _auth_client = TestClient(_auth_app)
+        AUTH_VOLATILE = {"access_token", "refresh_token", "challenge_token", "device_id"}
+
+        def _scrub_auth(v):
+            if isinstance(v, list):
+                return [_scrub_auth(x) for x in v]
+            if isinstance(v, dict):
+                out = {}
+                for k, x in v.items():
+                    if k in AUTH_VOLATILE:
+                        continue
+                    if k == "user" and isinstance(x, dict):
+                        out[k] = {kk: xx for kk, xx in x.items() if kk != "id"}
+                        continue
+                    out[k] = _scrub_auth(x)
+                return out
+            return v
+
+        _auth_steps = []
+        def _do(name, method, path, json_body=None, headers=None):
+            fn = getattr(_auth_client, method)
+            kw = {}
+            if json_body is not None:
+                kw["json"] = json_body
+            if headers:
+                kw["headers"] = headers
+            resp = fn(path, **kw)
+            body = resp.json() if resp.status_code != 204 and resp.content else None
+            _auth_steps.append({
+                "name": name,
+                "request": {"method": method.upper(), "path": path, "json": json_body},
+                "status": resp.status_code,
+                "result": _scrub_auth(body) if body is not None else None,
+            })
+            return resp, body
+
+        _do("register", "post", "/api/v1/auth/register", {
+            "email": "authtest@example.com", "password": "password123",
+            "client_type": "web", "device_name": "CI"})
+        _do("register_dup", "post", "/api/v1/auth/register", {
+            "email": "authtest@example.com", "password": "password123",
+            "client_type": "web", "device_name": "CI"})
+        _do("register_weak", "post", "/api/v1/auth/register", {
+            "email": "weak@example.com", "password": "short", "client_type": "web"})
+        _do("register_bademail", "post", "/api/v1/auth/register", {
+            "email": "notanemail", "password": "password123", "client_type": "web"})
+        _login_resp, _login_body = _do("login", "post", "/api/v1/auth/login", {
+            "email": "authtest@example.com", "password": "password123", "client_type": "web"})
+        _refresh_token = (_login_body or {}).get("refresh_token")
+        _access_token = (_login_body or {}).get("access_token")
+        _do("login_wrong", "post", "/api/v1/auth/login", {
+            "email": "authtest@example.com", "password": "wrongpass", "client_type": "web"})
+        if _refresh_token:
+            _do("refresh", "post", "/api/v1/auth/refresh", {"refresh_token": _refresh_token})
+        if _access_token:
+            _do("me", "get", "/api/v1/auth/me", headers={"Authorization": f"Bearer {_access_token}"})
+        if _refresh_token:
+            _do("logout", "post", "/api/v1/auth/logout", {"refresh_token": _refresh_token})
+
+        _auth_golden = {"steps": _auth_steps}
+        _auth_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-auth-golden.json")
+        with open(_auth_path, "w", encoding="utf-8") as _afh:
+            json.dump(_auth_golden, _afh, ensure_ascii=False, indent=2, default=str)
+            _afh.write("\n")
+        print(f"wrote {len(_auth_steps)} auth steps -> {_auth_path}")
+    except Exception as exc:
+        import traceback
+        print(f"[warn] auth golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(golden, fh, ensure_ascii=False, indent=2, default=str)

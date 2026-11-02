@@ -32,7 +32,7 @@ describe('Auth - Register', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'short@example.com', password: '123' }),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(422);
   });
 
   it('should reject invalid email', async () => {
@@ -41,7 +41,7 @@ describe('Auth - Register', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'not-an-email', password: 'password123' }),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(422);
   });
 
   it('should create a ledger and list it', async () => {

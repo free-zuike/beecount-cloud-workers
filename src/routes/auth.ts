@@ -137,7 +137,23 @@ authRouter.post('/register', zValidator('json', z.object({
   app_version: z.string().optional(),
   os_version: z.string().optional(),
   device_model: z.string().optional(),
-})), async (c) => {
+}), (result, c) => {
+  // 校验失败返回 422 + VALIDATION_ERROR 格式(对齐原版 Pydantic 空 email/弱密码 → 422)
+  if (result.success) return;
+  return c.json({
+    error: {
+      code: 'VALIDATION_ERROR',
+      message: 'Request validation failed',
+      request_id: c.req.header('cf-ray') || '',
+    },
+    detail: 'Request validation failed',
+    validation: result.error.issues.map(i => ({
+      loc: ['body', ...i.path.map(p => String(p))],
+      msg: i.message,
+      type: i.code,
+    })),
+  }, 422);
+}), async (c) => {
   const clientIp = c.req.header('CF-Connecting-IP') || 'unknown';
   if (await isRateLimitedDistributed(c.env.BEECOUNT_DO, 'register', clientIp)) {
     return c.json({ error: 'Too many requests' }, 429);
@@ -290,7 +306,7 @@ authRouter.post('/login', zValidator('json', z.object({
 
   // Create or update device（使用 upsert 处理跨用户冲突）
   const resolvedDeviceId = await upsertDevice(
-    db, user.id, deviceId || randomUUID(), deviceName, platform, appVersion, osVersion, deviceModel, c.req.header('CF-Connecting-IP')
+    db, user.id, deviceId || randomUUID(), deviceName, platform, appVersion, osVersion, deviceModel, clientIp
   );
 
   const accessToken = await createAccessToken(user.id, jwtSecret, tokenScopes, 3600, 'access', clientType);
