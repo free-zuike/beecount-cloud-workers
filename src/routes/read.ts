@@ -1187,17 +1187,21 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
     if (e) editorUids.add(e);
   }
   const editorInfoMap = new Map<string, { email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number | null }>();
-  if (editorUids.size > 0) {
-    const ph = [...editorUids].map(() => '?').join(',');
-    const userRows = await db
-      .prepare(`SELECT u.id, u.email, p.display_name, p.avatar_file_id, p.avatar_version
-                 FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id
-                 WHERE u.id IN (${ph})`)
-      .bind(...editorUids)
-      .all<{ id: string; email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number | null }>();
-    for (const u of userRows.results) {
-      editorInfoMap.set(u.id, { email: u.email, display_name: u.display_name, avatar_file_id: u.avatar_file_id, avatar_version: u.avatar_version });
+  try {
+    if (editorUids.size > 0) {
+      const ph = [...editorUids].map(() => '?').join(',');
+      const userRows = await db
+        .prepare(`SELECT u.id, u.email, p.display_name, p.avatar_file_id, p.avatar_version
+                   FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id
+                   WHERE u.id IN (${ph})`)
+        .bind(...editorUids)
+        .all<{ id: string; email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number | null }>();
+      for (const u of userRows.results) {
+        editorInfoMap.set(u.id, { email: u.email, display_name: u.display_name, avatar_file_id: u.avatar_file_id, avatar_version: u.avatar_version });
+      }
     }
+  } catch (err) {
+    serverLogger.info('src.routers.read', '[READ] Error getting editor info:', err);
   }
 
   const result: ReadTransactionOut[] = rows.results.map((row) => {
