@@ -370,9 +370,20 @@ export async function manageRecurringRule(
     const anchorUtc = parseDateBoundary(data.starts_at, { timeZone: tz }).getTime();
     // 校验完整交易契约（时间由 Cloud 提供）
     await prepareTransaction(c, ledger, { ...data.transaction, happened_at: new Date(anchorUtc).toISOString() });
+    const tx = (data.transaction ?? {}) as Record<string, unknown>;
+    // 对齐上游 RecurringRule.transaction = BatchTransactionItem（model_dump 含全部字段，缺失项取默认）：
+    // account/attachments/category/currency/from_account/from_account_id/native_amount/tags/to_account/to_account_id 默认 null，
+    // exclude_from_budget/exclude_from_stats 默认 false。
+    const txDefaults: Record<string, unknown> = {
+      account: null, attachments: null, category: null, currency: null,
+      exclude_from_budget: false, exclude_from_stats: false,
+      from_account: null, from_account_id: null, native_amount: null,
+      tags: null, to_account: null, to_account_id: null,
+    };
+    const transaction = { ...txDefaults, ...tx };
     const rulePayload: Record<string, unknown> = {
       name: data.name,
-      transaction: { ...data.transaction },
+      transaction,
       frequency: data.frequency,
       interval: data.interval ?? 1,
       starts_at: data.starts_at,

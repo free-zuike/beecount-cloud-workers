@@ -206,7 +206,7 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     // 不参与"形状"契约，必须归一掉（对齐 parity-compare.ts 的 VOLATILE_KEYS 意图）
     const VOLATILE = new Set([
       'revision', 'last_change_id', 'source_change_id', 'generated_at', 'created_at',
-      'updated_at', 'next_due_at', 'file_sha256', 'duration_ms', 'operation_id',
+      'updated_at', 'next_due_at', 'file_sha256', 'duration_ms', 'operation_id', 'joined_at',
       'server_timestamp', 'server_time', 'new_change_id', 'base_revision', 'change_id',
     ]);
     const scrub = (value: Json): Json => {
@@ -334,30 +334,6 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
       ledger_id: 'L1', question: '这笔交易属于哪个分类？', transaction_ids: ['t1'],
     }));
 
-    // 批量创建交易（对齐上游 create_transactions / 本地 createMany）
-    await run('create_transactions', () => createTransactions(c, {
-      transactions: [
-        { tx_type: 'expense', amount: 12.5, account_id: 'a1', category_id: 'c1', happened_at: '2026-05-13', note: '批量咖啡' },
-        { tx_type: 'income', amount: 9000, account_id: 'a1', category_id: 'c2', happened_at: '2026-05-20', note: '批量工资' },
-      ],
-      ledger_id: 'L1', time_zone: 'Asia/Shanghai', idempotency_key: 'parity-batch-1',
-    }));
-
-    // 周期规则：确认门控 + 创建 + 删除确认流（与 manage_* 同构）
-    const rrData = {
-      name: '周期会员费',
-      transaction: { tx_type: 'expense', amount: 10, account_id: 'a1', category_id: 'c1', happened_at: '2026-05-01', note: '周期扣费' },
-      frequency: 'monthly', interval: 1, starts_at: '2026-05-01', time_zone: 'Asia/Shanghai',
-      enabled: true, allow_backfill: true, dst_policy: 'skip',
-    };
-    await run('manage_recurring_rule_noconf', () => manageRecurringRule(c, { action: 'create', ledger_id: 'L1', data: rrData, confirm: false }));
-    await run('manage_recurring_rule_create', async () => {
-      const res = await manageRecurringRule(c, { action: 'create', ledger_id: 'L1', data: rrData, confirm: true });
-      newId = newIdOf(res);
-      return res;
-    });
-    await run('manage_recurring_rule_del_noconf', () => manageRecurringRule(c, { action: 'delete', ledger_id: 'L1', record_id: newId ?? '' }));
-    await run('manage_recurring_rule_del', () => manageRecurringRule(c, { action: 'delete', ledger_id: 'L1', record_id: newId ?? '', confirm: true }));
     // 顺序即语义：这一步必须在导入**之前**跑，否则会把导入写入的 2 笔算进来
     await run('list_total_after', async () => {
       const page = await listTransactions(c, { ledger_id: 'L1', limit: 50 });
@@ -484,6 +460,33 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
       return { total: page.total };
     });
     await run('get_workflow_record_after_undo', () => getWorkflowRecord(c, { record_id: planId ?? '' }));
+
+    // 以下两步在 upstream_dump.py 中位于 undo 之后（写-cycle 末尾），因此其写入的交易
+    // 不会被任何 list_total_* 步骤计入；顺序必须与上游生成 golden 时一致。
+    // 批量创建交易（对齐上游 create_transactions / 本地 createMany）
+    await run('create_transactions', () => createTransactions(c, {
+      transactions: [
+        { tx_type: 'expense', amount: 12.5, account_id: 'a1', category_id: 'c1', happened_at: '2026-05-13', note: '批量咖啡' },
+        { tx_type: 'income', amount: 9000, account_id: 'a1', category_id: 'c2', happened_at: '2026-05-20', note: '批量工资' },
+      ],
+      ledger_id: 'L1', time_zone: 'Asia/Shanghai', idempotency_key: 'parity-batch-1',
+    }));
+
+    // 周期规则：确认门控 + 创建 + 删除确认流（与 manage_* 同构）
+    const rrData = {
+      name: '周期会员费',
+      transaction: { tx_type: 'expense', amount: 10, account_id: 'a1', category_id: 'c1', happened_at: '2026-05-01', note: '周期扣费' },
+      frequency: 'monthly', interval: 1, starts_at: '2026-05-01', time_zone: 'Asia/Shanghai',
+      enabled: true, allow_backfill: true, dst_policy: 'skip',
+    };
+    await run('manage_recurring_rule_noconf', () => manageRecurringRule(c, { action: 'create', ledger_id: 'L1', data: rrData, confirm: false }));
+    await run('manage_recurring_rule_create', async () => {
+      const res = await manageRecurringRule(c, { action: 'create', ledger_id: 'L1', data: rrData, confirm: true });
+      newId = newIdOf(res);
+      return res;
+    });
+    await run('manage_recurring_rule_del_noconf', () => manageRecurringRule(c, { action: 'delete', ledger_id: 'L1', record_id: newId ?? '' }));
+    await run('manage_recurring_rule_del', () => manageRecurringRule(c, { action: 'delete', ledger_id: 'L1', record_id: newId ?? '', confirm: true }));
 
     expect(failures.join('\n')).toBe('');
   });

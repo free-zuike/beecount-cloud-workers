@@ -201,12 +201,10 @@ export function seed(h: Harness): void {
     id: 'L2-i', external_id: 'L2', user_id: 'u2', name: '共享账本', currency: 'USD',
     month_start_day: 1, created_at: '2026-01-01T00:00:00Z', deleted_at: null,
   });
-  addMember(h, 'L1-i', 'u1', 'owner');
   addMember(h, 'L2-i', 'u1', 'editor');
   addMember(h, 'L2-i', 'u2', 'owner');
   // L3：空账本，验证空数组/0/null 的形状；month_start_day=25 走非 1 号起始的分支
   createLedger(h, 'u1', 'L3-i', 'L3', '空账本', 'JPY', 25);
-  addMember(h, 'L3-i', 'u1', 'owner');
 
   insertRow(h.sqlite, 'attachment_files', {
     id: 'f1', ledger_id: 'L1-i', user_id: 'u1', attachment_kind: 'transaction',

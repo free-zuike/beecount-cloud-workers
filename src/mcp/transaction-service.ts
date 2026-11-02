@@ -146,10 +146,13 @@ export function parseTxDatetime(
   if (typeof value !== 'string' || !value.trim()) {
     throw new McpToolError('happened_at must be a non-empty ISO date or datetime');
   }
-  // 对齐上游 datetime.fromisoformat 的宽容度：去掉小数秒；+08 → +08:00
-  const raw = value.trim().replace(' ', 'T')
-    .replace(/\.\d+/, '')
-    .replace(/([+-]\d{2})$/, '$1:00');
+  // 对齐上游 datetime.fromisoformat 的宽容度：去掉小数秒；+08 → +08:00；+0800 → +08:00
+  let raw = value.trim().replace(' ', 'T').replace(/\.\d+/, '');
+  // 时区偏移简写补全仅在含时间部分（T 或冒号）时执行，避免把纯日期 "2026-05-13"
+  // 的日部分 "-13" 误判为偏移、补全成 "2026-05-13:00" 导致解析失败（上游接受纯日期）。
+  if (/[T:]/.test(raw)) {
+    raw = raw.replace(/([+-])(\d{2})(\d{2})$/, '$1$2:$3').replace(/([+-])(\d{2})$/, '$1$2:00');
+  }
   const hasOffset = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw);
   if (hasOffset) {
     const d = new Date(raw.replace('Z', '+00:00'));
@@ -364,6 +367,15 @@ async function finalizeCreateMany(
   opts: { single?: boolean; transactions: Array<Record<string, unknown>> },
 ): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = { ...outcome, ledger: ledger.name, ledger_id: ledger.external_id, created_count: outcome.sync_ids.length };
+  // 对齐上游批量创建返回：results 项不含 idempotency_replayed（Worker 写端点自带，但 MCP 回显应按上游 BatchTransactionItem）
+  if (!opts.single && Array.isArray((out as Record<string, unknown>).results)) {
+    (out as Record<string, unknown>).results = ((out as Record<string, unknown>).results as Array<Record<string, unknown>>).map(
+      (r: Record<string, unknown>) => {
+        const { idempotency_replayed: _drop, ...rest } = r;
+        return rest;
+      },
+    );
+  }
   if (out.status === 'completed') out.status = 'created';
   if (opts.single && outcome.sync_ids.length > 0) {
     const sid = outcome.sync_ids[0];

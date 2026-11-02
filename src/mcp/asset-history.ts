@@ -203,7 +203,8 @@ export async function history(
     missing_conversion_currencies: missingConversion,
     conversion_complete: Boolean(base) && missingConversion.length === 0,
     conversion_policy: 'Original-currency balance history; current configured/cached rates for optional valuation, not historical FX returns',
-    valued_in_base_currency: valued,
+    // 对齐上游：未显式提供 base_currency 时不返回 valued_in_base_currency（上游 history 仅在显式传入时才估值）
+    ...(args.base_currency ? { valued_in_base_currency: valued } : {}),
     series: valued ?? [],
     series_by_currency: filled.map(item => ({ ...item, bucket: item.bucket })),
     revision: baseRev,

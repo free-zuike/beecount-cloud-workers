@@ -20,6 +20,7 @@ const VOLATILE_KEYS = new Set([
   'operation_id',
   'server_timestamp',
   'server_time',
+  'joined_at',
 ]);
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
