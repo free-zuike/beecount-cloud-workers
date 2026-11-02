@@ -249,6 +249,7 @@ export function seed(h: Harness): void {
       sync_id: sync, user_id: 'u1', ledger_id: 'L1-i', tx_type: kind, amount,
       happened_at: happened, category_sync_id: cat, account_sync_id: acc,
       category_name: cat === 'c1' ? '餐饮' : cat === 'c2' ? '工资' : null,
+      category_kind: cat === 'c1' ? 'expense' : cat === 'c2' ? 'income' : cat === 'c3' ? 'transfer' : null,
       account_name: acc === 'a1' ? '现金' : acc === 'a2' ? '招行' : null,
       note, tags_csv: tags, currency_code: cur, native_amount: native,
       from_account_id: null, to_account_id: null, from_account_name: null, to_account_name: null,

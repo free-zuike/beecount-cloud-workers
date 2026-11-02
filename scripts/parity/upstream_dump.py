@@ -183,6 +183,9 @@ def main(out_path: str) -> int:
         ("list_budgets", {"ledger_id": "L1"}),
         ("get_ledger_stats", {"ledger_id": "L1"}),
         ("get_analytics_summary", {"ledger_id": "L1", "scope": "month", "period": "2026-05"}),
+        # 第3条：补齐 analytics 的 year / all 聚合口径（此前仅 month）
+        ("get_analytics_summary", {"ledger_id": "L1", "scope": "year", "period": "2026"}),
+        ("get_analytics_summary", {"ledger_id": "L1", "scope": "all"}),
         ("search", {"q": "星巴克", "limit": 20}),
         # 分页：游标编码本身也是对拍点（stableStringify 排序键必须一致）
         ("list_transactions", {"ledger_id": "L1", "limit": 2}),
@@ -623,17 +626,38 @@ def main(out_path: str) -> int:
                 return obj.model_dump(mode="json")
             return obj
 
+        fn_map = {
+            "get_summary": get_summary,
+            "list_budgets_usage": list_budgets_usage,
+            "list_exchange_rate_overrides": list_exchange_rate_overrides,
+            "list_gallery_attachments": list_gallery_attachments,
+        }
+        # 第3条：扩展覆盖 list_transactions 的过滤/排序/分页（上游 ledgers.py:240 独立重写路由）。
+        # 单独 try 隔离，避免该上游路由 import 失败拖垮整段 REST golden。
+        try:
+            from src.routers.read.ledgers import list_transactions as _up_list_transactions  # type: ignore
+            fn_map["list_transactions"] = _up_list_transactions
+        except Exception as exc:
+            print(f"[warn] list_transactions 上游路由 import 失败，跳过：{type(exc).__name__}: {exc}")
+
         rest_calls = [
             ("get_summary", dict(ledger_id="L1", _scopes=set(), current_user=owner, db=db)),
             ("get_summary", dict(ledger_id="L3", _scopes=set(), current_user=owner, db=db)),
             ("list_budgets_usage", dict(ledger_external_id="L1", _scopes=set(), current_user=owner, db=db)),
             ("list_budgets_usage", dict(ledger_external_id="L3", _scopes=set(), current_user=owner, db=db)),
             ("list_exchange_rate_overrides", dict(_scopes=set(), current_user=owner, db=db)),
+            # —— list_transactions 过滤/排序/分页（第3条）——
+            ("list_transactions", dict(ledger_external_id="L1", limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
+            ("list_transactions", dict(ledger_external_id="L1", tx_type="income", limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
+            ("list_transactions", dict(ledger_external_id="L1", q="咖啡", limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
+            ("list_transactions", dict(ledger_external_id="L1", start_at="2026-05-10T00:00:00+00:00", end_at="2026-05-31T23:59:59+00:00", limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
+            ("list_transactions", dict(ledger_external_id="L1", limit=3, offset=2, _scopes=set(), current_user=owner, db=db)),
         ]
         for tool, args in rest_calls:
-            fn = {"get_summary": get_summary, "list_budgets_usage": list_budgets_usage,
-                   "list_exchange_rate_overrides": list_exchange_rate_overrides,
-                   "list_gallery_attachments": list_gallery_attachments}[tool]
+            fn = fn_map.get(tool)
+            if fn is None:
+                print(f"[warn] REST golden 跳过未导入的工具：{tool}")
+                continue
             try:
                 res = dump_model(fn(**args))
                 rest_golden["cases"].append(
