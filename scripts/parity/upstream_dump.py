@@ -1195,6 +1195,52 @@ def main(out_path: str) -> int:
         print(f"[warn] auth golden 跳过：{type(exc).__name__}: {exc}")
         traceback.print_exc()
 
+    # ---------------- profile golden（HTTP /api/v1/profile/*）----------------
+    # 注册+登录拿 token，打 /api/v1/profile/me（GET/PUT）。scrub user_id/avatar_url
+    # （avatar_url 含 host，user_id 为随机 uuid）。其余确定性字段（email/display_name/
+    # income_is_red/theme_primary_color/primary_currency 等）逐字段比对。
+    try:
+        from fastapi.testclient import TestClient  # type: ignore
+        from src.main import app as _profile_app  # type: ignore
+        _pclient = TestClient(_profile_app)
+        _pclient.post("/api/v1/auth/register", json={"email": "authtest@example.com", "password": "password123", "client_type": "web", "device_name": "CI"})
+        _plr = _pclient.post("/api/v1/auth/login", json={"email": "authtest@example.com", "password": "password123", "client_type": "web"})
+        _pat = (_plr.json() or {}).get("access_token")
+        _phdr = {"Authorization": f"Bearer {_pat}"}
+
+        def _scrub_profile(v):
+            if isinstance(v, dict):
+                return {k: _scrub_profile(x) for k, x in v.items() if k not in ("user_id", "avatar_url")}
+            if isinstance(v, list):
+                return [_scrub_profile(i) for i in v]
+            return v
+
+        _prof_steps = []
+        def _pstep(name, method, path, json_body=None, headers=None):
+            fn = getattr(_pclient, method)
+            kw = {}
+            if json_body is not None:
+                kw["json"] = json_body
+            if headers:
+                kw["headers"] = headers
+            resp = fn(path, **kw)
+            body = resp.json() if resp.status_code != 204 and resp.content else None
+            _prof_steps.append({"name": name, "request": {"method": method.upper(), "path": path, "json": json_body}, "status": resp.status_code, "result": _scrub_profile(body) if body is not None else None})
+
+        _pstep("get_me", "get", "/api/v1/profile/me", headers=_phdr)
+        _pstep("put_me", "put", "/api/v1/profile/me", json_body={"display_name": "新昵称", "income_is_red": True, "theme_primary_color": "#123456"}, headers=_phdr)
+
+        _pg = {"steps": _prof_steps}
+        _pp = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-profile-golden.json")
+        with open(_pp, "w", encoding="utf-8") as _pfh:
+            json.dump(_pg, _pfh, ensure_ascii=False, indent=2, default=str)
+            _pfh.write("\n")
+        print(f"wrote {len(_prof_steps)} profile steps -> {_pp}")
+    except Exception as exc:
+        import traceback
+        print(f"[warn] profile golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(golden, fh, ensure_ascii=False, indent=2, default=str)

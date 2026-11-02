@@ -12,6 +12,8 @@ import { buildSummaryRouter } from '../src/routes/summary';
 import syncRouter from '../src/routes/sync';
 import devicesRouter from '../src/routes/devices';
 import authRouter from '../src/routes/auth';
+import profileRouter from '../src/routes/profile';
+import twoFactorRouter from '../src/routes/two_factor';
 import type { McpContext } from '../src/mcp/types';
 
 /** 真实表结构（含 #133 三张新表，与 src/db/schema.ts 对齐） */
@@ -321,6 +323,59 @@ export function authEnv(registrationEnabled = true): { DB: D1Database; JWT_SECRE
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec(DDL);
   return { DB: makeD1(sqlite), JWT_SECRET: 'test-secret-for-parity-0123456789', REGISTRATION_ENABLED: registrationEnabled ? 'true' : 'false' };
+}
+
+/** 通用鉴权模块 env：DB + JWT_SECRET + 可选 R2/BEECOUNT_DO（profile/2fa 等路由用）。 */
+export function routerEnv(): {
+  DB: D1Database; JWT_SECRET: string; REGISTRATION_ENABLED: string;
+  R2?: R2Bucket; BEECOUNT_DO?: DurableObjectNamespace;
+} {
+  const sqlite = new DatabaseSync(':memory:');
+  sqlite.exec(DDL);
+  return {
+    DB: makeD1(sqlite),
+    JWT_SECRET: 'test-secret-for-parity-0123456789',
+    REGISTRATION_ENABLED: 'true',
+  };
+}
+
+type AnyRouter = Parameters<typeof Hono.prototype.route>[1];
+
+/** 通用 router 挂载：通过 X-Test-User 头注入 userId（与 buildReadApp 同法），跳过真实 JWT 校验。
+ *  用于把任意上游路由挂成可测试 app，配合 authTokenFor 拿到的本地 userId 使用。 */
+export function buildRouterApp(router: AnyRouter, prefix: string, db?: D1Database): TestApp {
+  const a = new Hono<{ Bindings: { DB: D1Database; JWT_SECRET: string; REGISTRATION_ENABLED?: string; R2?: R2Bucket; BEECOUNT_DO?: DurableObjectNamespace }; Variables: { userId: string } }>();
+  a.use(`${prefix}/*`, async (c, next) => {
+    c.set('userId', c.req.header('X-Test-User') || 'u1');
+    if (db) (c.env as { DB?: D1Database }).DB = db;
+    await next();
+  });
+  a.route(prefix, router as never);
+  return a;
+}
+
+export const buildProfileApp = (db?: D1Database) => buildRouterApp(profileRouter as never, '/api/v1/profile', db);
+export const buildTwoFactorApp = (db?: D1Database) => buildRouterApp(twoFactorRouter as never, '/api/v1/two_factor', db);
+
+/** 注册并登录 authtest@example.com，返回本地生成的 access token / userId / refresh token。
+ *  供其它模块差分测试注入 X-Test-User 使用（与 golden 中上游用户的确定性字段比对）。 */
+export async function authTokenFor(env = authEnv()): Promise<{ accessToken: string; userId: string; refreshToken: string }> {
+  const app = buildAuthApp(true);
+  const reg = await app.request('/api/v1/auth/register', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: 'authtest@example.com', password: 'password123', client_type: 'web', device_name: 'CI' }),
+  }, env as never);
+  if (reg.status !== 200) {
+    throw new Error(`authTokenFor register failed: ${reg.status} ${await reg.text()}`);
+  }
+  const login = await app.request('/api/v1/auth/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: 'authtest@example.com', password: 'password123', client_type: 'web' }),
+  }, env as never);
+  const body = await login.json() as { access_token: string; refresh_token: string; user: { id: string } };
+  return { accessToken: body.access_token, userId: body.user.id, refreshToken: body.refresh_token };
 }
 
 /** 往 devices 插一条与上游 golden 同内容的设备，用于 GET /devices 响应比对。 */
