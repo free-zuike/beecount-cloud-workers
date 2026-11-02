@@ -356,7 +356,7 @@ export function buildRouterApp(router: AnyRouter, prefix: string, db?: D1Databas
 }
 
 export const buildProfileApp = (db?: D1Database) => buildRouterApp(profileRouter as never, '/api/v1/profile', db);
-export const buildTwoFactorApp = (db?: D1Database) => buildRouterApp(twoFactorRouter as never, '/api/v1/two_factor', db);
+export const buildTwoFactorApp = (db?: D1Database) => buildRouterApp(twoFactorRouter as never, '/api/v1/auth/2fa', db);
 
 /** 注册并登录 authtest@example.com，返回本地生成的 access token / userId / refresh token。
  *  供其它模块差分测试注入 X-Test-User 使用（与 golden 中上游用户的确定性字段比对）。 */

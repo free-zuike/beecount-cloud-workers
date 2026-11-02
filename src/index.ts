@@ -16,6 +16,7 @@ import { detectSafeImageMime } from './lib/image-mime';
 
 import setupRouter from './routes/setup';
 import authRouter from './routes/auth';
+import twoFactorRouter from './routes/two_factor';
 import syncRouter from './routes/sync';
 import readRouter from './routes/read';
 import summaryRouter from './routes/summary';
@@ -231,6 +232,7 @@ app.get('/.well-known/oauth-protected-resource/*', (c) => {
 // ---- 公共路由（无需鉴权）----
 app.route('/api/v1/setup', setupRouter);
 app.route('/api/v1/auth', authRouter);
+app.route('/api/v1/auth/2fa', twoFactorRouter); // 对齐原版 /api/v1/auth/2fa
 app.get('/api/v1/version', (c) =>
   c.json({ name: APP_NAME, version: APP_VERSION })
 );
