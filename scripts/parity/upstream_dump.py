@@ -1290,7 +1290,7 @@ def main(out_path: str) -> int:
         _code = _totp_code(r_setup.json()["secret"])
         print(f"[2fa-debug] computed code={_code}")
         r_confirm = _2fa_client.post("/api/v1/auth/2fa/confirm", json={"code": _code}, headers=_2fa_hdr)
-        print(f"[2fa-debug] confirm status={r_confirm.status_code} body={r_confirm.text()[:200]}")
+        print(f"[2fa-debug] confirm status={r_confirm.status_code} body={r_confirm.text[:200]}")
         _add("confirm", "POST", "/api/v1/auth/2fa/confirm", r_confirm, json_body={"code": "<computed>"})
         r_status1 = _2fa_client.get("/api/v1/auth/2fa/status", headers=_2fa_hdr)
         _add("status_enabled", "GET", "/api/v1/auth/2fa/status", r_status1)
