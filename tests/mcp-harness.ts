@@ -267,7 +267,9 @@ export function buildReadApp(db?: D1Database): TestApp {
   const a = new Hono<{ Bindings: { DB: D1Database; JWT_SECRET: string }; Variables: { userId: string; db?: D1Database } }>();
   a.use('/api/v1/read/*', async (c, next) => {
     c.set('userId', c.req.header('X-Test-User') || 'u1');
-    if (db) (c.set as (k: string, v: unknown) => void)('db', db);
+    // 父级 middleware 通过 c.set 注入的值在子路由（a.route 挂载的 summaryRouter/readRouter）
+    // 的 handler 中不可见，因此改为覆盖请求级 env 上的 DB，父子路由共享同一 env 对象。
+    if (db) (c.env as { DB?: D1Database }).DB = db;
     await next();
   });
   a.route('/api/v1/read', readRouter as never);

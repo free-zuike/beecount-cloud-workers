@@ -46,7 +46,7 @@ const summaryRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
  */
 summaryRouter.get('/', async (c) => {
   const userId = c.get('userId');
-  const db = (c.get('db') as D1Database | undefined) ?? c.env.DB;
+  const db = c.env.DB;
   const ledgerExternalId = c.req.query('ledger_id');
 
   if (!ledgerExternalId) {

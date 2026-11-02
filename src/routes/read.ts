@@ -253,7 +253,7 @@ const readRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
  */
 readRouter.get('/ledgers', async (c) => {
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
   const now = nowUtc();
 
   serverLogger.info('src.routers.read', '[READ] /ledgers called, userId:', userId);
@@ -462,7 +462,7 @@ async function ensureTxProjectionSynced(db: D1Database, userId: string): Promise
 
 readRouter.get('/workspace/transactions', async (c) => {
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
 
   const ledgerId = c.req.query('ledger_id') ?? null;
   const filterUserId = c.req.query('user_id') ?? null;
@@ -739,7 +739,7 @@ readRouter.get('/workspace/transactions', async (c) => {
  */
 readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
   const ledgerExternalId = c.req.param('ledgerExternalId');
   const now = nowUtc();
 
@@ -894,7 +894,7 @@ readRouter.get('/ledgers/:ledgerExternalId', async (c) => {
  */
 readRouter.get('/ledgers/:ledgerExternalId/stats', async (c) => {
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
   const ledgerExternalId = c.req.param('ledgerExternalId');
 
   // 查询账本（支持共享账本成员）
@@ -1044,7 +1044,7 @@ readRouter.get('/ledgers/:ledgerExternalId/stats', async (c) => {
  */
 readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
   const ledgerExternalId = c.req.param('ledgerExternalId');
 
   serverLogger.info('src.routers.read', '[READ] /transactions called, ledgerId:', ledgerExternalId, 'userId:', userId);
@@ -1234,7 +1234,7 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
  */
 readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
   const ledgerExternalId = c.req.param('ledgerExternalId');
 
   // 查询账本（支持共享账本成员）
@@ -1357,7 +1357,7 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
  */
 readRouter.get('/ledgers/:ledgerExternalId/categories', async (c) => {
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
   const ledgerExternalId = c.req.param('ledgerExternalId');
 
   let ledger = await db
@@ -1436,7 +1436,7 @@ readRouter.get('/ledgers/:ledgerExternalId/categories', async (c) => {
  */
 readRouter.get('/ledgers/:ledgerExternalId/tags', async (c) => {
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
   const ledgerExternalId = c.req.param('ledgerExternalId');
 
   let ledger = await db
@@ -1505,7 +1505,7 @@ readRouter.get('/ledgers/:ledgerExternalId/tags', async (c) => {
  */
 readRouter.get('/ledgers/:ledgerExternalId/budgets', async (c) => {
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
   const ledgerExternalId = c.req.param('ledgerExternalId');
 
   // 支持共享账本：先查 owner 账本，再查成员账本
@@ -1598,7 +1598,7 @@ readRouter.get('/ledgers/:ledgerExternalId/budgets', async (c) => {
 // GET /read/ledgers/:ledgerExternalId/budgets/usage - 预算使用情况
 readRouter.get('/ledgers/:ledgerExternalId/budgets/usage', async (c) => {
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
   const ledgerExtId = c.req.param('ledgerExternalId');
 
   // 支持共享账本
@@ -1718,7 +1718,7 @@ readRouter.get('/debug/ledgers', async (c) => {
     return c.json({ error: 'Not found' }, 404);
   }
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
 
   const ledgers = await db
     .prepare('SELECT * FROM ledgers WHERE user_id = ?')
@@ -1752,7 +1752,7 @@ readRouter.get('/debug/transactions', async (c) => {
     return c.json({ error: 'Not found' }, 404);
   }
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
 
   const ledgers = await db
     .prepare('SELECT id, external_id FROM ledgers WHERE user_id = ?')
@@ -1780,7 +1780,7 @@ readRouter.get('/debug/transactions', async (c) => {
 
 readRouter.get('/exchange-rate-overrides', async (c) => {
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
 
   const rows = await db
     .prepare(
@@ -1811,7 +1811,7 @@ readRouter.get('/exchange-rates', async (c) => {
     return c.json({ error: 'Invalid base currency' }, 400);
   }
 
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
   const env = c.env as unknown as Record<string, string | undefined>;
   // 对齐上游 config:exchange_rate_proxy_enabled 默认 true;EXCHANGE_RATE_CACHE_TTL_HOURS 默认 12
   if (env.EXCHANGE_RATE_PROXY_ENABLED === 'false') {
@@ -1888,7 +1888,7 @@ readRouter.get('/debug/sync-changes', async (c) => {
     return c.json({ error: 'Not found' }, 404);
   }
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
 
   const changes = await db
     .prepare('SELECT * FROM sync_changes WHERE user_id = ? ORDER BY change_id DESC LIMIT 50')
@@ -1923,7 +1923,7 @@ type GalleryRef = {
 
 readRouter.get('/workspace/attachments', async (c) => {
   const userId = c.get('userId');
-  const db = (c.get as (k: string) => unknown)('db') as D1Database | undefined ?? c.env.DB;
+  const db = c.env.DB;
 
   const ledgerExternalId = c.req.query('ledger_id') ?? null;
   const q = c.req.query('q') ?? null;
