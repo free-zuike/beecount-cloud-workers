@@ -19,6 +19,13 @@
 """
 from __future__ import annotations
 
+import os as _os
+
+# 在导入任何 src 模块之前设置，避免上游模块级 `settings = get_settings()` 缓存到默认值
+# （例如 registration_enabled 默认 False，会导致 golden 里注册被禁用 → 403，进而 login 等全 401）。
+# 仅此一项需在导入前设好；JWT_SECRET/APP_ENV 由 auth golden 块在导入 src.main 前另行设置。
+_os.environ["REGISTRATION_ENABLED"] = "true"
+
 import asyncio
 import hashlib
 import json
