@@ -92,10 +92,14 @@ describe.skipIf(!hasGolden)('REST 只读计算 vs 上游 golden', () => {
       const right = ORDER_UNDEFINED.has(kase.tool) ? sortTop(want) : want;
       const diffs = diffJson(left, right);
       if (diffs.length && process.env.CI) {
-        const rows = h.sqlite
+        const viaSqlite = h.sqlite
           .prepare('SELECT sync_id, ledger_id FROM read_tx_projection ORDER BY sync_id')
           .all() as Array<{ sync_id: string; ledger_id: string }>;
-        console.log('[CI-DIAG]', kase.tool, JSON.stringify(kase.args), 'rows=', rows.map(r => `${r.sync_id}@${r.ledger_id}`).join(','));
+        const viaD1all = await h.db.prepare('SELECT sync_id FROM read_tx_projection ORDER BY sync_id').all() as { results?: Array<{ sync_id: string }> };
+        const viaD1 = viaD1all?.results ?? [];
+        console.log('[CI-DIAG]', kase.tool, JSON.stringify(kase.args),
+          'sqlite=', viaSqlite.map(r => `${r.sync_id}@${r.ledger_id}`).join(','),
+          'd1=', viaD1.map(r => r.sync_id).join(','));
       }
       expect(diffs.length ? formatDiffs(kase.tool, diffs) : '').toBe('');
     });
