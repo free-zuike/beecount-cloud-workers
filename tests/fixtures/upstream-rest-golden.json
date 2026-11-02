@@ -7,12 +7,12 @@
         "ledger_id": "L1"
       },
       "result": {
-        "balance": 7798.47,
-        "expense_total": 101.53,
-        "income_total": 8000.0,
-        "latest_happened_at": "2026-05-14T02:30:00Z",
+        "balance": 16785.97,
+        "expense_total": 114.03,
+        "income_total": 17000.0,
+        "latest_happened_at": "2026-05-19T16:00:00Z",
         "ledger_id": "L1",
-        "transaction_count": 7
+        "transaction_count": 9
       }
     },
     {

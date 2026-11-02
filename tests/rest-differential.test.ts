@@ -13,7 +13,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildReadApp, makeHarness, seed, type Harness } from './mcp-harness';
+import { buildReadApp, makeHarness, seed, insertRow, type Harness } from './mcp-harness';
 import { diffJson, formatDiffs, normalize, type Json } from './parity-compare';
 
 const GOLDEN_PATH = join(process.cwd(), 'tests/fixtures/upstream-rest-golden.json');
@@ -58,6 +58,32 @@ function statusErrorCode(text: string): string {
   }
 }
 
+/**
+ * 对齐 upstream_dump.py scenario 的 create_transactions 批量写：对 L1 额外插入 2 笔交易，
+ * 使本地 harness 的 read_tx_projection 与上游生成 REST golden 时所处的 db 状态一致。
+ * 直接按上游最终落库的字段值插入（happened_at 已是 Asia/Shanghai → UTC 后的结果），
+ * 避免依赖批量路由的时区换算实现细节，只要最终统计口径一致即可差分通过。
+ */
+function seedBatchL1(h: Harness): void {
+  const bt: Array<[string, 'expense' | 'income', number, string, string, string, string, string | null]> = [
+    ['bt1', 'expense', 12.5, '2026-05-12T16:00:00Z', 'c1', 'a1', '批量咖啡', null],
+    ['bt2', 'income', 9000, '2026-05-19T16:00:00Z', 'c2', 'a1', '批量工资', null],
+  ];
+  for (const [sync, kind, amount, happened, cat, acc, note, tags] of bt) {
+    insertRow(h.sqlite, 'read_tx_projection', {
+      sync_id: sync, user_id: 'u1', ledger_id: 'L1-i', tx_type: kind, amount,
+      happened_at: happened, category_sync_id: cat, account_sync_id: acc,
+      category_name: cat === 'c1' ? '餐饮' : cat === 'c2' ? '工资' : null,
+      account_name: acc === 'a1' ? '现金' : acc === 'a2' ? '招行' : null,
+      note, tags_csv: tags, currency_code: 'CNY', native_amount: null,
+      from_account_id: null, to_account_id: null, from_account_name: null, to_account_name: null,
+      exclude_from_stats: 0, exclude_from_budget: 0,
+      source_change_id: 1, created_by_user_id: 'u1', created_at: happened, updated_at: happened,
+      tags_sync_ids_json: null, tag_sync_ids_json: null,
+    });
+  }
+}
+
 describe.skipIf(!hasGolden)('REST 只读计算 vs 上游 golden', () => {
   it('fixtures 已生成', () => {
     expect(golden.cases.length).toBeGreaterThan(0);
@@ -67,16 +93,13 @@ describe.skipIf(!hasGolden)('REST 只读计算 vs 上游 golden', () => {
     it(`[${kase.tool}] ${JSON.stringify(kase.args)}`, async () => {
       const h: Harness = makeHarness();
       seed(h);
+      // 对齐 upstream_dump.py 的 scenario：对 L1 执行 create_transactions 批量写（2 笔）。
+      // 上游 REST golden 是在 scenario（含批量写）跑完后的同一 db 上生成的，
+      // 所以本地 harness 必须复现这 2 笔，否则 worker 得 7 而 golden 得 9。
+      seedBatchL1(h);
       const userId = 'u1';
       const app = buildReadApp(h.db);
       const { method, path } = toRequest(kase.tool, kase.args);
-
-      if (kase.tool === 'get_summary' && (kase.args.ledger_id as string) === 'L1') {
-        const diag = h.sqlite.prepare("SELECT sync_id, happened_at, amount, tx_type, ledger_id FROM read_tx_projection WHERE ledger_id='L1-i'").all();
-        console.log('[DIAG-L1] rows after seed:', JSON.stringify(diag));
-        const cnt = h.sqlite.prepare("SELECT COUNT(*) c FROM read_tx_projection WHERE ledger_id='L1-i'").get();
-        console.log('[DIAG-L1] count after seed:', JSON.stringify(cnt));
-      }
 
       const res = await app.request(path, {
         method,
