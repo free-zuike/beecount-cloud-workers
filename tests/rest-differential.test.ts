@@ -86,7 +86,7 @@ function seedBatchL1(h: Harness): void {
       category_name: cat === 'c1' ? '餐饮' : cat === 'c2' ? '工资' : null,
       category_kind: cat === 'c1' ? 'expense' : cat === 'c2' ? 'income' : cat === 'c3' ? 'transfer' : null,
       account_name: acc === 'a1' ? '现金' : acc === 'a2' ? '招行' : null,
-      note, tags_csv: tags, currency_code: 'CNY', native_amount: null,
+      note, tags_csv: tags, currency_code: 'CNY', native_amount: null, tx_index: 0,
       from_account_id: null, to_account_id: null, from_account_name: null, to_account_name: null,
       exclude_from_stats: 0, exclude_from_budget: 0,
       source_change_id: 1, created_by_user_id: 'u1', created_at: happened, updated_at: happened,

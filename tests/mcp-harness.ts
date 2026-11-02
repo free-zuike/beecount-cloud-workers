@@ -240,15 +240,15 @@ export function seed(h: Harness): void {
   });
 
   const txs = [
-    ['t1', 'expense', 38, '2026-05-02T03:30:00Z', 'c1', 'a1', '星巴克', null, 'CNY', null],
-    ['t2', 'expense', 12.5, '2026-05-02T03:30:00Z', 'c1', 'a1', '同秒第二笔', null, 'CNY', null],
-    ['t3', 'income', 8000, '2026-05-10T02:30:00Z', 'c2', 'a2', null, null, 'CNY', null],
-    ['t4', 'expense', 100, '2026-05-11T02:30:00Z', 'c1', 'a1', null, null, 'CNY', null],
-    ['t5', 'expense', 20, '2026-05-12T02:30:00Z', 'c1', 'a1', null, null, 'CNY', null],
-    ['t6', 'expense', 7.5, '2026-05-13T02:30:00Z', null, 'a1', null, null, 'USD', 1.03],
-    ['t7', 'expense', 30, '2026-05-14T02:30:00Z', 'c1', 'a1', null, '出差,客户', 'CNY', null],
+    ['t1', 'expense', 38, '2026-05-02T03:30:00Z', 'c1', 'a1', '星巴克', null, 'CNY', null, 0],
+    ['t2', 'expense', 12.5, '2026-05-02T03:30:00Z', 'c1', 'a1', '同秒第二笔', null, 'CNY', null, 1],
+    ['t3', 'income', 8000, '2026-05-10T02:30:00Z', 'c2', 'a2', null, null, 'CNY', null, 2],
+    ['t4', 'expense', 100, '2026-05-11T02:30:00Z', 'c1', 'a1', null, null, 'CNY', null, 3],
+    ['t5', 'expense', 20, '2026-05-12T02:30:00Z', 'c1', 'a1', null, null, 'CNY', null, 4],
+    ['t6', 'expense', 7.5, '2026-05-13T02:30:00Z', null, 'a1', null, null, 'USD', 1.03, 5],
+    ['t7', 'expense', 30, '2026-05-14T02:30:00Z', 'c1', 'a1', null, '出差,客户', 'CNY', null, 6],
   ] as const;
-  for (const [sync, kind, amount, happened, cat, acc, note, tags, cur, native] of txs) {
+  for (const [sync, kind, amount, happened, cat, acc, note, tags, cur, native, txIndex] of txs) {
     insertRow(h.sqlite, 'read_tx_projection', {
       sync_id: sync, user_id: 'u1', ledger_id: 'L1-i', tx_type: kind, amount,
       happened_at: happened, category_sync_id: cat, account_sync_id: acc,
@@ -256,6 +256,7 @@ export function seed(h: Harness): void {
       category_kind: cat === 'c1' ? 'expense' : cat === 'c2' ? 'income' : cat === 'c3' ? 'transfer' : null,
       account_name: acc === 'a1' ? '现金' : acc === 'a2' ? '招行' : null,
       note, tags_csv: tags, currency_code: cur, native_amount: native,
+      tx_index: txIndex,
       from_account_id: null, to_account_id: null, from_account_name: null, to_account_name: null,
       exclude_from_stats: sync === 't4' ? 1 : 0,
       exclude_from_budget: sync === 't5' ? 1 : 0,
