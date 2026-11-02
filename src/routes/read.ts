@@ -1179,11 +1179,35 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
     .first<{ max_id: number }>();
   const ledgerLastChangeId = ledgerMaxChange?.max_id ?? 0;
 
+  // 共享账本 §7: 收集编辑者 uid，一次查 users/user_profiles 填充 last_edited_by_*
+  // （对齐上游：last_edited_by_user_id 为空时不做任何回退，直接全 null）
+  const editorUids = new Set<string>();
+  for (const r of rows.results) {
+    const e = r.last_edited_by_user_id as string | null;
+    if (e) editorUids.add(e);
+  }
+  const editorInfoMap = new Map<string, { email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number | null }>();
+  if (editorUids.size > 0) {
+    const ph = [...editorUids].map(() => '?').join(',');
+    const userRows = await db
+      .prepare(`SELECT u.id, u.email, p.display_name, p.avatar_file_id, p.avatar_version
+                 FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id
+                 WHERE u.id IN (${ph})`)
+      .bind(...editorUids)
+      .all<{ id: string; email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number | null }>();
+    for (const u of userRows.results) {
+      editorInfoMap.set(u.id, { email: u.email, display_name: u.display_name, avatar_file_id: u.avatar_file_id, avatar_version: u.avatar_version });
+    }
+  }
+
   const result: ReadTransactionOut[] = rows.results.map((row) => {
     const tagIds = safeJsonParse<string[]>(row.tag_sync_ids_json as string | null) ?? [];
     const attachments = safeJsonParse<Array<Record<string, unknown>>>(
       row.attachments_json as string | null
     );
+
+    const editorUid = (row.last_edited_by_user_id as string) ?? null;
+    const editor = editorUid ? editorInfoMap.get(editorUid) : undefined;
 
     return {
       id: row.sync_id as string,
@@ -1219,11 +1243,13 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
         ? `/api/v1/profile/avatar/${ownerInfo.id}?v=${ownerInfo.avatar_version ?? 0}`
         : null,
       created_by_avatar_version: ownerInfo.avatar_version,
-      last_edited_by_user_id: (row.last_edited_by_user_id as string) ?? null,
-      last_edited_by_email: null,
-      last_edited_by_display_name: null,
-      last_edited_by_avatar_url: null,
-      last_edited_by_avatar_version: null,
+      last_edited_by_user_id: editorUid,
+      last_edited_by_email: editor?.email ?? null,
+      last_edited_by_display_name: editor?.display_name ?? null,
+      last_edited_by_avatar_url: editorUid && editor?.avatar_file_id
+        ? `/api/v1/profile/avatar/${editorUid}?v=${editor?.avatar_version ?? 0}`
+        : null,
+      last_edited_by_avatar_version: editor?.avatar_file_id ? (editor?.avatar_version ?? 0) : null,
     };
   });
 
