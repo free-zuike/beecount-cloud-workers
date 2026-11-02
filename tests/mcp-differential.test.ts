@@ -20,7 +20,7 @@ import {
 } from '../src/mcp/tools/read-tools';
 import { listAttachments } from '../src/mcp/file-tools';
 import { getAccountBalances, getBookkeepingContext, manageAccount, manageCategory, manageTag, manageBudget, manageLedger, getNetWorthHistory, listLedgerMembers } from '../src/mcp/capability-tools';
-import { saveClassificationRule, saveReviewItem, manageRecurringRule } from '../src/mcp/rule-tools';
+import { saveClassificationRule, saveReviewItem, manageRecurringRule, type RecurringRule } from '../src/mcp/rule-tools';
 import { createTransactions } from '../src/mcp/tools/write-tools';
 import { analyzeTransactions } from '../src/mcp/analysis-tools';
 import {
@@ -473,7 +473,7 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
     }));
 
     // 周期规则：确认门控 + 创建 + 删除确认流（与 manage_* 同构）
-    const rrData = {
+    const rrData: RecurringRule = {
       name: '周期会员费',
       transaction: { tx_type: 'expense', amount: 10, account_id: 'a1', category_id: 'c1', happened_at: '2026-05-01', note: '周期扣费' },
       frequency: 'monthly', interval: 1, starts_at: '2026-05-01', time_zone: 'Asia/Shanghai',
