@@ -624,6 +624,8 @@ def main(out_path: str) -> int:
         def dump_model(obj):
             if hasattr(obj, "model_dump"):
                 return obj.model_dump(mode="json")
+            if isinstance(obj, list):
+                return [dump_model(x) for x in obj]
             return obj
 
         # 直接调用上游路由函数时，Query(default=None) 的默认值会变成真实的 Query 对象（truthy），
