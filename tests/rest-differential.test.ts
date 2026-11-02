@@ -98,16 +98,15 @@ function seedBatchL1(h: Harness): void {
     .run(18, 'u1', 'L1-i', 'ledger_snapshot', 'L1', 'upsert', '{}', '2026-05-20T00:00:00Z', 'u1', null, 'ledger');
 }
 
-// list_transactions 的核心比对投影：覆盖过滤/排序/分页相关的确定性字段 + 确定性元数据
-// （created_by_* / last_edited_by_* / ledger_* / last_change_id / exclude_* /
-// currency_code / native_amount），确保响应结构与上游逐项对齐。
-// 仅剔除两类无法静态对齐的字段：
-//   - id / tag_ids：上游夹具每次 CI 重生都会随机生成；
-//   - attachments：非过滤维度且格式可能为 null/[]，单独排除以免误报。
+// list_transactions 的核心比对投影：覆盖全部确定性字段（过滤/排序/分页相关 + 确定性元数据
+// created_by_* / last_edited_by_* / ledger_* / last_change_id / exclude_* / currency/native /
+// from_account_id / to_account_id / tx_index / attachments），确保响应结构与上游逐项对齐。
+// 仅剔除唯一一类无法静态对齐的字段：id / tag_ids（上游夹具每次 CI 重生都会随机生成）。
 const LT_CORE = new Set<string>([
   'tx_type', 'amount', 'happened_at', 'note', 'category_name', 'category_kind',
-  'account_name', 'from_account_name', 'to_account_name', 'category_id', 'account_id',
-  'tags', 'tags_list', 'currency_code', 'native_amount',
+  'account_name', 'from_account_name', 'to_account_name', 'from_account_id', 'to_account_id',
+  'category_id', 'account_id', 'tx_index',
+  'tags', 'tags_list', 'currency_code', 'native_amount', 'attachments',
   'created_by_user_id', 'created_by_email', 'created_by_display_name', 'created_by_avatar_url', 'created_by_avatar_version',
   'last_edited_by_user_id', 'last_edited_by_email', 'last_edited_by_display_name', 'last_edited_by_avatar_url', 'last_edited_by_avatar_version',
   'ledger_id', 'ledger_name', 'last_change_id',
