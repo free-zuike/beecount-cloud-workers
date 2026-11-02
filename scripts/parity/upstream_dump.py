@@ -1179,8 +1179,8 @@ def main(out_path: str) -> int:
             "email": "authtest@example.com", "password": "wrongpass", "client_type": "web"})
         if _refresh_token:
             _do("refresh", "post", "/api/v1/auth/refresh", {"refresh_token": _refresh_token})
-        if _access_token:
-            _do("me", "get", "/api/v1/auth/me", headers={"Authorization": f"Bearer {_access_token}"})
+        # 注：/me 属于 profile router（/api/v1/profile/me），不在 auth router，
+        # 故不纳入 auth golden；profile 模块的 parity 单独覆盖。
         if _refresh_token:
             _do("logout", "post", "/api/v1/auth/logout", {"refresh_token": _refresh_token})
 

@@ -15,9 +15,12 @@
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { buildAuthApp, authEnv } from './mcp-harness';
 
-const GOLDEN_PATH = new URL('./fixtures/upstream-auth-golden.json', import.meta.url);
+const GOLDEN_PATH = join(process.cwd(), 'tests/fixtures/upstream-auth-golden.json');
+const hasGolden = existsSync(GOLDEN_PATH);
+const goldenData = hasGolden ? JSON.parse(readFileSync(GOLDEN_PATH, 'utf-8')) : { steps: [] };
 
 // 随机字段 + 错误体格式字段，两侧都剔除后比对
 const VOLATILE_KEYS = new Set([
@@ -49,31 +52,11 @@ interface Step {
   result: unknown;
 }
 
-describe('auth differential vs upstream', () => {
-  // 同步读取 golden（在 describe 注册期执行，确保下方 forEach 能注册到正确数量的用例）。
-  // 本地未生成 golden 时 available=false，测试优雅跳过。
-  const goldenSteps: Step[] = [];
-  let available = false;
-  try {
-    if (existsSync(GOLDEN_PATH)) {
-      const raw = JSON.parse(readFileSync(GOLDEN_PATH, 'utf8'));
-      goldenSteps.push(...(raw.steps ?? []));
-      available = goldenSteps.length > 0;
-    } else {
-      console.warn('[auth-differential] golden 缺失，跳过（CI 生成 upstream-auth-golden.json 后生效）');
-    }
-  } catch (err) {
-    console.warn('[auth-differential] 读取 golden 失败，跳过：', err);
-  }
-
-  it('golden 可用', () => {
-    if (!available) return;
-    expect(goldenSteps.length).toBeGreaterThan(0);
-  });
+describe.skipIf(!hasGolden)('auth differential vs upstream', () => {
+  const goldenSteps: Step[] = goldenData.steps ?? [];
 
   goldenSteps.forEach((target, idx) => {
     it(`step[${idx}]: ${target.name}`, async () => {
-      if (!available) return;
       const env = authEnv(true);
       const app = buildAuthApp(true);
       const captured: Record<string, string> = {};

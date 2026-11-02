@@ -331,6 +331,7 @@ authRouter.post('/login', zValidator('json', z.object({
   // 返回符合蜜蜂记账 APP 期望的格式
   return c.json({
     requires_2fa: false,
+    available_methods: [],
     user: {
       id: user.id,
       email: user.email || null,
@@ -429,7 +430,6 @@ authRouter.post('/refresh', zValidator('json', z.object({
     await db.batch(refreshStmts);
 
     return c.json({
-      requires_2fa: false,
       user: { id: user.id, email: user.email || null, is_admin: Boolean(user.is_admin) },
       access_token: accessToken,
       refresh_token: newRefreshTokenValue,
