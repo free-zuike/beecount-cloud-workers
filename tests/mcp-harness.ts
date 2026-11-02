@@ -260,11 +260,14 @@ export function seed(h: Harness): void {
   }
 }
 
-/** 挂载真实 read + summary 路由（用于 REST 只读计算的差分；跳过 scopeGuard，直接注入 userId）。 */
-export function buildReadApp(): TestApp {
-  const a = new Hono<{ Bindings: { DB: D1Database; JWT_SECRET: string }; Variables: { userId: string } }>();
+/** 挂载真实 read + summary 路由（用于 REST 只读计算的差分；跳过 scopeGuard，直接注入 userId）。
+ *  db 可选：传入后会通过 c.set('db') 注入，路由优先使用它，避免依赖 c.env（在 CI 下
+ *  app.request 的 env 注入可能失效，使 c.env 回退到被其它测试污染的全局 DB）。 */
+export function buildReadApp(db?: D1Database): TestApp {
+  const a = new Hono<{ Bindings: { DB: D1Database; JWT_SECRET: string }; Variables: { userId: string; db?: D1Database } }>();
   a.use('/api/v1/read/*', async (c, next) => {
     c.set('userId', c.req.header('X-Test-User') || 'u1');
+    if (db) (c.set as (k: string, v: unknown) => void)('db', db);
     await next();
   });
   a.route('/api/v1/read', readRouter as never);

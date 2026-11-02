@@ -68,7 +68,7 @@ describe.skipIf(!hasGolden)('REST 只读计算 vs 上游 golden', () => {
       const h: Harness = makeHarness();
       seed(h);
       const userId = 'u1';
-      const app = buildReadApp();
+      const app = buildReadApp(h.db);
       const { method, path } = toRequest(kase.tool, kase.args);
 
       const res = await app.request(path, {
@@ -91,16 +91,6 @@ describe.skipIf(!hasGolden)('REST 只读计算 vs 上游 golden', () => {
       const left = ORDER_UNDEFINED.has(kase.tool) ? sortTop(body) : body;
       const right = ORDER_UNDEFINED.has(kase.tool) ? sortTop(want) : want;
       const diffs = diffJson(left, right);
-      if (diffs.length && process.env.CI) {
-        const viaSqlite = h.sqlite
-          .prepare('SELECT sync_id, ledger_id FROM read_tx_projection ORDER BY sync_id')
-          .all() as Array<{ sync_id: string; ledger_id: string }>;
-        const viaD1all = await h.db.prepare('SELECT sync_id FROM read_tx_projection ORDER BY sync_id').all() as { results?: Array<{ sync_id: string }> };
-        const viaD1 = viaD1all?.results ?? [];
-        console.log('[CI-DIAG]', kase.tool, JSON.stringify(kase.args),
-          'sqlite=', viaSqlite.map(r => `${r.sync_id}@${r.ledger_id}`).join(','),
-          'd1=', viaD1.map(r => r.sync_id).join(','));
-      }
       expect(diffs.length ? formatDiffs(kase.tool, diffs) : '').toBe('');
     });
   }
