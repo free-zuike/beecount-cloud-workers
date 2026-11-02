@@ -1290,8 +1290,8 @@ def main(out_path: str) -> int:
         _add("confirm", "POST", "/api/v1/auth/2fa/confirm", r_confirm, json_body={"code": "<computed>"})
         r_status1 = _2fa_client.get("/api/v1/auth/2fa/status", headers=_2fa_hdr)
         _add("status_enabled", "GET", "/api/v1/auth/2fa/status", r_status1)
-        r_disable = _2fa_client.post("/api/v1/auth/2fa/disable", json={"password": "password123"}, headers=_2fa_hdr)
-        _add("disable", "POST", "/api/v1/auth/2fa/disable", r_disable, json_body={"password": "password123"})
+        r_disable = _2fa_client.post("/api/v1/auth/2fa/disable", json={"password": "password123", "code": _totp_code(r_setup.json()["secret"])}, headers=_2fa_hdr)
+        _add("disable", "POST", "/api/v1/auth/2fa/disable", r_disable, json_body={"password": "password123", "code": "<computed>"})
         r_status2 = _2fa_client.get("/api/v1/auth/2fa/status", headers=_2fa_hdr)
         _add("status_after", "GET", "/api/v1/auth/2fa/status", r_status2)
 

@@ -5,6 +5,9 @@
  * 无法简单重放 code。故采用「结构比对」：golden 记录各步骤的状态码 + 响应结构
  * （已 scrub 掉 secret / qr_code_uri / recovery_codes / enabled_at 等随机/时间戳字段），
  * 本地测试自建完整 2FA 流程（用本地 secret 经 otpauth 计算 code）逐步骤比对。
+ *
+ * 鉴权：twoFactorRouter 自带 JWT 中间件（/verify 除外），故本地用 authTokenFor
+ * 签发的 Bearer token 鉴权（与 routerEnv 同一 JWT_SECRET，可被本地校验）。
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
@@ -51,77 +54,67 @@ function totpCode(secret: string): string {
 }
 
 describe.skipIf(!hasGolden)('two_factor differential vs upstream', () => {
-  const base = (userId: string, extra?: Record<string, string>) => ({ 'X-Test-User': userId, ...(extra ?? {}) });
+  // 每个用例自建独立 env/user，用 Bearer token 鉴权（twoFactorRouter 自带 JWT 中间件）
+  async function ctx() {
+    const env = routerEnv();
+    const { userId, accessToken } = await authTokenFor(env);
+    const app = buildTwoFactorApp();
+    const headers = (extra?: Record<string, string>) => ({ Authorization: `Bearer ${accessToken}`, ...(extra ?? {}) });
+    return { env, userId, app, headers };
+  }
 
   it('status_before: disabled', async () => {
-    const env = routerEnv();
-    const { userId } = await authTokenFor(env);
-    const app = buildTwoFactorApp();
-    const resp = await app.request('/api/v1/auth/2fa/status', { method: 'GET', headers: base(userId) }, env as never);
+    const { env, app, headers } = await ctx();
+    const resp = await app.request('/api/v1/auth/2fa/status', { method: 'GET', headers: headers() }, env as never);
     expect(resp.status).toBe(step('status_before').status);
     expect(scrub(await resp.json())).toEqual(scrub(step('status_before').result));
   });
 
-  it('setup returns expires_in and enables flow', async () => {
-    const env = routerEnv();
-    const { userId } = await authTokenFor(env);
-    const app = buildTwoFactorApp();
-    const resp = await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: base(userId) }, env as never);
+  it('setup returns expires_in', async () => {
+    const { env, app, headers } = await ctx();
+    const resp = await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: headers() }, env as never);
     expect(resp.status).toBe(step('setup').status);
     const body = await resp.json() as { secret: string; expires_in: number };
     expect(typeof body.secret).toBe('string');
     expect(scrub(body)).toEqual(scrub(step('setup').result));
-    return body.secret;
   });
 
   it('confirm enables 2FA', async () => {
-    const env = routerEnv();
-    const { userId } = await authTokenFor(env);
-    const app = buildTwoFactorApp();
-    const setup = await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: base(userId) }, env as never);
+    const { env, app, headers } = await ctx();
+    const setup = await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: headers() }, env as never);
     const secret = (await setup.json() as { secret: string }).secret;
-    const code = totpCode(secret);
-    const resp = await app.request('/api/v1/auth/2fa/confirm', { method: 'POST', headers: { ...base(userId), 'content-type': 'application/json' }, body: JSON.stringify({ code }) }, env as never);
+    const resp = await app.request('/api/v1/auth/2fa/confirm', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ code: totpCode(secret) }) }, env as never);
     expect(resp.status).toBe(step('confirm').status);
     expect(scrub(await resp.json())).toEqual(scrub(step('confirm').result));
   });
 
   it('status_enabled: enabled', async () => {
-    const env = routerEnv();
-    const { userId } = await authTokenFor(env);
-    const app = buildTwoFactorApp();
-    await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: base(userId) }, env as never);
-    const setup = await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: base(userId) }, env as never);
+    const { env, app, headers } = await ctx();
+    const setup = await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: headers() }, env as never);
     const secret = (await setup.json() as { secret: string }).secret;
-    await app.request('/api/v1/auth/2fa/confirm', { method: 'POST', headers: { ...base(userId), 'content-type': 'application/json' }, body: JSON.stringify({ code: totpCode(secret) }) }, env as never);
-    const resp = await app.request('/api/v1/auth/2fa/status', { method: 'GET', headers: base(userId) }, env as never);
+    await app.request('/api/v1/auth/2fa/confirm', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ code: totpCode(secret) }) }, env as never);
+    const resp = await app.request('/api/v1/auth/2fa/status', { method: 'GET', headers: headers() }, env as never);
     expect(resp.status).toBe(step('status_enabled').status);
     expect(scrub(await resp.json())).toEqual(scrub(step('status_enabled').result));
   });
 
   it('disable turns 2FA off', async () => {
-    const env = routerEnv();
-    const { userId } = await authTokenFor(env);
-    const app = buildTwoFactorApp();
-    await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: base(userId) }, env as never);
-    const setup = await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: base(userId) }, env as never);
+    const { env, app, headers } = await ctx();
+    const setup = await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: headers() }, env as never);
     const secret = (await setup.json() as { secret: string }).secret;
-    await app.request('/api/v1/auth/2fa/confirm', { method: 'POST', headers: { ...base(userId), 'content-type': 'application/json' }, body: JSON.stringify({ code: totpCode(secret) }) }, env as never);
-    const resp = await app.request('/api/v1/auth/2fa/disable', { method: 'POST', headers: { ...base(userId), 'content-type': 'application/json' }, body: JSON.stringify({ password: 'password123' }) }, env as never);
+    await app.request('/api/v1/auth/2fa/confirm', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ code: totpCode(secret) }) }, env as never);
+    const resp = await app.request('/api/v1/auth/2fa/disable', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ password: 'password123', code: totpCode(secret) }) }, env as never);
     expect(resp.status).toBe(step('disable').status);
     expect(scrub(await resp.json())).toEqual(scrub(step('disable').result));
   });
 
   it('status_after: disabled again', async () => {
-    const env = routerEnv();
-    const { userId } = await authTokenFor(env);
-    const app = buildTwoFactorApp();
-    await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: base(userId) }, env as never);
-    const setup = await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: base(userId) }, env as never);
+    const { env, app, headers } = await ctx();
+    const setup = await app.request('/api/v1/auth/2fa/setup', { method: 'POST', headers: headers() }, env as never);
     const secret = (await setup.json() as { secret: string }).secret;
-    await app.request('/api/v1/auth/2fa/confirm', { method: 'POST', headers: { ...base(userId), 'content-type': 'application/json' }, body: JSON.stringify({ code: totpCode(secret) }) }, env as never);
-    await app.request('/api/v1/auth/2fa/disable', { method: 'POST', headers: { ...base(userId), 'content-type': 'application/json' }, body: JSON.stringify({ password: 'password123' }) }, env as never);
-    const resp = await app.request('/api/v1/auth/2fa/status', { method: 'GET', headers: base(userId) }, env as never);
+    await app.request('/api/v1/auth/2fa/confirm', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ code: totpCode(secret) }) }, env as never);
+    await app.request('/api/v1/auth/2fa/disable', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ password: 'password123' }) }, env as never);
+    const resp = await app.request('/api/v1/auth/2fa/status', { method: 'GET', headers: headers() }, env as never);
     expect(resp.status).toBe(step('status_after').status);
     expect(scrub(await resp.json())).toEqual(scrub(step('status_after').result));
   });
