@@ -1266,7 +1266,7 @@ def main(out_path: str) -> int:
             msg = _st.pack(">Q", counter)
             h = _hm.new(key, msg, _hl.sha1).digest()
             o = h[-1] & 0x0f
-            code = (struct.unpack(">I", h[o:o + 4])[0] & 0x7fffffff) % (10 ** digits)
+            code = (_st.unpack(">I", h[o:o + 4])[0] & 0x7fffffff) % (10 ** digits)
             return str(code).zfill(digits)
 
         def _scrub_2fa(v):
