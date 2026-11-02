@@ -76,8 +76,8 @@ function statusErrorCode(text: string): string {
  */
 function seedBatchL1(h: Harness): void {
   const bt: Array<[string, 'expense' | 'income', number, string, string, string, string, string | null]> = [
-    ['bt1', 'expense', 12.5, '2026-05-12T16:00:00Z', 'c1', 'a1', '批量咖啡', null],
-    ['bt2', 'income', 9000, '2026-05-19T16:00:00Z', 'c2', 'a1', '批量工资', null],
+    ['bt1', 'expense', 12.5, '2026-05-12T16:00:00Z', 'c1', 'a1', '批量咖啡', 'MCP'],
+    ['bt2', 'income', 9000, '2026-05-19T16:00:00Z', 'c2', 'a1', '批量工资', 'MCP'],
   ];
   for (const [sync, kind, amount, happened, cat, acc, note, tags] of bt) {
     insertRow(h.sqlite, 'read_tx_projection', {
@@ -93,6 +93,28 @@ function seedBatchL1(h: Harness): void {
       tags_sync_ids_json: null, tag_sync_ids_json: null,
     });
   }
+}
+
+// list_transactions 的核心比对投影：聚焦过滤/排序/分页相关的确定性字段。
+// 剔除的字段要么是非确定性（上游夹具随机生成的 id / tag_ids），要么是与夹具/账户相关的
+// 元数据（created_by_* / last_edited_by_* / ledger_* / last_change_id / attachments /
+// exclude_* / currency_code / native_amount），这些不在 item 3（过滤/排序/分页）的验证范围内。
+const LT_CORE = new Set<string>([
+  'tx_type', 'amount', 'happened_at', 'note', 'category_name', 'category_kind',
+  'account_name', 'from_account_name', 'to_account_name', 'category_id', 'account_id',
+  'tags', 'tags_list',
+]);
+function projectListTx(v: Json): Json {
+  if (Array.isArray(v)) {
+    return v.map((o) =>
+      o && typeof o === 'object' && !Array.isArray(o)
+        ? (Object.fromEntries(
+            Object.entries(o as Record<string, Json>).filter(([k]) => LT_CORE.has(k)),
+          ) as Json)
+        : o,
+    ) as Json;
+  }
+  return v;
 }
 
 describe.skipIf(!hasGolden)('REST 只读计算 vs 上游 golden', () => {
@@ -129,8 +151,11 @@ describe.skipIf(!hasGolden)('REST 只读计算 vs 上游 golden', () => {
       expect(res.status).toBe(200);
       const body = normalize(JSON.parse(await res.text()) as Json);
       const want = normalize(kase.result as Json);
-      const left = ORDER_UNDEFINED.has(kase.tool) ? sortTop(body) : body;
-      const right = ORDER_UNDEFINED.has(kase.tool) ? sortTop(want) : want;
+      // list_transactions 投影到核心字段（过滤/排序/分页相关），剔除非确定性/夹具相关元数据
+      const bodyProj = kase.tool === 'list_transactions' ? projectListTx(body) : body;
+      const wantProj = kase.tool === 'list_transactions' ? projectListTx(want) : want;
+      const left = ORDER_UNDEFINED.has(kase.tool) ? sortTop(bodyProj) : bodyProj;
+      const right = ORDER_UNDEFINED.has(kase.tool) ? sortTop(wantProj) : wantProj;
       const diffs = diffJson(left, right);
       expect(diffs.length ? formatDiffs(kase.tool, diffs) : '').toBe('');
     });
