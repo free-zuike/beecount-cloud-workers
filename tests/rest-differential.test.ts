@@ -86,23 +86,32 @@ function seedBatchL1(h: Harness): void {
       category_name: cat === 'c1' ? '餐饮' : cat === 'c2' ? '工资' : null,
       category_kind: cat === 'c1' ? 'expense' : cat === 'c2' ? 'income' : cat === 'c3' ? 'transfer' : null,
       account_name: acc === 'a1' ? '现金' : acc === 'a2' ? '招行' : null,
-      note, tags_csv: tags, currency_code: 'CNY', native_amount: null, tx_index: 0,
+      note, tags_csv: tags, currency_code: null, native_amount: null, tx_index: 0,
       from_account_id: null, to_account_id: null, from_account_name: null, to_account_name: null,
       exclude_from_stats: 0, exclude_from_budget: 0,
       source_change_id: 1, created_by_user_id: 'u1', created_at: happened, updated_at: happened,
       tags_sync_ids_json: null, tag_sync_ids_json: null,
     });
   }
+  // 对齐上游 scenario 末态：L1 的最新 change_id=18（list_transactions 透传 last_change_id）。
+  h.sqlite.prepare('INSERT INTO sync_changes (change_id, user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(18, 'u1', 'L1-i', 'ledger_snapshot', 'L1', 'upsert', '{}', '2026-05-20T00:00:00Z', 'u1', null, 'ledger');
 }
 
-// list_transactions 的核心比对投影：聚焦过滤/排序/分页相关的确定性字段。
-// 剔除的字段要么是非确定性（上游夹具随机生成的 id / tag_ids），要么是与夹具/账户相关的
-// 元数据（created_by_* / last_edited_by_* / ledger_* / last_change_id / attachments /
-// exclude_* / currency_code / native_amount），这些不在 item 3（过滤/排序/分页）的验证范围内。
+// list_transactions 的核心比对投影：覆盖过滤/排序/分页相关的确定性字段 + 确定性元数据
+// （created_by_* / last_edited_by_* / ledger_* / last_change_id / exclude_* /
+// currency_code / native_amount），确保响应结构与上游逐项对齐。
+// 仅剔除两类无法静态对齐的字段：
+//   - id / tag_ids：上游夹具每次 CI 重生都会随机生成；
+//   - attachments：非过滤维度且格式可能为 null/[]，单独排除以免误报。
 const LT_CORE = new Set<string>([
   'tx_type', 'amount', 'happened_at', 'note', 'category_name', 'category_kind',
   'account_name', 'from_account_name', 'to_account_name', 'category_id', 'account_id',
-  'tags', 'tags_list',
+  'tags', 'tags_list', 'currency_code', 'native_amount',
+  'created_by_user_id', 'created_by_email', 'created_by_display_name', 'created_by_avatar_url', 'created_by_avatar_version',
+  'last_edited_by_user_id', 'last_edited_by_email', 'last_edited_by_display_name', 'last_edited_by_avatar_url', 'last_edited_by_avatar_version',
+  'ledger_id', 'ledger_name', 'last_change_id',
+  'exclude_from_stats', 'exclude_from_budget',
 ]);
 function projectListTx(v: Json): Json {
   if (Array.isArray(v)) {

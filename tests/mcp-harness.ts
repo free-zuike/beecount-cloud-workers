@@ -196,9 +196,9 @@ export function seed(h: Harness): void {
   registerUser(h, 'u1', 'u1@example.com');
   registerUser(h, 'u2', 'u2@example.com');
   // owner 资料：list_transactions 的 created_by_* 来自 user_profiles（对齐上游夹具）。
-  // display_name 先用占位，CI 暴露上游真实值后再校准。
-  h.sqlite.prepare('INSERT INTO user_profiles (user_id, primary_currency, display_name, avatar_file_id, avatar_version) VALUES (?, ?, ?, ?, ?)').run('u1', 'CNY', 'U1', null, 0);
-  h.sqlite.prepare('INSERT INTO user_profiles (user_id, primary_currency, display_name, avatar_file_id, avatar_version) VALUES (?, ?, ?, ?, ?)').run('u2', 'CNY', 'U2', null, 0);
+  // 上游夹具 owner_profile 未设 display_name/avatar，故这里 display_name=null 以对齐（golden 为 null）。
+  h.sqlite.prepare('INSERT INTO user_profiles (user_id, primary_currency, display_name, avatar_file_id, avatar_version) VALUES (?, ?, ?, ?, ?)').run('u1', 'CNY', null, null, 0);
+  h.sqlite.prepare('INSERT INTO user_profiles (user_id, primary_currency, display_name, avatar_file_id, avatar_version) VALUES (?, ?, ?, ?, ?)').run('u2', 'CNY', null, null, 0);
   createLedger(h, 'u1', 'L1-i', 'L1', '主账本', 'CNY');
   // L2 属于 u2，u1 是 editor（共享账本可见性）
   insertRow(h.sqlite, 'ledgers', {

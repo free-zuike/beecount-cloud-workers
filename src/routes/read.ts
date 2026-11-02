@@ -122,6 +122,11 @@ interface ReadTransactionOut {
   created_by_display_name: string | null;
   created_by_avatar_url: string | null;
   created_by_avatar_version: number | null;
+  last_edited_by_user_id: string | null;
+  last_edited_by_email: string | null;
+  last_edited_by_display_name: string | null;
+  last_edited_by_avatar_url: string | null;
+  last_edited_by_avatar_version: number | null;
   exclude_from_stats: boolean;
   exclude_from_budget: boolean;
 }
@@ -1214,6 +1219,11 @@ readRouter.get('/ledgers/:ledgerExternalId/transactions', async (c) => {
         ? `/api/v1/profile/avatar/${ownerInfo.id}?v=${ownerInfo.avatar_version ?? 0}`
         : null,
       created_by_avatar_version: ownerInfo.avatar_version,
+      last_edited_by_user_id: (row.last_edited_by_user_id as string) ?? null,
+      last_edited_by_email: null,
+      last_edited_by_display_name: null,
+      last_edited_by_avatar_url: null,
+      last_edited_by_avatar_version: null,
     };
   });
 
