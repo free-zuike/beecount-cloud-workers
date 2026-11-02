@@ -626,6 +626,13 @@ def main(out_path: str) -> int:
                 return obj.model_dump(mode="json")
             return obj
 
+        # 直接调用上游路由函数时，Query(default=None) 的默认值会变成真实的 Query 对象（truthy），
+        # 触发 _to_utc 报错。故必须显式传 None / 真正的 datetime，避免走 Query 默认。
+        from datetime import datetime as _dt_cls, timezone as _tz  # noqa: E402
+
+        def _as_utc(s: str):
+            return _dt_cls.fromisoformat(s).astimezone(_tz.utc)
+
         fn_map = {
             "get_summary": get_summary,
             "list_budgets_usage": list_budgets_usage,
@@ -647,11 +654,12 @@ def main(out_path: str) -> int:
             ("list_budgets_usage", dict(ledger_external_id="L3", _scopes=set(), current_user=owner, db=db)),
             ("list_exchange_rate_overrides", dict(_scopes=set(), current_user=owner, db=db)),
             # —— list_transactions 过滤/排序/分页（第3条）——
-            ("list_transactions", dict(ledger_external_id="L1", limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
-            ("list_transactions", dict(ledger_external_id="L1", tx_type="income", limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
-            ("list_transactions", dict(ledger_external_id="L1", q="咖啡", limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
-            ("list_transactions", dict(ledger_external_id="L1", start_at="2026-05-10T00:00:00+00:00", end_at="2026-05-31T23:59:59+00:00", limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
-            ("list_transactions", dict(ledger_external_id="L1", limit=3, offset=2, _scopes=set(), current_user=owner, db=db)),
+            # 注意：直接调上游路由须显式传 Query 默认值（None）或真实 datetime，否则 Query 默认对象会触发 _to_utc 报错。
+            ("list_transactions", dict(ledger_external_id="L1", tx_type=None, q=None, start_at=None, end_at=None, limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
+            ("list_transactions", dict(ledger_external_id="L1", tx_type="income", q=None, start_at=None, end_at=None, limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
+            ("list_transactions", dict(ledger_external_id="L1", tx_type=None, q="咖啡", start_at=None, end_at=None, limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
+            ("list_transactions", dict(ledger_external_id="L1", tx_type=None, q=None, start_at=_as_utc("2026-05-10T00:00:00+00:00"), end_at=_as_utc("2026-05-31T23:59:59+00:00"), limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
+            ("list_transactions", dict(ledger_external_id="L1", tx_type=None, q=None, start_at=None, end_at=None, limit=3, offset=2, _scopes=set(), current_user=owner, db=db)),
         ]
         for tool, args in rest_calls:
             fn = fn_map.get(tool)
