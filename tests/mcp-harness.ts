@@ -7,8 +7,8 @@ import { createHash } from 'node:crypto';
 import { Hono } from 'hono';
 import writeRouter from '../src/routes/write';
 import batchWriteRouter from '../src/routes/batch_write';
-import readRouter from '../src/routes/read';
-import summaryRouter from '../src/routes/summary';
+import { buildReadRouter } from '../src/routes/read';
+import { buildSummaryRouter } from '../src/routes/summary';
 import syncRouter from '../src/routes/sync';
 import devicesRouter from '../src/routes/devices';
 import type { McpContext } from '../src/mcp/types';
@@ -272,8 +272,8 @@ export function buildReadApp(db?: D1Database): TestApp {
     if (db) (c.env as { DB?: D1Database }).DB = db;
     await next();
   });
-  a.route('/api/v1/read', readRouter as never);
-  a.route('/api/v1/read/summary', summaryRouter as never);
+  a.route('/api/v1/read', buildReadRouter(db) as never);
+  a.route('/api/v1/read/summary', buildSummaryRouter(db) as never);
   return a;
 }
 

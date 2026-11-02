@@ -28,7 +28,8 @@ type Variables = {
   userId: string;
 };
 
-const summaryRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
+export function buildSummaryRouter(injectedDb?: D1Database) {
+  const summaryRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 /**
  * GET /read/summary - 单账本快速统计
@@ -46,7 +47,7 @@ const summaryRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
  */
 summaryRouter.get('/', async (c) => {
   const userId = c.get('userId');
-  const db = c.env.DB;
+  const db = injectedDb ?? c.env.DB;
   const ledgerExternalId = c.req.query('ledger_id');
 
   if (!ledgerExternalId) {
@@ -103,4 +104,7 @@ summaryRouter.get('/', async (c) => {
   });
 });
 
-export default summaryRouter;
+  return summaryRouter;
+}
+
+export default buildSummaryRouter();
