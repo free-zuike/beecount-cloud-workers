@@ -1229,7 +1229,9 @@ def main(out_path: str) -> int:
 
         _pstep("get_me", "get", "/api/v1/profile/me", headers=_phdr)
         _pstep("patch_me", "patch", "/api/v1/profile/me", json_body={"display_name": "新昵称", "income_is_red": True, "theme_primary_color": "#123456"}, headers=_phdr)
-        _pstep("change_password", "post", "/api/v1/profile/me/change-password", json_body={"current_password": "password123", "new_password": "newpass123"}, headers=_phdr)
+        # 注：上游 profile 路由只有 PATCH /me 与 POST /avatar，无 change-password 端点
+        # （本地 change-password 为额外功能，无上游可比，故不纳入 golden）。
+        # avatar 上传依赖 R2 对象存储（架构差异），亦不纳入。
 
         _pg = {"steps": _prof_steps}
         _pp = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-profile-golden.json")

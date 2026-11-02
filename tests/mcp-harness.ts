@@ -81,7 +81,7 @@ export const DDL = `
     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, pat_id TEXT, pat_prefix TEXT, pat_name TEXT,
     tool_name TEXT, status TEXT, error_message TEXT, args_summary TEXT, duration_ms INTEGER, client_ip TEXT, called_at TEXT
   );
-  CREATE TABLE user_profiles (user_id TEXT PRIMARY KEY, primary_currency TEXT, display_name TEXT, avatar_file_id TEXT, avatar_version INTEGER, ai_config_json TEXT);
+  CREATE TABLE user_profiles (user_id TEXT PRIMARY KEY, primary_currency TEXT, display_name TEXT, avatar_file_id TEXT, avatar_version INTEGER, ai_config_json TEXT, income_is_red INTEGER, theme_primary_color TEXT, appearance_json TEXT, updated_at TEXT);
   CREATE TABLE user_exchange_rate_projection (user_id TEXT NOT NULL, sync_id TEXT NOT NULL, base_currency TEXT NOT NULL, quote_currency TEXT NOT NULL, rate TEXT NOT NULL, updated_at TEXT NOT NULL, source_change_id INTEGER DEFAULT 0 NOT NULL, PRIMARY KEY (user_id, sync_id));
   CREATE TABLE exchange_rate_cache (base_currency TEXT PRIMARY KEY, rate_date TEXT, source TEXT, payload_json TEXT, fetched_at TEXT);
   CREATE TABLE sync_cursors (user_id TEXT, device_id TEXT, ledger_external_id TEXT, last_cursor INTEGER, updated_at TEXT, PRIMARY KEY (user_id, device_id, ledger_external_id));

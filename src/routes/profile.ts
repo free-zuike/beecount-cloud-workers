@@ -52,7 +52,7 @@ profileRouter.get('/me', async (c) => {
     avatar_url: profile?.avatar_file_id ? `${c.req.url.split('/api')[0]}/api/v1/profile/avatar/${userId}?v=${profile.avatar_version}` : null,
     avatar_version: profile?.avatar_version || 0,
     income_is_red: profile?.income_is_red != null ? Boolean(profile.income_is_red) : null,
-    theme_primary_color: profile?.theme_primary_color,
+    theme_primary_color: profile?.theme_primary_color ?? null,
     appearance: profile?.appearance_json ? JSON.parse(profile.appearance_json) : null,
     ai_config: profile?.ai_config_json ? JSON.parse(profile.ai_config_json) : null,
     primary_currency: profile?.primary_currency || null,
