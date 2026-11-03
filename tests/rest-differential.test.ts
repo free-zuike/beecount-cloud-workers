@@ -99,36 +99,6 @@ function statusErrorCode(text: string): string {
   }
 }
 
-/**
- * 对齐 upstream_dump.py scenario 的 create_transactions 批量写：对 L1 额外插入 2 笔交易，
- * 使本地 harness 的 read_tx_projection 与上游生成 REST golden 时所处的 db 状态一致。
- * 直接按上游最终落库的字段值插入（happened_at 已是 Asia/Shanghai → UTC 后的结果），
- * 避免依赖批量路由的时区换算实现细节，只要最终统计口径一致即可差分通过。
- */
-function seedBatchL1(h: Harness): void {
-  const bt: Array<[string, 'expense' | 'income', number, string, string, string, string, string | null]> = [
-    ['bt1', 'expense', 12.5, '2026-05-12T16:00:00Z', 'c1', 'a1', '批量咖啡', 'MCP'],
-    ['bt2', 'income', 9000, '2026-05-19T16:00:00Z', 'c2', 'a1', '批量工资', 'MCP'],
-  ];
-  for (const [sync, kind, amount, happened, cat, acc, note, tags] of bt) {
-    insertRow(h.sqlite, 'read_tx_projection', {
-      sync_id: sync, user_id: 'u1', ledger_id: 'L1-i', tx_type: kind, amount,
-      happened_at: happened, category_sync_id: cat, account_sync_id: acc,
-      category_name: cat === 'c1' ? '餐饮' : cat === 'c2' ? '工资' : null,
-      category_kind: cat === 'c1' ? 'expense' : cat === 'c2' ? 'income' : cat === 'c3' ? 'transfer' : null,
-      account_name: acc === 'a1' ? '现金' : acc === 'a2' ? '招行' : null,
-      note, tags_csv: tags, currency_code: null, native_amount: null, tx_index: 0,
-      from_account_id: null, to_account_id: null, from_account_name: null, to_account_name: null,
-      exclude_from_stats: 0, exclude_from_budget: 0,
-      source_change_id: 1, created_by_user_id: 'u1', created_at: happened, updated_at: happened,
-      tags_sync_ids_json: null, tag_sync_ids_json: null,
-    });
-  }
-  // 对齐上游 scenario 末态：L1 的最新 change_id=18（list_transactions 透传 last_change_id）。
-  h.sqlite.prepare('INSERT INTO sync_changes (change_id, user_id, ledger_id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_user_id, updated_by_device_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(18, 'u1', 'L1-i', 'ledger_snapshot', 'L1', 'upsert', '{}', '2026-05-20T00:00:00Z', 'u1', null, 'ledger');
-}
-
 // list_transactions 的核心比对投影：覆盖全部确定性字段（过滤/排序/分页相关 + 确定性元数据
 // created_by_* / last_edited_by_* / ledger_* / last_change_id / exclude_* / currency/native /
 // from_account_id / to_account_id / tx_index / attachments），确保响应结构与上游逐项对齐。
@@ -165,10 +135,6 @@ describe.skipIf(!hasGolden)('REST 只读计算 vs 上游 golden', () => {
     it(`[${kase.tool}] ${JSON.stringify(kase.args)}`, async () => {
       const h: Harness = makeHarness();
       seed(h);
-      // 对齐 upstream_dump.py 的 scenario：对 L1 执行 create_transactions 批量写（2 笔）。
-      // 上游 REST golden 是在 scenario（含批量写）跑完后的同一 db 上生成的，
-      // 所以本地 harness 必须复现这 2 笔，否则 worker 得 7 而 golden 得 9。
-      seedBatchL1(h);
       const userId = 'u1';
       const app = buildReadApp(h.db);
       const { method, path } = toRequest(kase.tool, kase.args);

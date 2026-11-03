@@ -649,8 +649,8 @@ def main(out_path: str) -> int:
     # 了同样的 SQL/计算（且带"对齐上游"注释），是最可能重演 MCP 那几类"早期错误对齐"的地方。
     # 单独产一份 golden，本地用真实路由做 HTTP 级差分（见 tests/rest-differential.test.ts）。
     # 隔离在 try 里：上游路由若因依赖缺失 import 失败，不影响主管线的 golden。
-    # REST golden 用独立 DB：避免写差分（capability_tools.manage_tag 建 "MCP" 标签）
-    # 泄漏进 list_tags / get_ledger_stats，造成"golden 有、本地没有"的假分歧。
+    # REST golden 用独立 DB（仅基础 seed，无写路径的 bt1/bt2 批注交易与额外附件/成员）：
+    # 与本地 harness 的基础种子一致，避免写路径 undo/删除导致 golden 与本地 7 笔交易对不上。
     _orig_db = db
     db = make_db("/tmp/parity-rest.db")
     rest_golden = {"now": NOW.isoformat(), "cases": []}
