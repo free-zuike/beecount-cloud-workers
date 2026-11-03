@@ -1591,7 +1591,11 @@ def main(out_path: str) -> int:
             return v
 
         def _dump_ws(obj):
-            return obj.model_dump(mode="json") if hasattr(obj, "model_dump") else obj
+            if isinstance(obj, list):
+                return [_dump_ws(x) for x in obj]
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump(mode="json")
+            return obj
 
         _ws_calls = [
             ("members", lambda: _ws_list_members("L1", _scopes=set(), current_user=_owner, db=_ws_db)),

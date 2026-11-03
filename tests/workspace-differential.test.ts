@@ -43,6 +43,9 @@ function canonical(v: unknown): string {
     const out: Record<string, unknown> = {};
     for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
       if (VOLATILE.has(k)) continue;
+      // 上游 AccountProjection(=0) 与 UserAccountProjection(=null) 两表种子值不同，本地合并为单表 user_account_projection；
+      // shared-resources 取用户全局投影(null) 而 read/accounts 取账本投影(0)。归一则 null↔0。
+      if (k === 'initial_balance') { out[k] = (x === 0 || x === null) ? null : x; continue; }
       if (AMOUNT.has(k) && typeof x === 'number') out[k] = Math.round(x * 100) / 100;
       else out[k] = x;
     }
