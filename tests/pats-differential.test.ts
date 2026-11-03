@@ -34,7 +34,7 @@ describe('pats differential (align /api/v1/profile/pats)', () => {
     const env = routerEnv();
     const { userId } = await authTokenFor(env);
     const app = buildPatsApp();
-    const h = { 'X-Test-User': userId };
+    const h = { 'X-Test-User': userId, 'content-type': 'application/json' };
     const resp = await app.request(
       '/api/v1/profile/pats',
       { method: 'POST', headers: h, body: JSON.stringify({ name: 'ci-pat', scopes: ['mcp:read'], expires_in_days: null }) },
@@ -48,7 +48,7 @@ describe('pats differential (align /api/v1/profile/pats)', () => {
     const env = routerEnv();
     const { userId } = await authTokenFor(env);
     const app = buildPatsApp();
-    const h = { 'X-Test-User': userId };
+    const h = { 'X-Test-User': userId, 'content-type': 'application/json' };
     const create = await app.request(
       '/api/v1/profile/pats',
       { method: 'POST', headers: h, body: JSON.stringify({ name: 'ci-pat', scopes: ['mcp:read'], expires_in_days: null }) },
@@ -64,7 +64,7 @@ describe('pats differential (align /api/v1/profile/pats)', () => {
     const env = routerEnv();
     const { userId } = await authTokenFor(env);
     const app = buildPatsApp();
-    const h = { 'X-Test-User': userId };
+    const h = { 'X-Test-User': userId, 'content-type': 'application/json' };
     const create = await app.request(
       '/api/v1/profile/pats',
       { method: 'POST', headers: h, body: JSON.stringify({ name: 'ci-pat', scopes: ['mcp:read'], expires_in_days: null }) },
@@ -84,7 +84,7 @@ describe('pats differential (align /api/v1/profile/pats)', () => {
     const env = routerEnv();
     const { userId } = await authTokenFor(env);
     const app = buildPatsApp();
-    const h = { 'X-Test-User': userId };
+    const h = { 'X-Test-User': userId, 'content-type': 'application/json' };
     const create = await app.request(
       '/api/v1/profile/pats',
       { method: 'POST', headers: h, body: JSON.stringify({ name: 'ci-pat', scopes: ['mcp:read'], expires_in_days: null }) },
@@ -104,7 +104,7 @@ describe('pats 边界（对齐上游，无需 golden）', () => {
     const env = routerEnv();
     const { userId } = await authTokenFor(env);
     const app = buildPatsApp();
-    const h = { 'X-Test-User': userId };
+    const h = { 'X-Test-User': userId, 'content-type': 'application/json' };
     const create = await app.request(
       '/api/v1/profile/pats',
       { method: 'POST', headers: h, body: JSON.stringify({ name: 'rev', scopes: ['mcp:read'], expires_in_days: null }) },
@@ -124,7 +124,7 @@ describe('pats 边界（对齐上游，无需 golden）', () => {
     const env = routerEnv();
     const { userId } = await authTokenFor(env);
     const app = buildPatsApp();
-    const h = { 'X-Test-User': userId };
+    const h = { 'X-Test-User': userId, 'content-type': 'application/json' };
     const upd = await app.request(
       '/api/v1/profile/pats/nope',
       { method: 'PATCH', headers: h, body: JSON.stringify({ name: 'x' }) },
