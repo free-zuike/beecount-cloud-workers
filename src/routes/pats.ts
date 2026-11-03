@@ -211,6 +211,7 @@ patsRouter.post('/', zValidator('json', PatCreateSchema), async (c) => {
     name: req.name,
     // ⚠️ 注意：明文 token 只有这一次返回机会
     token,
+    prefix,
     scopes: req.scopes,
     expires_at: expiresAt,
     created_at: serverNow,
@@ -235,24 +236,20 @@ patsRouter.patch('/:id', zValidator('json', PatUpdateSchema), async (c) => {
   const req = c.req.valid('json');
   const serverNow = nowUtc();
 
-  // 验证归属
+  // 验证归属 + 存在性（已撤销的也算找到，后续单独判断 409）
   const pat = await db
     .prepare(
-      'SELECT id, expires_at FROM personal_access_tokens WHERE id = ? AND user_id = ? AND revoked_at IS NULL'
+      'SELECT id, revoked_at FROM personal_access_tokens WHERE id = ? AND user_id = ?'
     )
     .bind(patId, userId)
-    .first<{ id: string; expires_at: string | null }>();
+    .first<{ id: string; revoked_at: string | null }>();
 
   if (!pat) {
     return c.json({ error: 'PAT not found' }, 404);
   }
 
-  // 检查是否已撤销（与原版对齐：已撤销的 PAT 不能编辑）
-  const revokedCheck = await db
-    .prepare('SELECT id FROM personal_access_tokens WHERE id = ? AND revoked_at IS NOT NULL')
-    .bind(patId)
-    .first();
-  if (revokedCheck) {
+  // 已撤销的 PAT 不能编辑（对齐上游：返回 409）
+  if (pat.revoked_at) {
     return c.json({ error: 'PAT has been revoked' }, 409);
   }
 
@@ -341,7 +338,7 @@ patsRouter.delete('/:id', async (c) => {
     .bind(patId, userId)
     .run();
 
-  return c.json({ success: true });
+  return c.body(null, 204);
 });
 
 export default patsRouter;

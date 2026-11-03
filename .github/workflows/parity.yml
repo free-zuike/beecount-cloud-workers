@@ -31,6 +31,7 @@ on:
       - 'tests/auth-differential.test.ts'
       - 'tests/profile-differential.test.ts'
       - 'tests/two-factor-differential.test.ts'
+      - 'tests/pats-differential.test.ts'
       - 'tests/mcp-harness.ts'
       - 'tests/parity-compare.ts'
       - 'scripts/parity/**'
@@ -173,6 +174,9 @@ jobs:
       - name: Run two_factor differential test
         run: npm test -- --run tests/two-factor-differential.test.ts
 
+      - name: Run pats differential test
+        run: npm test -- --run tests/pats-differential.test.ts
+
       - name: Job summary
         if: always()
         run: |
@@ -192,7 +196,7 @@ jobs:
       - name: Detect golden drift
         id: drift
         run: |
-          if git diff --quiet -- tests/fixtures/upstream-golden.json tests/fixtures/upstream-rest-golden.json tests/fixtures/upstream-import-golden.json tests/fixtures/upstream-transform-golden.json tests/fixtures/upstream-write-schema-golden.json tests/fixtures/upstream-sync-golden.json tests/fixtures/upstream-subsystems-schema-golden.json tests/fixtures/upstream-device-golden.json tests/fixtures/upstream-auth-golden.json tests/fixtures/upstream-profile-golden.json tests/fixtures/upstream-two-factor-golden.json; then
+          if git diff --quiet -- tests/fixtures/upstream-golden.json tests/fixtures/upstream-rest-golden.json tests/fixtures/upstream-import-golden.json tests/fixtures/upstream-transform-golden.json tests/fixtures/upstream-write-schema-golden.json tests/fixtures/upstream-sync-golden.json tests/fixtures/upstream-subsystems-schema-golden.json tests/fixtures/upstream-device-golden.json tests/fixtures/upstream-auth-golden.json tests/fixtures/upstream-profile-golden.json tests/fixtures/upstream-two-factor-golden.json tests/fixtures/upstream-pats-golden.json; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "::notice::golden 与上游一致，无漂移"
           else
@@ -206,7 +210,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B parity/upstream-golden
-          for f in tests/fixtures/upstream-golden.json tests/fixtures/upstream-rest-golden.json tests/fixtures/upstream-import-golden.json tests/fixtures/upstream-transform-golden.json tests/fixtures/upstream-write-schema-golden.json tests/fixtures/upstream-sync-golden.json tests/fixtures/upstream-subsystems-schema-golden.json tests/fixtures/upstream-device-golden.json tests/fixtures/upstream-auth-golden.json tests/fixtures/upstream-profile-golden.json tests/fixtures/upstream-two-factor-golden.json; do
+          for f in tests/fixtures/upstream-golden.json tests/fixtures/upstream-rest-golden.json tests/fixtures/upstream-import-golden.json tests/fixtures/upstream-transform-golden.json tests/fixtures/upstream-write-schema-golden.json tests/fixtures/upstream-sync-golden.json tests/fixtures/upstream-subsystems-schema-golden.json tests/fixtures/upstream-device-golden.json tests/fixtures/upstream-auth-golden.json tests/fixtures/upstream-profile-golden.json tests/fixtures/upstream-two-factor-golden.json tests/fixtures/upstream-pats-golden.json; do
             [ -f "$f" ] && git add "$f"
           done
           git commit -m "chore(parity): 上游 MCP 输出变化（${{ steps.upstream.outputs.ref }}）" || echo "nothing to commit"

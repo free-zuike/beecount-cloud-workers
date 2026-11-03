@@ -14,6 +14,7 @@ import devicesRouter from '../src/routes/devices';
 import authRouter from '../src/routes/auth';
 import profileRouter from '../src/routes/profile';
 import twoFactorRouter from '../src/routes/two_factor';
+import patsRouter from '../src/routes/pats';
 import type { McpContext } from '../src/mcp/types';
 
 /** 真实表结构（含 #133 三张新表，与 src/db/schema.ts 对齐） */
@@ -23,6 +24,7 @@ export const DDL = `
   CREATE TABLE ledgers (id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, name TEXT, currency TEXT, month_start_day INTEGER DEFAULT 1, created_at TEXT);
   CREATE TABLE ledger_members (ledger_id TEXT, user_id TEXT, role TEXT, joined_at TEXT, invited_by_user_id TEXT);
   CREATE TABLE devices (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, platform TEXT, app_version TEXT, os_version TEXT, device_model TEXT, last_seen_at TEXT, last_ip TEXT, revoked_at TEXT, created_at TEXT);
+  CREATE TABLE personal_access_tokens (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, token_hash TEXT, prefix TEXT, scopes_json TEXT, expires_at TEXT, last_used_at TEXT, last_used_ip TEXT, revoked_at TEXT, created_at TEXT);
   CREATE TABLE sync_changes (
     change_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ledger_id TEXT, entity_type TEXT,
     entity_sync_id TEXT, action TEXT, payload_json TEXT, updated_at TEXT,
@@ -357,6 +359,7 @@ export function buildRouterApp(router: AnyRouter, prefix: string, db?: D1Databas
 
 export const buildProfileApp = (db?: D1Database) => buildRouterApp(profileRouter as never, '/api/v1/profile', db);
 export const buildTwoFactorApp = (db?: D1Database) => buildRouterApp(twoFactorRouter as never, '/api/v1/auth/2fa', db);
+export const buildPatsApp = (db?: D1Database) => buildRouterApp(patsRouter as never, '/api/v1/profile/pats', db);
 
 /** 注册并登录 authtest@example.com，返回本地生成的 access token / userId / refresh token。
  *  供其它模块差分测试注入 X-Test-User 使用（与 golden 中上游用户的确定性字段比对）。 */

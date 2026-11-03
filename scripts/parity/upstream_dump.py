@@ -1319,6 +1319,57 @@ def main(out_path: str) -> int:
         print(f"[warn] two_factor golden 跳过：{type(exc).__name__}: {exc}")
         traceback.print_exc()
 
+    # ---------------- pats golden（HTTP /api/v1/profile/pats）----------------
+    # PAT 生命周期：create(201) -> list -> patch(update) -> delete(204)。
+    # token/id/prefix/created_at/expires_at 等随机或时间相关字段在 golden 中 scrub，
+    # 本地测试自建相同流程逐步骤比对结构（详见 tests/pats-differential.test.ts）。
+    try:
+        from fastapi.testclient import TestClient  # type: ignore
+        from src.main import app as _pats_app  # type: ignore
+        _pc = TestClient(_pats_app)
+        _pc.post("/api/v1/auth/register", json={"email": "patstest@example.com", "password": "password123", "client_type": "web", "device_name": "CI"})
+        _plr = _pc.post("/api/v1/auth/login", json={"email": "patstest@example.com", "password": "password123", "client_type": "web"})
+        _pat = (_plr.json() or {}).get("access_token")
+        _ph = {"Authorization": f"Bearer {_pat}"}
+
+        def _scrub_pat(v):
+            if isinstance(v, list):
+                return [_scrub_pat(i) for i in v]
+            if isinstance(v, dict):
+                return {k: _scrub_pat(x) for k, x in v.items() if k not in ("token", "id", "prefix", "created_at", "expires_at", "last_used_at", "revoked_at", "last_used_ip")}
+            return v
+
+        _pat_steps = []
+        def _pstep(name, method, path, json_body=None, headers=None):
+            fn = getattr(_pc, method)
+            kw = {}
+            if json_body is not None:
+                kw["json"] = json_body
+            if headers:
+                kw["headers"] = headers
+            resp = fn(path, **kw)
+            body = resp.json() if resp.status_code != 204 and resp.content else None
+            _pat_steps.append({"name": name, "request": {"method": method.upper(), "path": path, "json": json_body}, "status": resp.status_code, "result": _scrub_pat(body) if body is not None else None})
+
+        _create_resp = _pc.post("/api/v1/profile/pats", json={"name": "ci-pat", "scopes": ["mcp:read"], "expires_in_days": None}, headers=_ph)
+        _create_id = (_create_resp.json() or {}).get("id")
+        _create_body = _create_resp.json() if _create_resp.content else None
+        _pat_steps.append({"name": "create", "request": {"method": "POST", "path": "/api/v1/profile/pats", "json": {"name": "ci-pat", "scopes": ["mcp:read"], "expires_in_days": None}}, "status": _create_resp.status_code, "result": _scrub_pat(_create_body)})
+        _pstep("list", "get", "/api/v1/profile/pats", headers=_ph)
+        _pstep("update", "patch", f"/api/v1/profile/pats/{_create_id}", json_body={"name": "ci-pat-renamed"}, headers=_ph)
+        _pstep("delete", "delete", f"/api/v1/profile/pats/{_create_id}", headers=_ph)
+
+        _pg = {"steps": _pat_steps}
+        _pp = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-pats-golden.json")
+        with open(_pp, "w", encoding="utf-8") as _f:
+            json.dump(_pg, _f, ensure_ascii=False, indent=2, default=str)
+            _f.write("\n")
+        print(f"wrote {len(_pat_steps)} pats steps -> {_pp}")
+    except Exception as exc:
+        import traceback
+        print(f"[warn] pats golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(golden, fh, ensure_ascii=False, indent=2, default=str)

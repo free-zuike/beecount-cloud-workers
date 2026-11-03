@@ -184,8 +184,7 @@ describe('PAT 生命周期', () => {
     const patId = body.id as string;
 
     const deleted = await api('DELETE', `/api/v1/profile/pats/${patId}`, undefined, token);
-    expect(deleted.status).toBe(200);
-    await deleted.json();
+    expect(deleted.status).toBe(204);
 
     const listed = await api('GET', '/api/v1/profile/pats', undefined, token);
     const items = await listed.json() as any[];
