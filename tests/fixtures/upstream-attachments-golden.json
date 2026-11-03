@@ -1,0 +1,68 @@
+{
+  "steps": [
+    {
+      "name": "upload",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/attachments/upload",
+        "json": null
+      },
+      "status": 200,
+      "result": {
+        "ledger_id": "L1",
+        "sha256": "46d9b69dc9d1f605bc0a5437d82b5d4b387b8fcddcd651308b7fdd1f346f1d74",
+        "size": 24,
+        "mime_type": "text/csv",
+        "file_name": "seed.csv"
+      }
+    },
+    {
+      "name": "batch_exists_hit",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/attachments/batch-exists",
+        "json": {
+          "ledger_id": "L1",
+          "sha256_list": [
+            "46d9b69dc9d1f605bc0a5437d82b5d4b387b8fcddcd651308b7fdd1f346f1d74"
+          ]
+        }
+      },
+      "status": 200,
+      "result": {
+        "items": [
+          {
+            "sha256": "46d9b69dc9d1f605bc0a5437d82b5d4b387b8fcddcd651308b7fdd1f346f1d74",
+            "exists": true,
+            "size": 24,
+            "mime_type": "text/csv"
+          }
+        ]
+      }
+    },
+    {
+      "name": "batch_exists_miss",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/attachments/batch-exists",
+        "json": {
+          "ledger_id": "L1",
+          "sha256_list": [
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+          ]
+        }
+      },
+      "status": 200,
+      "result": {
+        "items": [
+          {
+            "sha256": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            "exists": false,
+            "size": null,
+            "mime_type": null
+          }
+        ]
+      }
+    }
+  ]
+}
