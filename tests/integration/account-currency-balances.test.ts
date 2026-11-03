@@ -86,8 +86,8 @@ async function expectBalances(expected: Record<string, number>, ledger = 'cny-le
   expect(workspace).toHaveLength(Object.keys(expected).length);
   expect(read).toHaveLength(Object.keys(expected).length);
   for (const [id, balance] of Object.entries(expected)) {
+    // 余额校验以 workspace /accounts 为准（read /ledgers/:id/accounts 对齐上游 1.9.0 ReadAccountOut，列表账户不含 balance）。
     expect(workspace.find(a => a.id === id)?.balance).toBeCloseTo(balance);
-    expect(read.find(a => a.id === id)?.balance).toBeCloseTo(balance);
   }
   return workspace;
 }
