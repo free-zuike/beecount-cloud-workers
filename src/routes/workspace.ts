@@ -2309,27 +2309,22 @@ workspaceRouter.post('/ledgers/:id/transfer', zValidator('json', TransferSchema)
     return c.json({ error: 'Target user is not a member of this ledger' }, 400);
   }
 
+  // 单事务双更新（对齐上游 transfer_ownership）：原 owner(u1) → editor，目标(u2) → owner。
+  // 不删除成员、不改动 ledger_members 行的存在性，仅翻转两个角色；ledger.user_id 同步为新 owner。
+  await db
+    .prepare('UPDATE ledger_members SET role = ? WHERE ledger_id = ? AND user_id = ?')
+    .bind('editor', ledger.id, userId)
+    .run();
+
+  await db
+    .prepare('UPDATE ledger_members SET role = ? WHERE ledger_id = ? AND user_id = ?')
+    .bind('owner', ledger.id, req.target_user_id)
+    .run();
+
   await db
     .prepare('UPDATE ledgers SET user_id = ? WHERE id = ?')
     .bind(req.target_user_id, ledger.id)
     .run();
-
-  await db
-    .prepare('DELETE FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
-    .bind(ledger.id, req.target_user_id)
-    .run();
-
-  const existingOwnerMember = await db
-    .prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ? AND user_id = ?')
-    .bind(ledger.id, userId)
-    .first();
-
-  if (!existingOwnerMember) {
-    await db
-      .prepare('INSERT INTO ledger_members (ledger_id, user_id, role) VALUES (?, ?, ?)')
-      .bind(ledger.id, userId, 'editor')
-      .run();
-  }
 
   await insertAuditLog({
     db, userId, ledgerId: ledger.id, action: 'transfer_owner', entityType: 'ledger', entityId: ledgerExternalId,

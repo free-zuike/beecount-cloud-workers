@@ -1,0 +1,83 @@
+{
+  "cases": [
+    {
+      "name": "create_invite",
+      "status": 201,
+      "result": {
+        "target_role": "editor"
+      }
+    },
+    {
+      "name": "preview_invite",
+      "status": 200,
+      "result": {
+        "ledger_external_id": "L1",
+        "ledger_name": "主账本",
+        "ledger_currency": "CNY",
+        "invited_by_display": "u1",
+        "target_role": "editor"
+      }
+    },
+    {
+      "name": "accept_invite",
+      "status": 200,
+      "result": {
+        "ledger_external_id": "L1",
+        "ledger_name": "主账本",
+        "ledger_currency": "CNY",
+        "role": "editor",
+        "member_count": 2
+      }
+    },
+    {
+      "name": "revoke_invite",
+      "status": 204,
+      "result": null
+    },
+    {
+      "name": "change_member_role",
+      "status": 200,
+      "result": {
+        "user_id": "u2",
+        "email": "u2@example.com",
+        "display_name": null,
+        "role": "editor",
+        "invited_by_user_id": "u1",
+        "is_self": false,
+        "avatar_url": null,
+        "avatar_version": 0
+      }
+    },
+    {
+      "name": "remove_member",
+      "status": 204,
+      "result": null
+    },
+    {
+      "name": "transfer_ownership",
+      "status": 200,
+      "result": [
+        {
+          "user_id": "u1",
+          "email": "u1@example.com",
+          "display_name": null,
+          "role": "editor",
+          "invited_by_user_id": null,
+          "is_self": true,
+          "avatar_url": null,
+          "avatar_version": 0
+        },
+        {
+          "user_id": "u2",
+          "email": "u2@example.com",
+          "display_name": null,
+          "role": "owner",
+          "invited_by_user_id": "u1",
+          "is_self": false,
+          "avatar_url": null,
+          "avatar_version": 0
+        }
+      ]
+    }
+  ]
+}
