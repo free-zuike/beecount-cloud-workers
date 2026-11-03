@@ -48,7 +48,7 @@ export const DDL = `
     bank_name TEXT, card_last_four TEXT, hidden INTEGER NOT NULL DEFAULT 0, source_change_id INTEGER DEFAULT 0,
     PRIMARY KEY (user_id, sync_id)
   );
-  CREATE TABLE user_category_projection (sync_id TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT, kind TEXT, level INTEGER, sort_order INTEGER, icon TEXT, icon_type TEXT, custom_icon_path TEXT, icon_cloud_file_id TEXT, icon_cloud_sha256 TEXT, parent_name TEXT, parent_sync_id TEXT, source_change_id INTEGER DEFAULT 0, PRIMARY KEY (user_id, sync_id));
+  CREATE TABLE user_category_projection (sync_id TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT, kind TEXT, level INTEGER DEFAULT 0, sort_order INTEGER, icon TEXT, icon_type TEXT, custom_icon_path TEXT, icon_cloud_file_id TEXT, icon_cloud_sha256 TEXT, parent_name TEXT, parent_sync_id TEXT, source_change_id INTEGER DEFAULT 0, PRIMARY KEY (user_id, sync_id));
   CREATE TABLE user_tag_projection (sync_id TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT, color TEXT, source_change_id INTEGER, PRIMARY KEY (user_id, sync_id));
   CREATE TABLE attachment_files (
     id TEXT PRIMARY KEY, ledger_id TEXT, user_id TEXT, sha256 TEXT, size_bytes INTEGER,

@@ -97,84 +97,109 @@ def main(out_path: str) -> int:
         return 2
 
     Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
     dropped_keys: set[str] = set()
 
-    def add(model, **kw):
-        row, dropped = insert(db, model, **kw)
-        dropped_keys.update(dropped)
-        return row
+    # 场景夹具抽成函数：主管线与 REST 独立库都会调用同一份种子，保证"上游一侧"
+    # 的 read 计算 golden 不被其它 golden 块（如写路径的 manage_tag 往共享 db 插 "MCP" 标签）污染。
+    def seed_scenario(db):
+        def add(model, **kw):
+            row, dropped = insert(db, model, **kw)
+            dropped_keys.update(dropped)
+            return row
+        # ---------------- 夹具（须与 tests/mcp-differential.test.ts 一致） ----------------
+        add(User, id="u1", email="u1@example.com", password_hash="x", is_enabled=True)
+        add(User, id="u2", email="u2@example.com", password_hash="x", is_enabled=True)
 
-    # ---------------- 夹具（须与 tests/mcp-differential.test.ts 一致） ----------------
-    add(User, id="u1", email="u1@example.com", password_hash="x", is_enabled=True)
-    add(User, id="u2", email="u2@example.com", password_hash="x", is_enabled=True)
+        add(Ledger, id="L1-i", external_id="L1", user_id="u1", name="主账本",
+            currency="CNY", month_start_day=1, created_at=NOW)
+        add(Ledger, id="L2-i", external_id="L2", user_id="u2", name="共享账本",
+            currency="USD", month_start_day=1, created_at=NOW)
+        add(LedgerMember, ledger_id="L1-i", user_id="u1", role="owner")
+        add(LedgerMember, ledger_id="L2-i", user_id="u1", role="editor")
+        add(LedgerMember, ledger_id="L2-i", user_id="u2", role="owner")
+        # 空账本：验证空集合/零值/None 的形状（最容易在"没数据"时走偏）
+        add(Ledger, id="L3-i", external_id="L3", user_id="u1", name="空账本",
+            currency="JPY", month_start_day=25, created_at=NOW)
+        add(LedgerMember, ledger_id="L3-i", user_id="u1", role="owner")
 
-    add(Ledger, id="L1-i", external_id="L1", user_id="u1", name="主账本",
-        currency="CNY", month_start_day=1, created_at=NOW)
-    add(Ledger, id="L2-i", external_id="L2", user_id="u2", name="共享账本",
-        currency="USD", month_start_day=1, created_at=NOW)
-    add(LedgerMember, ledger_id="L1-i", user_id="u1", role="owner")
-    add(LedgerMember, ledger_id="L2-i", user_id="u1", role="editor")
-    add(LedgerMember, ledger_id="L2-i", user_id="u2", role="owner")
-    # 空账本：验证空集合/零值/None 的形状（最容易在"没数据"时走偏）
-    add(Ledger, id="L3-i", external_id="L3", user_id="u1", name="空账本",
-        currency="JPY", month_start_day=25, created_at=NOW)
-    add(LedgerMember, ledger_id="L3-i", user_id="u1", role="owner")
+        add(UserCategoryProjection, sync_id="c1", ledger_id="L1-i", user_id="u1",
+            name="餐饮", kind="expense", sort_order=1, icon="🍜")
+        add(UserCategoryProjection, sync_id="c2", ledger_id="L1-i", user_id="u1",
+            name="工资", kind="income", sort_order=2)
+        add(UserAccountProjection, sync_id="a1", ledger_id="L1-i", user_id="u1",
+            name="现金", account_type="cash", currency="CNY", hidden=False)
+        # 本地 D1 的 hidden 是 NOT NULL DEFAULT 0（显式 NULL 会被拒），上游可空。
+        # 夹具两侧统一用 False/0，null 语义由 capability-tools 单测覆盖。
+        add(UserAccountProjection, sync_id="a2", ledger_id="L1-i", user_id="u1",
+            name="招行", account_type="bank", currency="CNY", hidden=False)
+        add(UserTagProjection, sync_id="g1", ledger_id="L1-i", user_id="u1",
+            name="出差", color="#00bcf2")
+        add(UserTagProjection, sync_id="g2", ledger_id="L1-i", user_id="u1",
+            name="客户", color="#ff9800")
 
-    add(UserCategoryProjection, sync_id="c1", ledger_id="L1-i", user_id="u1",
-        name="餐饮", kind="expense", sort_order=1, icon="🍜")
-    add(UserCategoryProjection, sync_id="c2", ledger_id="L1-i", user_id="u1",
-        name="工资", kind="income", sort_order=2)
-    add(UserAccountProjection, sync_id="a1", ledger_id="L1-i", user_id="u1",
-        name="现金", account_type="cash", currency="CNY", hidden=False)
-    # 本地 D1 的 hidden 是 NOT NULL DEFAULT 0（显式 NULL 会被拒），上游可空。
-    # 夹具两侧统一用 False/0，null 语义由 capability-tools 单测覆盖。
-    add(UserAccountProjection, sync_id="a2", ledger_id="L1-i", user_id="u1",
-        name="招行", account_type="bank", currency="CNY", hidden=False)
-    add(UserTagProjection, sync_id="g1", ledger_id="L1-i", user_id="u1",
-        name="出差", color="#00bcf2")
-    add(UserTagProjection, sync_id="g2", ledger_id="L1-i", user_id="u1",
-        name="客户", color="#ff9800")
+        # 导入预览用的附件：上游附件存在磁盘，读取时会校验 sha256 + size_bytes
+        attach_dir = os.environ["ATTACHMENT_STORAGE_DIR"]
+        os.makedirs(attach_dir, exist_ok=True)
+        # 必须包含 4 个必填字段对应的列（类型/金额/日期/分类），否则 required_complete
+        # 不成立、上游与本地都只报 PARSE_MAPPING_INCOMPLETE，拿不到可执行的 plan
+        csv_bytes = ("日期,金额,类型,分类,备注\n"
+                     "2026-05-16,12.5,支出,餐饮,午饭\n"
+                     "2026-05-17,3000,收入,工资,五月工资\n").encode("utf-8-sig")
+        csv_path = os.path.join(attach_dir, "seed.csv")
+        with open(csv_path, "wb") as fh:
+            fh.write(csv_bytes)
+        add(AttachmentFile, id="f1", ledger_id="L1-i", user_id="u1",
+            attachment_kind="transaction", file_name="seed.csv", mime_type="text/csv",
+            size_bytes=len(csv_bytes), sha256=hashlib.sha256(csv_bytes).hexdigest(),
+            storage_path=csv_path, created_at=NOW)
 
-    # 导入预览用的附件：上游附件存在磁盘，读取时会校验 sha256 + size_bytes
-    attach_dir = os.environ["ATTACHMENT_STORAGE_DIR"]
-    os.makedirs(attach_dir, exist_ok=True)
-    # 必须包含 4 个必填字段对应的列（类型/金额/日期/分类），否则 required_complete
-    # 不成立、上游与本地都只报 PARSE_MAPPING_INCOMPLETE，拿不到可执行的 plan
-    csv_bytes = ("日期,金额,类型,分类,备注\n"
-                 "2026-05-16,12.5,支出,餐饮,午饭\n"
-                 "2026-05-17,3000,收入,工资,五月工资\n").encode("utf-8-sig")
-    csv_path = os.path.join(attach_dir, "seed.csv")
-    with open(csv_path, "wb") as fh:
-        fh.write(csv_bytes)
-    add(AttachmentFile, id="f1", ledger_id="L1-i", user_id="u1",
-        attachment_kind="transaction", file_name="seed.csv", mime_type="text/csv",
-        size_bytes=len(csv_bytes), sha256=hashlib.sha256(csv_bytes).hexdigest(),
-        storage_path=csv_path, created_at=NOW)
+        txs = [
+            ("t1", "expense", 38.0, "2026-05-02", "c1", "a1", "星巴克", None, "CNY", None),
+            ("t2", "expense", 12.5, "2026-05-02", "c1", "a1", "同秒第二笔", None, "CNY", None),
+            ("t3", "income", 8000.0, "2026-05-10", "c2", "a2", None, None, "CNY", None),
+            ("t4", "expense", 100.0, "2026-05-11", "c1", "a1", None, None, "CNY", None),
+            ("t5", "expense", 20.0, "2026-05-12", "c1", "a1", None, None, "CNY", None),
+            ("t6", "expense", 7.5, "2026-05-13", None, "a1", None, None, "USD", 1.03),
+            ("t7", "expense", 30.0, "2026-05-14", "c1", "a1", None, "出差,客户", "CNY", None),
+        ]
+        for idx, (sync, kind, amount, day, cat, acc, note, tags, cur, native) in enumerate(txs):
+            hour = 3 if day == "2026-05-02" else 2
+            add(ReadTxProjection,
+                sync_id=sync, ledger_id="L1-i", user_id="u1", tx_type=kind, amount=amount,
+                happened_at=datetime.fromisoformat(f"{day}T{hour:02d}:30:00+00:00"),
+                note=note, category_sync_id=cat,
+                category_name={"c1": "餐饮", "c2": "工资"}.get(cat or ""),
+                category_kind={"c1": "expense", "c2": "income"}.get(cat or ""),
+                account_sync_id=acc,
+                account_name={"a1": "现金", "a2": "招行"}.get(acc or ""),
+                tags_csv=tags, currency_code=cur, native_amount=native,
+                tx_index=idx, created_by_user_id="u1", source_change_id=1,
+                exclude_from_stats=(sync == "t4"), exclude_from_budget=(sync == "t5"))
+        db.commit()
 
-    txs = [
-        ("t1", "expense", 38.0, "2026-05-02", "c1", "a1", "星巴克", None, "CNY", None),
-        ("t2", "expense", 12.5, "2026-05-02", "c1", "a1", "同秒第二笔", None, "CNY", None),
-        ("t3", "income", 8000.0, "2026-05-10", "c2", "a2", None, None, "CNY", None),
-        ("t4", "expense", 100.0, "2026-05-11", "c1", "a1", None, None, "CNY", None),
-        ("t5", "expense", 20.0, "2026-05-12", "c1", "a1", None, None, "CNY", None),
-        ("t6", "expense", 7.5, "2026-05-13", None, "a1", None, None, "USD", 1.03),
-        ("t7", "expense", 30.0, "2026-05-14", "c1", "a1", None, "出差,客户", "CNY", None),
-    ]
-    for idx, (sync, kind, amount, day, cat, acc, note, tags, cur, native) in enumerate(txs):
-        hour = 3 if day == "2026-05-02" else 2
-        add(ReadTxProjection,
-            sync_id=sync, ledger_id="L1-i", user_id="u1", tx_type=kind, amount=amount,
-            happened_at=datetime.fromisoformat(f"{day}T{hour:02d}:30:00+00:00"),
-            note=note, category_sync_id=cat,
-            category_name={"c1": "餐饮", "c2": "工资"}.get(cat or ""),
-            category_kind={"c1": "expense", "c2": "income"}.get(cat or ""),
-            account_sync_id=acc,
-            account_name={"a1": "现金", "a2": "招行"}.get(acc or ""),
-            tags_csv=tags, currency_code=cur, native_amount=native,
-            tx_index=idx, created_by_user_id="u1", source_change_id=1,
-            exclude_from_stats=(sync == "t4"), exclude_from_budget=(sync == "t5"))
-    db.commit()
+    def make_db(path):
+        """独立数据库：删旧文件、建表、播种场景，返回 session。
+
+        用于 REST golden：其它 golden 块（写路径的 manage_tag 等）会往共享 db 的
+        user_tag_projection / read_tx_projection 里插数据，泄漏进 list_tags / get_ledger_stats，
+        造成"golden 有、本地没有"的假分歧。REST 用一份干净、重新播种的 DB 即可避免。
+        """
+        if os.path.exists(path):
+            os.remove(path)
+        eng = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
+        @event.listens_for(eng, "connect")
+        def _p(dbapi_conn, _):
+            c = dbapi_conn.cursor()
+            c.execute("PRAGMA foreign_keys=ON")
+            c.close()
+        Base.metadata.create_all(bind=eng)
+        S = sessionmaker(bind=eng, autocommit=False, autoflush=False)
+        db = S()
+        seed_scenario(db)
+        return db
+
+    db = SessionLocal()
+    seed_scenario(db)
 
     # ---------------- 调用矩阵（与 TS 侧逐条对应） ----------------
     # 每条都是一个"同一夹具、同一参数、比完整 JSON"的判定点。
@@ -621,6 +646,10 @@ def main(out_path: str) -> int:
     # 了同样的 SQL/计算（且带"对齐上游"注释），是最可能重演 MCP 那几类"早期错误对齐"的地方。
     # 单独产一份 golden，本地用真实路由做 HTTP 级差分（见 tests/rest-differential.test.ts）。
     # 隔离在 try 里：上游路由若因依赖缺失 import 失败，不影响主管线的 golden。
+    # REST golden 用独立 DB：避免写差分（capability_tools.manage_tag 建 "MCP" 标签）
+    # 泄漏进 list_tags / get_ledger_stats，造成"golden 有、本地没有"的假分歧。
+    _orig_db = db
+    db = make_db("/tmp/parity-rest.db")
     rest_golden = {"now": NOW.isoformat(), "cases": []}
     try:
         from src.routers.read.summary import get_summary  # type: ignore
@@ -716,6 +745,8 @@ def main(out_path: str) -> int:
             json.dump(rest_golden, rfh, ensure_ascii=False, indent=2, default=str)
             rfh.write("\n")
         print(f"wrote {len(rest_golden['cases'])} rest cases -> {rest_path}")
+        db.close()
+        db = _orig_db
     except Exception as exc:
         print(f"[warn] REST golden 跳过（上游路由 import 失败）：{type(exc).__name__}: {exc}")
 
