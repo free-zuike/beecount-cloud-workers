@@ -1594,10 +1594,10 @@ def main(out_path: str) -> int:
             return obj.model_dump(mode="json") if hasattr(obj, "model_dump") else obj
 
         _ws_calls = [
-            ("members", lambda: _ws_list_members(_scopes=set(), current_user=_owner, db=_ws_db)),
-            ("invites", lambda: _ws_list_invites(_scopes=set(), current_user=_owner, db=_ws_db)),
-            ("member_stats", lambda: _ws_member_stats(scope="all", period=None, tz_offset_minutes=0, _scopes=set(), current_user=_owner, db=_ws_db)),
-            ("shared_resources", lambda: _ws_shared(_scopes=set(), current_user=_owner, db=_ws_db)),
+            ("members", lambda: _ws_list_members("L1", _scopes=set(), current_user=_owner, db=_ws_db)),
+            ("invites", lambda: _ws_list_invites("L1", _scopes=set(), current_user=_owner, db=_ws_db)),
+            ("member_stats", lambda: _ws_member_stats("L1", scope="all", period=None, tz_offset_minutes=0, _scopes=set(), current_user=_owner, db=_ws_db)),
+            ("shared_resources", lambda: _ws_shared("L1", _scopes=set(), current_user=_owner, db=_ws_db)),
         ]
         _ws_cases = []
         for _name, _fn in _ws_calls:
