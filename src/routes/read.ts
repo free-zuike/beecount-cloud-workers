@@ -138,7 +138,6 @@ interface ReadAccountOut {
   account_type: string | null;
   currency: string | null;
   initial_balance: number | null;
-  balance: number;
   last_change_id: number;
   ledger_id: string | null;
   ledger_name: string | null;
