@@ -147,6 +147,32 @@ export function makeD1(s: DatabaseSync): D1Database {
   } as unknown as D1Database;
 }
 
+/** 内存 R2 实现，供需要对象存储的路由（如 attachments 上传）在 differential 测试中脱机运行。 */
+export function makeMockR2(): R2Bucket {
+  const store = new Map<string, { body: Uint8Array; httpMetadata?: Record<string, string> }>();
+  const toBuf = (v: ArrayBuffer | Uint8Array | string | ReadableStream): Uint8Array => {
+    if (typeof v === 'string') return new TextEncoder().encode(v);
+    if (v instanceof Uint8Array) return v;
+    if (v instanceof ReadableStream) throw new Error('ReadableStream not supported in mock R2');
+    return new Uint8Array(v as ArrayBuffer);
+  };
+  return {
+    put: async (key: string, value: ArrayBuffer | Uint8Array | string | ReadableStream, opts?: R2PutOptions) => {
+      store.set(key, { body: toBuf(value), httpMetadata: opts?.httpMetadata as Record<string, string> | undefined });
+      return undefined as unknown as R2Object;
+    },
+    get: async (key: string) => {
+      const e = store.get(key);
+      if (!e) return null;
+      return {
+        arrayBuffer: async () => e.body.slice().buffer as ArrayBuffer,
+        httpMetadata: e.httpMetadata,
+      } as unknown as R2Object;
+    },
+    delete: async (key: string) => { store.delete(key); },
+  } as unknown as R2Bucket;
+}
+
 /** 全新内存库 + 路由（不预置任何数据） */
 export function makeHarness(): Harness {
   const sqlite = new DatabaseSync(':memory:');

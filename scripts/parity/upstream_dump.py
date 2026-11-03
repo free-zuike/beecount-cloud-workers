@@ -1431,6 +1431,79 @@ def main(out_path: str) -> int:
         print(f"[warn] pats golden 跳过：{type(exc).__name__}: {exc}")
         traceback.print_exc()
 
+    # ---------------- attachments golden（HTTP /api/v1/attachments/*）----------------
+    # 上传依赖磁盘存储（ATTACHMENT_STORAGE_DIR，main() 已设为 /tmp/parity-attach）。
+    # batch-exists 仅读 DB。scrub：file_id / created_at（两侧皆随机/时间相关）。
+    # 注：上游无 /exists（本地独有），故对拍只用 /upload + /batch-exists。
+    try:
+        from fastapi.testclient import TestClient  # type: ignore
+        from src.main import app as _att_app  # type: ignore
+        from src.database import SessionLocal  # type: ignore
+        from src.models import Ledger, LedgerMember, User  # type: ignore
+        from sqlalchemy import select  # type: ignore
+        import hashlib as _hl
+        _att_client = TestClient(_att_app)
+        _att_client.post("/api/v1/auth/register", json={"email": "atttest@example.com", "password": "password123", "client_type": "web", "device_name": "CI"})
+        _alr = _att_client.post("/api/v1/auth/login", json={"email": "atttest@example.com", "password": "password123", "client_type": "web"})
+        _at = (_alr.json() or {}).get("access_token")
+        _ah = {"Authorization": f"Bearer {_at}"}
+        _att_db = SessionLocal()
+        _att_user = _att_db.scalar(select(User).where(User.email == "atttest@example.com"))
+        # 幂等：先清 L1 再建，避免重复运行 golden 时唯一约束冲突
+        for _old in _att_db.scalars(select(Ledger).where(Ledger.external_id == "L1", Ledger.user_id == _att_user.id)).all():
+            _att_db.delete(_old)
+        _att_db.commit()
+        _lid = "ATT-L1-i"
+        insert(_att_db, Ledger, id=_lid, external_id="L1", user_id=_att_user.id, name="主账本", currency="CNY", month_start_day=1, created_at=NOW)
+        insert(_att_db, LedgerMember, ledger_id=_lid, user_id=_att_user.id, role="owner")
+
+        _ATT_VOLATILE = {"file_id", "created_at"}
+
+        def _scrub_att(v):
+            if isinstance(v, list):
+                return [_scrub_att(i) for i in v]
+            if isinstance(v, dict):
+                return {k: _scrub_att(x) for k, x in v.items() if k not in _ATT_VOLATILE}
+            return v
+
+        _att_steps = []
+        def _astep(name, method, path, files=None, data=None, json_body=None, headers=None):
+            fn = getattr(_att_client, method)
+            kw = {}
+            if files is not None:
+                kw["files"] = files
+            if data is not None:
+                kw["data"] = data
+            if json_body is not None:
+                kw["json"] = json_body
+            if headers:
+                kw["headers"] = headers
+            resp = fn(path, **kw)
+            body = resp.json() if resp.status_code != 204 and resp.content else None
+            _att_steps.append({"name": name, "request": {"method": method.upper(), "path": path, "json": json_body}, "status": resp.status_code, "result": _scrub_att(body) if body is not None else None})
+            return resp, body
+
+        _content = b"hello attachment content"
+        _sha = _hl.sha256(_content).hexdigest()
+        _astep("upload", "post", "/api/v1/attachments/upload",
+               files={"file": ("seed.csv", _content, "text/csv")},
+               data={"ledger_id": "L1"}, headers=_ah)
+        _astep("batch_exists_hit", "post", "/api/v1/attachments/batch-exists",
+               json_body={"ledger_id": "L1", "sha256_list": [_sha]}, headers=_ah)
+        _astep("batch_exists_miss", "post", "/api/v1/attachments/batch-exists",
+               json_body={"ledger_id": "L1", "sha256_list": ["deadbeef" * 8]}, headers=_ah)
+
+        _ag = {"steps": _att_steps}
+        _ap = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-attachments-golden.json")
+        with open(_ap, "w", encoding="utf-8") as _afh:
+            json.dump(_ag, _afh, ensure_ascii=False, indent=2, default=str)
+            _afh.write("\n")
+        print(f"wrote {len(_att_steps)} attachments steps -> {_ap}")
+    except Exception as exc:
+        import traceback
+        print(f"[warn] attachments golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(golden, fh, ensure_ascii=False, indent=2, default=str)

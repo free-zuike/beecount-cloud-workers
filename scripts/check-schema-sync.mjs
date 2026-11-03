@@ -32,29 +32,20 @@ const KNOWN = {
     'ai_image_cache',    // 截图记账缓存（D1+R2 持久化，上游无）
     'backup_restores',   // 恢复任务（上游无恢复功能）
   ]),
-  // 列级已知差异（上游有/我们没有，或反之），按表归并
-  columnAdditions: {
-    // 本地独有的附件分类列（Workers 附件归类用，上游无）
-    attachment_files: ['attachment_kind'],
-    // 本地扩展：账本月起始日（预算周期用，上游无）
-    ledgers: ['month_start_day'],
-    // 本地扩展：MCP 调用日志冗余 PAT 名（便于审计，上游无）
-    mcp_call_logs: ['pat_name'],
-    // 本地扩展：交易最后编辑人（审计，上游无）
-    read_tx_projection: ['last_edited_by_user_id'],
-    // 本地扩展：同步变更作用域（ledger/device，上游无）
-    sync_changes: ['scope'],
-  },
+  // 列级已知差异（本地有/上游无）。注意：以下曾误列为本地扩展，但经核对上游
+  // 1.9.0 Alembic 后确认全部上游已有，属对齐项，故清空：
+  //   attachment_kind(0006) / month_start_day(0014) / pat_name(0009) /
+  //   last_edited_by_user_id(0012) / scope+ledger_id 可空(0010)
+  columnAdditions: {},
   columnMissing: {},
   // 类型/约束级已知差异：键为 "表.列"，值为原因（有意为之）
   typeExceptions: {
     // D1 没有原生 BOOLEAN/DOUBLE 等，本地用 INTEGER/REAL 表达，逻辑等价
   },
   // NOT NULL 已知差异（本地有意允许为空，尽管上游要求非空），键为 "表.列"
-  notNullExceptions: {
-    // 设备级同步变更（scope=device）ledger_id 可为空，上游要求非空但本地语义需要可空
-    'sync_changes.ledger_id': '设备级变更 ledger_id 可为空',
-  },
+  // 注意：sync_changes.ledger_id 曾误列于此，但上游 0010 已将其改 nullable（为
+  // scope='user' 用户级实体），与本地一致，故清空。
+  notNullExceptions: {},
   // 默认值已知差异：本地在 DB 层提供默认值（上游交给应用层），键为 "表.列"
   defaultExceptions: {
     // 以下均属 Workers 移植的有意选择：D1 无 SQLAlchemy 的应用层 default，
@@ -197,24 +188,47 @@ function parseUpstreamSchema() {
   const tables = new Map();
   const ensure = (t) => { if (!tables.has(t)) tables.set(t, { cols: new Map(), indexes: new Set(), pks: new Set() }); return tables.get(t); };
 
+  // 同时识别 op.* 与 batch 上下文（上游 SQLite 兼容迁移大量用
+  // `with op.batch_alter_table("T") as batch_op:` / `as batch:` / `as ops:` 包裹
+  // add_column / alter_column / create_index，旧解析器只认 op.* 会漏读这些后续
+  // 迁移，导致列/可空/索引误报。此处捕获任意 batch 变量名（不仅限于 batch_op）。
+  const tokRe = /(?<!\w)(?:op\.batch_alter_table\(\s*["']([^"']+)["']\s*\)\s*as\s+(\w+)|(\w+)\.(create_table|add_column|drop_table|drop_column|alter_column|create_index)\()/g;
   for (const file of files) {
     const full = execSync(`git show ${UPSTREAM_REF}:${file}`, { cwd: ROOT, maxBuffer: 10 * 1024 * 1024 }).toString();
     const upStart = full.indexOf('def upgrade');
     const downStart = full.indexOf('def downgrade', upStart + 1);
-    const up = downStart > upStart ? full.slice(upStart, downStart) : full.slice(upStart);
+    // 扫描 upgrade() 及其调用的 helper 函数（部分迁移把列/索引操作封装在 helper 里再被
+    // upgrade() 调用，如 0010 的 _alter_sync_changes_add_scope），故取整个模块（去掉
+    // downgrade）而非仅 upgrade() 本体。
+    const up = downStart > upStart ? full.slice(0, downStart) : full;
 
-    // 表级：op.create_table / op.add_column / op.drop_table / op.drop_column
-    const opRe = /(?<!\w)op\.(create_table|add_column|drop_table|drop_column)\(\s*/g;
-    let m;
-    while ((m = opRe.exec(up))) {
-      const openIdx = up.indexOf('(', m.index);
+    // 收集本文件内的 batch 变量名 -> 表名
+    const batchVars = {};
+    const batchDeclRe = /op\.batch_alter_table\(\s*["']([^"']+)["']\s*\)\s*as\s+(\w+)/g;
+    let bd;
+    while ((bd = batchDeclRe.exec(up))) batchVars[bd[2]] = bd[1];
+
+    let tm;
+    while ((tm = tokRe.exec(up))) {
+      if (tm[1]) { batchVars[tm[2]] = tm[1]; continue; }
+      const prefix = tm[3];
+      const op = tm[4];
+      const isBatch = prefix !== 'op';
+      const openIdx = up.indexOf('(', tm.index);
       const closeIdx = matchParen(up, openIdx);
-      const args = stringsInCall(up, opRe.lastIndex, closeIdx);
+      if (closeIdx < 0) continue;
+      const args = stringsInCall(up, tm.index + tm[0].length, closeIdx);
       const body = up.slice(openIdx + 1, closeIdx);
-      if (m[1] === 'create_table') {
-        const t = args[0];
-        const tbl = ensure(t);
-        // 解析每个 sa.Column(...)
+
+      // 表名：op.* 取参数（create_table/增删列取首参，create_index 取次参）；
+      // batch.* 取对应 batch 表。
+      let t = isBatch
+        ? batchVars[prefix]
+        : (op === 'create_table' || op !== 'create_index' ? args[0] : args[1]);
+      if (!t) continue;
+      const tbl = ensure(t);
+
+      if (op === 'create_table') {
         const colRe = /sa\.Column\(\s*/g;
         let cm;
         while ((cm = colRe.exec(body))) {
@@ -224,7 +238,6 @@ function parseUpstreamSchema() {
           const col = parseAlembicColumn(cBody);
           if (col.name) tbl.cols.set(col.name, { type: col.type, notNull: col.notNull, fk: col.fk, pk: col.pk, def: col.def });
         }
-        // 表级主键 / 外键 / 索引
         let pkM;
         const pkRe = /sa\.PrimaryKeyConstraint\(\s*([^)]*)\)/g;
         while ((pkM = pkRe.exec(body))) { for (const c of stringsInCall(pkM[1], 0, pkM[1].length)) tbl.pks.add(c); }
@@ -233,10 +246,7 @@ function parseUpstreamSchema() {
         while ((fkM = fkRe.exec(body))) {
           const localCols = stringsInCall(fkM[1], 0, fkM[1].length);
           const refs = stringsInCall(fkM[2], 0, fkM[2].length);
-          localCols.forEach((lc, i) => {
-            const ref = refs[i];
-            if (tbl.cols.has(lc)) tbl.cols.get(lc).fk = ref;
-          });
+          localCols.forEach((lc, i) => { const ref = refs[i]; if (tbl.cols.has(lc)) tbl.cols.get(lc).fk = ref; });
         }
         let ixM;
         const ixRe = /sa\.Index\(\s*["'][^"']*["']\s*,([^)]*)\)/g;
@@ -244,9 +254,7 @@ function parseUpstreamSchema() {
           const cols = stringsInCall(ixM[1], 0, ixM[1].length);
           if (cols.length) tbl.indexes.add(cols.slice().sort().join(','));
         }
-      } else if (m[1] === 'add_column') {
-        const t = args[0];
-        const tbl = ensure(t);
+      } else if (op === 'add_column') {
         const cOpen = body.indexOf('sa.Column(');
         if (cOpen >= 0) {
           const cStart = body.indexOf('(', cOpen);
@@ -254,29 +262,21 @@ function parseUpstreamSchema() {
           const col = parseAlembicColumn(body.slice(cStart + 1, cClose));
           if (col.name) tbl.cols.set(col.name, { type: col.type, notNull: col.notNull, fk: col.fk, pk: col.pk, def: col.def });
         }
-      } else if (m[1] === 'drop_column') {
-        const t = args[0];
-        const tbl = tables.get(t);
-        if (tbl) tbl.cols.delete(args[1]);
-      } else if (m[1] === 'drop_table') {
-        tables.delete(args[0]);
-      }
-    }
-
-    // op.create_index('name', 't', ['c1','c2'], unique=...)
-    const idxRe = /(?<!\w)op\.create_index\(\s*/g;
-    let im;
-    while ((im = idxRe.exec(up))) {
-      const openIdx = up.indexOf('(', im.index);
-      const closeIdx = matchParen(up, openIdx);
-      const args = stringsInCall(up, idxRe.lastIndex, closeIdx);
-      // args: [name, table, [cols...], unique?]
-      if (args.length >= 3) {
-        const t = args[1];
-        const cols = args.slice(2)
-          .filter(a => !/^(true|false|unique)$/i.test(a))
-          .map(c => c.toLowerCase().replace(/\s+(desc|asc)$/, ''));
-        const tbl = ensure(t);
+      } else if (op === 'alter_column') {
+        const colName = isBatch ? args[0] : args[1];
+        if (colName && tbl.cols.has(colName)) {
+          // nullable=True 表示“允许空”→ notNull 应为 false（注意取反）
+          const nullableM = body.match(/nullable\s*=\s*(True|False)/i);
+          if (nullableM) tbl.cols.get(colName).notNull = !/true/i.test(nullableM[1]);
+        }
+      } else if (op === 'drop_column') {
+        const colName = isBatch ? args[0] : args[1];
+        if (colName && tbl.cols.has(colName)) tbl.cols.delete(colName);
+      } else if (op === 'drop_table') {
+        tables.delete(t);
+      } else if (op === 'create_index') {
+        let cols = isBatch ? args.slice(1) : args.slice(2);
+        cols = cols.filter(a => !/^(true|false|unique)$/i.test(a)).map(c => c.toLowerCase().replace(/\s+(desc|asc)$/, ''));
         if (cols.length) tbl.indexes.add(cols.slice().sort().join(','));
       }
     }

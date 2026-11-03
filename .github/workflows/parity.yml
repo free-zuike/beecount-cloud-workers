@@ -36,6 +36,8 @@ on:
       - 'tests/parity-compare.ts'
       - 'scripts/parity/**'
       - 'tests/integration/**'
+      - 'src/routes/attachments.ts'
+      - 'tests/attachments-differential.test.ts'
       - '.github/workflows/parity.yml'
 
 concurrency:
@@ -173,6 +175,9 @@ jobs:
 
       - name: Run pats differential test
         run: npm test -- --run tests/pats-differential.test.ts
+
+      - name: Run attachments differential test
+        run: npm test -- --run tests/attachments-differential.test.ts
 
       - name: Job summary
         if: always()

@@ -246,32 +246,34 @@ attachmentsRouter.post('/batch-exists', async (c) => {
             const sha256 = rawSha256.trim().toLowerCase();
             const existing = await db
                 .prepare(
-                    `SELECT id, file_name, mime_type, size_bytes, created_at 
-                     FROM attachment_files 
+                    `SELECT id, file_name, mime_type, size_bytes, created_at
+                     FROM attachment_files
                      WHERE sha256 = ? AND ledger_id = ? AND attachment_kind = 'transaction'`
                 )
                 .bind(sha256, ledger.id)
-                .first<{ id: string; file_name: string; mime_type: string; size_bytes: number; created_at: string }>();
+                .first<{ id: string; file_name: string; mime_type: string | null; size_bytes: number; created_at: string }>();
 
             if (existing) {
                 results.push({
                     sha256,
                     exists: true,
                     file_id: existing.id,
-                    file_name: existing.file_name,
-                    mime_type: existing.mime_type,
                     size: existing.size_bytes,
-                    created_at: existing.created_at
+                    mime_type: existing.mime_type,
                 });
             } else {
                 results.push({
                     sha256,
-                    exists: false
+                    exists: false,
+                    file_id: null,
+                    size: null,
+                    mime_type: null,
                 });
             }
         }
 
-        return c.json({ exists: results });
+        // 对齐上游信封：{items:[...]}（前端 api-client 的 AttachmentBatchExistsResponse 亦为 items）
+        return c.json({ items: results });
     } catch (error) {
         serverLogger.error('src.routers.attachments', '[ATTACHMENT] Batch exists error:', error);
         return c.json({ error: 'Failed to check attachments' }, 500);

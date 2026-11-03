@@ -283,7 +283,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         external_id TEXT NOT NULL,
         name TEXT,
         currency TEXT DEFAULT 'CNY' NOT NULL,
-        month_start_day INTEGER DEFAULT 1,
+        month_start_day INTEGER DEFAULT 1 NOT NULL,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
         UNIQUE(user_id, external_id)
       )
@@ -331,7 +331,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         updated_at TEXT NOT NULL,
         updated_by_device_id TEXT,
         updated_by_user_id TEXT,
-        scope TEXT DEFAULT 'ledger'
+        scope TEXT DEFAULT 'ledger' NOT NULL
       )
     `).run();
 
@@ -530,7 +530,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS attachment_files (
         id TEXT PRIMARY KEY,
-        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        ledger_id TEXT REFERENCES ledgers(id) ON DELETE CASCADE,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         sha256 TEXT NOT NULL,
         size_bytes INTEGER DEFAULT 0 NOT NULL,
