@@ -1,0 +1,81 @@
+{
+  "steps": [
+    {
+      "name": "status_before",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/auth/2fa/status",
+        "json": null
+      },
+      "status": 200,
+      "result": {
+        "enabled": false
+      }
+    },
+    {
+      "name": "setup",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/auth/2fa/setup",
+        "json": null
+      },
+      "status": 200,
+      "result": {
+        "expires_in": 300
+      }
+    },
+    {
+      "name": "confirm",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/auth/2fa/confirm",
+        "json": {
+          "code": "<computed>"
+        }
+      },
+      "status": 200,
+      "result": {
+        "enabled": true
+      }
+    },
+    {
+      "name": "status_enabled",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/auth/2fa/status",
+        "json": null
+      },
+      "status": 200,
+      "result": {
+        "enabled": true
+      }
+    },
+    {
+      "name": "disable",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/auth/2fa/disable",
+        "json": {
+          "password": "password123",
+          "code": "<computed>"
+        }
+      },
+      "status": 200,
+      "result": {
+        "disabled": true
+      }
+    },
+    {
+      "name": "status_after",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/auth/2fa/status",
+        "json": null
+      },
+      "status": 200,
+      "result": {
+        "enabled": false
+      }
+    }
+  ]
+}

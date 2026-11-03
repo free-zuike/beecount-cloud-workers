@@ -1,0 +1,46 @@
+{
+  "steps": [
+    {
+      "name": "get_me",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/profile/me",
+        "json": null
+      },
+      "status": 200,
+      "result": {
+        "email": "authtest@example.com",
+        "display_name": null,
+        "avatar_version": 0,
+        "income_is_red": null,
+        "theme_primary_color": null,
+        "appearance": null,
+        "ai_config": null,
+        "primary_currency": null
+      }
+    },
+    {
+      "name": "patch_me",
+      "request": {
+        "method": "PATCH",
+        "path": "/api/v1/profile/me",
+        "json": {
+          "display_name": "新昵称",
+          "income_is_red": true,
+          "theme_primary_color": "#123456"
+        }
+      },
+      "status": 200,
+      "result": {
+        "email": "authtest@example.com",
+        "display_name": "新昵称",
+        "avatar_version": 0,
+        "income_is_red": true,
+        "theme_primary_color": "#123456",
+        "appearance": null,
+        "ai_config": null,
+        "primary_currency": null
+      }
+    }
+  ]
+}
