@@ -1456,6 +1456,9 @@ def main(out_path: str) -> int:
         _lid = "ATT-L1-i"
         insert(_att_db, Ledger, id=_lid, external_id="L1", user_id=_att_user.id, name="主账本", currency="CNY", month_start_day=1, created_at=NOW)
         insert(_att_db, LedgerMember, ledger_id=_lid, user_id=_att_user.id, role="owner")
+        # 必须提交：TestClient 使用独立会话，SQLite 跨连接看不到未提交数据，
+        # 否则上游 upload 解析不到账本 → 404（与本地共用内存库返回的 200 不一致）。
+        _att_db.commit()
 
         _ATT_VOLATILE = {"file_id", "created_at"}
 
