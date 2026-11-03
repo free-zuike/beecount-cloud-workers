@@ -52,7 +52,13 @@ function canonical(v: unknown): string {
     const parts = Object.keys(out).sort().map((k) => JSON.stringify(k) + ':' + canonical(out[k]));
     return '{' + parts.join(',') + '}';
   }
+  if (typeof v === 'string') return JSON.stringify(normTs(v));
   return JSON.stringify(v);
+}
+
+/** 归一化 UTC 时间戳时区后缀：上游 pydantic 输出 +00:00，本地输出 Z；二者等价 */
+function normTs(s: string): string {
+  return s.replace(/\+00:00$/, 'Z');
 }
 
 const CASES = [
