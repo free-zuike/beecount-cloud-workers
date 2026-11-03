@@ -89,12 +89,13 @@ describe('list_ledger_members 输出契约（对齐上游 MemberOut）', () => {
     // 补 u2 为 editor，joined_at 晚于 u1（2026-01-01），用于验证升序排序
     insertRow(h.sqlite, 'ledger_members', {
       ledger_id: 'L1-i', user_id: 'u2', role: 'editor',
-      joined_at: '2026-02-01T00:00:00Z', invited_by_user_id: 'u1',
+      joined_at: '2026-02-01T00:00:00Z', invited_by: 'u1',
     });
-    h.sqlite.prepare('UPDATE users SET display_name=?, avatar_url=?, avatar_version=? WHERE id=?')
-      .run('张三', 'https://x/a.png', 3, 'u1');
-    h.sqlite.prepare('UPDATE users SET display_name=?, avatar_url=?, avatar_version=? WHERE id=?')
-      .run('李四', 'https://x/b.png', 1, 'u2');
+    // display_name / 头像来自 user_profiles（对齐真实 schema.ts，users 表无这些列）
+    h.sqlite.prepare('INSERT OR REPLACE INTO user_profiles (user_id, display_name, avatar_file_id, avatar_version) VALUES (?, ?, ?, ?)')
+      .run('u1', '张三', 'https://x/a.png', 3);
+    h.sqlite.prepare('INSERT OR REPLACE INTO user_profiles (user_id, display_name, avatar_file_id, avatar_version) VALUES (?, ?, ?, ?)')
+      .run('u2', '李四', 'https://x/b.png', 1);
 
     const c = mcpCtx(h, 'u1');
     const res = (await listLedgerMembers(c, { ledger_id: 'L1' })) as Record<string, unknown>[];
