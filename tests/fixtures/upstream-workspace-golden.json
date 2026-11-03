@@ -1,0 +1,134 @@
+{
+  "cases": [
+    {
+      "name": "members",
+      "status": 200,
+      "result": [
+        {
+          "user_id": "u1",
+          "email": "u1@example.com",
+          "display_name": null,
+          "role": "owner",
+          "invited_by_user_id": null,
+          "is_self": true,
+          "avatar_url": null,
+          "avatar_version": 0
+        }
+      ]
+    },
+    {
+      "name": "invites",
+      "status": 200,
+      "result": [
+        {
+          "code": "ABC234",
+          "formatted_code": "ABC 234",
+          "target_role": "editor",
+          "expires_at": "2099-01-01T00:00:00+00:00",
+          "created_at": "2026-01-01T00:00:00+00:00",
+          "invited_by_user_id": "u1"
+        }
+      ]
+    },
+    {
+      "name": "member_stats",
+      "status": 200,
+      "result": {
+        "ledger_id": "L1",
+        "ledger_currency": "CNY",
+        "scope": "all",
+        "period": null,
+        "start_at": null,
+        "end_at": null,
+        "items": [
+          {
+            "user_id": "u1",
+            "email": "u1@example.com",
+            "display_name": null,
+            "avatar_url": null,
+            "avatar_version": 0,
+            "role": "owner",
+            "income_total": 8000.0,
+            "expense_total": 101.53,
+            "tx_count": 6
+          }
+        ]
+      }
+    },
+    {
+      "name": "shared_resources",
+      "status": 200,
+      "result": {
+        "owner_user_id": "u1",
+        "categories": [
+          {
+            "sync_id": "c1",
+            "name": "餐饮",
+            "kind": "expense",
+            "icon": "🍜",
+            "icon_type": null,
+            "icon_cloud_file_id": null,
+            "icon_cloud_sha256": null,
+            "sort_order": 1,
+            "level": null,
+            "parent_name": null,
+            "parent_sync_id": null
+          },
+          {
+            "sync_id": "c2",
+            "name": "工资",
+            "kind": "income",
+            "icon": null,
+            "icon_type": null,
+            "icon_cloud_file_id": null,
+            "icon_cloud_sha256": null,
+            "sort_order": 2,
+            "level": null,
+            "parent_name": null,
+            "parent_sync_id": null
+          }
+        ],
+        "accounts": [
+          {
+            "sync_id": "a1",
+            "name": "现金",
+            "account_type": "cash",
+            "currency": "CNY",
+            "initial_balance": null,
+            "note": null,
+            "credit_limit": null,
+            "billing_day": null,
+            "payment_due_day": null,
+            "bank_name": null,
+            "card_last_four": null
+          },
+          {
+            "sync_id": "a2",
+            "name": "招行",
+            "account_type": "bank",
+            "currency": "CNY",
+            "initial_balance": null,
+            "note": null,
+            "credit_limit": null,
+            "billing_day": null,
+            "payment_due_day": null,
+            "bank_name": null,
+            "card_last_four": null
+          }
+        ],
+        "tags": [
+          {
+            "sync_id": "g1",
+            "name": "出差",
+            "color": "#00bcf2"
+          },
+          {
+            "sync_id": "g2",
+            "name": "客户",
+            "color": "#ff9800"
+          }
+        ]
+      }
+    }
+  ]
+}
