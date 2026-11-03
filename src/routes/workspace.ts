@@ -1354,7 +1354,7 @@ workspaceRouter.post('/ledgers/:id/invites', zValidator('json', InviteSchema), a
     created_at: nowUtc(),
     target_role: req.target_role,
     share_url: shareUrl,
-  });
+  }, 201);
 });
 
 // ===========================================================================
@@ -1451,7 +1451,7 @@ workspaceRouter.delete('/ledgers/:id/invites/:code', async (c) => {
     db, userId, ledgerId: ledger.id, action: 'revoke_invite', entityType: 'ledger_invites', entityId: inviteCode,
   });
 
-  return c.json({ success: true });
+  return new Response(null, { status: 204 });
 });
 
 // ===========================================================================
@@ -1513,11 +1513,12 @@ workspaceRouter.post('/invites/:code/preview', async (c) => {
   return c.json({
     code: invite.code,
     target_role: invite.target_role,
-    ledger_id: invite.external_id,
+    ledger_external_id: invite.external_id,
     ledger_name: invite.ledger_name,
-    currency: invite.currency,
-    owner_email: invite.owner_email,
-    invited_by_display_name: invite.owner_display_name ?? invite.owner_email,
+    ledger_currency: invite.currency,
+    invited_by_display: invite.owner_display_name
+      ? invite.owner_display_name
+      : (invite.owner_email ? invite.owner_email.split('@')[0] : ''),
     expires_at: invite.expires_at,
   });
 });
@@ -1575,7 +1576,7 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
     .first();
 
   if (existingMember) {
-    return c.json({ message: 'Already a member', ledger_id: invite.external_id, ledger_name: invite.ledger_name });
+    return c.json({ message: 'Already a member', ledger_external_id: invite.external_id, ledger_name: invite.ledger_name });
   }
 
   const memberCount = await db
@@ -1598,7 +1599,7 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
       // 已是成员（并发请求竞争），返回成功
       const cnt = await db.prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).first<{ cnt: number }>();
       const li = await db.prepare('SELECT currency FROM ledgers WHERE id = ?').bind(invite.ledger_id).first<{ currency: string }>();
-      return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) });
+      return c.json({ ledger_external_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) });
     }
     throw err;
   }
@@ -1642,7 +1643,7 @@ workspaceRouter.post('/ledgers/join', zValidator('json', JoinSchema), async (c) 
   });
 
   return c.json({
-    ledger_id: invite.external_id,
+    ledger_external_id: invite.external_id,
     ledger_name: invite.ledger_name,
     ledger_currency: ledgerInfo?.currency ?? 'CNY',
     role: invite.target_role,
@@ -1702,7 +1703,7 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
   if (existingMember) {
     const cnt = await db.prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).first<{ cnt: number }>();
     const li = await db.prepare('SELECT currency FROM ledgers WHERE id = ?').bind(invite.ledger_id).first<{ currency: string }>();
-    return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) });
+    return c.json({ ledger_external_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) });
   }
 
   // 并发保护：try-catch 捕获 UNIQUE 约束冲突
@@ -1715,7 +1716,7 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
     if ((err as Error).message?.includes('UNIQUE')) {
       const cnt = await db.prepare('SELECT COUNT(*) as cnt FROM ledger_members WHERE ledger_id = ?').bind(invite.ledger_id).first<{ cnt: number }>();
       const li = await db.prepare('SELECT currency FROM ledgers WHERE id = ?').bind(invite.ledger_id).first<{ currency: string }>();
-      return c.json({ ledger_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) });
+      return c.json({ ledger_external_id: invite.external_id, ledger_name: invite.ledger_name, ledger_currency: li?.currency ?? 'CNY', role: invite.target_role, member_count: (cnt?.cnt ?? 0) });
     }
     throw err;
   }
@@ -1737,7 +1738,7 @@ workspaceRouter.post('/invites/:code/accept', async (c) => {
   } catch {}
 
   return c.json({
-    ledger_id: invite.external_id,
+    ledger_external_id: invite.external_id,
     ledger_name: invite.ledger_name,
     ledger_currency: ledgerInfo?.currency ?? 'CNY',
     role: invite.target_role,
@@ -1794,6 +1795,35 @@ workspaceRouter.get('/ledgers/:id/members', async (c) => {
     avatar_version: m.avatar_version ?? 0,
   })));
 });
+
+/** 取单个成员并水合成上游 MemberOut（9 字段），用于 change-role / transfer 响应对齐。 */
+async function hydrateMember(
+  db: any, ledgerId: string, userId: string, callerUserId: string,
+): Promise<Record<string, unknown> | null> {
+  const row = await db.prepare(
+    `SELECT lm.user_id, lm.role, lm.joined_at, lm.invited_by, u.email,
+            up.display_name, up.avatar_file_id, up.avatar_version
+     FROM ledger_members lm
+     LEFT JOIN users u ON u.id = lm.user_id
+     LEFT JOIN user_profiles up ON up.user_id = u.id
+     WHERE lm.ledger_id = ? AND lm.user_id = ?`
+  ).bind(ledgerId, userId).first<{
+    user_id: string; role: string; joined_at: string | null; invited_by: string | null;
+    email: string | null; display_name: string | null; avatar_file_id: string | null; avatar_version: number | null;
+  }>();
+  if (!row) return null;
+  return {
+    user_id: row.user_id,
+    role: row.role,
+    email: row.email ?? '',
+    display_name: row.display_name ?? null,
+    joined_at: row.joined_at ? `${new Date(String(row.joined_at)).toISOString().slice(0, 19)}+00:00` : null,
+    invited_by_user_id: row.invited_by ?? null,
+    is_self: row.user_id === callerUserId,
+    avatar_url: row.avatar_file_id ? `/api/v1/profile/avatar/${row.user_id}?v=${row.avatar_version ?? 0}` : null,
+    avatar_version: row.avatar_version ?? 0,
+  };
+}
 
 // ===========================================================================
 // PATCH /workspace/ledgers/:id/members/:memberUserId - 修改成员角色（仅 Owner）
@@ -1863,11 +1893,7 @@ workspaceRouter.patch('/ledgers/:id/members/:memberUserId', zValidator('json', M
     }
   } catch {}
 
-  return c.json({
-    user_id: memberUserId,
-    ledger_id: ledgerExternalId,
-    role: req.role,
-  });
+  return c.json(await hydrateMember(db, ledger.id, memberUserId, userId));
 });
 
 // ===========================================================================
@@ -2333,7 +2359,16 @@ workspaceRouter.post('/ledgers/:id/transfer', zValidator('json', TransferSchema)
     }
   } catch {}
 
-  return c.json({ success: true, new_owner_id: req.target_user_id });
+  const memberRows = await db
+    .prepare('SELECT user_id FROM ledger_members WHERE ledger_id = ?')
+    .bind(ledger.id)
+    .all<{ user_id: string }>();
+  const members = [];
+  for (const m of memberRows.results) {
+    const h = await hydrateMember(db, ledger.id, m.user_id, userId);
+    if (h) members.push(h);
+  }
+  return c.json(members);
 });
 
 // ===========================================================================

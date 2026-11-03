@@ -1622,6 +1622,134 @@ def main(out_path: str) -> int:
         print(f"[warn] workspace golden 跳过：{type(exc).__name__}: {exc}")
         traceback.print_exc()
 
+    # ---------------- workspace WRITE golden（create/revoke/preview/accept/change-role/remove/transfer）----------------
+    # 直接调用上游写函数（绕过 JWT/依赖），每个用例独立 fresh db（make_db + seed_scenario）避免状态串扰。
+    # 写函数会 broadcast_to_ledger（依赖 request.app.state.ws_manager）；mock 为 no-op。
+    # 比对排除：code/formatted_code/expires_at/created_at/share_url/id/joined_at（随机/时间/环境派生）。
+    try:
+        import asyncio as _asyncio
+        import tempfile as _tf
+        import types as _types
+        from src.routers import invites as _inv_rt
+        from src.routers import members as _mem_rt
+        import src.websocket_manager as _wsm
+        async def _noop_broadcast(**_kw):
+            return None
+        # 写函数内部 `from ..websocket_manager import broadcast_to_ledger` 在调用时重读模块属性，no-op 生效
+        _wsm.broadcast_to_ledger = _noop_broadcast
+
+        _FakeReq = _types.SimpleNamespace(
+            app=_types.SimpleNamespace(state=_types.SimpleNamespace(ws_manager=None)))
+
+        _WSW_VOLATILE = {"code", "formatted_code", "expires_at", "created_at", "share_url", "id", "joined_at"}
+
+        def _scrub_wsw(v):
+            if isinstance(v, list):
+                return [_scrub_wsw(x) for x in v]
+            if isinstance(v, dict):
+                out = {}
+                for k, x in v.items():
+                    if k in _WSW_VOLATILE:
+                        continue
+                    out[k] = _scrub_wsw(x)
+                return out
+            return v
+
+        def _dump_wsw(obj):
+            if isinstance(obj, list):
+                return [_dump_wsw(x) for x in obj]
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump(mode="json")
+            return obj
+
+        _wsw_ctr = [0]
+        def _new_wdb():
+            _wsw_ctr[0] += 1
+            return make_db(os.path.join(_tf.gettempdir(), f"parity-ws-write-{_wsw_ctr[0]}.db"))
+
+        def _accept_u2(d, o):
+            inv = _inv_rt.create_invite("L1", _inv_rt.InviteCreateRequest(role="editor", expires_in_hours=24),
+                                       _scopes=set(), current_user=o, db=d)
+            return _asyncio.run(_inv_rt.accept_invite(inv.code, _FakeReq, _scopes=set(), current_user=d.get(User, "u2"), db=d))
+
+        def _case_create():
+            d, o = _new_wdb(), None
+            o = d.get(User, "u1")
+            res = _inv_rt.create_invite("L1", _inv_rt.InviteCreateRequest(role="editor", expires_in_hours=24),
+                                        _scopes=set(), current_user=o, db=d)
+            d.close(); return res
+
+        def _case_preview():
+            d = _new_wdb(); o = d.get(User, "u1"); u2 = d.get(User, "u2")
+            inv = _inv_rt.create_invite("L1", _inv_rt.InviteCreateRequest(role="editor", expires_in_hours=24),
+                                       _scopes=set(), current_user=o, db=d)
+            res = _inv_rt.preview_invite(inv.code, _scopes=set(), current_user=u2, db=d)
+            d.close(); return res
+
+        def _case_accept():
+            d = _new_wdb(); o = d.get(User, "u1")
+            inv = _inv_rt.create_invite("L1", _inv_rt.InviteCreateRequest(role="editor", expires_in_hours=24),
+                                       _scopes=set(), current_user=o, db=d)
+            res = _asyncio.run(_inv_rt.accept_invite(inv.code, _FakeReq, _scopes=set(), current_user=d.get(User, "u2"), db=d))
+            d.close(); return res
+
+        def _case_revoke():
+            d = _new_wdb(); o = d.get(User, "u1")
+            inv = _inv_rt.create_invite("L1", _inv_rt.InviteCreateRequest(role="editor", expires_in_hours=24),
+                                       _scopes=set(), current_user=o, db=d)
+            res = _inv_rt.revoke_invite("L1", inv.code, _scopes=set(), current_user=o, db=d)
+            d.close(); return res
+
+        def _case_change_role():
+            d = _new_wdb(); o = d.get(User, "u1")
+            _accept_u2(d, o)
+            res = _mem_rt.update_member_role("L1", "u2", _mem_rt.MemberRoleUpdateRequest(role="editor"),
+                                            _FakeReq, _scopes=set(), current_user=o, db=d)
+            d.close(); return res
+
+        def _case_remove():
+            d = _new_wdb(); o = d.get(User, "u1")
+            _accept_u2(d, o)
+            res = _mem_rt.remove_member("L1", "u2", _FakeReq, _scopes=set(), current_user=o, db=d)
+            d.close(); return res
+
+        def _case_transfer():
+            d = _new_wdb(); o = d.get(User, "u1")
+            _accept_u2(d, o)
+            res = _mem_rt.transfer_ownership("L1", _mem_rt.TransferOwnershipRequest(new_owner_user_id="u2"),
+                                            _FakeReq, _scopes=set(), current_user=o, db=d)
+            d.close(); return res
+
+        _wsw_calls = [
+            ("create_invite", 201, _case_create),
+            ("preview_invite", 200, _case_preview),
+            ("accept_invite", 200, _case_accept),
+            ("revoke_invite", 204, _case_revoke),
+            ("change_member_role", 200, _case_change_role),
+            ("remove_member", 204, _case_remove),
+            ("transfer_ownership", 200, _case_transfer),
+        ]
+        _wsw_cases = []
+        for _name, _st, _fn in _wsw_calls:
+            try:
+                _res = _fn()
+                if _asyncio.iscoroutine(_res):
+                    _res = _asyncio.run(_res)
+                _scrubbed = _scrub_wsw(_dump_wsw(_res)) if _res is not None else None
+                _wsw_cases.append({"name": _name, "status": _st, "result": _scrubbed})
+            except Exception as exc:
+                _wsw_cases.append({"name": _name, "status": 0, "error": f"{type(exc).__name__}: {exc}"})
+        _wswg = {"cases": _wsw_cases}
+        _wswp = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-workspace-write-golden.json")
+        with open(_wswp, "w", encoding="utf-8") as _fw:
+            json.dump(_wswg, _fw, ensure_ascii=False, indent=2, default=str)
+            _fw.write("\n")
+        print(f"wrote {len(_wsw_cases)} workspace-write cases -> {_wswp}")
+    except Exception as exc:
+        import traceback
+        print(f"[warn] workspace-write golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(golden, fh, ensure_ascii=False, indent=2, default=str)
