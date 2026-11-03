@@ -59,13 +59,9 @@ jobs:
             REF="${{ vars.PARITY_UPSTREAM_REF }}"
             echo "::notice::使用固定 ref: $REPO@$REF"
           else
-            REF=$(git ls-remote --tags --refs --sort=-v:refname "https://github.com/$REPO.git" \
-                  | head -1 | sed 's#.*refs/tags/##')
-            if [ -z "$REF" ]; then
-              echo "::error::无法取得上游 tag 列表（仓库不存在或无权限）"
-              exit 1
-            fi
-            echo "::notice::对齐上游最新 tag: $REPO@$REF"
+            # 默认对齐本仓库分叉版本 1.9.0（而非上游最新 tag），保证 golden 与本地移植基线一致。
+            REF="1.9.0"
+            echo "::notice::对齐分叉版本 1.9.0: $REPO@$REF"
           fi
           echo "repo=$REPO" >> "$GITHUB_OUTPUT"
           echo "ref=$REF" >> "$GITHUB_OUTPUT"

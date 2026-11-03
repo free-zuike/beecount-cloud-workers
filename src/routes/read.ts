@@ -1294,42 +1294,10 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
   const result: ReadAccountOut[] = [];
   const rowsList = rows.results;
 
-  // 单账本聚合:3 条 GROUP BY 取代逐账户循环查询(N+1)。
-  // 账户维度读 amount 原币(与 workspace/accounts 同口径);转账影响分别按 from/to 计入
-  const mainStats = await db.prepare(`
-    SELECT account_sync_id,
-           COALESCE(SUM(CASE WHEN tx_type = 'income' THEN amount ELSE 0 END), 0) as income,
-           COALESCE(SUM(CASE WHEN tx_type = 'expense' THEN amount ELSE 0 END), 0) as expense
-    FROM read_tx_projection
-    WHERE ledger_id = ? AND account_sync_id IS NOT NULL AND tx_type IN ('income','expense')
-    GROUP BY account_sync_id
-  `).bind(ledger.id).all<{ account_sync_id: string; income: number; expense: number }>();
-
-  const transferFrom = await db.prepare(`
-    SELECT from_account_sync_id as account_sync_id, COALESCE(SUM(amount), 0) as amt
-    FROM read_tx_projection
-    WHERE ledger_id = ? AND tx_type = 'transfer' AND from_account_sync_id IS NOT NULL
-    GROUP BY from_account_sync_id
-  `).bind(ledger.id).all<{ account_sync_id: string; amt: number }>();
-
-  const transferTo = await db.prepare(`
-    SELECT to_account_sync_id as account_sync_id, COALESCE(SUM(amount), 0) as amt
-    FROM read_tx_projection
-    WHERE ledger_id = ? AND tx_type = 'transfer' AND to_account_sync_id IS NOT NULL
-    GROUP BY to_account_sync_id
-  `).bind(ledger.id).all<{ account_sync_id: string; amt: number }>();
-
-  const txMap: Record<string, { income: number; expense: number; transferIn: number; transferOut: number }> = {};
-  for (const r of mainStats.results) txMap[r.account_sync_id] = { income: Number(r.income), expense: Number(r.expense), transferIn: 0, transferOut: 0 };
-  for (const r of transferFrom.results) (txMap[r.account_sync_id] ??= { income: 0, expense: 0, transferIn: 0, transferOut: 0 }).transferOut += Number(r.amt);
-  for (const r of transferTo.results) (txMap[r.account_sync_id] ??= { income: 0, expense: 0, transferIn: 0, transferOut: 0 }).transferIn += Number(r.amt);
-
+  // 对齐上游 ReadAccountOut(1.9.0):列表账户不含 balance(余额由 get_ledger_stats 提供)。
   for (const row of rowsList) {
     const accountSyncId = row.sync_id as string;
     const initialBalance = (row.initial_balance as number) ?? 0;
-    const tx = txMap[accountSyncId] ?? { income: 0, expense: 0, transferIn: 0, transferOut: 0 };
-
-    const balance = initialBalance + tx.income - tx.expense + tx.transferIn - tx.transferOut;
 
     result.push({
       id: accountSyncId,
@@ -1337,7 +1305,6 @@ readRouter.get('/ledgers/:ledgerExternalId/accounts', async (c) => {
       account_type: row.account_type as string | null,
       currency: row.currency as string | null,
       initial_balance: initialBalance,
-      balance,
       last_change_id: latestChangeId?.max_id ?? 0,
       ledger_id: ledger.external_id,
       ledger_name: ledger.name,
