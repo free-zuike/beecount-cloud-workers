@@ -1085,12 +1085,14 @@ def main(out_path: str) -> int:
     except Exception as exc:
         print(f"[warn] sync pull golden 跳过：{type(exc).__name__}: {exc}")
 
-    # ---------------- device LIST 响应 golden ----------------
+    # ---------------- device LIST + REVOKE 响应 golden ----------------
     # 设备 LIST（GET /devices）响应结构（DeviceOut 字段集）契约差分。设备登录时自动
     # 创建、无请求体，所以这里比「响应」而非「请求」。直接调 list_devices。
+    # REVOKE（POST /devices/{device_id}/revoke）端点响应也纳入：上游对「已撤销设备重复
+    # revoke」幂等返回 200，本地已对齐（devices.ts 不再过滤 revoked_at IS NULL）。
     try:
         from src.models import Device  # type: ignore
-        from src.routers.devices import list_devices  # type: ignore
+        from src.routers.devices import list_devices, revoke_device  # type: ignore
 
         # 用固定近期时间戳（不要 5 个月前的旧时间，否则 active_within_days 窗口会把它过滤掉，
         # 两侧都返回空列表）。超大窗口确保设备始终被包含，且值固定可跨时间稳定比对。
@@ -1100,16 +1102,22 @@ def main(out_path: str) -> int:
                       app_version="1.0.0", os_version="17.0", device_model="iPhone15,2",
                       last_ip="1.2.3.4", last_seen_at=upd, created_at=upd))
         db.commit()
+        # 先抓 LIST（dev-1 仍 active），再 revoke（状态变更），避免 revoke 影响 LIST 快照。
         devs = list_devices(view="sessions", active_within_days=73000, _scopes=set(),
                             current_user=fake_user, db=db)
-        device_golden = [d.model_dump(mode="json") for d in devs]
+        device_list = [d.model_dump(mode="json") for d in devs]
+        rev = revoke_device(device_id="dev-1", _=True, current_user=fake_user, db=db)
+        device_golden = {
+            "list": device_list,
+            "revoke": {"status": 200, "result": rev},
+        }
         dev_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-device-golden.json")
         with open(dev_path, "w", encoding="utf-8") as sfh:
             json.dump(device_golden, sfh, ensure_ascii=False, indent=2, default=str)
             sfh.write("\n")
-        print(f"wrote device list golden -> {dev_path}")
+        print(f"wrote device golden -> {dev_path}")
     except Exception as exc:
-        print(f"[warn] device list golden 跳过：{type(exc).__name__}: {exc}")
+        print(f"[warn] device golden 跳过：{type(exc).__name__}: {exc}")
 
     # ---------------- 鉴权 golden（HTTP /api/v1/auth/*）----------------
     # 用上游 FastAPI app 的 TestClient 直接打路由，与本地 Hono auth 路由逐场景对拍。

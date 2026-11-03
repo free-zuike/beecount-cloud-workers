@@ -183,7 +183,7 @@ devicesRouter.post('/:id/revoke', async (c) => {
   const serverNow = nowUtc();
 
   const device = await db
-    .prepare('SELECT id FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL')
+    .prepare('SELECT id FROM devices WHERE id = ? AND user_id = ?')
     .bind(deviceId, userId)
     .first<{ id: string }>();
 
