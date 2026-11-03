@@ -1507,6 +1507,50 @@ def main(out_path: str) -> int:
         print(f"[warn] attachments golden 跳过：{type(exc).__name__}: {exc}")
         traceback.print_exc()
 
+    # ---------------- admin golden（HTTP /api/v1/admin/*，只读聚合）----------------
+    # 用独立库（make_db）+ seed_scenario 保证计数干净（不被写路径 golden 污染 transactions_total）。
+    # 直接调用上游函数（绕过 JWT/依赖），_admin_user 传 u1。scrub：users 的 id / created_at。
+    # 注：/health 需 request.app.state.ws_manager，/users(POST) 等写操作不在对拍范围。
+    try:
+        from src.routers import admin as _admin_rt
+        _adm_db = make_db("/tmp/parity-admin.db")
+        _owner = _adm_db.get(User, "u1")
+        _owner.is_admin = True
+        _adm_db.commit()
+
+        def _scrub_admin(v):
+            if isinstance(v, dict):
+                return {k: _scrub_admin(x) for k, x in v.items() if k not in ("id", "created_at")}
+            if isinstance(v, list):
+                return [_scrub_admin(x) for x in v]
+            return v
+
+        def _dump_admin(obj):
+            return obj.model_dump(mode="json") if hasattr(obj, "model_dump") else obj
+
+        _adm_calls = [
+            ("overview", lambda: _admin_rt.admin_overview(_scopes=set(), _admin_user=_owner, db=_adm_db)),
+            ("users", lambda: _admin_rt.list_users(limit=100, offset=0, _admin_user=_owner, db=_adm_db)),
+        ]
+        _adm_cases = []
+        for _name, _fn in _adm_calls:
+            try:
+                _res = _fn()
+                _adm_cases.append({"name": _name, "status": 200, "result": _scrub_admin(_dump_admin(_res))})
+            except Exception as exc:
+                _adm_cases.append({"name": _name, "status": 0, "error": f"{type(exc).__name__}: {exc}"})
+        _ag = {"cases": _adm_cases}
+        _ap = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-admin-golden.json")
+        with open(_ap, "w", encoding="utf-8") as _afh:
+            json.dump(_ag, _afh, ensure_ascii=False, indent=2, default=str)
+            _afh.write("\n")
+        print(f"wrote {len(_adm_cases)} admin cases -> {_ap}")
+        _adm_db.close()
+    except Exception as exc:
+        import traceback
+        print(f"[warn] admin golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(golden, fh, ensure_ascii=False, indent=2, default=str)

@@ -38,6 +38,8 @@ on:
       - 'tests/integration/**'
       - 'src/routes/attachments.ts'
       - 'tests/attachments-differential.test.ts'
+      - 'src/routes/admin.ts'
+      - 'tests/admin-differential.test.ts'
       - '.github/workflows/parity.yml'
 
 concurrency:
@@ -178,6 +180,9 @@ jobs:
 
       - name: Run attachments differential test
         run: npm test -- --run tests/attachments-differential.test.ts
+
+      - name: Run admin differential test
+        run: npm test -- --run tests/admin-differential.test.ts
 
       - name: Job summary
         if: always()
