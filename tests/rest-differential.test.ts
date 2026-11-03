@@ -25,13 +25,30 @@ const golden: { cases: RestCase[] } = hasGolden
   ? JSON.parse(readFileSync(GOLDEN_PATH, 'utf-8'))
   : { cases: [] };
 
-/** 这些返回数组：exchange-rate-overrides、budgets/usage 的项顺序非契约，按多重集合比。 */
-const ORDER_UNDEFINED = new Set(['list_exchange_rate_overrides', 'list_budgets_usage']);
+/** 这些返回数组：exchange-rate-overrides、budgets/usage 及各类列表的项顺序非契约，按多重集合比。 */
+const ORDER_UNDEFINED = new Set([
+  'list_exchange_rate_overrides', 'list_budgets_usage',
+  'list_ledgers', 'list_accounts', 'list_categories', 'list_tags', 'list_budgets',
+]);
 
 function sortTop(value: Json): Json {
   if (!Array.isArray(value)) return value;
   const key = (v: Json) => JSON.stringify(v);
   return [...value].sort((a, b) => key(a).localeCompare(key(b)));
+}
+
+/** 剥掉服务端 now() 字段（exported_at / updated_at）：golden 侧已 scrub，本地侧在此对齐。 */
+function dropReadVolatile(v: Json): Json {
+  if (Array.isArray(v)) return v.map(dropReadVolatile);
+  if (v && typeof v === 'object') {
+    const out: Record<string, Json> = {};
+    for (const [k, val] of Object.entries(v as Record<string, Json>)) {
+      if (k === 'exported_at' || k === 'updated_at') continue;
+      out[k] = dropReadVolatile(val);
+    }
+    return out;
+  }
+  return v;
 }
 
 /** 把 golden 的工具名 + 参数映射成本地 REST 路由请求。 */
@@ -53,6 +70,20 @@ function toRequest(tool: string, args: Record<string, unknown>): { method: strin
       const qs = qp.toString();
       return { method: 'GET', path: `/api/v1/read/ledgers/${ledger_external_id}/transactions${qs ? `?${qs}` : ''}` };
     }
+    case 'list_ledgers':
+      return { method: 'GET', path: '/api/v1/read/ledgers' };
+    case 'get_ledger':
+      return { method: 'GET', path: `/api/v1/read/ledgers/${args.ledger_external_id}` };
+    case 'get_ledger_stats':
+      return { method: 'GET', path: `/api/v1/read/ledgers/${args.ledger_external_id}/stats` };
+    case 'list_accounts':
+      return { method: 'GET', path: `/api/v1/read/ledgers/${args.ledger_external_id}/accounts` };
+    case 'list_categories':
+      return { method: 'GET', path: `/api/v1/read/ledgers/${args.ledger_external_id}/categories` };
+    case 'list_tags':
+      return { method: 'GET', path: `/api/v1/read/ledgers/${args.ledger_external_id}/tags` };
+    case 'list_budgets':
+      return { method: 'GET', path: `/api/v1/read/ledgers/${args.ledger_external_id}/budgets` };
     default:
       throw new Error(`REST 差分未映射工具: ${tool}`);
   }
@@ -157,8 +188,8 @@ describe.skipIf(!hasGolden)('REST 只读计算 vs 上游 golden', () => {
       }
 
       expect(res.status).toBe(200);
-      const body = normalize(JSON.parse(await res.text()) as Json);
-      const want = normalize(kase.result as Json);
+      const body = dropReadVolatile(normalize(JSON.parse(await res.text()) as Json));
+      const want = dropReadVolatile(normalize(kase.result as Json));
       // list_transactions 投影到核心字段（过滤/排序/分页相关），剔除非确定性/夹具相关元数据
       const bodyProj = kase.tool === 'list_transactions' ? projectListTx(body) : body;
       const wantProj = kase.tool === 'list_transactions' ? projectListTx(want) : want;

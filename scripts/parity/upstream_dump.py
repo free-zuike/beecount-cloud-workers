@@ -624,9 +624,21 @@ def main(out_path: str) -> int:
     rest_golden = {"now": NOW.isoformat(), "cases": []}
     try:
         from src.routers.read.summary import get_summary  # type: ignore
-        from src.routers.read.ledgers import list_budgets_usage  # type: ignore
+        from src.routers.read.ledgers import (  # type: ignore
+            list_budgets_usage, list_ledgers, get_ledger_stats, get_ledger,
+            list_accounts, list_categories, list_tags, list_budgets,
+        )
         from src.routers.read.rates import list_exchange_rate_overrides  # type: ignore
         from src.routers.read.attachment_gallery import list_gallery_attachments  # type: ignore
+
+        # 这些只读响应带 exported_at / updated_at（服务端 now()），跨实例必然不同；
+        # 与本地侧的 parity-compare VOLATILE 处理对齐，生成 golden 时一并剥掉。
+        def scrub_read(v):
+            if isinstance(v, dict):
+                return {k: scrub_read(x) for k, x in v.items() if k not in ("exported_at", "updated_at")}
+            if isinstance(v, list):
+                return [scrub_read(x) for x in v]
+            return v
 
         def dump_model(obj):
             if hasattr(obj, "model_dump"):
@@ -647,6 +659,13 @@ def main(out_path: str) -> int:
             "list_budgets_usage": list_budgets_usage,
             "list_exchange_rate_overrides": list_exchange_rate_overrides,
             "list_gallery_attachments": list_gallery_attachments,
+            "list_ledgers": list_ledgers,
+            "get_ledger": get_ledger,
+            "get_ledger_stats": get_ledger_stats,
+            "list_accounts": list_accounts,
+            "list_categories": list_categories,
+            "list_tags": list_tags,
+            "list_budgets": list_budgets,
         }
         # 第3条：扩展覆盖 list_transactions 的过滤/排序/分页（上游 ledgers.py:240 独立重写路由）。
         # 单独 try 隔离，避免该上游路由 import 失败拖垮整段 REST golden。
@@ -669,6 +688,14 @@ def main(out_path: str) -> int:
             ("list_transactions", dict(ledger_external_id="L1", tx_type=None, q="咖啡", start_at=None, end_at=None, limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
             ("list_transactions", dict(ledger_external_id="L1", tx_type=None, q=None, start_at=_as_utc("2026-05-10T00:00:00+00:00"), end_at=_as_utc("2026-05-31T23:59:59+00:00"), limit=20, offset=0, _scopes=set(), current_user=owner, db=db)),
             ("list_transactions", dict(ledger_external_id="L1", tx_type=None, q=None, start_at=None, end_at=None, limit=3, offset=2, _scopes=set(), current_user=owner, db=db)),
+            # —— 剩余 read 列表/详情/统计端点（第4条扩展）——
+            ("list_ledgers", dict(_scopes=set(), current_user=owner, db=db)),
+            ("get_ledger", dict(ledger_external_id="L1", _scopes=set(), current_user=owner, db=db)),
+            ("get_ledger_stats", dict(ledger_external_id="L1", _scopes=set(), current_user=owner, db=db)),
+            ("list_accounts", dict(ledger_external_id="L1", _scopes=set(), current_user=owner, db=db)),
+            ("list_categories", dict(ledger_external_id="L1", _scopes=set(), current_user=owner, db=db)),
+            ("list_tags", dict(ledger_external_id="L1", _scopes=set(), current_user=owner, db=db)),
+            ("list_budgets", dict(ledger_external_id="L1", _scopes=set(), current_user=owner, db=db)),
         ]
         for tool, args in rest_calls:
             fn = fn_map.get(tool)
@@ -679,7 +706,7 @@ def main(out_path: str) -> int:
                 res = dump_model(fn(**args))
                 rest_golden["cases"].append(
                     {"tool": tool, "args": {k: v for k, v in args.items() if k not in ("db", "_scopes", "current_user")},
-                     "result": normalize(res)})
+                     "result": scrub_read(normalize(res))})
             except Exception as exc:
                 rest_golden["cases"].append(
                     {"tool": tool, "args": {k: v for k, v in args.items() if k not in ("db", "_scopes", "current_user")},
