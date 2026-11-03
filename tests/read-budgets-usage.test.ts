@@ -26,7 +26,7 @@ const TABLES = `
   CREATE TABLE read_budget_projection (
     ledger_id TEXT NOT NULL, sync_id TEXT NOT NULL, user_id TEXT NOT NULL,
     budget_type TEXT, category_sync_id TEXT, amount REAL, period TEXT,
-    enabled BOOLEAN DEFAULT 1, PRIMARY KEY (ledger_id, sync_id)
+    enabled BOOLEAN DEFAULT 1, source_change_id INTEGER DEFAULT 0, PRIMARY KEY (ledger_id, sync_id)
   );
   CREATE TABLE read_tx_projection (
     ledger_id TEXT, sync_id TEXT, user_id TEXT, tx_type TEXT, amount REAL DEFAULT 0,
