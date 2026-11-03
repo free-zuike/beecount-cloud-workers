@@ -206,8 +206,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B parity/upstream-golden
-          git add tests/fixtures/upstream-golden.json tests/fixtures/upstream-rest-golden.json tests/fixtures/upstream-import-golden.json tests/fixtures/upstream-transform-golden.json tests/fixtures/upstream-write-schema-golden.json tests/fixtures/upstream-sync-golden.json tests/fixtures/upstream-subsystems-schema-golden.json tests/fixtures/upstream-device-golden.json tests/fixtures/upstream-auth-golden.json tests/fixtures/upstream-profile-golden.json tests/fixtures/upstream-two-factor-golden.json
-          git commit -m "chore(parity): 上游 MCP 输出变化（${{ steps.upstream.outputs.ref }}）"
+          for f in tests/fixtures/upstream-golden.json tests/fixtures/upstream-rest-golden.json tests/fixtures/upstream-import-golden.json tests/fixtures/upstream-transform-golden.json tests/fixtures/upstream-write-schema-golden.json tests/fixtures/upstream-sync-golden.json tests/fixtures/upstream-subsystems-schema-golden.json tests/fixtures/upstream-device-golden.json tests/fixtures/upstream-auth-golden.json tests/fixtures/upstream-profile-golden.json tests/fixtures/upstream-two-factor-golden.json; do
+            [ -f "$f" ] && git add "$f"
+          done
+          git commit -m "chore(parity): 上游 MCP 输出变化（${{ steps.upstream.outputs.ref }}）" || echo "nothing to commit"
           git push --force origin parity/upstream-golden
 
       - name: Open PR on upstream drift
