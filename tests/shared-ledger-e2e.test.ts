@@ -125,14 +125,14 @@ async function inviteAndAccept(ownerId: string, editorId: string, ledgerId: stri
     method: 'POST',
     body: JSON.stringify({ target_role: role, expires_in_hours: 24 }),
   });
-  expect(inv.status).toBe(200);
+  expect(inv.status).toBe(201);
   const { code } = await inv.json() as any;
   expect(code.length).toBe(6);
 
   const preview = await req(editorId, `/api/v1/invites/${code}/preview`, { method: 'POST' });
   expect(preview.status).toBe(200);
   const pv = await preview.json() as any;
-  expect(pv.ledger_id).toBe(ledgerId);
+  expect(pv.ledger_external_id).toBe(ledgerId);
   expect(pv.target_role).toBe(role);
 
   const accept = await req(editorId, `/api/v1/invites/${code}/accept`, { method: 'POST' });

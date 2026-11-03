@@ -1798,7 +1798,7 @@ workspaceRouter.get('/ledgers/:id/members', async (c) => {
 
 /** 取单个成员并水合成上游 MemberOut（9 字段），用于 change-role / transfer 响应对齐。 */
 async function hydrateMember(
-  db: any, ledgerId: string, userId: string, callerUserId: string,
+  db: D1Database, ledgerId: string, userId: string, callerUserId: string,
 ): Promise<Record<string, unknown> | null> {
   const row = await db.prepare(
     `SELECT lm.user_id, lm.role, lm.joined_at, lm.invited_by, u.email,

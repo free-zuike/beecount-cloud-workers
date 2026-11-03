@@ -30,7 +30,7 @@ describe('共享账本 v3 防回归（invites/members/join/transfer）', () => {
       headers: authHeaders(token),
       body: JSON.stringify({ expires_in_hours: 24, target_role: 'editor' }),
     });
-    expect(create.status).toBe(200);
+    expect(create.status).toBe(201);
     const created = await create.json() as any;
     expect(created.code).toBeDefined();
 

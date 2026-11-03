@@ -1668,60 +1668,77 @@ def main(out_path: str) -> int:
         _wsw_ctr = [0]
         def _new_wdb():
             _wsw_ctr[0] += 1
-            return make_db(os.path.join(_tf.gettempdir(), f"parity-ws-write-{_wsw_ctr[0]}.db"))
+            _p = os.path.join(_tf.gettempdir(), f"parity-ws-write-{_wsw_ctr[0]}.db")
+            return make_db(_p), _p
 
-        def _accept_u2(d, o):
+        def _open_existing(path):
+            # 在已落盘 db 上重新开一个独立 session：accept 是 async 函数、经
+            # _asyncio.run 跑完后，原 session d 与其中加载的 ORM 对象(o=u1)处于
+            # 已提交/过期状态，若直接复用会在 _hydrate_member 的 db.scalar(User)
+            # / user.email 触发 DetachedInstanceError。重开 session 彻底解耦。
+            _eng = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
+            @event.listens_for(_eng, "connect")
+            def _fk(dbapi_conn, _):
+                c = dbapi_conn.cursor(); c.execute("PRAGMA foreign_keys=ON"); c.close()
+            _S = sessionmaker(bind=_eng, autocommit=False, autoflush=False)
+            return _S()
+
+        def _accept_u2(db, path):
+            o = db.get(User, "u1")
             inv = _inv_rt.create_invite("L1", _inv_rt.InviteCreateRequest(role="editor", expires_in_hours=24),
-                                       _scopes=set(), current_user=o, db=d)
-            return _asyncio.run(_inv_rt.accept_invite(inv.code, _FakeReq, _scopes=set(), current_user=d.get(User, "u2"), db=d))
+                                       _scopes=set(), current_user=o, db=db)
+            _asyncio.run(_inv_rt.accept_invite(inv.code, _FakeReq, _scopes=set(),
+                                               current_user=db.get(User, "u2"), db=db))
+            db.close()
+            return inv.code
 
         def _case_create():
-            d, o = _new_wdb(), None
-            o = d.get(User, "u1")
+            d, _p = _new_wdb(); o = d.get(User, "u1")
             res = _inv_rt.create_invite("L1", _inv_rt.InviteCreateRequest(role="editor", expires_in_hours=24),
                                         _scopes=set(), current_user=o, db=d)
             d.close(); return res
 
         def _case_preview():
-            d = _new_wdb(); o = d.get(User, "u1"); u2 = d.get(User, "u2")
+            d, _p = _new_wdb(); o = d.get(User, "u1"); u2 = d.get(User, "u2")
             inv = _inv_rt.create_invite("L1", _inv_rt.InviteCreateRequest(role="editor", expires_in_hours=24),
                                        _scopes=set(), current_user=o, db=d)
             res = _inv_rt.preview_invite(inv.code, _scopes=set(), current_user=u2, db=d)
             d.close(); return res
 
         def _case_accept():
-            d = _new_wdb(); o = d.get(User, "u1")
+            d, _p = _new_wdb(); o = d.get(User, "u1")
             inv = _inv_rt.create_invite("L1", _inv_rt.InviteCreateRequest(role="editor", expires_in_hours=24),
                                        _scopes=set(), current_user=o, db=d)
-            res = _asyncio.run(_inv_rt.accept_invite(inv.code, _FakeReq, _scopes=set(), current_user=d.get(User, "u2"), db=d))
+            res = _asyncio.run(_inv_rt.accept_invite(inv.code, _FakeReq, _scopes=set(),
+                                                     current_user=d.get(User, "u2"), db=d))
             d.close(); return res
 
         def _case_revoke():
-            d = _new_wdb(); o = d.get(User, "u1")
+            d, _p = _new_wdb(); o = d.get(User, "u1")
             inv = _inv_rt.create_invite("L1", _inv_rt.InviteCreateRequest(role="editor", expires_in_hours=24),
                                        _scopes=set(), current_user=o, db=d)
             res = _inv_rt.revoke_invite("L1", inv.code, _scopes=set(), current_user=o, db=d)
             d.close(); return res
 
         def _case_change_role():
-            d = _new_wdb(); o = d.get(User, "u1")
-            _accept_u2(d, o)
+            d, _p = _new_wdb(); _accept_u2(d, _p)
+            d2 = _open_existing(_p); o = d2.get(User, "u1")
             res = _mem_rt.update_member_role("L1", "u2", _mem_rt.MemberRoleUpdateRequest(role="editor"),
-                                            _FakeReq, _scopes=set(), current_user=o, db=d)
-            d.close(); return res
+                                            _FakeReq, _scopes=set(), current_user=o, db=d2)
+            d2.close(); return res
 
         def _case_remove():
-            d = _new_wdb(); o = d.get(User, "u1")
-            _accept_u2(d, o)
-            res = _mem_rt.remove_member("L1", "u2", _FakeReq, _scopes=set(), current_user=o, db=d)
-            d.close(); return res
+            d, _p = _new_wdb(); _accept_u2(d, _p)
+            d2 = _open_existing(_p); o = d2.get(User, "u1")
+            res = _mem_rt.remove_member("L1", "u2", _FakeReq, _scopes=set(), current_user=o, db=d2)
+            d2.close(); return res
 
         def _case_transfer():
-            d = _new_wdb(); o = d.get(User, "u1")
-            _accept_u2(d, o)
+            d, _p = _new_wdb(); _accept_u2(d, _p)
+            d2 = _open_existing(_p); o = d2.get(User, "u1")
             res = _mem_rt.transfer_ownership("L1", _mem_rt.TransferOwnershipRequest(new_owner_user_id="u2"),
-                                            _FakeReq, _scopes=set(), current_user=o, db=d)
-            d.close(); return res
+                                            _FakeReq, _scopes=set(), current_user=o, db=d2)
+            d2.close(); return res
 
         _wsw_calls = [
             ("create_invite", 201, _case_create),
@@ -1741,7 +1758,8 @@ def main(out_path: str) -> int:
                 _scrubbed = _scrub_wsw(_dump_wsw(_res)) if _res is not None else None
                 _wsw_cases.append({"name": _name, "status": _st, "result": _scrubbed})
             except Exception as exc:
-                _wsw_cases.append({"name": _name, "status": 0, "error": f"{type(exc).__name__}: {exc}"})
+                import traceback as _tb
+                _wsw_cases.append({"name": _name, "status": 0, "error": f"{type(exc).__name__}: {exc}\n{_tb.format_exc()}"})
         _wswg = {"cases": _wsw_cases}
         _wswp = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-workspace-write-golden.json")
         with open(_wswp, "w", encoding="utf-8") as _fw:
