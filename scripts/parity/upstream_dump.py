@@ -1130,10 +1130,10 @@ def main(out_path: str) -> int:
                 "sort_order": 1, "icon": "🍜",
             }),
         ]:
-            add(SyncChange, user_id="u1", ledger_id="L1-i", scope="ledger",
+            db.add(SyncChange(user_id="u1", ledger_id="L1-i", scope="ledger",
                 entity_type=etype, entity_sync_id=esid, action="upsert",
                 payload_json=payload, updated_at=upd,
-                updated_by_device_id=None, updated_by_user_id="u1")
+                updated_by_device_id=None, updated_by_user_id="u1"))
         db.commit()
         resp = pull_changes(since=0, device_id=None, limit=1000, _scopes=set(),
                             current_user=fake_user, db=db)
@@ -1172,7 +1172,7 @@ def main(out_path: str) -> int:
         devs = list_devices(view="sessions", active_within_days=73000, _scopes=set(),
                             current_user=fake_user, db=db)
         device_list = [d.model_dump(mode="json") for d in devs]
-        rev = revoke_device(device_id="dev-1", _=True, current_user=fake_user, db=db)
+        rev = revoke_device(device_id="dev-1", current_user=fake_user, db=db)
         device_golden = {
             "list": device_list,
             "revoke": {"status": 200, "result": rev},
