@@ -23,6 +23,7 @@ export const DDL = `
   CREATE TABLE recovery_codes (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, code_hash TEXT, created_at TEXT, used_at TEXT);
   CREATE TABLE ledgers (id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, name TEXT, currency TEXT, month_start_day INTEGER DEFAULT 1, created_at TEXT);
   CREATE TABLE ledger_members (ledger_id TEXT, user_id TEXT, role TEXT, joined_at TEXT, invited_by_user_id TEXT);
+  CREATE TABLE ledger_invites (code TEXT PRIMARY KEY, ledger_id TEXT NOT NULL, invited_by TEXT NOT NULL, target_role TEXT DEFAULT 'editor' NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, used_by TEXT, created_at TEXT);
   CREATE TABLE devices (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, platform TEXT, app_version TEXT, os_version TEXT, device_model TEXT, last_seen_at TEXT, last_ip TEXT, revoked_at TEXT, created_at TEXT);
   CREATE TABLE personal_access_tokens (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, token_hash TEXT, prefix TEXT, scopes_json TEXT, expires_at TEXT, last_used_at TEXT, last_used_ip TEXT, revoked_at TEXT, created_at TEXT);
   CREATE TABLE sync_changes (
@@ -242,6 +243,11 @@ export function seed(h: Harness): void {
   addMember(h, 'L2-i', 'u2', 'owner');
   // L3：空账本，验证空数组/0/null 的形状；month_start_day=25 走非 1 号起始的分支
   createLedger(h, 'u1', 'L3-i', 'L3', '空账本', 'JPY', 25);
+
+  // 一条有效邀请（供 workspace /invites 对拍；active 过滤 used_at IS NULL AND expires_at > now）
+  h.sqlite.prepare(
+    'INSERT INTO ledger_invites (code, ledger_id, invited_by, target_role, expires_at, used_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run('ABC234', 'L1-i', 'u1', 'editor', '2099-01-01T00:00:00Z', null, '2026-01-01T00:00:00Z');
 
   insertRow(h.sqlite, 'attachment_files', {
     id: 'f1', ledger_id: 'L1-i', user_id: 'u1', attachment_kind: 'transaction',

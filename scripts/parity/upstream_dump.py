@@ -1551,6 +1551,73 @@ def main(out_path: str) -> int:
         print(f"[warn] admin golden 跳过：{type(exc).__name__}: {exc}")
         traceback.print_exc()
 
+    # ---------------- workspace golden（members/invites/member-stats/shared-resources）----------------
+    # 直接调用上游函数（绕过 JWT/依赖），用 make_db（内置 seed_scenario）保证种子一致。
+    # 比对排除：id（本地 invites 独有）、share_url（环境派生）、joined_at（seed_scenario 未固定）；
+    # income_total/expense_total 四舍五入 2 位（跨 Python/TS 浮点尾差）。列表顺序由本地 canonical 排序归一。
+    try:
+        from src.routers.members import list_members as _ws_list_members
+        from src.routers.invites import list_invites as _ws_list_invites
+        from src.routers.member_stats import get_member_stats as _ws_member_stats
+        from src.routers.shared_resources import get_shared_resources as _ws_shared
+        from sqlalchemy import text as _txt
+
+        _ws_db = make_db("/tmp/parity-workspace.db")
+        _owner = _ws_db.get(User, "u1")
+        # 插入一条有效邀请（active 过滤：used_at IS NULL AND expires_at > now）
+        _ws_db.execute(_txt(
+            "INSERT INTO ledger_invites (code, ledger_id, invited_by, target_role, expires_at, used_at, created_at) "
+            "VALUES (:c, :l, :i, :r, :e, :u, :ca)"
+        ), {"c": "ABC234", "l": "L1-i", "i": "u1", "r": "editor",
+           "e": "2099-01-01T00:00:00Z", "u": None, "ca": "2026-01-01T00:00:00Z"})
+        _ws_db.commit()
+
+        _WS_VOLATILE = {"id", "share_url", "joined_at"}
+        _WS_AMOUNT = {"income_total", "expense_total"}
+
+        def _scrub_ws(v):
+            if isinstance(v, list):
+                return [_scrub_ws(x) for x in v]
+            if isinstance(v, dict):
+                out = {}
+                for k, x in v.items():
+                    if k in _WS_VOLATILE:
+                        continue
+                    if k in _WS_AMOUNT and isinstance(x, (int, float)):
+                        out[k] = round(float(x), 2)
+                    else:
+                        out[k] = _scrub_ws(x)
+                return out
+            return v
+
+        def _dump_ws(obj):
+            return obj.model_dump(mode="json") if hasattr(obj, "model_dump") else obj
+
+        _ws_calls = [
+            ("members", lambda: _ws_list_members(_scopes=set(), current_user=_owner, db=_ws_db)),
+            ("invites", lambda: _ws_list_invites(_scopes=set(), current_user=_owner, db=_ws_db)),
+            ("member_stats", lambda: _ws_member_stats(scope="all", period=None, tz_offset_minutes=0, _scopes=set(), current_user=_owner, db=_ws_db)),
+            ("shared_resources", lambda: _ws_shared(_scopes=set(), current_user=_owner, db=_ws_db)),
+        ]
+        _ws_cases = []
+        for _name, _fn in _ws_calls:
+            try:
+                _res = _fn()
+                _ws_cases.append({"name": _name, "status": 200, "result": _scrub_ws(_dump_ws(_res))})
+            except Exception as exc:
+                _ws_cases.append({"name": _name, "status": 0, "error": f"{type(exc).__name__}: {exc}"})
+        _wg = {"cases": _ws_cases}
+        _wp = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-workspace-golden.json")
+        with open(_wp, "w", encoding="utf-8") as _wfh:
+            json.dump(_wg, _wfh, ensure_ascii=False, indent=2, default=str)
+            _wfh.write("\n")
+        print(f"wrote {len(_ws_cases)} workspace cases -> {wp}")
+        _ws_db.close()
+    except Exception as exc:
+        import traceback
+        print(f"[warn] workspace golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(golden, fh, ensure_ascii=False, indent=2, default=str)
