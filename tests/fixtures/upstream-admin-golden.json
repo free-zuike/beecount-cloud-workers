@@ -1,0 +1,42 @@
+{
+  "cases": [
+    {
+      "name": "overview",
+      "status": 200,
+      "result": {
+        "users_total": 2,
+        "users_enabled_total": 2,
+        "ledgers_total": 3,
+        "transactions_total": 7,
+        "accounts_total": 2,
+        "categories_total": 2,
+        "tags_total": 2
+      }
+    },
+    {
+      "name": "users",
+      "status": 200,
+      "result": {
+        "total": 2,
+        "items": [
+          {
+            "email": "u2@example.com",
+            "is_admin": false,
+            "is_enabled": true,
+            "display_name": null,
+            "avatar_url": null,
+            "avatar_version": 0
+          },
+          {
+            "email": "u1@example.com",
+            "is_admin": true,
+            "is_enabled": true,
+            "display_name": null,
+            "avatar_url": null,
+            "avatar_version": 0
+          }
+        ]
+      }
+    }
+  ]
+}
