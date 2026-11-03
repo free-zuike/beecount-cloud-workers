@@ -1530,7 +1530,7 @@ def main(out_path: str) -> int:
 
         _adm_calls = [
             ("overview", lambda: _admin_rt.admin_overview(_scopes=set(), _admin_user=_owner, db=_adm_db)),
-            ("users", lambda: _admin_rt.list_users(_scopes=set(), limit=100, offset=0, _admin_user=_owner, db=_adm_db)),
+            ("users", lambda: _admin_rt.list_users(q=None, status="enabled", limit=100, offset=0, _scopes=set(), _admin_user=_owner, db=_adm_db)),
         ]
         _adm_cases = []
         for _name, _fn in _adm_calls:
