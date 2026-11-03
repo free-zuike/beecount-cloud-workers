@@ -1635,8 +1635,11 @@ def main(out_path: str) -> int:
         import src.websocket_manager as _wsm
         async def _noop_broadcast(**_kw):
             return None
-        # 写函数内部 `from ..websocket_manager import broadcast_to_ledger` 在调用时重读模块属性，no-op 生效
+        # 写函数内部 `from ..websocket_manager import broadcast_to_ledger` 在调用时重读模块属性，no-op 生效；
+        # 但部分 router（如 members.py）在模块级 import，需在 router 命名空间也 patch
         _wsm.broadcast_to_ledger = _noop_broadcast
+        _inv_rt.broadcast_to_ledger = _noop_broadcast
+        _mem_rt.broadcast_to_ledger = _noop_broadcast
 
         _FakeReq = _types.SimpleNamespace(
             app=_types.SimpleNamespace(state=_types.SimpleNamespace(ws_manager=None)))
