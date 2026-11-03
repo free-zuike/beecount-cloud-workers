@@ -22,7 +22,7 @@ export const DDL = `
   CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, display_name TEXT, avatar_url TEXT, avatar_version INTEGER DEFAULT 0, is_admin INTEGER DEFAULT 0, is_enabled INTEGER DEFAULT 1, created_at TEXT, totp_enabled INTEGER DEFAULT 0, totp_secret_encrypted TEXT, totp_enabled_at TEXT);
   CREATE TABLE recovery_codes (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, code_hash TEXT, created_at TEXT, used_at TEXT);
   CREATE TABLE ledgers (id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, name TEXT, currency TEXT, month_start_day INTEGER DEFAULT 1, created_at TEXT);
-  CREATE TABLE ledger_members (ledger_id TEXT, user_id TEXT, role TEXT, joined_at TEXT, invited_by_user_id TEXT);
+  CREATE TABLE ledger_members (ledger_id TEXT, user_id TEXT, role TEXT, joined_at TEXT, invited_by TEXT);
   CREATE TABLE ledger_invites (code TEXT PRIMARY KEY, ledger_id TEXT NOT NULL, invited_by TEXT NOT NULL, target_role TEXT DEFAULT 'editor' NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, used_by TEXT, created_at TEXT);
   CREATE TABLE devices (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, platform TEXT, app_version TEXT, os_version TEXT, device_model TEXT, last_seen_at TEXT, last_ip TEXT, revoked_at TEXT, created_at TEXT);
   CREATE TABLE personal_access_tokens (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, token_hash TEXT, prefix TEXT, scopes_json TEXT, expires_at TEXT, last_used_at TEXT, last_used_ip TEXT, revoked_at TEXT, created_at TEXT);
