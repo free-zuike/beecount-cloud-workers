@@ -1369,7 +1369,7 @@ readRouter.get('/ledgers/:ledgerExternalId/categories', async (c) => {
 
   const rows = await db
     .prepare(
-      `SELECT DISTINCT r.sync_id, r.name, r.kind, r.level, r.sort_order,
+      `SELECT DISTINCT r.sync_id, r.name, r.kind, COALESCE(r.level, 0) AS level, r.sort_order,
               r.icon, r.icon_type, r.custom_icon_path,
               r.icon_cloud_file_id, r.icon_cloud_sha256, r.parent_name, r.parent_sync_id
        FROM user_category_projection r
@@ -1383,7 +1383,7 @@ readRouter.get('/ledgers/:ledgerExternalId/categories', async (c) => {
     id: row.sync_id as string,
     name: (row.name as string) ?? '',
     kind: (row.kind as string) ?? '',
-    level: row.level as number | null,
+    level: (row.level as number | null) ?? 0,
     sort_order: row.sort_order as number | null,
     icon: row.icon as string | null,
     icon_type: row.icon_type as string | null,
