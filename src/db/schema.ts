@@ -89,7 +89,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         display_name TEXT,
         avatar_file_id TEXT,
-        avatar_version INTEGER DEFAULT 0,
+        avatar_version INTEGER DEFAULT 0 NOT NULL,
         income_is_red BOOLEAN DEFAULT 1,
         theme_primary_color TEXT,
         appearance_json TEXT,
@@ -154,7 +154,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         status TEXT NOT NULL,
         error_message TEXT,
         args_summary TEXT,
-        duration_ms INTEGER DEFAULT 0,
+        duration_ms INTEGER DEFAULT 0 NOT NULL,
         client_ip TEXT,
         called_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
@@ -165,6 +165,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_call_logs_pat_id ON mcp_call_logs(pat_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_call_logs_tool_name ON mcp_call_logs(tool_name)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_call_logs_status ON mcp_call_logs(status)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_mcp_call_logs_called_at ON mcp_call_logs(called_at)').run();
 
     // ── #133 MCP 工作流（对齐原版 alembic 0021_mcp_workflows）──
     await db.prepare(`
@@ -230,9 +231,9 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       CREATE TABLE IF NOT EXISTS audit_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-        ledger_id TEXT,
+        ledger_id TEXT REFERENCES ledgers(id) ON DELETE CASCADE,
         action TEXT NOT NULL,
-        metadata_json TEXT,
+        metadata_json TEXT NOT NULL,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
     `).run();
@@ -253,13 +254,14 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     // v3 迁移已删除该表 entity_type/entity_id 列（见下方迁移 DROP INDEX），
     // 全新库再执行会 no such column 导致整个初始化中断——已移除。
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_ledger ON audit_logs(ledger_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id)').run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS devices (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        name TEXT DEFAULT 'Unknown Device',
-        platform TEXT DEFAULT 'unknown',
+        name TEXT DEFAULT 'Unknown Device' NOT NULL,
+        platform TEXT DEFAULT 'unknown' NOT NULL,
         app_version TEXT,
         os_version TEXT,
         device_model TEXT,
@@ -321,7 +323,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       CREATE TABLE IF NOT EXISTS sync_changes (
         change_id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        ledger_id TEXT,
+        ledger_id TEXT REFERENCES ledgers(id) ON DELETE CASCADE,
         entity_type TEXT NOT NULL,
         entity_sync_id TEXT NOT NULL,
         action TEXT NOT NULL,
@@ -342,6 +344,11 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_entity_type ON sync_changes(entity_type)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_action ON sync_changes(action)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_scope ON sync_changes(scope)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_user_scope ON sync_changes(user_id, scope, change_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_entity_sync_id ON sync_changes(entity_sync_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_updated_at ON sync_changes(updated_at)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_updated_by_device_id ON sync_changes(updated_by_device_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_changes_updated_by_user_id ON sync_changes(updated_by_user_id)').run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS sync_cursors (
@@ -357,6 +364,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_cursors_user_id ON sync_cursors(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_cursors_device_id ON sync_cursors(device_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_cursors_ledger_external_id ON sync_cursors(ledger_external_id)').run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS sync_push_idempotency (
@@ -374,6 +382,8 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_push_idempotency_user_id ON sync_push_idempotency(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_push_idempotency_expires_at ON sync_push_idempotency(expires_at)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_push_idempotency_device_id ON sync_push_idempotency(device_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_push_idempotency_idempotency_key ON sync_push_idempotency(idempotency_key)').run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_snapshots (
@@ -395,20 +405,23 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       CREATE TABLE IF NOT EXISTS backup_artifacts (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        ledger_id TEXT REFERENCES ledgers(id) ON DELETE CASCADE,
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
         kind TEXT NOT NULL,
         file_name TEXT NOT NULL,
         storage_path TEXT NOT NULL,
         content_type TEXT,
         checksum_sha256 TEXT NOT NULL,
-        size_bytes INTEGER DEFAULT 0,
-        metadata_json TEXT,
+        size_bytes INTEGER DEFAULT 0 NOT NULL,
+        metadata_json TEXT NOT NULL,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
     `).run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_artifacts_user_id ON backup_artifacts(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_artifacts_ledger_created ON backup_artifacts(ledger_id, created_at)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_artifacts_kind ON backup_artifacts(kind)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_artifacts_checksum_sha256 ON backup_artifacts(checksum_sha256)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_artifacts_created_at ON backup_artifacts(created_at)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_artifacts_ledger_id ON backup_artifacts(ledger_id)').run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_remotes (
@@ -433,9 +446,9 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       CREATE TABLE IF NOT EXISTS backup_schedules (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
-        user_id TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         cron_expr TEXT NOT NULL,
-        retention_days INTEGER DEFAULT 30,
+        retention_days INTEGER DEFAULT 30 NOT NULL,
         include_attachments BOOLEAN DEFAULT 1 NOT NULL,
         enabled BOOLEAN DEFAULT 1 NOT NULL,
         next_run_at TEXT,
@@ -453,7 +466,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       CREATE TABLE IF NOT EXISTS backup_runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         schedule_id INTEGER REFERENCES backup_schedules(id) ON DELETE SET NULL,
-        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         status TEXT NOT NULL DEFAULT 'pending',
         error_message TEXT,
         log_text TEXT,
@@ -471,8 +484,8 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_run_targets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        run_id INTEGER REFERENCES backup_runs(id) ON DELETE CASCADE,
-        remote_id INTEGER REFERENCES backup_remotes(id) ON DELETE SET NULL,
+        run_id INTEGER NOT NULL REFERENCES backup_runs(id) ON DELETE CASCADE,
+        remote_id INTEGER NOT NULL REFERENCES backup_remotes(id) ON DELETE CASCADE,
         status TEXT NOT NULL DEFAULT 'pending',
         started_at TEXT,
         finished_at TEXT,
@@ -487,7 +500,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       CREATE TABLE IF NOT EXISTS backup_schedule_remotes (
         schedule_id INTEGER NOT NULL REFERENCES backup_schedules(id) ON DELETE CASCADE,
         remote_id INTEGER NOT NULL REFERENCES backup_remotes(id) ON DELETE RESTRICT,
-        sort_order INTEGER DEFAULT 0,
+        sort_order INTEGER DEFAULT 0 NOT NULL,
         PRIMARY KEY (schedule_id, remote_id)
       )
     `).run();
@@ -517,10 +530,10 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS attachment_files (
         id TEXT PRIMARY KEY,
-        ledger_id TEXT REFERENCES ledgers(id) ON DELETE CASCADE,
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         sha256 TEXT NOT NULL,
-        size_bytes INTEGER DEFAULT 0,
+        size_bytes INTEGER DEFAULT 0 NOT NULL,
         mime_type TEXT,
         file_name TEXT,
         storage_path TEXT NOT NULL,
@@ -532,6 +545,8 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_attachment_files_sha256 ON attachment_files(sha256)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_attachment_files_ledger_created ON attachment_files(ledger_id, created_at)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_attachment_files_user_id ON attachment_files(user_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_attachment_files_created_at ON attachment_files(created_at)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_attachment_files_ledger_id ON attachment_files(ledger_id)').run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS read_tx_projection (
@@ -539,7 +554,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         sync_id TEXT NOT NULL,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         tx_type TEXT NOT NULL,
-        amount REAL DEFAULT 0.0,
+        amount REAL DEFAULT 0.0 NOT NULL,
         happened_at TEXT NOT NULL,
         note TEXT,
         category_sync_id TEXT,
@@ -554,12 +569,12 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         tags_csv TEXT,
         tag_sync_ids_json TEXT,
         attachments_json TEXT,
-        tx_index INTEGER DEFAULT 0,
+        tx_index INTEGER DEFAULT 0 NOT NULL,
         created_by_user_id TEXT,
         last_edited_by_user_id TEXT,
-        source_change_id INTEGER DEFAULT 0,
-        exclude_from_stats BOOLEAN DEFAULT 0,
-        exclude_from_budget BOOLEAN DEFAULT 0,
+        source_change_id INTEGER DEFAULT 0 NOT NULL,
+        exclude_from_stats BOOLEAN DEFAULT 0 NOT NULL,
+        exclude_from_budget BOOLEAN DEFAULT 0 NOT NULL,
         PRIMARY KEY (ledger_id, sync_id)
       )
     `).run();
@@ -574,6 +589,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_tx_ledger_category ON read_tx_projection(ledger_id, category_sync_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_tx_ledger_account ON read_tx_projection(ledger_id, account_sync_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_tx_user_time ON read_tx_projection(user_id, happened_at DESC)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_read_tx_user_id ON read_tx_projection(user_id)').run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS user_account_projection (
@@ -590,7 +606,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         bank_name TEXT,
         card_last_four TEXT,
         hidden INTEGER NOT NULL DEFAULT 0,
-        source_change_id INTEGER DEFAULT 0,
+        source_change_id INTEGER DEFAULT 0 NOT NULL,
         PRIMARY KEY (user_id, sync_id)
       )
     `).run();
@@ -610,7 +626,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         icon_cloud_sha256 TEXT,
         parent_name TEXT,
         parent_sync_id TEXT,
-        source_change_id INTEGER DEFAULT 0,
+        source_change_id INTEGER DEFAULT 0 NOT NULL,
         PRIMARY KEY (user_id, sync_id)
       )
     `).run();
@@ -623,7 +639,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         name TEXT,
         color TEXT,
-        source_change_id INTEGER DEFAULT 0,
+        source_change_id INTEGER DEFAULT 0 NOT NULL,
         PRIMARY KEY (user_id, sync_id)
       )
     `).run();
@@ -693,13 +709,14 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         amount REAL,
         period TEXT,
         start_day INTEGER,
-        enabled BOOLEAN DEFAULT 1,
-        source_change_id INTEGER DEFAULT 0,
+        enabled BOOLEAN DEFAULT 1 NOT NULL,
+        source_change_id INTEGER DEFAULT 0 NOT NULL,
         PRIMARY KEY (ledger_id, sync_id)
       )
     `).run();
 
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_budget_ledger_cat ON read_budget_projection(ledger_id, category_sync_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_read_budget_user_id ON read_budget_projection(user_id)').run();
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS system_settings (
@@ -866,13 +883,15 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
       await db.prepare('DROP TABLE ledger_invites').run();
       await db.prepare('ALTER TABLE ledger_invites_new RENAME TO ledger_invites').run();
       await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_invites_code ON ledger_invites(code)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_invites_expires_at ON ledger_invites(expires_at)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_ledger_invites_ledger_id ON ledger_invites(ledger_id)').run();
     }
 
     // 4) 老 backup_runs 的 R2 key 回填到 backup_artifacts（删 backup_path 前执行）
     if (await tableHasColumn('backup_runs', 'backup_path')) {
       await db.prepare(
         `INSERT OR IGNORE INTO backup_artifacts (id, user_id, ledger_id, kind, file_name, storage_path, content_type, checksum_sha256, size_bytes, metadata_json, created_at)
-         SELECT 'run-' || run.id, run.user_id, run.ledger_id, 'db', run.backup_filename, run.backup_path, NULL, '', run.bytes_total, NULL, run.started_at
+         SELECT 'run-' || run.id, run.user_id, COALESCE(run.ledger_id, ''), 'db', run.backup_filename, run.backup_path, NULL, '', COALESCE(run.bytes_total, 0), '{}', run.started_at
          FROM backup_runs run
          WHERE run.backup_path IS NOT NULL AND run.backup_path != ''
            AND NOT EXISTS (SELECT 1 FROM backup_artifacts a WHERE a.storage_path = run.backup_path)`

@@ -59,9 +59,10 @@ jobs:
             REF="${{ vars.PARITY_UPSTREAM_REF }}"
             echo "::notice::使用固定 ref: $REPO@$REF"
           else
-            # 默认对齐本仓库分叉版本 1.9.0（而非上游最新 tag），保证 golden 与本地移植基线一致。
-            REF="1.9.0"
-            echo "::notice::对齐分叉版本 1.9.0: $REPO@$REF"
+            # 默认对齐上游最新 tag（上游按版本发 tag）；golden 自动随上游推进。
+            REF="$(gh api "repos/$REPO/tags" --jq '.[0].name' 2>/dev/null || true)"
+            if [ -z "$REF" ]; then REF="1.9.0"; fi
+            echo "::notice::对齐上游最新 tag: $REPO@$REF"
           fi
           echo "repo=$REPO" >> "$GITHUB_OUTPUT"
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
