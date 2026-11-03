@@ -1,0 +1,69 @@
+{
+  "steps": [
+    {
+      "name": "create",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/profile/pats",
+        "json": {
+          "name": "ci-pat",
+          "scopes": [
+            "mcp:read"
+          ],
+          "expires_in_days": null
+        }
+      },
+      "status": 201,
+      "result": {
+        "name": "ci-pat",
+        "scopes": [
+          "mcp:read"
+        ]
+      }
+    },
+    {
+      "name": "list",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/profile/pats",
+        "json": null
+      },
+      "status": 200,
+      "result": [
+        {
+          "name": "ci-pat",
+          "scopes": [
+            "mcp:read"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "update",
+      "request": {
+        "method": "PATCH",
+        "path": "/api/v1/profile/pats/1e149747-60ad-4599-b20b-b864bcfd7666",
+        "json": {
+          "name": "ci-pat-renamed"
+        }
+      },
+      "status": 200,
+      "result": {
+        "name": "ci-pat-renamed",
+        "scopes": [
+          "mcp:read"
+        ]
+      }
+    },
+    {
+      "name": "delete",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/v1/profile/pats/1e149747-60ad-4599-b20b-b864bcfd7666",
+        "json": null
+      },
+      "status": 204,
+      "result": null
+    }
+  ]
+}

@@ -1,0 +1,212 @@
+{
+  "steps": [
+    {
+      "name": "register",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/auth/register",
+        "json": {
+          "email": "authtest@example.com",
+          "password": "password123",
+          "client_type": "web",
+          "device_name": "CI"
+        }
+      },
+      "status": 200,
+      "result": {
+        "user": {
+          "email": "authtest@example.com",
+          "is_admin": false
+        },
+        "expires_in": 3600,
+        "scopes": [
+          "web_read",
+          "web_write",
+          "ops_write"
+        ]
+      }
+    },
+    {
+      "name": "register_dup",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/auth/register",
+        "json": {
+          "email": "authtest@example.com",
+          "password": "password123",
+          "client_type": "web",
+          "device_name": "CI"
+        }
+      },
+      "status": 409,
+      "result": {
+        "error": {
+          "code": "AUTH_EMAIL_EXISTS",
+          "message": "Email already exists",
+          "request_id": "06eac91e6c9d474791365990a4392bcd"
+        },
+        "detail": "Email already exists"
+      }
+    },
+    {
+      "name": "register_weak",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/auth/register",
+        "json": {
+          "email": "weak@example.com",
+          "password": "short",
+          "client_type": "web"
+        }
+      },
+      "status": 422,
+      "result": {
+        "error": {
+          "code": "VALIDATION_ERROR",
+          "message": "Request validation failed",
+          "request_id": "a09272be898e4ac3b9f2981e96711dc1"
+        },
+        "detail": "Request validation failed",
+        "validation": [
+          {
+            "type": "string_too_short",
+            "loc": [
+              "body",
+              "password"
+            ],
+            "msg": "String should have at least 6 characters",
+            "input": "short",
+            "ctx": {
+              "min_length": 6
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "register_bademail",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/auth/register",
+        "json": {
+          "email": "notanemail",
+          "password": "password123",
+          "client_type": "web"
+        }
+      },
+      "status": 422,
+      "result": {
+        "error": {
+          "code": "VALIDATION_ERROR",
+          "message": "Request validation failed",
+          "request_id": "d89b04d8b4a74fc1b771ebb1e982495c"
+        },
+        "detail": "Request validation failed",
+        "validation": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "email"
+            ],
+            "msg": "Value error, Invalid email format",
+            "input": "notanemail",
+            "ctx": {
+              "error": "Invalid email format"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "login",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/auth/login",
+        "json": {
+          "email": "authtest@example.com",
+          "password": "password123",
+          "client_type": "web"
+        }
+      },
+      "status": 200,
+      "result": {
+        "requires_2fa": false,
+        "user": {
+          "email": "authtest@example.com",
+          "is_admin": false
+        },
+        "expires_in": 3600,
+        "scopes": [
+          "web_read",
+          "web_write",
+          "ops_write"
+        ],
+        "available_methods": []
+      }
+    },
+    {
+      "name": "login_wrong",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/auth/login",
+        "json": {
+          "email": "authtest@example.com",
+          "password": "wrongpass",
+          "client_type": "web"
+        }
+      },
+      "status": 401,
+      "result": {
+        "error": {
+          "code": "AUTH_INVALID_CREDENTIALS",
+          "message": "Invalid credentials",
+          "request_id": "2490ba77af94490e969ed094ced05120"
+        },
+        "detail": "Invalid credentials"
+      }
+    },
+    {
+      "name": "refresh",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/auth/refresh",
+        "json": {
+          "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxYzUzNTYxYS1lZjU0LTRmZjUtOTkzOS04ZGE1NmEwNTljZDgiLCJ0eXBlIjoicmVmcmVzaCIsImNsaWVudF90eXBlIjoid2ViIiwic2NvcGVzIjpbIndlYl9yZWFkIiwid2ViX3dyaXRlIiwib3BzX3dyaXRlIl0sImp0aSI6IjI3ZmZiZmU1NWQ1YTRmYjNhM2JiY2Q4ZmRhYjMxYjQ4IiwiaWF0IjoxNzkzNjkzMTEwLCJleHAiOjE3OTYyODUxMTB9.pJRP1UYblTPuOPUhwOWqOjxwpOnZ5xiuPY7HFwqAUYo"
+        }
+      },
+      "status": 200,
+      "result": {
+        "user": {
+          "email": "authtest@example.com",
+          "is_admin": false
+        },
+        "expires_in": 3600,
+        "scopes": [
+          "web_read",
+          "web_write",
+          "ops_write"
+        ]
+      }
+    },
+    {
+      "name": "logout",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/auth/logout",
+        "json": {
+          "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxYzUzNTYxYS1lZjU0LTRmZjUtOTkzOS04ZGE1NmEwNTljZDgiLCJ0eXBlIjoicmVmcmVzaCIsImNsaWVudF90eXBlIjoid2ViIiwic2NvcGVzIjpbIndlYl9yZWFkIiwid2ViX3dyaXRlIiwib3BzX3dyaXRlIl0sImp0aSI6IjI3ZmZiZmU1NWQ1YTRmYjNhM2JiY2Q4ZmRhYjMxYjQ4IiwiaWF0IjoxNzkzNjkzMTEwLCJleHAiOjE3OTYyODUxMTB9.pJRP1UYblTPuOPUhwOWqOjxwpOnZ5xiuPY7HFwqAUYo"
+        }
+      },
+      "status": 401,
+      "result": {
+        "error": {
+          "code": "UNAUTHORIZED",
+          "message": "Not authenticated",
+          "request_id": "001c68999a244304b0453d48c22a59f9"
+        },
+        "detail": "Not authenticated"
+      }
+    }
+  ]
+}
