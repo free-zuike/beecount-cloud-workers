@@ -1695,8 +1695,10 @@ def main(out_path: str) -> int:
         print(f"[warn] admin_backup golden 跳过：{type(exc).__name__}: {exc}")
         traceback.print_exc()
 
-    # ---------------- preview_import golden（MCP preview_import，独立库避免污染写路径 golden）----------------
-    # 用独立库(make_db)+ seed_scenario 保证 import_plan 不泄漏进主 golden 的 list_workflow_records。
+    # ---------------- preview_import golden（MCP preview_import，写全局库）----------------
+    # 注意：preview_import 不接受 db 参数，内部用全局 SessionLocal()（与主线 golden 同一库/文件）。
+    # 依赖主线 golden 已 seed 的全局库（u1/L1/c1/a1 已存在）。主线 golden 的 list_workflow_records
+    # 在本文之前已捕获，故此处落库的 import_plan 不会污染已记录的 golden。
     # 直接调 src.mcp.workflow_tools.preview_import（绕过 MCP transport）。
     # 候选用 allow_similar=True → ready=True 的稳定形态；只预览不落交易。
     # scrub：记录元数据(id/ledger_internal_id/revision/next_due_at/created_at/updated_at)、
@@ -1705,18 +1707,18 @@ def main(out_path: str) -> int:
     try:
         from src.mcp import workflow_tools as _pi_rt
 
-        _pi_db = make_db("/tmp/parity-preview-import.db")
-        _pi_user = _pi_db.get(User, "u1")
-        _pi_candidates = [{
-            "transaction": {
-                "amount": 12.5, "tx_type": "expense",
-                "happened_at": "2026-05-16T03:30:00+00:00",
-                "category_id": "c1", "account_id": "a1", "note": "午饭",
-            },
-            "sources": [{"source_system": "bank", "source_id": "pi-001"}],
-            "action": "create", "allow_similar": True,
-        }]
-        _pi_res = asyncio.run(_pi_rt.preview_import(_pi_user, "L1", _pi_candidates))
+        with SessionLocal() as _pi_db:
+            _pi_user = _pi_db.get(User, "u1")
+            _pi_candidates = [{
+                "transaction": {
+                    "amount": 12.5, "tx_type": "expense",
+                    "happened_at": "2026-05-16T03:30:00+00:00",
+                    "category_id": "c1", "account_id": "a1", "note": "午饭",
+                },
+                "sources": [{"source_system": "bank", "source_id": "pi-001"}],
+                "action": "create", "allow_similar": True,
+            }]
+            _pi_res = asyncio.run(_pi_rt.preview_import(_pi_user, "L1", _pi_candidates))
 
         def _scrub_ha_pi(v):
             if isinstance(v, str):
@@ -1755,7 +1757,6 @@ def main(out_path: str) -> int:
             json.dump(_pi_golden, _pifh, ensure_ascii=False, indent=2, default=str)
             _pifh.write("\n")
         print(f"wrote 1 preview_import case -> {_pi_path}")
-        _pi_db.close()
     except Exception as exc:
         import traceback
         print(f"[warn] preview_import golden 跳过：{type(exc).__name__}: {exc}")
