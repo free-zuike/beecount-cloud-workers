@@ -90,6 +90,37 @@ export const DDL = `
   CREATE TABLE exchange_rate_cache (base_currency TEXT PRIMARY KEY, rate_date TEXT, source TEXT, payload_json TEXT, fetched_at TEXT);
   CREATE TABLE sync_cursors (user_id TEXT, device_id TEXT, ledger_external_id TEXT, last_cursor INTEGER, updated_at TEXT, PRIMARY KEY (user_id, device_id, ledger_external_id));
   CREATE TABLE refresh_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, device_id TEXT, token_hash TEXT UNIQUE NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT, created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL);
+  CREATE TABLE backup_remotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL,
+    backend_type TEXT NOT NULL, config_summary TEXT, encrypted BOOLEAN DEFAULT 0 NOT NULL,
+    last_test_at TEXT, last_test_ok BOOLEAN, last_test_error TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+    UNIQUE(user_id, name)
+  );
+  CREATE TABLE backup_schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, user_id TEXT NOT NULL,
+    cron_expr TEXT NOT NULL, retention_days INTEGER DEFAULT 30 NOT NULL,
+    include_attachments BOOLEAN DEFAULT 1 NOT NULL, enabled BOOLEAN DEFAULT 1 NOT NULL,
+    next_run_at TEXT, last_run_at TEXT, last_run_status TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+  );
+  CREATE TABLE backup_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, schedule_id INTEGER, user_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending', error_message TEXT, log_text TEXT,
+    bytes_total INTEGER, backup_filename TEXT,
+    started_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL, finished_at TEXT
+  );
+  CREATE TABLE backup_run_targets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, remote_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending', started_at TEXT, finished_at TEXT,
+    bytes_transferred INTEGER, error_message TEXT
+  );
+  CREATE TABLE backup_schedule_remotes (
+    schedule_id INTEGER NOT NULL, remote_id INTEGER NOT NULL, sort_order INTEGER DEFAULT 0 NOT NULL,
+    PRIMARY KEY (schedule_id, remote_id)
+  );
 `;
 
 export type TestApp = Hono<{ Bindings: { DB: D1Database; JWT_SECRET: string }; Variables: { userId: string } }>;

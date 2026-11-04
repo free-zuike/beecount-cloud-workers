@@ -40,6 +40,10 @@ on:
       - 'tests/attachments-differential.test.ts'
       - 'src/routes/admin.ts'
       - 'tests/admin-differential.test.ts'
+      - 'src/routes/admin_backup.ts'
+      - 'tests/admin_backup-differential.test.ts'
+      - 'src/routes/ai.ts'
+      - 'tests/ai-differential.test.ts'
       - 'src/routes/workspace.ts'
       - 'tests/workspace-differential.test.ts'
       - 'tests/workspace-write-differential.test.ts'
@@ -186,6 +190,12 @@ jobs:
 
       - name: Run admin differential test
         run: npm test -- --run tests/admin-differential.test.ts
+
+      - name: Run admin_backup differential test
+        run: npm test -- --run tests/admin_backup-differential.test.ts
+
+      - name: Run ai differential test
+        run: npm test -- --run tests/ai-differential.test.ts
 
       - name: Run workspace differential test
         run: npm test -- --run tests/workspace-differential.test.ts

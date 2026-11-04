@@ -1551,6 +1551,81 @@ def main(out_path: str) -> int:
         print(f"[warn] admin golden 跳过：{type(exc).__name__}: {exc}")
         traceback.print_exc()
 
+    # ---------------- admin_backup golden（HTTP /api/v1/admin/backup，只读聚合）----------------
+    # 用独立库（make_db）+ seed_scenario 保证计数干净。直接调用上游函数（绕过 JWT/依赖），
+    # _owner 传 u1 并设 is_admin=True。scrub：config(local 独有, 由 config_summary 派生)、
+    # timezone_offset(local 独有)、created_at/updated_at(tz 序列化尾差)。
+    # 注：test_remote/run_schedule_now/prepare-restore 依赖 rclone / request.app.state / 磁盘，
+    # 不在对拍范围；只覆盖确定性 DB 只读端点 list_remotes / list_schedules。
+    try:
+        from src.routers import admin_backup as _ab_rt
+        from src.models import (BackupRemote, BackupSchedule, BackupScheduleRemote)
+
+        _ab_db = make_db("/tmp/parity-admin-backup.db")
+        _owner = _ab_db.get(User, "u1")
+        _owner.is_admin = True
+        _ab_db.commit()
+
+        insert(_ab_db, BackupRemote, user_id="u1", name="R2",
+               backend_type="s3", encrypted=False,
+               config_summary={"provider": "Cloudflare", "region": "auto", "bucket": "beecount-test"},
+               created_at=NOW, updated_at=NOW)
+        insert(_ab_db, BackupSchedule, user_id="u1", name="nightly",
+               cron_expr="0 4 * * *", retention_days=30, include_attachments=1,
+               enabled=1, created_at=NOW, updated_at=NOW)
+        _ab_db.commit()
+        _ab_sid = _ab_db.query(BackupSchedule).filter_by(user_id="u1", name="nightly").first().id
+        insert(_ab_db, BackupScheduleRemote, schedule_id=_ab_sid, remote_id=1, sort_order=0)
+        _ab_db.commit()
+
+        def _dump_ab(obj):
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump(mode="json")
+            if isinstance(obj, list):
+                return [_dump_ab(x) for x in obj]
+            if isinstance(obj, dict):
+                return {k: _dump_ab(v) for k, v in obj.items()}
+            return obj
+
+        def _scrub_ab(v):
+            if isinstance(v, list):
+                return [_scrub_ab(x) for x in v]
+            if isinstance(v, dict):
+                return {k: _scrub_ab(x) for k, x in v.items()
+                        if k not in ("config", "timezone_offset", "created_at", "updated_at")}
+            return v
+
+        _ab_calls = [
+            ("list_remotes", lambda: _ab_rt.list_remotes(admin_user=_owner, db=_ab_db)),
+            ("list_schedules", lambda: _ab_rt.list_schedules(admin_user=_owner, db=_ab_db)),
+        ]
+        _ab_cases = []
+        for _name, _fn in _ab_calls:
+            try:
+                _res = _fn()
+                _ab_cases.append({"name": _name, "status": 200,
+                                  "result": _scrub_ab(_dump_ab(_res))})
+            except Exception as exc:
+                _ab_cases.append({"name": _name, "status": 0,
+                                  "error": f"{type(exc).__name__}: {exc}"})
+        _ag = {"cases": _ab_cases}
+        _ap = os.path.join(os.path.dirname(os.path.abspath(out_path)),
+                           "upstream-admin-backup-golden.json")
+        with open(_ap, "w", encoding="utf-8") as _afh:
+            json.dump(_ag, _afh, ensure_ascii=False, indent=2, default=str)
+            _afh.write("\n")
+        print(f"wrote {len(_ab_cases)} admin_backup cases -> {_ap}")
+        _ab_db.close()
+    except Exception as exc:
+        import traceback
+        print(f"[warn] admin_backup golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
+    # ---------------- ai：本地契约测试（tests/ai-differential.test.ts）----------------
+    # 注：ai 走 embedding / 向量检索，parity venv 未装 sentence-transformers，
+    # 故不在此生成 golden（会静默 skip）；改由本地契约测试（fetch stub + 断言响应）
+    # 覆盖 test_provider 的 LLM mock 路径，字段契约已由 write-contract-differential 覆盖。
+
     # ---------------- workspace golden（members/invites/member-stats/shared-resources）----------------
     # 直接调用上游函数（绕过 JWT/依赖），用 make_db（内置 seed_scenario）保证种子一致。
     # 比对排除：id（本地 invites 独有）、share_url（环境派生）、joined_at（seed_scenario 未固定）；
