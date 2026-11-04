@@ -1,0 +1,77 @@
+{
+  "cases": [
+    {
+      "name": "preview_import",
+      "status": 200,
+      "result": {
+        "kind": "import_plan",
+        "status": "ready",
+        "data": {
+          "items": [
+            {
+              "transaction": {
+                "amount": 12.5,
+                "tx_type": "expense",
+                "happened_at": "2026-05-16T03:30:00",
+                "note": "午饭",
+                "category": null,
+                "account": null,
+                "tags": null,
+                "currency": null,
+                "category_id": "c1",
+                "account_id": "a1",
+                "from_account_id": null,
+                "to_account_id": null,
+                "from_account": null,
+                "to_account": null,
+                "native_amount": null,
+                "exclude_from_stats": false,
+                "exclude_from_budget": false,
+                "attachments": null
+              },
+              "sources": [
+                {
+                  "source_system": "bank",
+                  "source_id": "pi-001",
+                  "order_id": null,
+                  "file_sha256": null,
+                  "row_number": null
+                }
+              ],
+              "action": "create",
+              "allow_similar": true,
+              "index": 0,
+              "status": "ready",
+              "normalized": {
+                "base_change_id": 0,
+                "tx_type": "expense",
+                "amount": 12.5,
+                "happened_at": "2026-05-16T03:30:00",
+                "note": "午饭",
+                "exclude_from_stats": false,
+                "exclude_from_budget": false,
+                "category_id": "c1",
+                "category_name": "餐饮",
+                "category_kind": "expense",
+                "account_id": "a1",
+                "account_name": "现金",
+                "tags": [
+                  "MCP"
+                ],
+                "tag_ids": [
+                  "tag_24a983fbee3e"
+                ]
+              }
+            }
+          ],
+          "errors": [],
+          "balance_effects": {
+            "a1": -12.5
+          },
+          "time_zone": null,
+          "ready": true
+        }
+      }
+    }
+  ]
+}

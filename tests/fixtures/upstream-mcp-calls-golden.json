@@ -1,0 +1,35 @@
+{
+  "cases": [
+    {
+      "name": "list_mcp_calls",
+      "status": 200,
+      "result": {
+        "total": 2,
+        "items": [
+          {
+            "tool_name": "get_transaction",
+            "status": "error",
+            "error_message": "boom",
+            "args_summary": "{}",
+            "pat_id": null,
+            "pat_prefix": null,
+            "client_label": null,
+            "client_active": false,
+            "client_ip": "1.2.3.4"
+          },
+          {
+            "tool_name": "search_transactions",
+            "status": "ok",
+            "error_message": null,
+            "args_summary": "{}",
+            "pat_id": "pat-1",
+            "pat_prefix": "pat_",
+            "client_label": "My Client",
+            "client_active": true,
+            "client_ip": "1.2.3.4"
+          }
+        ]
+      }
+    }
+  ]
+}

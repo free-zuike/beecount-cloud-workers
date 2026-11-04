@@ -1,0 +1,9 @@
+{
+  "cases": [
+    {
+      "name": "export_csv",
+      "status": 200,
+      "result": "﻿Type,Category,Subcategory,Amount,Currency,Account,From Account,To Account,Note,Time,Tags,Attachments\nIncome,工资,,8000.00,CNY,招行,,,,  2026-05-10 02:30:00  ,,\nExpense,餐饮,,38.00,CNY,现金,,,星巴克,  2026-05-02 03:30:00  ,,\n"
+    }
+  ]
+}
