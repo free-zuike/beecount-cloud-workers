@@ -294,15 +294,13 @@ workspaceRouter.get('/transactions.csv', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
 
+  // ledger_id 可选(对齐上游 Query(default=None)):缺省时导出当前用户可见的全部账本
   const ledgerId = c.req.query('ledger_id');
-  if (!ledgerId) {
-    return c.json({ error: 'ledger_id is required' }, 400);
-  }
   const langKey = normalizeLang(c.req.query('lang') ?? null);
   const headers = CSV_HEADERS[langKey];
   const typeLabels = TX_TYPE_LABELS[langKey];
 
-  // 账本可见性:owner / member,排除软删(对齐上游 _visible_workspace_ledgers)
+  // 账本可见性:owner / member(含共享账本),排除软删(对齐上游 _visible_workspace_ledgers)
   const softDeleteCond = `NOT EXISTS (
     SELECT 1 FROM sync_changes sc
     WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'
@@ -310,33 +308,46 @@ workspaceRouter.get('/transactions.csv', async (c) => {
       AND sc.change_id = (SELECT MAX(sc2.change_id) FROM sync_changes sc2
                           WHERE sc2.ledger_id = l.id AND sc2.entity_type = 'ledger_snapshot')
   )`;
-  let ledger = await db
-    .prepare(`SELECT l.id, l.external_id, l.name, l.currency FROM ledgers l
-      WHERE l.user_id = ? AND l.external_id = ? AND ${softDeleteCond}`)
-    .bind(userId, ledgerId)
-    .first<{ id: string; external_id: string; name: string | null; currency: string | null }>();
-  if (!ledger) {
-    ledger = await db
-      .prepare(`SELECT l.id, l.external_id, l.name, l.currency FROM ledgers l
-        JOIN ledger_members lm ON l.id = lm.ledger_id
-        WHERE lm.user_id = ? AND l.external_id = ? AND ${softDeleteCond}`)
-      .bind(userId, ledgerId)
-      .first<{ id: string; external_id: string; name: string | null; currency: string | null }>();
+  let ledgerQuery = `SELECT l.id, l.external_id, l.name, l.currency FROM ledgers l
+    LEFT JOIN ledger_members lm ON l.id = lm.ledger_id AND lm.user_id = ?
+    WHERE (l.user_id = ? OR lm.user_id = ?) AND ${softDeleteCond}`;
+  const ledgerParams: string[] = [userId, userId, userId];
+  if (ledgerId) {
+    ledgerQuery += ' AND l.external_id = ?';
+    ledgerParams.push(ledgerId);
   }
-  if (!ledger) {
-    return c.json({ error: 'Ledger not found or access denied' }, 404);
+  const ledgers = await db.prepare(ledgerQuery).bind(...ledgerParams)
+    .all<{ id: string; external_id: string; name: string | null; currency: string | null }>();
+
+  // 上游:无可访问账本(含 ledger_id 指向无权 / 不存在的账本)走 false_literal(),
+  // 返回 200 + BOM + 表头、无数据行,并非 404。与 src/routes/csv.ts 口径一致。
+  if (ledgers.results.length === 0) {
+    const emptyCsv = '\uFEFF' + headers.join(',') + '\r\n';
+    return new Response(emptyCsv, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="beecount-empty.csv"',
+        'Cache-Control': 'no-store',
+      },
+    });
   }
+
+  const ledgerInternalIds = ledgers.results.map((l) => l.id);
+  const primaryName = sanitizeFilename(ledgers.results[0]?.name ?? ledgers.results[0]?.external_id ?? null);
+  const ledgerCurrencyMap = new Map(ledgers.results.map((l) => [l.id, l.currency || 'CNY']));
 
   const tzOffset = parseInt(c.req.query('tz_offset_minutes') ?? '0', 10) || 0;
   const dateFrom = c.req.query('date_from');
   const dateTo = c.req.query('date_to');
 
-  // 查询(单账本;子分类 JOIN 提供二级分类,对齐上游 CSV 12 列)
+  // 查询(可见账本集合;子分类 JOIN 提供二级分类,对齐上游 CSV 12 列)
+  const ledgerPlaceholders = ledgerInternalIds.map(() => '?').join(',');
   let txQuery = `SELECT tx.*, cp.level AS cat_level, cp.parent_name AS cat_parent_name
     FROM read_tx_projection tx
     LEFT JOIN user_category_projection cp ON cp.user_id = tx.user_id AND cp.sync_id = tx.category_sync_id
-    WHERE tx.ledger_id = ?`;
-  const params: (string | number)[] = [ledger.id];
+    WHERE tx.ledger_id IN (${ledgerPlaceholders})`;
+  const params: (string | number)[] = [...ledgerInternalIds];
 
   const txType = c.req.query('tx_type');
   if (txType) { txQuery += ' AND tx.tx_type = ?'; params.push(txType); }
@@ -403,7 +414,9 @@ workspaceRouter.get('/transactions.csv', async (c) => {
     }
     const typeLabel = typeLabels[String(tx.tx_type ?? '')] ?? String(tx.tx_type ?? '');
     const amount = tx.amount != null ? Number(tx.amount).toFixed(2) : '';
-    const currency = String((tx.currency_code as string | null) ?? ledger.currency ?? 'CNY').toUpperCase();
+    const currency = String(
+      (tx.currency_code as string | null) ?? ledgerCurrencyMap.get(String(tx.ledger_id)) ?? 'CNY',
+    ).toUpperCase();
     const happenedAt = tx.happened_at as string | null;
     let timeStr = '';
     if (happenedAt) {
@@ -439,7 +452,7 @@ workspaceRouter.get('/transactions.csv', async (c) => {
   const periodSegment = !dateFrom && !dateTo
     ? `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
     : `${periodFrom}_${periodTo}`;
-  const filename = `beecount-${sanitizeFilename(ledger.name)}-${periodSegment}.csv`;
+  const filename = `beecount-${primaryName}-${periodSegment}.csv`;
   const asciiFilename = filename.replace(/[^\x20-\x7e]/g, '_');
   const encodedFilename = encodeURIComponent(filename);
 

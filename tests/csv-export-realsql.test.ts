@@ -227,10 +227,13 @@ describe('CSV 导出(移植上游 test_workspace_csv_export.py)', () => {
     expect(qLines[1]).toContain('工资');
   });
 
-  it('无权访问账本 → 404;不存在的账本 → 404', async () => {
+  // 上游 _visible_workspace_ledgers 返回空 → false_literal() → 200 + BOM + 表头(无数据行),
+  // 并非 404;与 src/routes/csv.ts 已对齐实现口径一致。
+  it('无权 / 不存在的账本 → 200 且只有表头', async () => {
     seedBasic();
     const forbidden = await fetchCsv({ ledger_id: 'other-lg' });
-    expect(forbidden.status).toBe(404);
+    expect(forbidden.status).toBe(200);
+    expect(dataLines(await forbidden.text()).length).toBe(1);
   });
 
   it('tx_ids 多选导出:只出选中行(移植上游 test_tx_batch_delete 三例)', async () => {
@@ -257,5 +260,35 @@ describe('CSV 导出(移植上游 test_workspace_csv_export.py)', () => {
     });
     expect(res.status).toBe(200);
     expect(dataLines(await res.text()).length).toBe(4); // 表头 + 3 条
+  });
+
+  // 对齐上游:ledger_id 缺省(Query default=None)时导出当前用户可见的全部账本,
+  // 含共享账本,不再 400;currency_code 为 NULL 的历史行按其所属账本本位币兜底。
+  it('ledger_id 缺省 → 导出全部可见账本(含共享),币种按各自账本兜底', async () => {
+    seedBasic();
+    sqlite.prepare(
+      "INSERT INTO ledgers (id, user_id, external_id, name, currency) VALUES ('lg-2', 'user-2', 'lg-2', '共享账本', 'USD')"
+    ).run();
+    sqlite.prepare(
+      "INSERT INTO ledger_members (ledger_id, user_id, role, joined_at) VALUES ('lg-2', ?, 'editor', '2025-01-01T00:00:00Z')"
+    ).run(USER);
+    sqlite.prepare(
+      `INSERT INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
+         account_sync_id, account_name, tx_index)
+       VALUES ('lg-2', 'tx-shared', ?, 'expense', 7.25, '2026-04-17T09:00:00Z', '共享账本午餐',
+         'acc-credit', '招商信用卡', 0)`
+    ).run(USER);
+
+    const all = await fetchCsv({ lang: 'en' }); // 故意不带 ledger_id
+    expect(all.status).toBe(200);
+    const lines = dataLines(await all.text());
+    expect(lines.length).toBe(5); // 表头 + lg-1 三笔 + lg-2 一笔
+    const shared = lines.find((l) => l.includes('共享账本午餐'));
+    expect(shared).toBeDefined();
+    expect(shared ?? '').toContain(',USD,'); // currency_code NULL 按 lg-2 本位币兜底
+
+    // 指定 ledger_id 时仍只导出该账本(单账本回归保护)
+    const onlyL1 = await fetchCsv({ ledger_id: LEDGER_ID, lang: 'en' });
+    expect(dataLines(await onlyL1.text()).length).toBe(4);
   });
 });
