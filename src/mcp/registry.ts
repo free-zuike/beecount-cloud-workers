@@ -64,31 +64,31 @@ export const REGISTERED_TOOLS: RegisteredTool[] = tools([
   {
     name: 'manage_account', scope: 'write',
     description: 'Create/update/delete an account (dictionary CRUD). action: create|update|delete. data: {name, account_type, currency, initial_balance, credit_limit, ...}. Delete requires confirm=true. Returns a durable operation with sync_ids.',
-    inputSchema: { ...obj, properties: { action: { type: 'string', enum: ['create', 'update', 'delete'] }, ledger_id: { type: 'string' }, data: { type: 'object' }, account_id: { type: 'string' }, confirm: { type: 'boolean' }, idempotency_key: { type: 'string' } }, required: ['action', 'ledger_id'] },
+    inputSchema: { ...obj, properties: { action: { type: 'string', enum: ['create', 'update', 'delete'] }, ledger_id: { type: 'string' }, data: { type: 'object', description: 'AccountFields (name/account_type/currency/initial_balance/note/credit_limit/billing_day/payment_due_day/bank_name/card_last_four/hidden)', properties: { name: { type: 'string' }, account_type: { type: 'string' }, currency: { type: 'string' }, initial_balance: { type: 'number' }, note: { type: 'string' }, credit_limit: { type: 'number' }, billing_day: { type: 'integer' }, payment_due_day: { type: 'integer' }, bank_name: { type: 'string' }, card_last_four: { type: 'string' }, hidden: { type: 'boolean' } } }, account_id: { type: 'string' }, confirm: { type: 'boolean' }, idempotency_key: { type: 'string' } }, required: ['action', 'ledger_id'] },
     handler: (c, a) => manageAccount(c, a as never),
   },
   {
     name: 'manage_category', scope: 'write',
     description: 'Create/update/delete a category. data: {name, kind (expense|income|transfer), parent_name, icon}. Delete requires confirm=true.',
-    inputSchema: { ...obj, properties: { action: { type: 'string', enum: ['create', 'update', 'delete'] }, ledger_id: { type: 'string' }, data: { type: 'object' }, category_id: { type: 'string' }, confirm: { type: 'boolean' }, idempotency_key: { type: 'string' } }, required: ['action', 'ledger_id'] },
+    inputSchema: { ...obj, properties: { action: { type: 'string', enum: ['create', 'update', 'delete'] }, ledger_id: { type: 'string' }, data: { type: 'object', description: 'CategoryFields (name/kind/parent_sync_id/parent_name/icon/sort_order)', properties: { name: { type: 'string' }, kind: { type: 'string', enum: ['expense', 'income', 'transfer'] }, parent_sync_id: { type: 'string' }, parent_name: { type: 'string' }, icon: { type: 'string' }, sort_order: { type: 'integer' } } }, category_id: { type: 'string' }, confirm: { type: 'boolean' }, idempotency_key: { type: 'string' } }, required: ['action', 'ledger_id'] },
     handler: (c, a) => manageCategory(c, a as never),
   },
   {
     name: 'manage_tag', scope: 'write',
     description: 'Create/update/delete a tag. data: {name, color}. Delete requires confirm=true.',
-    inputSchema: { ...obj, properties: { action: { type: 'string', enum: ['create', 'update', 'delete'] }, ledger_id: { type: 'string' }, data: { type: 'object' }, tag_id: { type: 'string' }, confirm: { type: 'boolean' }, idempotency_key: { type: 'string' } }, required: ['action', 'ledger_id'] },
+    inputSchema: { ...obj, properties: { action: { type: 'string', enum: ['create', 'update', 'delete'] }, ledger_id: { type: 'string' }, data: { type: 'object', description: 'TagFields (name/color)', properties: { name: { type: 'string' }, color: { type: 'string' } } }, tag_id: { type: 'string' }, confirm: { type: 'boolean' }, idempotency_key: { type: 'string' } }, required: ['action', 'ledger_id'] },
     handler: (c, a) => manageTag(c, a as never),
   },
   {
     name: 'manage_budget', scope: 'write',
     description: 'Create/update/delete a budget. data: {type (total|category), amount, period, start_day, category_id}. Delete requires confirm=true.',
-    inputSchema: { ...obj, properties: { action: { type: 'string', enum: ['create', 'update', 'delete'] }, ledger_id: { type: 'string' }, data: { type: 'object' }, budget_id: { type: 'string' }, confirm: { type: 'boolean' }, idempotency_key: { type: 'string' } }, required: ['action', 'ledger_id'] },
+    inputSchema: { ...obj, properties: { action: { type: 'string', enum: ['create', 'update', 'delete'] }, ledger_id: { type: 'string' }, data: { type: 'object', description: 'BudgetFields (type/category_id/amount/period/enabled)', properties: { type: { type: 'string', enum: ['total', 'category'] }, category_id: { type: 'string' }, amount: { type: 'number' }, period: { type: 'string', enum: ['monthly', 'weekly', 'yearly'] }, enabled: { type: 'boolean' } } }, budget_id: { type: 'string' }, confirm: { type: 'boolean' }, idempotency_key: { type: 'string' } }, required: ['action', 'ledger_id'] },
     handler: (c, a) => manageBudget(c, a as never),
   },
   {
     name: 'manage_ledger', scope: 'write',
     description: 'Create/update/delete a ledger. create: {ledger_id (external id), ledger_name, currency}; update: {ledger_name, month_start_day}; delete requires confirm=true.',
-    inputSchema: { ...obj, properties: { action: { type: 'string', enum: ['create', 'update', 'delete'] }, data: { type: 'object' }, ledger_id: { type: 'string' }, confirm: { type: 'boolean' }, idempotency_key: { type: 'string' } }, required: ['action'] },
+    inputSchema: { ...obj, properties: { action: { type: 'string', enum: ['create', 'update', 'delete'] }, data: { type: 'object', description: 'LedgerFields (ledger_name/currency/month_start_day)', properties: { ledger_name: { type: 'string' }, currency: { type: 'string' }, month_start_day: { type: 'integer' } } }, ledger_id: { type: 'string' }, confirm: { type: 'boolean' }, idempotency_key: { type: 'string' } }, required: ['action'] },
     handler: (c, a) => manageLedger(c, a as never),
   },
   {
@@ -230,7 +230,7 @@ export const REGISTERED_TOOLS: RegisteredTool[] = tools([
   {
     name: 'manage_recurring_rule', scope: 'write',
     description: 'Create/update/pause/resume/delete a Cloud-owned recurring rule (daily/weekly/monthly/yearly, month-end clamped, DST-aware, opt-in backfill). Confirmation required. Returns next_occurrences preview.',
-    inputSchema: { ...obj, properties: { action: { type: 'string', enum: ['create', 'update', 'pause', 'resume', 'delete'] }, ledger_id: { type: 'string' }, data: { type: 'object', description: '{name, transaction: {...}, frequency, interval?, starts_at, time_zone, ends_at?, enabled?, allow_backfill?, dst_policy?}' }, record_id: { type: 'string' }, expected_revision: { type: 'number' }, confirm: { type: 'boolean' } }, required: ['action'] },
+    inputSchema: { ...obj, properties: { action: { type: 'string', enum: ['create', 'update', 'pause', 'resume', 'delete'] }, ledger_id: { type: 'string' }, data: { type: 'object', description: 'RecurringRule payload (name/transaction/frequency/interval/starts_at/time_zone/ends_at/enabled/allow_backfill/dst_policy)', properties: { name: { type: 'string' }, transaction: { type: 'object', description: 'BatchTransactionItem', properties: { amount: { type: 'number' }, tx_type: { type: 'string', enum: ['expense', 'income', 'transfer'] }, happened_at: { type: 'string' }, note: { type: 'string' }, category: { type: 'string' }, account: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, currency: { type: 'string' }, category_id: { type: 'string' }, account_id: { type: 'string' }, from_account_id: { type: 'string' }, to_account_id: { type: 'string' }, from_account: { type: 'string' }, to_account: { type: 'string' }, native_amount: { type: 'number' }, exclude_from_stats: { type: 'boolean' }, exclude_from_budget: { type: 'boolean' }, attachments: { type: 'array', items: { type: 'string' } } } }, frequency: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly'] }, interval: { type: 'integer' }, starts_at: { type: 'string' }, time_zone: { type: 'string' }, ends_at: { type: 'string' }, enabled: { type: 'boolean' }, allow_backfill: { type: 'boolean' }, dst_policy: { type: 'string', enum: ['skip', 'first', 'second'] } } }, record_id: { type: 'string' }, expected_revision: { type: 'number' }, confirm: { type: 'boolean' } }, required: ['action'] },
     handler: (c, a) => manageRecurringRule(c, a as never),
   },
   {

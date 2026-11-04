@@ -5,8 +5,11 @@
  * 上游用官方 FastMCP SDK，其 tools/list 的工具目录由 SDK 注册生成；本地手搓 Streamable
  * transport 的 tools/list 必须与之对齐。比对：
  *  - 工具名集合（严格：缺失/多余/改名都算漂移，最高价值）；
- *  - 每个工具的 inputSchema 顶层属性名集合（严格：schema 生成器差异只比属性名，
- *    不比 $defs/附加字段/required）。
+ *  - 每个工具的 inputSchema 属性名（严格、递归）：顶层属性名严格；对带 data 信封的工具
+ *    （save_review_item / save_classification_rule / manage_recurring_rule）下钻 data
+ *    及其子对象（如 RecurringRule.transaction = BatchTransactionItem），逐层比属性名。
+ *    不豁免任何 data 信封工具。
+ *  - schema 生成器差异只比属性「名」（不比类型/约束/$defs/required/description）。
  * 注：description 本地移植时改写/增强（如 list_transactions 增补 cursor 说明），属有意
  * 演进，不纳入严格比对。工具「调用」的功能级对拍已由 tests/mcp-differential.test.ts 覆盖。
  *
@@ -34,6 +37,64 @@ async function sha256Hex(s: string): Promise<string> {
 
 function app(h: ReturnType<typeof makeHarness>) {
   return buildRouterApp(mcpRouter as never, '/api/v1/mcp', h.db);
+}
+
+/** 解析 $ref / anyOf|oneOf 到实际对象（FastMCP 用 $defs 内联 Pydantic 模型）。 */
+function resolveSchema(s: any, defs: Record<string, any>): any {
+  let cur = s;
+  let guard = 0;
+  while (cur && guard++ < 20) {
+    if (typeof cur.$ref === 'string') {
+      const name = cur.$ref.split('/').pop();
+      cur = defs[name];
+      continue;
+    }
+    if (Array.isArray(cur.anyOf) || Array.isArray(cur.oneOf)) {
+      const arr = cur.anyOf || cur.oneOf;
+      const hit = arr.find((m: any) => m && (typeof m.$ref === 'string' || (m.properties && typeof m.properties === 'object')));
+      if (hit) { cur = hit; continue; }
+    }
+    break;
+  }
+  return cur;
+}
+
+/** 取（已解析的）schema 的 properties 对象；无则返回 null。 */
+function propsOf(resolved: any): Record<string, any> | null {
+  if (resolved && resolved.properties && typeof resolved.properties === 'object') {
+    return resolved.properties;
+  }
+  return null;
+}
+
+/** 递归比对：顶层属性名严格；对 data 信封下钻 data 及其子对象（不豁免 recurring）。 */
+function diffToolSchema(
+  name: string,
+  lSchema: any, lDefs: Record<string, any>,
+  uSchema: any, uDefs: Record<string, any>,
+  mismatches: string[],
+  path = '',
+): void {
+  const lr = resolveSchema(lSchema, lDefs);
+  const ur = resolveSchema(uSchema, uDefs);
+  const lProps = propsOf(lr);
+  const uProps = propsOf(ur);
+  const lKeys = lProps ? Object.keys(lProps).sort() : null;
+  const uKeys = uProps ? Object.keys(uProps).sort() : null;
+  if (lKeys && uKeys) {
+    if (JSON.stringify(lKeys) !== JSON.stringify(uKeys)) {
+      mismatches.push(`${name}${path}: 属性名 ${JSON.stringify(lKeys)} != ${JSON.stringify(uKeys)}`);
+    } else if (path === '' || path.endsWith('.data')) {
+      // 进入/已在 data 信封：继续下钻所有子对象（如 RecurringRule.transaction）。
+      for (const k of lKeys) {
+        const descend = path === '' ? k === 'data' : true;
+        if (!descend) continue;
+        diffToolSchema(name, lProps![k], lDefs, uProps![k], uDefs, mismatches, `${path}.${k}`);
+      }
+    }
+  } else if (lKeys !== uKeys) {
+    mismatches.push(`${name}${path}: 一侧缺少 properties（local=${lKeys}, upstream=${uKeys}）`);
+  }
 }
 
 describe.skipIf(!hasGolden)('mcp tools/list catalog differential vs upstream', () => {
@@ -70,7 +131,7 @@ describe.skipIf(!hasGolden)('mcp tools/list catalog differential vs upstream', (
     expect(localNames).toEqual(goldenNames);
   });
 
-  it('每个工具的 name + inputSchema 顶层属性名与上游一致', async () => {
+  it('每个工具 name + inputSchema 属性名（递归 data 信封）与上游一致', async () => {
     const h = makeHarness();
     seed(h);
     const token = await seedPat(h);
@@ -90,13 +151,13 @@ describe.skipIf(!hasGolden)('mcp tools/list catalog differential vs upstream', (
     expect(res.status).toBe(200);
     const body = (await res.json()) as { result: { tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> } };
     const localTools = new Map(body.result.tools.map((t) => [t.name, t]));
+    const mismatches: string[] = [];
     for (const gt of golden.tools) {
       const lt = localTools.get(gt.name);
       expect(lt, `本地缺少工具 ${gt.name}`).toBeDefined();
-      // schema 生成器差异只比顶层属性名（不比 $defs/附加字段/required）。
-      const lProps = Object.keys((lt!.inputSchema?.properties as Record<string, unknown>) || {}).sort();
-      const gProps = Object.keys((gt.inputSchema?.properties as Record<string, unknown>) || {}).sort();
-      expect(lProps, `工具 ${gt.name} 的 inputSchema 顶层属性名集合`).toEqual(gProps);
+      const uDefs = (gt.inputSchema?.$defs as Record<string, any>) || {};
+      diffToolSchema(gt.name, lt!.inputSchema, {}, gt.inputSchema, uDefs, mismatches);
     }
+    expect(mismatches, `inputSchema 漂移:\n${mismatches.join('\n')}`).toEqual([]);
   });
 });
