@@ -2016,7 +2016,7 @@ def main(out_path: str) -> int:
         with open(_wp, "w", encoding="utf-8") as _wfh:
             json.dump(_wg, _wfh, ensure_ascii=False, indent=2, default=str)
             _wfh.write("\n")
-        print(f"wrote {len(_ws_cases)} workspace cases -> {wp}")
+        print(f"wrote {len(_ws_cases)} workspace cases -> {_wp}")
         _ws_db.close()
     except Exception as exc:
         import traceback
