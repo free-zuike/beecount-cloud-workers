@@ -79,7 +79,7 @@ describe.skipIf(!hasGolden)('csv 导出 vs 上游 golden', () => {
       await seed(h);
       const app = buildRouterApp(workspaceRouter as any, '/api/v1/read/workspace', h.db);
       const res = await app.request(
-        '/api/v1/read/workspace/transactions.csv?tx_ids=t1&tx_ids=t3',
+        '/api/v1/read/workspace/transactions.csv?ledger_id=L1&tx_ids=t1&tx_ids=t3',
         { headers: { 'X-Test-User': 'u1' } },
         { DB: h.db, JWT_SECRET: 'test-secret-for-parity-0123456789' } as never,
       );
