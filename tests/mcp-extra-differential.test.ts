@@ -73,11 +73,31 @@ const SYNC_ID_RE = /(tx|acc|cat|tag|bgt)_[0-9a-f]{12}/i;
  * - dataset_revision：本地 export_transactions 多返回（上游无此字段）→ 直接丢弃
  * - uuid（export_id / resource_uri 里嵌入的、operation_id 等）：每次运行都不同
  * - sync_id 形如 tx_/acc_/... 的 12 位 hex：也是随机实体 id
+ * - *cursor：分页令牌（含 fingerprint / 签名），跨实现必然不同 → 直接丢弃
  * 注意 normalize() 已负责剥离 revision/created_at/updated_at 等 VOLATILE_KEYS 并解码 *cursor，
  * 这里只补 normalize 不处理的"字符串内嵌随机片段"与本地独有字段。
  */
+function sortKeys(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(v as Record<string, unknown>).sort()) {
+      out[k] = sortKeys((v as Record<string, unknown>)[k]);
+    }
+    return out;
+  }
+  return v;
+}
+/** 把"长得像 JSON 的字符串"按键序归一，消除上游 sort_keys 与本地插入序的差异（如 read_attachment 的 metadata 文本）。 */
+function canonJson(s: string): string {
+  try {
+    const p = JSON.parse(s);
+    if (p !== null && typeof p === 'object') return JSON.stringify(sortKeys(p));
+  } catch { /* 非 JSON，原样返回 */ }
+  return s;
+}
 function scrubStr(s: string): string {
-  return s.replace(UUID_RE, '<UUID>').replace(SYNC_ID_RE, '<SYNC_ID>');
+  return canonJson(s).replace(UUID_RE, '<UUID>').replace(SYNC_ID_RE, '<SYNC_ID>');
 }
 function scrubExtras(v: Json): Json {
   if (Array.isArray(v)) return v.map(scrubExtras);
@@ -85,6 +105,7 @@ function scrubExtras(v: Json): Json {
     const out: Record<string, Json> = {};
     for (const k of Object.keys(v as Record<string, Json>)) {
       if (k === 'dataset_revision') continue; // 本地 export_transactions 独有，上游无
+      if (k.endsWith('cursor')) continue; // 游标是分页令牌（含指纹/签名），跨实现不同 → 剔除
       const val = (v as Record<string, Json>)[k];
       out[k] = typeof val === 'string' ? scrubStr(val) : scrubExtras(val);
     }
@@ -158,6 +179,15 @@ describe.skipIf(!hasGolden)('MCP 额外工具差分（对上游 extra golden）'
       }
       const unordered = ORDER_UNDEFINED.has(kase.tool);
       const upstream = scrubExtras(normalize(asArray(kase.result)));
+      // export_transactions 的 sha256 是 CSV 内容哈希：本地用 BOM+CRLF、上游格式或不同 → 哈希必然不同，
+      // 剔除（row_count / revision / export_id / resource_uri 结构仍校验）。
+      if (kase.tool === 'export_transactions') {
+        for (const o of [upstream, local]) {
+          if (o && typeof o === 'object' && !Array.isArray(o)) {
+            delete (o as Record<string, unknown>).sha256;
+          }
+        }
+      }
       const left = unordered ? sortTop(upstream) : upstream;
       const right = unordered ? sortTop(local) : local;
       const diffs = diffJson(left, right);
