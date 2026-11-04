@@ -32,6 +32,11 @@ function app(h: ReturnType<typeof makeHarness>) {
   return buildRouterApp(mcpRouter as never, '/api/v1/mcp', h.db);
 }
 
+/** 归一化空白（换行/缩进→单空格），忽略上游多行描述与本地单行描述的格式差，只比内容 */
+function normWs(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
 describe.skipIf(!hasGolden)('mcp tools/list catalog differential vs upstream', () => {
   async function seedPat(h: ReturnType<typeof makeHarness>): Promise<string> {
     const hash = await sha256Hex(TOKEN);
@@ -89,7 +94,7 @@ describe.skipIf(!hasGolden)('mcp tools/list catalog differential vs upstream', (
     for (const gt of golden.tools) {
       const lt = localTools.get(gt.name);
       expect(lt, `本地缺少工具 ${gt.name}`).toBeDefined();
-      expect(lt!.description).toBe(gt.description);
+      expect(normWs(lt!.description)).toBe(normWs(gt.description));
       const lProps = Object.keys((lt!.inputSchema?.properties as Record<string, unknown>) || {}).sort();
       const gProps = Object.keys((gt.inputSchema?.properties as Record<string, unknown>) || {}).sort();
       expect(lProps, `工具 ${gt.name} 的 inputSchema 顶层属性名集合`).toEqual(gProps);
