@@ -1621,10 +1621,90 @@ def main(out_path: str) -> int:
         print(f"[warn] admin_backup golden 跳过：{type(exc).__name__}: {exc}")
         traceback.print_exc()
 
-    # ---------------- ai：本地契约测试（tests/ai-differential.test.ts）----------------
-    # 注：ai 走 embedding / 向量检索，parity venv 未装 sentence-transformers，
-    # 故不在此生成 golden（会静默 skip）；改由本地契约测试（fetch stub + 断言响应）
-    # 覆盖 test_provider 的 LLM mock 路径，字段契约已由 write-contract-differential 覆盖。
+    # ---------------- ai golden（HTTP /api/v1/ai，LLM mock）----------------
+    # test_provider(text) 直接调上游函数（绕过 JWT/依赖），current_user 传 u1。
+    # LLM 调用点 _test_text 被 monkeypatch 成固定返回值（pytest 同款「LLM mock」），golden 确定性。
+    # 比对排除 latency_ms。success / preview / error_code / error_message 逐项比对。
+    # 注：test_provider 的 text 路径只用 _test_text(httpx)，不碰 embedding/RAG；
+    # 但 import src.routers.ai 会经 src.services.ai 拉 docs_index（RAG，装 sentence-transformers）。
+    # 这里 stub 掉 docs_index 模块即可，无需在 parity venv 装重型 ML 依赖。
+    # parse_tx_text / ask 走流式 + 向量检索，依赖外部 embedding，不在对拍范围。
+    try:
+        import sys as _sys
+        import types as _types
+        _fake_docs = _types.ModuleType("src.services.ai.docs_index")
+        class _FakeDocsIndex:  # type: ignore
+            pass
+        _fake_docs.DocsIndex = _FakeDocsIndex
+        _fake_docs.get_docs_index = lambda *a, **k: None
+        _fake_docs.reset_docs_index_cache = lambda *a, **k: None
+        _sys.modules["src.services.ai.docs_index"] = _fake_docs
+
+        from src.routers.ai import test_provider as _aip_rt
+        import src.routers.ai.test_provider as _aip_mod
+        from src.routers.ai.test_provider import TestProviderRequest
+
+        async def _fake_test_text(base_url, api_key, model):
+            return "hi-reply"
+        _aip_mod._test_text = _fake_test_text
+
+        _ai_db = make_db("/tmp/parity-ai.db")
+        _ai_user = _ai_db.get(User, "u1")
+        _ai_req = TestProviderRequest(
+            provider={"apiKey": "sk-test", "baseUrl": "https://api.openai.com", "textModel": "test-model"},
+            capability="text",
+        )
+        _ai_res = asyncio.run(_aip_rt.test_provider(_ai_req, current_user=_ai_user))
+
+        def _scrub_ai(v):
+            if isinstance(v, dict):
+                return {k: _scrub_ai(x) for k, x in v.items() if k != "latency_ms"}
+            if isinstance(v, list):
+                return [_scrub_ai(x) for x in v]
+            return v
+
+        _ai_cases = [{
+            "name": "test_provider_text",
+            "status": 200,
+            "result": _scrub_ai(_ai_res.model_dump(mode="json")),
+        }]
+        _ag = {"cases": _ai_cases}
+        _ap = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-ai-golden.json")
+        with open(_ap, "w", encoding="utf-8") as _afh:
+            json.dump(_ag, _afh, ensure_ascii=False, indent=2, default=str)
+            _afh.write("\n")
+        print(f"wrote {len(_ai_cases)} ai cases -> {_ap}")
+        _ai_db.close()
+    except Exception as exc:
+        import traceback
+        print(f"[warn] ai golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
+    # ---------------- mcp tools/list catalog golden（Streamable HTTP 暴露的工具目录）----------------
+    # 上游用官方 FastMCP SDK，其 tools/list 的工具目录（name/description/inputSchema）由 SDK 注册生成；
+    # 本地手搓 transport 的 tools/list 必须与之对齐。函数级取上游注册表（无需起 HTTP server），
+    # 比 name + description + inputSchema 顶层属性名集合。握手/通知/header 校验由 mcp-streamable-contract 覆盖。
+    try:
+        from src.mcp.server import mcp as _up_mcp
+        _up_tools = asyncio.run(_up_mcp.list_tools())
+        _tool_catalog = []
+        for _t in _up_tools:
+            _schema = getattr(_t, "input_schema", None) or getattr(_t, "inputSchema", None) or {}
+            _tool_catalog.append({
+                "name": getattr(_t, "name", ""),
+                "description": getattr(_t, "description", "") or "",
+                "inputSchema": _schema,
+            })
+        _mg = {"tools": _tool_catalog}
+        _mp = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-mcp-tools-golden.json")
+        with open(_mp, "w", encoding="utf-8") as _mfh:
+            json.dump(_mg, _mfh, ensure_ascii=False, indent=2, default=str)
+            _mfh.write("\n")
+        print(f"wrote {len(_tool_catalog)} mcp tools -> {_mp}")
+    except Exception as exc:
+        import traceback
+        print(f"[warn] mcp tools golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
 
     # ---------------- workspace golden（members/invites/member-stats/shared-resources）----------------
     # 直接调用上游函数（绕过 JWT/依赖），用 make_db（内置 seed_scenario）保证种子一致。

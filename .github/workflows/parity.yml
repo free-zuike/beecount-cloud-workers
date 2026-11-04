@@ -44,6 +44,10 @@ on:
       - 'tests/admin_backup-differential.test.ts'
       - 'src/routes/ai.ts'
       - 'tests/ai-differential.test.ts'
+      - 'src/routes/mcp.ts'
+      - 'src/mcp/**'
+      - 'tests/mcp-tools-differential.test.ts'
+      - 'tests/mcp-streamable-contract.test.ts'
       - 'src/routes/workspace.ts'
       - 'tests/workspace-differential.test.ts'
       - 'tests/workspace-write-differential.test.ts'
@@ -196,6 +200,9 @@ jobs:
 
       - name: Run ai differential test
         run: npm test -- --run tests/ai-differential.test.ts
+
+      - name: Run mcp tools differential test
+        run: npm test -- --run tests/mcp-tools-differential.test.ts
 
       - name: Run workspace differential test
         run: npm test -- --run tests/workspace-differential.test.ts
