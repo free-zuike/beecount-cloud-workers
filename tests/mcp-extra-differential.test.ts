@@ -9,7 +9,7 @@
  *   capability: get_operation / retry_operation / list_operations / list_changes
  *   file:       read_attachment / export_transactions
  *   rule:       apply_classification_rule / execute_classification_preview / run_due_recurring_rules
- *   workflow:   preview_import（纯 dry-run）
+ *   workflow:   list_workflow_records（只读）
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -23,7 +23,7 @@ import { readAttachment, exportTransactions, setAttachmentBytesSource } from '..
 import {
   applyClassificationRule, executeClassificationPreview, runDueRecurringRules,
 } from '../src/mcp/rule-tools';
-import { previewImport } from '../src/mcp/workflow-tools';
+import { listWorkflowRecords } from '../src/mcp/workflow-tools';
 
 const GOLDEN_PATH = join(process.cwd(), 'tests/fixtures/upstream-mcp-extra-golden.json');
 
@@ -40,7 +40,7 @@ const TOOL_FNS: Record<string, (c: ReturnType<typeof mcpCtx>, args: Record<strin
   apply_classification_rule: applyClassificationRule as never,
   execute_classification_preview: executeClassificationPreview as never,
   run_due_recurring_rules: runDueRecurringRules as never,
-  preview_import: previewImport as never,
+  list_workflow_records: listWorkflowRecords as never,
 };
 
 /**

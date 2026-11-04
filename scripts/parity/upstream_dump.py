@@ -341,12 +341,11 @@ def main(out_path: str) -> int:
     #   capability: get_operation / retry_operation / list_operations / list_changes
     #   file:       read_attachment / export_transactions
     #   rule:       apply_classification_rule / execute_classification_preview / run_due_recurring_rules
-    #   workflow:   preview_import（纯 dry-run，不写交易）
+    #   workflow:   list_workflow_records（只读，不污染写路径）
     # 排除两个依赖外部 LLM 的工具：parse_receipt / preview_text_transactions。
     try:
         import inspect as _inspect
-        from src.mcp import workflow_tools as _wt  # preview_import / ImportCandidate / SourceInput
-        from src.mcp.schemas import BatchTransactionItem
+        from src.mcp import workflow_tools as _wt  # list_workflow_records 等
 
         def _call_extra(fn, *a, **kw):
             if _inspect.iscoroutinefunction(fn):
@@ -378,13 +377,8 @@ def main(out_path: str) -> int:
             ("export_transactions", {"ledger_id": "L1"}),
             # 周期调度：种子无 active 周期规则 → 空 results（与时间无关，确定性）
             ("run_due_recurring_rules", {"ledger_id": "L1"}),
-            # 导入预览 dry-run：构造 pydantic 候选（上游要求 ImportCandidate，不能直接传 dict）
-            ("preview_import", {"ledger_id": "L1", "time_zone": "Asia/Shanghai", "candidates": [
-                _wt.ImportCandidate(
-                    transaction=BatchTransactionItem(amount=12.5, tx_type="expense", happened_at="2026-05-13",
-                                                    note="预览导入咖啡", category_id="c1", account_id="a1"),
-                    sources=[_wt.SourceInput(source_system="manual", source_id="seed-1")],
-                )]}),
+            # 工作流记录：只读，种子无记录 → 空集合（且不会污染写路径 scenario 的 import_plan/checkpoint 查询）
+            ("list_workflow_records", {"ledger_id": "L1", "kind": "import"}),
             # 错误路径：无前置状态即可确定性校验（本地与上游都报错，消息文本一致）
             #   apply_classification_rule 上游缺少省参数 expected_revision，必须显式传入
             ("get_operation", {"operation_id": "nope"}),
