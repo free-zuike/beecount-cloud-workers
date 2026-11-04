@@ -52,6 +52,9 @@ on:
       - 'src/routes/workspace.ts'
       - 'tests/workspace-differential.test.ts'
       - 'tests/workspace-write-differential.test.ts'
+      - 'tests/preview-import-differential.test.ts'
+      - 'tests/mcp-calls-differential.test.ts'
+      - 'tests/csv-export-differential.test.ts'
       - '.github/workflows/parity.yml'
 
 concurrency:
@@ -213,6 +216,15 @@ jobs:
 
       - name: Run workspace-write differential test
         run: npm test -- --run tests/workspace-write-differential.test.ts
+
+      - name: Run preview_import differential test
+        run: npm test -- --run tests/preview-import-differential.test.ts
+
+      - name: Run mcp_calls differential test
+        run: npm test -- --run tests/mcp-calls-differential.test.ts
+
+      - name: Run csv export differential test
+        run: npm test -- --run tests/csv-export-differential.test.ts
 
       - name: Job summary
         if: always()

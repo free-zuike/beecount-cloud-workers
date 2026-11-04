@@ -9,7 +9,7 @@ import { createAccessToken } from '../src/auth';
 import { createRouteDb, insertUser, insertPat, insertCallLog, withAuth, ROUTE_JWT_SECRET } from './helpers/route-harness';
 
 function makeApp(db: D1Database): Hono {
-  const app = new Hono<{ Bindings: any; Variables: { userId: string } }>();
+  const app = new Hono();
   withAuth(app);
   app.route('/api/v1/mcp-calls', mcpCallsRouter);
   return app;

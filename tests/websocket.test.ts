@@ -10,7 +10,7 @@ import { createAccessToken } from '../src/auth';
 import { createRouteDb, insertUser, ROUTE_JWT_SECRET } from './helpers/route-harness';
 
 function makeApp(db: D1Database): Hono {
-  const app = new Hono<{ Bindings: any }>();
+  const app = new Hono();
   app.route('/ws', wsRouter);
   return app;
 }

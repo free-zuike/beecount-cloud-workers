@@ -77,7 +77,7 @@ describe.skipIf(!hasGolden)('csv 导出 vs 上游 golden', () => {
     it(c.name, async () => {
       const h = makeHarness();
       await seed(h);
-      const app = buildRouterApp(workspaceRouter, '/api/v1/read/workspace', h.db);
+      const app = buildRouterApp(workspaceRouter as any, '/api/v1/read/workspace', h.db);
       const res = await app.request(
         '/api/v1/read/workspace/transactions.csv?tx_ids=t1&tx_ids=t3',
         { headers: { 'X-Test-User': 'u1' } },
