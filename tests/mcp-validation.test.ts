@@ -123,14 +123,14 @@ describe('MCP 参数校验（对齐上游 pydantic）', () => {
 
   it('save_review_item：question 1..4000、transaction_ids <= 200、status 枚举', async () => {
     const c = setup();
-    await expect(saveReviewItem(c, { ledger_id: 'L1', question: '' }))
+    await expect(saveReviewItem(c, { ledger_id: 'L1', data: { question: '' } }))
       .rejects.toThrow(/question must be at least 1/);
-    await expect(saveReviewItem(c, { ledger_id: 'L1', question: 'q'.repeat(4001) }))
+    await expect(saveReviewItem(c, { ledger_id: 'L1', data: { question: 'q'.repeat(4001) } }))
       .rejects.toThrow(/question must be at most 4000/);
     await expect(
-      saveReviewItem(c, { ledger_id: 'L1', question: 'q', transaction_ids: Array.from({ length: 201 }, (_, i) => `t${i}`) }),
+      saveReviewItem(c, { ledger_id: 'L1', data: { question: 'q', transaction_ids: Array.from({ length: 201 }, (_, i) => `t${i}`) } }),
     ).rejects.toThrow(/transaction_ids accepts at most 200/);
-    await expect(saveReviewItem(c, { ledger_id: 'L1', question: 'q', status: 'closed' as never }))
+    await expect(saveReviewItem(c, { ledger_id: 'L1', data: { question: 'q', status: 'closed' as never } }))
       .rejects.toThrow(/status must be one of/);
   });
 });

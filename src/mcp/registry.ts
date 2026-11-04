@@ -130,7 +130,7 @@ export const REGISTERED_TOOLS: RegisteredTool[] = tools([
   {
     name: 'get_net_worth_history', scope: 'read',
     description: 'Monthly net-worth series per currency (missing conversion rates reported); base_currency optional.',
-    inputSchema: { ...obj, properties: { ledger_id: { type: 'string' }, base_currency: { type: 'string' }, time_zone: { type: 'string' } } },
+    inputSchema: { ...obj, properties: { ledger_id: { type: 'string' }, base_currency: { type: 'string' }, time_zone: { type: 'string' }, tz_offset_minutes: { type: 'number' } } },
     handler: (c, a) => getNetWorthHistory(c, a as never),
   },
   {
@@ -206,13 +206,13 @@ export const REGISTERED_TOOLS: RegisteredTool[] = tools([
   {
     name: 'save_review_item', scope: 'write',
     description: 'Save a question, related transaction IDs, user answer and resolution state so another Agent can continue. Updates require record_id + expected_revision.',
-    inputSchema: { ...obj, properties: { ledger_id: { type: 'string' }, question: { type: 'string' }, transaction_ids: { type: 'array', items: { type: 'string' } }, answer: { type: 'string' }, status: { type: 'string', enum: ['open', 'answered', 'resolved', 'dismissed'] }, record_id: { type: 'string' }, expected_revision: { type: 'number' } }, required: ['ledger_id', 'question'] },
+    inputSchema: { ...obj, properties: { ledger_id: { type: 'string' }, data: { type: 'object', description: 'Review item payload (question/transaction_ids/answer/status)', properties: { question: { type: 'string', minLength: 1, maxLength: 4000 }, transaction_ids: { type: 'array', items: { type: 'string' }, maxItems: 200 }, answer: { type: 'string', maxLength: 8000 }, status: { type: 'string', enum: ['open', 'answered', 'resolved', 'dismissed'] } }, required: ['question'] }, record_id: { type: 'string' }, expected_revision: { type: 'number' } }, required: ['ledger_id', 'data'] },
     handler: (c, a) => saveReviewItem(c, a as never),
   },
   {
     name: 'save_classification_rule', scope: 'write',
     description: 'Save a versioned categorization rule (note_contains/account/min-max amount → category). Confirmed rules require explicit confirm=true; inferred rules are never applied automatically.',
-    inputSchema: { ...obj, properties: { ledger_id: { type: 'string' }, name: { type: 'string' }, note_contains: { type: 'string' }, account_id: { type: 'string' }, tx_type: { type: 'string', enum: ['income', 'expense'] }, min_amount: { type: 'number' }, max_amount: { type: 'number' }, category_id: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, except_sync_ids: { type: 'array', items: { type: 'string' } }, enabled: { type: 'boolean' }, confirmed: { type: 'boolean' }, record_id: { type: 'string' }, expected_revision: { type: 'number' }, confirm: { type: 'boolean' } }, required: ['ledger_id', 'name', 'category_id'] },
+    inputSchema: { ...obj, properties: { ledger_id: { type: 'string' }, data: { type: 'object', description: 'Classification rule payload (name/note_contains/account_id/tx_type/min_amount/max_amount/category_id/tags/except_sync_ids/enabled/confirmed)', properties: { name: { type: 'string', minLength: 1, maxLength: 255 }, note_contains: { type: 'string', maxLength: 500 }, account_id: { type: 'string' }, tx_type: { type: 'string', enum: ['income', 'expense'] }, min_amount: { type: 'number', minimum: 0 }, max_amount: { type: 'number', minimum: 0 }, category_id: { type: 'string', minLength: 1 }, tags: { type: 'array', items: { type: 'string' } }, except_sync_ids: { type: 'array', items: { type: 'string' }, maxItems: 1000 }, enabled: { type: 'boolean' }, confirmed: { type: 'boolean' } }, required: ['name', 'category_id'] }, record_id: { type: 'string' }, expected_revision: { type: 'number' }, confirm: { type: 'boolean' } }, required: ['ledger_id', 'data'] },
     handler: (c, a) => saveClassificationRule(c, a as never),
   },
   {

@@ -152,13 +152,13 @@ describe('MCP workflows（移植上游 test_mcp_workflows.py）', () => {
     );
     expect(saved.kind).toBe('checkpoint');
 
-    const review = asObj<{ id: string; revision: number }>(await rules.saveReviewItem(ctx(), { ledger_id: 'L1', question: 'Which receipt?' }));
+    const review = asObj<{ id: string; revision: number }>(await rules.saveReviewItem(ctx(), { ledger_id: 'L1', data: { question: 'Which receipt?' } }));
     const changed = asObj<{ revision: number }>(await rules.saveReviewItem(ctx(), {
-      ledger_id: 'L1', question: 'Which receipt?', answer: 'Confirmed by user', status: 'answered',
+      ledger_id: 'L1', data: { question: 'Which receipt?', answer: 'Confirmed by user', status: 'answered' },
       record_id: review.id, expected_revision: review.revision,
     }));
     expect(changed.revision).toBe(2);
-    await expect(rules.saveReviewItem(ctx(), { ledger_id: 'L1', question: 'stale', record_id: review.id, expected_revision: review.revision }))
+    await expect(rules.saveReviewItem(ctx(), { ledger_id: 'L1', data: { question: 'stale' }, record_id: review.id, expected_revision: review.revision }))
       .rejects.toThrow(/REVISION_CONFLICT/);
 
     registerUser(h, 'u2', 'stranger@example.com');
@@ -308,7 +308,7 @@ describe('MCP workflows（移植上游 test_mcp_workflows.py）', () => {
     const cid = createdCategory.sync_ids[0];
     const tx = asObj<{ sync_id: string }>(await createTransaction(ctx(), { ledger_id: 'L1', amount: 9, note: 'Coffee receipt' }));
     const saved = asObj<{ id: string; revision: number }>(await rules.saveClassificationRule(ctx(), {
-      ledger_id: 'L1', name: 'Coffee mapping', note_contains: 'Coffee', category_id: cid, confirmed: true, confirm: true,
+      ledger_id: 'L1', data: { name: 'Coffee mapping', note_contains: 'Coffee', category_id: cid, confirmed: true }, confirm: true,
     }));
     const preview = asObj<{ preview_id: string; items: Array<{ before: { category_id: string | null } }> }>(
       await rules.applyClassificationRule(ctx(), { rule_id: saved.id, expected_revision: saved.revision }),

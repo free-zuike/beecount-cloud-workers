@@ -325,13 +325,13 @@ describe.skipIf(!hasGolden)('MCP 写路径差分（对上游 scenario）', () =>
 
     // 分类规则 / 复核项：确认门控 + 普通创建
     await run('save_classification_rule_noconf', () => saveClassificationRule(c, {
-      ledger_id: 'L1', name: '咖啡分类', category_id: 'c1', note_contains: '星巴克', confirmed: true, confirm: false,
+      ledger_id: 'L1', data: { name: '咖啡分类', category_id: 'c1', note_contains: '星巴克', confirmed: true }, confirm: false,
     }));
     await run('save_classification_rule_create', () => saveClassificationRule(c, {
-      ledger_id: 'L1', name: '餐饮自动归类', category_id: 'c1', note_contains: '午餐',
+      ledger_id: 'L1', data: { name: '餐饮自动归类', category_id: 'c1', note_contains: '午餐' },
     }));
     await run('save_review_item_create', () => saveReviewItem(c, {
-      ledger_id: 'L1', question: '这笔交易属于哪个分类？', transaction_ids: ['t1'],
+      ledger_id: 'L1', data: { question: '这笔交易属于哪个分类？', transaction_ids: ['t1'] },
     }));
 
     // 顺序即语义：这一步必须在导入**之前**跑，否则会把导入写入的 2 笔算进来

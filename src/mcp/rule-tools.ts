@@ -54,15 +54,15 @@ export interface RecurringRule {
 
 export async function saveReviewItem(
   c: McpContext,
-  args: { ledger_id: string; question: string; transaction_ids?: string[]; answer?: string | null; status?: 'open' | 'answered' | 'resolved' | 'dismissed'; record_id?: string | null; expected_revision?: number | null },
+  args: { ledger_id: string; data: ReviewItem; record_id?: string | null; expected_revision?: number | null },
 ): Promise<Record<string, unknown>> {
   // 对齐上游 ReviewItem：question 1..4000、transaction_ids ≤ 200、answer ≤ 8000、status 枚举
-  optionalString(args.question, 'question', { minLength: 1, maxLength: 4000 });
-  optionalString(args.answer, 'answer', { maxLength: 8000 });
-  enumValue(args.status, ['open', 'answered', 'resolved', 'dismissed'] as const, 'status');
-  maxItems(args.transaction_ids, 200, 'transaction_ids');
+  optionalString(args.data.question, 'data.question', { minLength: 1, maxLength: 4000 });
+  optionalString(args.data.answer, 'data.answer', { maxLength: 8000 });
+  enumValue(args.data.status, ['open', 'answered', 'resolved', 'dismissed'] as const, 'data.status');
+  maxItems(args.data.transaction_ids, 200, 'data.transaction_ids');
   const ledger = await requireLedger(c, args.ledger_id, { write: true });
-  const ids = args.transaction_ids ?? [];
+  const ids = args.data.transaction_ids ?? [];
   if (ids.length > 0) {
     const placeholders = ids.map(() => '?').join(',');
     const rows = await c.db.prepare(
@@ -74,44 +74,45 @@ export async function saveReviewItem(
     }
   }
   const data: Record<string, unknown> = {
-    question: args.question,
+    question: args.data.question,
     transaction_ids: ids,
-    answer: args.answer ?? null,
-    status: args.status ?? 'open',
+    answer: args.data.answer ?? null,
+    status: args.data.status ?? 'open',
   };
   return saveRecord(c, ledger, {
     kind: 'review_item',
     data,
     record_id: args.record_id ?? null,
     expected_revision: args.expected_revision ?? null,
-    status: args.status ?? 'open',
+    status: args.data.status ?? 'open',
   });
 }
 
 export async function saveClassificationRule(
   c: McpContext,
-  args: { ledger_id: string; name: string; note_contains?: string | null; account_id?: string | null; tx_type?: 'income' | 'expense'; min_amount?: number | null; max_amount?: number | null; category_id: string; tags?: string[] | null; except_sync_ids?: string[]; enabled?: boolean; confirmed?: boolean; record_id?: string | null; expected_revision?: number | null; confirm?: boolean },
+  args: { ledger_id: string; data: ClassificationRule; record_id?: string | null; expected_revision?: number | null; confirm?: boolean },
 ): Promise<Record<string, unknown>> {
+  const r = args.data;
   // 对齐上游 ClassificationRule：name 1..255、note_contains ≤500、金额 ≥0、
   // except_sync_ids ≤1000、tx_type 枚举
-  optionalString(args.name, 'name', { minLength: 1, maxLength: 255 });
-  optionalString(args.note_contains, 'note_contains', { maxLength: 500 });
-  optionalNumber(args.min_amount, 'min_amount', { ge: 0 });
-  optionalNumber(args.max_amount, 'max_amount', { ge: 0 });
-  maxItems(args.except_sync_ids, 1000, 'except_sync_ids');
-  enumValue(args.tx_type, ['income', 'expense'] as const, 'tx_type');
+  optionalString(r.name, 'data.name', { minLength: 1, maxLength: 255 });
+  optionalString(r.note_contains, 'data.note_contains', { maxLength: 500 });
+  optionalNumber(r.min_amount, 'data.min_amount', { ge: 0 });
+  optionalNumber(r.max_amount, 'data.max_amount', { ge: 0 });
+  maxItems(r.except_sync_ids, 1000, 'data.except_sync_ids');
+  enumValue(r.tx_type, ['income', 'expense'] as const, 'data.tx_type');
   const rule: ClassificationRule = {
-    name: args.name,
-    note_contains: args.note_contains ?? null,
-    account_id: args.account_id ?? null,
-    tx_type: args.tx_type ?? 'expense',
-    min_amount: args.min_amount ?? null,
-    max_amount: args.max_amount ?? null,
-    category_id: args.category_id,
-    tags: args.tags ?? null,
-    except_sync_ids: args.except_sync_ids ?? [],
-    enabled: args.enabled ?? true,
-    confirmed: args.confirmed ?? false,
+    name: r.name,
+    note_contains: r.note_contains ?? null,
+    account_id: r.account_id ?? null,
+    tx_type: r.tx_type ?? 'expense',
+    min_amount: r.min_amount ?? null,
+    max_amount: r.max_amount ?? null,
+    category_id: r.category_id,
+    tags: r.tags ?? null,
+    except_sync_ids: r.except_sync_ids ?? [],
+    enabled: r.enabled ?? true,
+    confirmed: r.confirmed ?? false,
   };
   if (rule.confirmed && !args.confirm) return { status: 'confirmation_required' };
   if (!rule.note_contains && !rule.account_id && (rule.min_amount ?? null) === null && (rule.max_amount ?? null) === null) {
