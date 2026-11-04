@@ -1695,6 +1695,160 @@ def main(out_path: str) -> int:
         print(f"[warn] admin_backup golden 跳过：{type(exc).__name__}: {exc}")
         traceback.print_exc()
 
+    # ---------------- preview_import golden（MCP preview_import，独立库避免污染写路径 golden）----------------
+    # 用独立库(make_db)+ seed_scenario 保证 import_plan 不泄漏进主 golden 的 list_workflow_records。
+    # 直接调 src.mcp.workflow_tools.preview_import（绕过 MCP transport）。
+    # 候选用 allow_similar=True → ready=True 的稳定形态；只预览不落交易。
+    # scrub：记录元数据(id/ledger_internal_id/revision/next_due_at/created_at/updated_at)、
+    #   data.base_revision、item.existing_sync_id、item.similar(近似提示非契约)、
+    #   normalized.happened_at 的时区尾差(Z / +00:00)。
+    try:
+        from src.mcp import workflow_tools as _pi_rt
+
+        _pi_db = make_db("/tmp/parity-preview-import.db")
+        _pi_user = _pi_db.get(User, "u1")
+        _pi_candidates = [{
+            "transaction": {
+                "amount": 12.5, "tx_type": "expense",
+                "happened_at": "2026-05-16T03:30:00+00:00",
+                "category_id": "c1", "account_id": "a1", "note": "午饭",
+            },
+            "sources": [{"source_system": "bank", "source_id": "pi-001"}],
+            "action": "create", "allow_similar": True,
+        }]
+        _pi_res = asyncio.run(_pi_rt.preview_import(_pi_user, "L1", _pi_candidates))
+
+        def _scrub_ha_pi(v):
+            if isinstance(v, str):
+                return v.replace("Z", "").replace("+00:00", "")
+            return v
+
+        def _scrub_pi(obj):
+            if hasattr(obj, "model_dump"):
+                obj = obj.model_dump(mode="json")
+            if isinstance(obj, list):
+                return [_scrub_pi(x) for x in obj]
+            if isinstance(obj, dict):
+                out = {}
+                for k, v in obj.items():
+                    if k in ("id", "ledger_internal_id", "revision", "next_due_at",
+                             "created_at", "updated_at", "base_revision",
+                             "existing_sync_id", "similar"):
+                        continue
+                    if k == "happened_at":
+                        out[k] = _scrub_ha_pi(v)
+                    elif k == "items":
+                        out[k] = [_scrub_pi(it) for it in v]
+                    elif k == "normalized" and isinstance(v, dict):
+                        out[k] = {nk: (_scrub_ha_pi(nv) if nk == "happened_at" else nv)
+                                  for nk, nv in v.items()}
+                    else:
+                        out[k] = _scrub_pi(v)
+                return out
+            return obj
+
+        _pi_golden = {"cases": [{"name": "preview_import", "status": 200,
+                                 "result": _scrub_pi(_pi_res)}]}
+        _pi_path = os.path.join(os.path.dirname(os.path.abspath(out_path)),
+                                "upstream-preview-import-golden.json")
+        with open(_pi_path, "w", encoding="utf-8") as _pifh:
+            json.dump(_pi_golden, _pifh, ensure_ascii=False, indent=2, default=str)
+            _pifh.write("\n")
+        print(f"wrote 1 preview_import case -> {_pi_path}")
+        _pi_db.close()
+    except Exception as exc:
+        import traceback
+        print(f"[warn] preview_import golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
+    # ---------------- mcp_calls golden（HTTP /api/v1/mcp-calls，只读聚合）----------------
+    # 直接调 src.routers.mcp_calls.list_mcp_calls（绕过 JWT/依赖）。先插入
+    # PersonalAccessToken + 两条 MCPCallLog 造数据。两条用不同时刻保证 called_at DESC 稳定。
+    # scrub：id / called_at(时区尾差) / duration_ms(运行时抖动，parity-compare 亦视为易变)。
+    try:
+        from src.routers import mcp_calls as _mc_rt
+        from src.models import MCPCallLog, PersonalAccessToken
+
+        _mc_db = make_db("/tmp/parity-mcp-calls.db")
+        _mc_user = _mc_db.get(User, "u1")
+        insert(_mc_db, PersonalAccessToken, id="pat-1", user_id="u1", name="My Client",
+               token_hash="x" * 64, prefix="pat_", scopes_json="[\"mcp:read\"]")
+        insert(_mc_db, MCPCallLog, user_id="u1", pat_id="pat-1", pat_prefix="pat_", pat_name="Old",
+               tool_name="search_transactions", status="ok", error_message=None, args_summary="{}",
+               duration_ms=12, client_ip="1.2.3.4",
+               called_at=datetime(2026, 5, 20, 3, 0, 0, tzinfo=timezone.utc))
+        insert(_mc_db, MCPCallLog, user_id="u1", pat_id=None, pat_prefix=None, pat_name=None,
+               tool_name="get_transaction", status="error", error_message="boom", args_summary="{}",
+               duration_ms=5, client_ip="1.2.3.4",
+               called_at=datetime(2026, 5, 20, 4, 0, 0, tzinfo=timezone.utc))
+        _mc_res = _mc_rt.list_mcp_calls(limit=50, offset=0, tool_name=None, status=None, pat_id=None,
+                                        current_user=_mc_user, db=_mc_db)
+
+        def _dump_mc(obj):
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump(mode="json")
+            if isinstance(obj, list):
+                return [_dump_mc(x) for x in obj]
+            if isinstance(obj, dict):
+                return {k: _dump_mc(v) for k, v in obj.items()}
+            return obj
+
+        def _scrub_mc(v):
+            if isinstance(v, list):
+                return [_scrub_mc(x) for x in v]
+            if isinstance(v, dict):
+                return {k: _scrub_mc(x) for k, x in v.items()
+                        if k not in ("id", "called_at", "duration_ms")}
+            return v
+
+        _mc_golden = {"cases": [{"name": "list_mcp_calls", "status": 200,
+                                 "result": _scrub_mc(_dump_mc(_mc_res))}]}
+        _mc_path = os.path.join(os.path.dirname(os.path.abspath(out_path)),
+                                "upstream-mcp-calls-golden.json")
+        with open(_mc_path, "w", encoding="utf-8") as _mcfh:
+            json.dump(_mc_golden, _mcfh, ensure_ascii=False, indent=2, default=str)
+            _mcfh.write("\n")
+        print(f"wrote 1 mcp_calls case -> {_mc_path}")
+        _mc_db.close()
+    except Exception as exc:
+        import traceback
+        print(f"[warn] mcp_calls golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
+    # ---------------- csv export golden（HTTP /workspace/transactions.csv，文本体）----------------
+    # 直接调 src.routers.read.workspace.export_workspace_transactions_csv（绕过 transport）。
+    # 用 tx_ids 限定 2 条确定性交易(t1/t3)降低格式面。流式响应需迭代 body_iterator 取全文。
+    # 文本比对由 workers 侧差分测试负责（去 BOM + 按列名对齐 + 剥 workers 独有 currency 列 +
+    # amount 规范为浮点串），避免上游 11 列 / workers 12 列(currency)的格式分歧造成假失败。
+    try:
+        from src.routers.read import workspace as _ws_rt
+
+        _csv_db = make_db("/tmp/parity-csv.db")
+        _csv_user = _csv_db.get(User, "u1")
+
+        async def _gen_csv():
+            _resp = _ws_rt.export_workspace_transactions_csv(
+                ledger_id="L1", tx_ids=["t1", "t3"], tz_offset_minutes=0, lang=None,
+                _scopes=set(), current_user=_csv_user, db=_csv_db)
+            _chunks = []
+            async for _ch in _resp.body_iterator:
+                _chunks.append(_ch.decode("utf-8") if isinstance(_ch, bytes) else _ch)
+            return "".join(_chunks)
+
+        _csv_text = asyncio.run(_gen_csv())
+        _csv_golden = {"cases": [{"name": "export_csv", "status": 200, "result": _csv_text}]}
+        _csv_path = os.path.join(os.path.dirname(os.path.abspath(out_path)),
+                                "upstream-csv-export-golden.json")
+        with open(_csv_path, "w", encoding="utf-8") as _csvfh:
+            json.dump(_csv_golden, _csvfh, ensure_ascii=False, indent=2, default=str)
+            _csvfh.write("\n")
+        print(f"wrote 1 csv export case -> {_csv_path}")
+        _csv_db.close()
+    except Exception as exc:
+        import traceback
+        print(f"[warn] csv export golden 跳过：{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
     # ---------------- ai golden（HTTP /api/v1/ai，LLM mock）----------------
     # test_provider(text) 直接调上游函数（绕过 JWT/依赖），current_user 传 u1。
     # LLM 调用点 _test_text 被 monkeypatch 成固定返回值（pytest 同款「LLM mock」），golden 确定性。
