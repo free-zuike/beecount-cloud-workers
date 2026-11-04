@@ -333,6 +333,84 @@ def main(out_path: str) -> int:
             golden["cases"].append({"tool": tool, "args": args,
                                     "error": f"{type(exc).__name__}: {exc}"})
 
+    # ---------------- MCP 额外工具 golden（mcp-differential 未覆盖的 10 个工具）----------------
+    # 必须放在「写路径 scenario」之前：上游 list_operations / list_changes / run_due_recurring_rules
+    # / export_transactions 实际读的是全局库（忽略传进来的独立 db），写路径会往里灌操作/变更/规则，
+    # 放到后面会污染这里的读数。此处全局库只有种子数据，与本地 harness 的 seed 对应。
+    # 覆盖 mcp-differential 的 TOOL_FNS / 写路径 scenario 之外的读/查询工具：
+    #   capability: get_operation / retry_operation / list_operations / list_changes
+    #   file:       read_attachment / export_transactions
+    #   rule:       apply_classification_rule / execute_classification_preview / run_due_recurring_rules
+    #   workflow:   preview_import（纯 dry-run，不写交易）
+    # 排除两个依赖外部 LLM 的工具：parse_receipt / preview_text_transactions。
+    try:
+        import inspect as _inspect
+        from src.mcp import workflow_tools as _wt  # preview_import / ImportCandidate / SourceInput
+        from src.mcp.schemas import BatchTransactionItem
+
+        def _call_extra(fn, *a, **kw):
+            if _inspect.iscoroutinefunction(fn):
+                return asyncio.run(fn(*a, **kw))
+            return fn(*a, **kw)
+
+        def to_jsonable(v):
+            # 上游 MCP 工具返回 CallToolResult / TextContent 等 pydantic 模型；转成普通 dict 并剔除
+            # pydantic 包装字段（annotations/meta/structuredContent/isError），对齐本地直接返回的
+            # {"content":[...]} 结构。
+            if hasattr(v, "model_dump"):
+                v = v.model_dump()
+            if isinstance(v, dict):
+                return {k: to_jsonable(val) for k, val in v.items()
+                        if k not in ("annotations", "meta", "structuredContent", "isError")}
+            if isinstance(v, (list, tuple)):
+                return [to_jsonable(x) for x in v]
+            return v
+
+        extra_golden = {"now": NOW.isoformat(), "cases": []}
+        extra_calls = [
+            # 读路径（直接对种子，确定性）：无前置写入 → 空集合/空结果形状
+            ("list_operations", {"ledger_id": "L1"}),
+            ("list_operations", {"ledger_id": "L3"}),
+            ("list_changes", {"ledger_id": "L1"}),
+            # 附件字节：seed.csv（f1），下游测试侧用相同 IMPORT_BYTES 注入字节源
+            ("read_attachment", {"file_id": "f1"}),
+            # CSV 导出：返回 export_id / row_count / revision / sha256 / resource_uri（revision 易变已剥）
+            ("export_transactions", {"ledger_id": "L1"}),
+            # 周期调度：种子无 active 周期规则 → 空 results（与时间无关，确定性）
+            ("run_due_recurring_rules", {"ledger_id": "L1"}),
+            # 导入预览 dry-run：构造 pydantic 候选（上游要求 ImportCandidate，不能直接传 dict）
+            ("preview_import", {"ledger_id": "L1", "time_zone": "Asia/Shanghai", "candidates": [
+                _wt.ImportCandidate(
+                    transaction=BatchTransactionItem(amount=12.5, tx_type="expense", happened_at="2026-05-13",
+                                                    note="预览导入咖啡", category_id="c1", account_id="a1"),
+                    sources=[_wt.SourceInput(source_system="manual", source_id="seed-1")],
+                )]}),
+            # 错误路径：无前置状态即可确定性校验（本地与上游都报错，消息文本一致）
+            #   apply_classification_rule 上游缺少省参数 expected_revision，必须显式传入
+            ("get_operation", {"operation_id": "nope"}),
+            ("retry_operation", {"operation_id": "nope"}),
+            ("apply_classification_rule", {"rule_id": "nope", "expected_revision": 1}),
+            ("execute_classification_preview", {"preview_id": "nope"}),
+        ]
+        for tool, args in extra_calls:
+            fn = getattr(read_tools, tool, None) or getattr(capability_tools, tool, None) \
+                or getattr(file_tools, tool, None) or getattr(analysis_tools, tool, None) \
+                or getattr(_wt, tool, None) or getattr(rule_tools, tool, None)
+            try:
+                raw = _call_extra(fn, owner, **args)
+                result = normalize(to_jsonable(raw))
+                extra_golden["cases"].append({"tool": tool, "args": args, "result": result})
+            except Exception as exc:  # 上游报错本身也是一条契约
+                extra_golden["cases"].append({"tool": tool, "args": args,
+                                              "error": f"{type(exc).__name__}: {exc}"})
+        extra_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-mcp-extra-golden.json")
+        with open(extra_path, "w", encoding="utf-8") as efh:
+            json.dump(extra_golden, efh, ensure_ascii=False, indent=2, default=str)
+            efh.write("\n")
+        print(f"wrote {len(extra_golden['cases'])} mcp-extra cases -> {extra_path}")
+    except Exception as exc:
+        print(f"[warn] mcp-extra golden 跳过：{type(exc).__name__}: {exc}")
+
     # ---------------- 写路径场景：写入 → 回读 → 更新 → 删除 ----------------
     # 上游写工具通过 in-process ASGI self-call 打自己的 write router，
     # 所以这里要先把 src.main:app 拉起来（get_internal_client 会 late-bind）。
@@ -644,62 +722,7 @@ def main(out_path: str) -> int:
 
     golden["scenario"] = scenario
 
-    # ---------------- MCP 额外工具 golden（mcp-differential 未覆盖的 10 个工具）----------------
-    # 覆盖 mcp-differential 的 TOOL_FNS / 写路径 scenario 之外的读/查询工具：
-    #   capability: get_operation / retry_operation / list_operations / list_changes
-    #   file:       read_attachment / export_transactions
-    #   rule:       apply_classification_rule / execute_classification_preview / run_due_recurring_rules
-    #   workflow:   preview_import（纯 dry-run，不写交易）
-    # 排除两个依赖外部 LLM 的工具：parse_receipt / preview_text_transactions。
-    # 独立 DB（make_db）生成，避免写路径 scenario 的写入污染（operation / state_record 等）。
-    # 上游 read 工具部分为 async，统一用 _call 自适应（与写路径 scenario 一致）。
-    try:
-        from src.mcp import workflow_tools as _wt  # preview_import 在这里
-
-        extra_db = make_db("/tmp/parity-mcp-extra.db")
-        extra_owner = extra_db.get(User, "u1")
-        extra_golden = {"now": NOW.isoformat(), "cases": []}
-        extra_calls = [
-            # 读路径（直接对种子，确定性）：list_operations / list_changes 无前置写入 → 空集合形状
-            ("list_operations", {"ledger_id": "L1"}),
-            ("list_operations", {"ledger_id": "L3"}),
-            ("list_changes", {"ledger_id": "L1"}),
-            # 附件字节：seed.csv（f1），下游测试侧用相同 IMPORT_BYTES 注入字节源
-            ("read_attachment", {"file_id": "f1"}),
-            # CSV 导出：返回 export_id / row_count / revision / sha256 / resource_uri（revision 易变已剥）
-            ("export_transactions", {"ledger_id": "L1"}),
-            # 周期调度：种子无 active 周期规则 → 空 results（与时间无关，确定性）
-            ("run_due_recurring_rules", {"ledger_id": "L1"}),
-            # 导入预览 dry-run：固定 candidates，确定性
-            ("preview_import", {"ledger_id": "L1", "time_zone": "Asia/Shanghai", "candidates": [
-                {"transaction": {"tx_type": "expense", "amount": 12.5, "account_id": "a1",
-                                 "category_id": "c1", "happened_at": "2026-05-13",
-                                 "note": "预览导入咖啡"},
-                 "sources": [{"source_system": "manual", "source_id": "seed-1"}]}]}),
-            # 错误路径：无前置状态即可确定性校验（本地与上游都报错，消息文本一致）
-            ("get_operation", {"operation_id": "nope"}),
-            ("retry_operation", {"operation_id": "nope"}),
-            ("apply_classification_rule", {"rule_id": "nope"}),
-            ("execute_classification_preview", {"preview_id": "nope"}),
-        ]
-        for tool, args in extra_calls:
-            fn = getattr(read_tools, tool, None) or getattr(capability_tools, tool, None) \
-                or getattr(file_tools, tool, None) or getattr(analysis_tools, tool, None) \
-                or getattr(_wt, tool, None) or getattr(rule_tools, tool, None)
-            try:
-                result = normalize(_call(fn, extra_owner, **args))
-                extra_golden["cases"].append({"tool": tool, "args": args, "result": result})
-            except Exception as exc:
-                extra_golden["cases"].append({"tool": tool, "args": args,
-                                              "error": f"{type(exc).__name__}: {exc}"})
-        extra_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-mcp-extra-golden.json")
-        with open(extra_path, "w", encoding="utf-8") as efh:
-            json.dump(extra_golden, efh, ensure_ascii=False, indent=2, default=str)
-            efh.write("\n")
-        print(f"wrote {len(extra_golden['cases'])} mcp-extra cases -> {extra_path}")
-        extra_db.close()
-    except Exception as exc:
-        print(f"[warn] mcp-extra golden 跳过：{type(exc).__name__}: {exc}")
+    # （MCP 额外工具 golden 已移至「写路径 scenario」之前生成，避免被写路径污染 —— 见上方）
 
     # ---------------- REST 只读计算 golden（summary / budgets-usage / rates / gallery）--------
     # 这些上游实现分布在 routers/read/*，workers 在 routes/read.ts / summary.ts 里**独立重写**
