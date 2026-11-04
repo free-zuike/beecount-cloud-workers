@@ -7,7 +7,8 @@
  *
  * 文本体比对做结构化归一（不是逐字节）：
  *  - 去 UTF-8 BOM；
- *  - 按列名对齐，剥除 workers 独有、上游契约没有的 `currency` 列（已知格式分歧，待产品侧对齐）；
+ *  - 表头按列名对齐。历史上误认为 workers 多一列 currency，实际两边都是
+ *    12 列（含 Currency），表头全量比对已通过；下方 dropIdx 只是兼容兜底，当前不生效；
  *  - amount 规范为浮点串（容忍 38.00 / 38 这类格式差异）；
  *  - 行集合比较（容忍排序）。
  * 文件缺失时 skip（见 parity.yml 先生成再测试）。
@@ -54,7 +55,8 @@ function normalizeCsv(text: string): { headers: string[]; rows: string[] } {
   const lines = raw.split(/\r\n|\n/).filter((l) => l.length > 0);
   if (lines.length === 0) return { headers: [], rows: [] };
   const headers = parseCsvLine(lines[0]);
-  // workers 独有 currency 列：剥除（上下游列名对齐）
+  // 兼容兜底：仅当上游表头出现全小写 `currency` 列时剥除。当前两边表头都是
+  // `Currency`/`币种`，indexOf 找不到 → dropIdx=-1，12 列全量参与比对（已对齐）。
   const dropIdx = headers.indexOf('currency');
   const keep = (cells: string[]) => (dropIdx >= 0 ? cells.filter((_, i) => i !== dropIdx) : cells);
   const normHeaders = keep(headers);
