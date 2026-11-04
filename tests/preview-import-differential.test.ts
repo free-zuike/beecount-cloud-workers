@@ -30,6 +30,9 @@ const golden: { cases: PreviewCase[] } = hasGolden
 const PI_DROP = new Set([
   'id', 'ledger_internal_id', 'revision', 'next_due_at', 'created_at', 'updated_at',
   'base_revision', 'existing_sync_id', 'similar',
+  // tag_ids 是种子派生的 sync_id（跨代码库不可比），与 id/similar 同理需剥离；
+  // tags 名称（如默认 "MCP"）保留比对，以校验 workers 正确合并默认标签。
+  'tag_ids',
 ]);
 
 function scrubHa(v: Json): Json {
