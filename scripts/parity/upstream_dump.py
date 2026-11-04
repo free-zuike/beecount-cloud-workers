@@ -1709,15 +1709,20 @@ def main(out_path: str) -> int:
 
         with SessionLocal() as _pi_db:
             _pi_user = _pi_db.get(User, "u1")
-            _pi_candidates = [{
-                "transaction": {
-                    "amount": 12.5, "tx_type": "expense",
-                    "happened_at": "2026-05-16T03:30:00+00:00",
-                    "category_id": "c1", "account_id": "a1", "note": "午饭",
-                },
-                "sources": [{"source_system": "bank", "source_id": "pi-001"}],
-                "action": "create", "allow_similar": True,
-            }]
+            # preview_import 期望 list[ImportCandidate]（Pydantic 模型），dict 会被
+            # 内部 candidate.model_dump 报 AttributeError；用 ImportCandidate 构造，
+            # 嵌套 dict 由 Pydantic 自动转成 BatchTransactionItem / SourceInput。
+            _pi_candidates = [
+                _pi_rt.ImportCandidate(
+                    transaction={
+                        "amount": 12.5, "tx_type": "expense",
+                        "happened_at": "2026-05-16T03:30:00+00:00",
+                        "category_id": "c1", "account_id": "a1", "note": "午饭",
+                    },
+                    sources=[{"source_system": "bank", "source_id": "pi-001"}],
+                    action="create", allow_similar=True,
+                )
+            ]
             _pi_res = asyncio.run(_pi_rt.preview_import(_pi_user, "L1", _pi_candidates))
 
         def _scrub_ha_pi(v):
@@ -1828,8 +1833,15 @@ def main(out_path: str) -> int:
         _csv_user = _csv_db.get(User, "u1")
 
         async def _gen_csv():
+            # 直接调用需显式覆盖所有 Query(default=...) 参数，否则默认值会是 Query
+            # 对象（truthy 且无 .isoformat()），导致 date_from.isoformat() 报错。
             _resp = _ws_rt.export_workspace_transactions_csv(
-                ledger_id="L1", tx_ids=["t1", "t3"], tz_offset_minutes=0, lang=None,
+                ledger_id="L1", tx_ids=["t1", "t3"],
+                user_id=None, tx_type=None, account_name=None, q=None,
+                tx_sync_id=None, tag_sync_id=None, category_sync_id=None,
+                account_sync_id=None, amount_min=None, amount_max=None,
+                date_from=None, date_to=None,
+                tz_offset_minutes=0, lang=None,
                 _scopes=set(), current_user=_csv_user, db=_csv_db)
             _chunks = []
             async for _ch in _resp.body_iterator:
