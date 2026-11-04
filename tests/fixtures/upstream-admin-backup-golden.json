@@ -1,0 +1,44 @@
+{
+  "cases": [
+    {
+      "name": "list_remotes",
+      "status": 200,
+      "result": [
+        {
+          "id": 1,
+          "name": "R2",
+          "backend_type": "s3",
+          "encrypted": false,
+          "config_summary": {
+            "provider": "Cloudflare",
+            "region": "auto",
+            "bucket": "beecount-test"
+          },
+          "last_test_at": null,
+          "last_test_ok": null,
+          "last_test_error": null
+        }
+      ]
+    },
+    {
+      "name": "list_schedules",
+      "status": 200,
+      "result": [
+        {
+          "id": 1,
+          "name": "nightly",
+          "cron_expr": "0 4 * * *",
+          "retention_days": 30,
+          "include_attachments": true,
+          "enabled": true,
+          "next_run_at": null,
+          "last_run_at": null,
+          "last_run_status": null,
+          "remote_ids": [
+            1
+          ]
+        }
+      ]
+    }
+  ]
+}
