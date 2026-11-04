@@ -291,4 +291,41 @@ describe('CSV 导出(移植上游 test_workspace_csv_export.py)', () => {
     const onlyL1 = await fetchCsv({ ledger_id: LEDGER_ID, lang: 'en' });
     expect(dataLines(await onlyL1.text()).length).toBe(4);
   });
+
+  // 上游 _is_admin()(src/routers/read/_shared.py) 恒返回 False:admin 角色只作用于
+  // /admin/* 面板,read 路由不给 admin 开"看所有用户数据"的后门。因此 is_admin + user_id
+  // 跨用户分支是死代码,user_id 参数在非 admin 路径被忽略。workers 两份 CSV 实现
+  // (workspace.ts /transactions.csv 与 csv.ts /workspace/transactions.csv) 都不能
+  // 因 admin 角色放宽账本范围 —— 这里把该安全不变量锁成回归测试。
+  it('admin 用户 + user_id 不能越权导出他人账本(两份 CSV 实现均对齐上游)', async () => {
+    seedBasic();
+    sqlite.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(USER);
+    sqlite.prepare("INSERT INTO users (id, email, password_hash) VALUES ('user-2', 'other@x.com', 'x')").run();
+    sqlite.prepare(
+      "INSERT INTO ledgers (id, user_id, external_id, name, currency) VALUES ('lg-2', 'user-2', 'lg-2', '他人账本', 'USD')"
+    ).run();
+    sqlite.prepare(
+      "INSERT INTO ledger_members (ledger_id, user_id, role, joined_at) VALUES ('lg-2', 'user-2', 'owner', '2025-01-01T00:00:00Z')"
+    ).run();
+    sqlite.prepare(
+      `INSERT INTO read_tx_projection (ledger_id, sync_id, user_id, tx_type, amount, happened_at, note,
+         account_sync_id, account_name, tx_index)
+       VALUES ('lg-2', 'tx-other', 'user-2', 'expense', 99, '2026-04-18T09:00:00Z', '他人私密交易',
+         'acc-credit', '招行', 0)`
+    ).run();
+
+    const { default: csvRouter } = await import('../src/routes/csv');
+    app.route('/api/v1/export', csvRouter);
+
+    const responses = [
+      await fetchCsv({ user_id: 'user-2', lang: 'en' }),
+      await app.request('/api/v1/export/workspace/transactions.csv?user_id=user-2&lang=en', {}, { DB: db }),
+    ];
+    for (const res of responses) {
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      expect(body).not.toContain('他人私密交易');
+      expect(body).toContain('午餐'); // 自己账本数据仍在
+    }
+  });
 });

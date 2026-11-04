@@ -301,6 +301,8 @@ workspaceRouter.get('/transactions.csv', async (c) => {
   const typeLabels = TX_TYPE_LABELS[langKey];
 
   // 账本可见性:owner / member(含共享账本),排除软删(对齐上游 _visible_workspace_ledgers)
+  // 上游 _is_admin() 恒返回 False(read 路由不给 admin 开看所有用户数据的后门),
+  // 故 is_admin + user_id 跨用户分支是死代码:始终按 current_user 过滤,忽略 user_id。
   const softDeleteCond = `NOT EXISTS (
     SELECT 1 FROM sync_changes sc
     WHERE sc.ledger_id = l.id AND sc.entity_type = 'ledger_snapshot'

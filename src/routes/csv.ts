@@ -84,6 +84,9 @@ export const TX_TYPE_LABELS: Record<string, Record<string, string>> = {
 
 const ExportQuerySchema = z.object({
   ledger_id: z.string().optional(),
+  // 上游 export_workspace_transactions_csv 声明了 user_id,但 _is_admin() 恒返回 False
+  // (read 路由不给 admin 开"看所有用户数据"的后门),非 admin 分支完全忽略 user_id。
+  // 这里保留声明仅为对齐上游契约,勿据此实现跨用户查询。
   user_id: z.string().optional(),
   tx_type: z.enum(['income', 'expense', 'transfer']).optional(),
   account_name: z.string().optional(),
@@ -115,6 +118,8 @@ csvRouter.get('/workspace/transactions.csv', zValidator('query', ExportQuerySche
 
   // 1. 查询可见账本（含共享账本，与原版 _visible_workspace_ledgers 对齐；
   //   ledgers 表无 deleted_at 列，软删用 ledger_snapshot tombstone 排除）
+  //   上游 _is_admin() 恒 False → is_admin + user_id 跨用户分支是死代码；
+  //   这里始终按 current_user 过滤，不因 admin 角色放宽账本范围。
   let ledgerQuery = `
     SELECT l.id, l.external_id, l.name, l.currency, l.user_id
     FROM ledgers l
