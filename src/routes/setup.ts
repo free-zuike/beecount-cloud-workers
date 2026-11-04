@@ -122,17 +122,32 @@ setupRouter.get('/', async (c) => {
       .prepare('SELECT * FROM system_settings WHERE id = ?')
       .bind('default')
       .first();
-    
+
+    // 健壮性：system_settings.setup_completed 可能因历史迁移（ALTER TABLE ADD COLUMN
+    // DEFAULT 0）被回填为 0、或该行缺失，导致"库里已有管理员却被判为未完成"而错误地
+    // 逼用户重新走首次启动的"创建管理员"流程。这里把"已存在管理员账户"也视为已完成。
+    let adminCount = 0;
+    try {
+      const row = await db
+        .prepare('SELECT COUNT(*) as count FROM users WHERE is_admin = 1')
+        .first<{ count: number }>();
+      adminCount = row?.count ?? 0;
+    } catch {
+      // users 表也不可用时（极早期库）忽略，退回到按 setup_completed 判定。
+    }
+
+    const settingsAny = settings as any;
+    const setupCompleted = settingsAny?.setup_completed === 1 || adminCount > 0;
+
     if (!settings) {
       return c.json({
-        setup_completed: false,
+        setup_completed: setupCompleted,
         timezone_offset: 0,
         cloud_config: null
       });
     }
     
     let cloudConfig = null;
-    const settingsAny = settings as any;
     if (settingsAny.cloud_config_json) {
       try {
         cloudConfig = JSON.parse(settingsAny.cloud_config_json);
@@ -148,7 +163,7 @@ setupRouter.get('/', async (c) => {
     }
     
     return c.json({
-      setup_completed: Boolean(settingsAny.setup_completed),
+      setup_completed: setupCompleted,
       timezone_offset: settingsAny.timezone_offset || 0,
       cloud_config: cloudConfig
     });
