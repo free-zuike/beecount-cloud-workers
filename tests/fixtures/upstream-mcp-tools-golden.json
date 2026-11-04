@@ -1,0 +1,4480 @@
+{
+  "tools": [
+    {
+      "name": "list_ledgers",
+      "description": "List all ledgers for the authenticated BeeCount user.\n\n    Returns each ledger's id (external_id), name, currency, and created_at.\n    Use the returned id when calling other tools that take ledger_id.\n    ",
+      "inputSchema": {
+        "properties": {},
+        "title": "list_ledgersArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_active_ledger",
+      "description": "Get the user's primary/default ledger.\n\n    Use this when the user doesn't specify which ledger they're talking about.\n    Returns null if the user has no ledgers.\n    ",
+      "inputSchema": {
+        "properties": {},
+        "title": "get_active_ledgerArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_transactions",
+      "description": "Query transactions with rich filters.\n\n    Args:\n        ledger_id: Optional. If omitted, uses the active ledger.\n        date_from, date_to: ISO dates (YYYY-MM-DD) or full ISO datetimes.\n        category: Exact category name match.\n        account: Exact account name match (matches account/from_account/to_account).\n        min_amount, max_amount: Filter by absolute amount.\n        q: Substring match against note.\n        limit: Max items returned (1..200, default 50).\n    ",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          },
+          "date_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date From"
+          },
+          "date_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date To"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category"
+          },
+          "account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Account"
+          },
+          "min_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Min Amount"
+          },
+          "max_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Amount"
+          },
+          "q": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Q"
+          },
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "tx_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tx Type"
+          },
+          "category_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category Id"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Account Id"
+          },
+          "tag_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tag Id"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Zone"
+          }
+        },
+        "title": "list_transactionsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_transaction",
+      "description": "Get a single transaction by its sync_id (cross-ledger lookup).",
+      "inputSchema": {
+        "properties": {
+          "sync_id": {
+            "title": "Sync Id",
+            "type": "string"
+          },
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          }
+        },
+        "required": [
+          "sync_id"
+        ],
+        "title": "get_transactionArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_categories",
+      "description": "List user's categories. kind is one of: expense, income, transfer.",
+      "inputSchema": {
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Kind"
+          },
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          }
+        },
+        "title": "list_categoriesArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_accounts",
+      "description": "List user's accounts. account_type filters by type (bank_card, credit_card, cash, ...).",
+      "inputSchema": {
+        "properties": {
+          "account_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Account Type"
+          },
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          }
+        },
+        "title": "list_accountsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_tags",
+      "description": "List all of the user's tags.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          }
+        },
+        "title": "list_tagsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_budgets",
+      "description": "List budgets for a ledger with current-month spent/remaining/percent_used.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          }
+        },
+        "title": "list_budgetsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_ledger_stats",
+      "description": "Get summary stats for a ledger (transaction/category/account/tag/budget counts).",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          }
+        },
+        "title": "get_ledger_statsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_analytics_summary",
+      "description": "Income/expense/balance plus top-10 spending categories.\n\n    Args:\n        scope: 'month' | 'year' | 'all'.\n        period: For month: 'YYYY-MM'. For year: 'YYYY'. Defaults to current.\n        ledger_id: Optional, uses active ledger if omitted.\n    ",
+      "inputSchema": {
+        "properties": {
+          "scope": {
+            "default": "month",
+            "title": "Scope",
+            "type": "string"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Period"
+          },
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          },
+          "tz_offset_minutes": {
+            "default": 0,
+            "title": "Tz Offset Minutes",
+            "type": "integer"
+          }
+        },
+        "title": "get_analytics_summaryArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "search",
+      "description": "Full-text fuzzy search across transaction notes, category names, account names.",
+      "inputSchema": {
+        "properties": {
+          "q": {
+            "title": "Q",
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "title": "searchArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "upload_attachment",
+      "description": "Upload a receipt/file to a ledger and return its file_id and SHA256.\n\n    The client reads the user's local file and sends standard Base64 bytes\n    (without a data URL prefix). A remote Cloud cannot read client file paths.\n    Prefer small receipt images; the configured attachment upload size limit\n    applies. Same bytes in the same ledger reuse the existing file_id.\n    If multiple ledgers exist, supply ledger_id. Uploading does not create a\n    transaction: pass the returned file_id to create/update_transaction's\n    ordered attachments list, using the same ledger.\n    ",
+      "inputSchema": {
+        "properties": {
+          "file_name": {
+            "title": "File Name",
+            "type": "string"
+          },
+          "content_base64": {
+            "title": "Content Base64",
+            "type": "string"
+          },
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mime Type"
+          }
+        },
+        "required": [
+          "file_name",
+          "content_base64"
+        ],
+        "title": "upload_attachmentArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "create_transaction",
+      "description": "Create one expense, income or complete transfer. Supply both from/to accounts for transfers. Prefer stable IDs. Use the same idempotency_key on retries; original times and exchange-rate snapshots are retained. native_amount is the actual settlement in ledger currency. Offset-free timestamps follow Cloud timezone; never append Z to local time. Upload attachments first, then pass ordered file IDs. Multiple ledgers require an explicit ledger_id.",
+      "inputSchema": {
+        "properties": {
+          "amount": {
+            "gt": 0,
+            "title": "Amount",
+            "type": "number"
+          },
+          "tx_type": {
+            "default": "expense",
+            "title": "Tx Type",
+            "type": "string"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category"
+          },
+          "account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Account"
+          },
+          "happened_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Happened At"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Note"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tags"
+          },
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Currency"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Zone"
+          },
+          "attachments": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Attachments"
+          },
+          "category_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category Id"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Account Id"
+          },
+          "from_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "From Account Id"
+          },
+          "to_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To Account Id"
+          },
+          "from_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "From Account"
+          },
+          "to_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To Account"
+          },
+          "native_amount": {
+            "anyOf": [
+              {
+                "gt": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Native Amount"
+          },
+          "exclude_from_stats": {
+            "default": false,
+            "title": "Exclude From Stats",
+            "type": "boolean"
+          },
+          "exclude_from_budget": {
+            "default": false,
+            "title": "Exclude From Budget",
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "amount"
+        ],
+        "title": "create_transactionArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "create_transactions",
+      "description": "Create 1..200 transactions with a durable operation ID and per-step results. Use a stable idempotency_key to retry without duplicates. Each group of at most 50 commits independently; partial failures retain completed groups. Query get_operation and retry_operation to resume. Supports complete transfers, stable dictionary IDs, currency/settlement snapshots, flags and ordered attachment IDs. Preserve source UTC offsets.",
+      "inputSchema": {
+        "$defs": {
+          "BatchTransactionItem": {
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "Positive finite amount; numeric strings are accepted",
+                "exclusiveMinimum": 0,
+                "title": "Amount",
+                "type": "number"
+              },
+              "tx_type": {
+                "default": "expense",
+                "enum": [
+                  "expense",
+                  "income",
+                  "transfer"
+                ],
+                "title": "Tx Type",
+                "type": "string"
+              },
+              "happened_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Happened At"
+              },
+              "note": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Note"
+              },
+              "category": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Category"
+              },
+              "account": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Account"
+              },
+              "tags": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Tags"
+              },
+              "currency": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Currency"
+              },
+              "category_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Category Id"
+              },
+              "account_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Account Id"
+              },
+              "from_account_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "From Account Id"
+              },
+              "to_account_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "To Account Id"
+              },
+              "from_account": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "From Account"
+              },
+              "to_account": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "To Account"
+              },
+              "native_amount": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Native Amount"
+              },
+              "exclude_from_stats": {
+                "default": false,
+                "title": "Exclude From Stats",
+                "type": "boolean"
+              },
+              "exclude_from_budget": {
+                "default": false,
+                "title": "Exclude From Budget",
+                "type": "boolean"
+              },
+              "attachments": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Attachments"
+              }
+            },
+            "required": [
+              "amount"
+            ],
+            "title": "BatchTransactionItem",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "transactions": {
+            "items": {
+              "$ref": "#/$defs/BatchTransactionItem"
+            },
+            "title": "Transactions",
+            "type": "array"
+          },
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Zone"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "transactions"
+        ],
+        "title": "create_transactionsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "update_transaction",
+      "description": "Update only supplied transaction fields. Use expected_revision from get_transaction to reject conflicting changes. Complete transfers require both accounts; use ledger_id if sync_id is ambiguous. Omitted/null attachments preserve files; [] clears; an ordered file ID list replaces. Amount corrections preserve the recorded settlement ratio unless native_amount/currency is explicitly supplied.",
+      "inputSchema": {
+        "properties": {
+          "sync_id": {
+            "title": "Sync Id",
+            "type": "string"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "gt": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Amount"
+          },
+          "tx_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tx Type"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category"
+          },
+          "account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Account"
+          },
+          "happened_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Happened At"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Note"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tags"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Zone"
+          },
+          "attachments": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Attachments"
+          },
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          },
+          "category_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category Id"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Account Id"
+          },
+          "from_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "From Account Id"
+          },
+          "to_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To Account Id"
+          },
+          "from_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "From Account"
+          },
+          "to_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To Account"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Currency"
+          },
+          "native_amount": {
+            "anyOf": [
+              {
+                "gt": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Native Amount"
+          },
+          "exclude_from_stats": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Exclude From Stats"
+          },
+          "exclude_from_budget": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Exclude From Budget"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "required": [
+          "sync_id"
+        ],
+        "title": "update_transactionArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "delete_transaction",
+      "description": "Delete a transaction only after explicit user confirmation (confirm=true). Optional expected_revision protects concurrent edits. Specify ledger_id when sync_id is ambiguous.",
+      "inputSchema": {
+        "properties": {
+          "sync_id": {
+            "title": "Sync Id",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "required": [
+          "sync_id"
+        ],
+        "title": "delete_transactionArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "create_category",
+      "description": "Create a new category. Usually unnecessary — prefer existing categories.",
+      "inputSchema": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "kind": {
+            "default": "expense",
+            "title": "Kind",
+            "type": "string"
+          },
+          "parent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parent Name"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Icon"
+          },
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "create_categoryArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "update_budget",
+      "description": "Update a budget's amount.",
+      "inputSchema": {
+        "properties": {
+          "budget_id": {
+            "title": "Budget Id",
+            "type": "string"
+          },
+          "amount": {
+            "title": "Amount",
+            "type": "number"
+          }
+        },
+        "required": [
+          "budget_id",
+          "amount"
+        ],
+        "title": "update_budgetArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "parse_and_create_from_text",
+      "description": "Have BeeCount AI parse free-form natural-language text into a transaction.\n\n    Useful when the user gives a sentence like \"上午星巴克花了 38\" and you want\n    BeeCount's own AI prompt + ledger context to do the heavy lifting. Requires\n    the user to have configured an AI chat provider in their profile.\n    ",
+      "inputSchema": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "parse_and_create_from_textArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_bookkeeping_context",
+      "description": "Get ledger selection, role, server time/timezone, currency, dictionary IDs and feature contracts in one call. No ledger is guessed when several exist.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          }
+        },
+        "title": "get_bookkeeping_contextArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_operation",
+      "description": "Read durable per-step outcomes and exact transaction boundaries after a timeout or partial failure.",
+      "inputSchema": {
+        "properties": {
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id"
+        ],
+        "title": "get_operationArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_operations",
+      "description": "Find recent operations, including an operation whose initial response was lost.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "limit": {
+            "default": 30,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ledger_id"
+        ],
+        "title": "list_operationsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_changes",
+      "description": "Read incremental transaction/budget and dictionary changes including deletion tombstones. Keep the signed next_cursor even when has_more=false.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "limit": {
+            "default": 100,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ledger_id"
+        ],
+        "title": "list_changesArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_account_balances",
+      "description": "Get opening balance, income, expense, transfers and calculated balance per account/currency. at is an exclusive timestamp or an inclusive local date. No currencies are added together.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "At"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Zone"
+          },
+          "scope": {
+            "default": "personal",
+            "enum": [
+              "personal",
+              "visible"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "title": "get_account_balancesArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_net_worth_history",
+      "description": "Read monthly assets/debts/net worth in original currencies. Optional primary-currency valuation is returned only when all conversion rates exist; current valuation rates are explicitly distinguished from historical FX returns.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          },
+          "tz_offset_minutes": {
+            "default": 0,
+            "title": "Tz Offset Minutes",
+            "type": "integer"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Zone"
+          },
+          "base_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Base Currency"
+          }
+        },
+        "title": "get_net_worth_historyArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_ledger_members",
+      "description": "List members and roles of a ledger accessible to this token's user.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ledger_id"
+        ],
+        "title": "list_ledger_membersArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "manage_account",
+      "description": "Create/edit/archive (hidden=true)/delete an account. Owner role required. Balance edits change opening balance; preview impact with reconcile_account. Delete requires confirm=true.",
+      "inputSchema": {
+        "$defs": {
+          "AccountFields": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "anyOf": [
+                  {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Name"
+              },
+              "account_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Account Type"
+              },
+              "currency": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Currency"
+              },
+              "initial_balance": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Initial Balance"
+              },
+              "note": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Note"
+              },
+              "credit_limit": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Credit Limit"
+              },
+              "billing_day": {
+                "anyOf": [
+                  {
+                    "maximum": 31,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Billing Day"
+              },
+              "payment_due_day": {
+                "anyOf": [
+                  {
+                    "maximum": 31,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Payment Due Day"
+              },
+              "bank_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Bank Name"
+              },
+              "card_last_four": {
+                "anyOf": [
+                  {
+                    "maxLength": 8,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Card Last Four"
+              },
+              "hidden": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Hidden"
+              }
+            },
+            "title": "AccountFields",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "action": {
+            "enum": [
+              "create",
+              "update",
+              "delete"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AccountFields"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Account Id"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "action",
+          "ledger_id"
+        ],
+        "title": "manage_accountArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "manage_category",
+      "description": "Create/rename/reparent/delete a category using stable IDs. Owner role required; deleting a referenced category follows the production validation rules.",
+      "inputSchema": {
+        "$defs": {
+          "CategoryFields": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "anyOf": [
+                  {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Name"
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "expense",
+                      "income",
+                      "transfer"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Kind"
+              },
+              "parent_sync_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Parent Sync Id"
+              },
+              "parent_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Parent Name"
+              },
+              "icon": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Icon"
+              },
+              "sort_order": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Sort Order"
+              }
+            },
+            "title": "CategoryFields",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "action": {
+            "enum": [
+              "create",
+              "update",
+              "delete"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CategoryFields"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "category_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category Id"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "action",
+          "ledger_id"
+        ],
+        "title": "manage_categoryArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "manage_tag",
+      "description": "Create/rename/recolor/delete a tag. Existing transaction relationships use stable IDs. Owner role required; deletion requires confirmation.",
+      "inputSchema": {
+        "$defs": {
+          "TagFields": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "anyOf": [
+                  {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Name"
+              },
+              "color": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Color"
+              }
+            },
+            "title": "TagFields",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "action": {
+            "enum": [
+              "create",
+              "update",
+              "delete"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TagFields"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tag_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tag Id"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "action",
+          "ledger_id"
+        ],
+        "title": "manage_tagArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "manage_budget",
+      "description": "Create/edit/enable/disable/delete total or category budgets. Usage follows the ledger billing cycle, child categories and exclude_from_budget flags.",
+      "inputSchema": {
+        "$defs": {
+          "BudgetFields": {
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "total",
+                      "category"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Type"
+              },
+              "category_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Category Id"
+              },
+              "amount": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Amount"
+              },
+              "period": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "monthly",
+                      "weekly",
+                      "yearly"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Period"
+              },
+              "enabled": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Enabled"
+              }
+            },
+            "title": "BudgetFields",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "action": {
+            "enum": [
+              "create",
+              "update",
+              "delete"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/BudgetFields"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "budget_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Budget Id"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "action",
+          "ledger_id"
+        ],
+        "title": "manage_budgetArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "manage_ledger",
+      "description": "Create/rename/configure/delete a ledger. Deletion requires confirm=true. For create, supply ledger_name and a caller-chosen ledger_id to make retries stable.",
+      "inputSchema": {
+        "$defs": {
+          "LedgerFields": {
+            "additionalProperties": false,
+            "properties": {
+              "ledger_name": {
+                "anyOf": [
+                  {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Ledger Name"
+              },
+              "currency": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Currency"
+              },
+              "month_start_day": {
+                "anyOf": [
+                  {
+                    "maximum": 28,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Month Start Day"
+              }
+            },
+            "title": "LedgerFields",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "action": {
+            "enum": [
+              "create",
+              "update",
+              "delete"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LedgerFields"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ledger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ledger Id"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "manage_ledgerArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "retry_operation",
+      "description": "Resume only unfinished steps using the original normalized times, currencies and stable idempotency keys. A live concurrent lease returns running.",
+      "inputSchema": {
+        "properties": {
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id"
+        ],
+        "title": "retry_operationArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "analyze_transactions",
+      "description": "Aggregate matching transactions by local calendar/category/account/tag/member with optional comparison filters and exact drill-down context. Income/expense use ledger settlement currency; transfers are separate and never counted as consumption. Multi-tag groups overlap.",
+      "inputSchema": {
+        "$defs": {
+          "TransactionFilter": {
+            "additionalProperties": false,
+            "properties": {
+              "date_from": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Date From"
+              },
+              "date_to": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Date To"
+              },
+              "tx_type": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "expense",
+                      "income",
+                      "transfer"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Tx Type"
+              },
+              "category_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "title": "Category Ids",
+                "type": "array"
+              },
+              "account_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "title": "Account Ids",
+                "type": "array"
+              },
+              "tag_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "title": "Tag Ids",
+                "type": "array"
+              },
+              "member_user_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "title": "Member User Ids",
+                "type": "array"
+              },
+              "note_contains": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Note Contains"
+              },
+              "min_amount": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Min Amount"
+              },
+              "max_amount": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Max Amount"
+              },
+              "include_excluded": {
+                "default": false,
+                "title": "Include Excluded",
+                "type": "boolean"
+              }
+            },
+            "title": "TransactionFilter",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TransactionFilter"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "group_by": {
+            "default": "month",
+            "enum": [
+              "none",
+              "day",
+              "week",
+              "month",
+              "category",
+              "account",
+              "tag",
+              "member",
+              "type"
+            ],
+            "title": "Group By",
+            "type": "string"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Zone"
+          },
+          "comparison": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TransactionFilter"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "top_n": {
+            "default": 100,
+            "title": "Top N",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ledger_id"
+        ],
+        "title": "analyze_transactionsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "read_attachment",
+      "description": "Read an original receipt image or small text attachment after checking current ledger membership. Large/binary files return an authenticated MCP resource link; bytes are never resized or transcoded.",
+      "inputSchema": {
+        "properties": {
+          "file_id": {
+            "title": "File Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file_id"
+        ],
+        "title": "read_attachmentArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_attachments",
+      "description": "Find receipt files and their linked transactions, with filename/note search and pagination.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "q": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Q"
+          },
+          "limit": {
+            "default": 40,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ledger_id"
+        ],
+        "title": "list_attachmentsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "export_transactions",
+      "description": "Create a complete CSV snapshot (up to 50000 rows) with IDs, original/settlement currencies and flags. Fetch the saved CSV using its authenticated MCP resource URI.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "date_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date From"
+          },
+          "date_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date To"
+          },
+          "tx_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tx Type"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Account Id"
+          },
+          "category_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category Id"
+          },
+          "tag_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tag Id"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Zone"
+          }
+        },
+        "required": [
+          "ledger_id"
+        ],
+        "title": "export_transactionsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "parse_receipt",
+      "description": "Use the user's configured BeeCount vision provider to recognize an uploaded receipt into drafts. No transaction is created. Keep file_id as the attachment when creating approved drafts.",
+      "inputSchema": {
+        "properties": {
+          "file_id": {
+            "title": "File Id",
+            "type": "string"
+          },
+          "locale": {
+            "default": "zh",
+            "title": "Locale",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file_id"
+        ],
+        "title": "parse_receiptArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "preview_text_transactions",
+      "description": "Ask the user's configured BeeCount text provider for drafts without recording transactions. Review drafts, then call create_transaction(s) with a stable idempotency key.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "locale": {
+            "default": "zh",
+            "title": "Locale",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ledger_id",
+          "text"
+        ],
+        "title": "preview_text_transactionsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "preview_import_file",
+      "description": "Parse an uploaded CSV/TSV/XLSX with the production parser, return mappings/errors and save a durable import preview. Each plan covers at most 200 source rows; use next_offset for large files. No transaction is written.",
+      "inputSchema": {
+        "$defs": {
+          "ImportMapping": {
+            "additionalProperties": false,
+            "properties": {
+              "tx_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Tx Type"
+              },
+              "amount": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Amount"
+              },
+              "happened_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Happened At"
+              },
+              "category_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Category Name"
+              },
+              "subcategory_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Subcategory Name"
+              },
+              "account_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Account Name"
+              },
+              "from_account_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "From Account Name"
+              },
+              "to_account_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "To Account Name"
+              },
+              "note": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Note"
+              },
+              "currency": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Currency"
+              },
+              "tags": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Tags",
+                "type": "array"
+              },
+              "datetime_format": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Datetime Format"
+              },
+              "strip_currency_symbols": {
+                "default": true,
+                "title": "Strip Currency Symbols",
+                "type": "boolean"
+              },
+              "expense_is_negative": {
+                "default": false,
+                "title": "Expense Is Negative",
+                "type": "boolean"
+              },
+              "tz_offset_minutes": {
+                "anyOf": [
+                  {
+                    "maximum": 840,
+                    "minimum": -720,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Tz Offset Minutes"
+              }
+            },
+            "title": "ImportMapping",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "file_id": {
+            "title": "File Id",
+            "type": "string"
+          },
+          "mapping": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ImportMapping"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source_system": {
+            "default": "file",
+            "title": "Source System",
+            "type": "string"
+          },
+          "source_id_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Id Column"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Zone"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "limit": {
+            "default": 200,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "file_id"
+        ],
+        "title": "preview_import_fileArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "save_review_item",
+      "description": "Save a question, related transaction IDs, user answer and resolution state so another Agent can continue. Updates require the current revision.",
+      "inputSchema": {
+        "$defs": {
+          "ReviewItem": {
+            "additionalProperties": false,
+            "properties": {
+              "question": {
+                "maxLength": 4000,
+                "minLength": 1,
+                "title": "Question",
+                "type": "string"
+              },
+              "transaction_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 200,
+                "title": "Transaction Ids",
+                "type": "array"
+              },
+              "answer": {
+                "anyOf": [
+                  {
+                    "maxLength": 8000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Answer"
+              },
+              "status": {
+                "default": "open",
+                "enum": [
+                  "open",
+                  "answered",
+                  "resolved",
+                  "dismissed"
+                ],
+                "title": "Status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "question"
+            ],
+            "title": "ReviewItem",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/$defs/ReviewItem"
+          },
+          "record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Record Id"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "required": [
+          "ledger_id",
+          "data"
+        ],
+        "title": "save_review_itemArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "save_classification_rule",
+      "description": "Save a versioned categorization rule and exceptions. Confirmed rules require explicit user confirmation; inferred rules remain suggestions and are never applied automatically.",
+      "inputSchema": {
+        "$defs": {
+          "ClassificationRule": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "maxLength": 255,
+                "minLength": 1,
+                "title": "Name",
+                "type": "string"
+              },
+              "note_contains": {
+                "anyOf": [
+                  {
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Note Contains"
+              },
+              "account_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Account Id"
+              },
+              "tx_type": {
+                "default": "expense",
+                "enum": [
+                  "income",
+                  "expense"
+                ],
+                "title": "Tx Type",
+                "type": "string"
+              },
+              "min_amount": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Min Amount"
+              },
+              "max_amount": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Max Amount"
+              },
+              "category_id": {
+                "title": "Category Id",
+                "type": "string"
+              },
+              "tags": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Tags"
+              },
+              "except_sync_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 1000,
+                "title": "Except Sync Ids",
+                "type": "array"
+              },
+              "enabled": {
+                "default": true,
+                "title": "Enabled",
+                "type": "boolean"
+              },
+              "confirmed": {
+                "default": false,
+                "title": "Confirmed",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "category_id"
+            ],
+            "title": "ClassificationRule",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/$defs/ClassificationRule"
+          },
+          "record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Record Id"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ledger_id",
+          "data"
+        ],
+        "title": "save_classification_ruleArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "apply_classification_rule",
+      "description": "Save a preview of a confirmed rule's matching transactions and before/after values. Apply using execute_classification_preview; each target carries its original revision.",
+      "inputSchema": {
+        "properties": {
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "expected_revision": {
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rule_id",
+          "expected_revision"
+        ],
+        "title": "apply_classification_ruleArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "execute_classification_preview",
+      "description": "Apply exactly the saved rule preview after user confirmation. Stale transaction revisions fail without overwriting user edits.",
+      "inputSchema": {
+        "properties": {
+          "preview_id": {
+            "title": "Preview Id",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "preview_id"
+        ],
+        "title": "execute_classification_previewArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "manage_recurring_rule",
+      "description": "Preview/create/edit/pause/resume/delete a Cloud-owned recurring rule. Month/year ends clamp to valid dates without drifting the anchor. Historical backfill is opt-in; generated ordinary transactions sync to App. Do not duplicate the same rule in App.",
+      "inputSchema": {
+        "$defs": {
+          "BatchTransactionItem": {
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "Positive finite amount; numeric strings are accepted",
+                "exclusiveMinimum": 0,
+                "title": "Amount",
+                "type": "number"
+              },
+              "tx_type": {
+                "default": "expense",
+                "enum": [
+                  "expense",
+                  "income",
+                  "transfer"
+                ],
+                "title": "Tx Type",
+                "type": "string"
+              },
+              "happened_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Happened At"
+              },
+              "note": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Note"
+              },
+              "category": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Category"
+              },
+              "account": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Account"
+              },
+              "tags": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Tags"
+              },
+              "currency": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Currency"
+              },
+              "category_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Category Id"
+              },
+              "account_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Account Id"
+              },
+              "from_account_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "From Account Id"
+              },
+              "to_account_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "To Account Id"
+              },
+              "from_account": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "From Account"
+              },
+              "to_account": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "To Account"
+              },
+              "native_amount": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Native Amount"
+              },
+              "exclude_from_stats": {
+                "default": false,
+                "title": "Exclude From Stats",
+                "type": "boolean"
+              },
+              "exclude_from_budget": {
+                "default": false,
+                "title": "Exclude From Budget",
+                "type": "boolean"
+              },
+              "attachments": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Attachments"
+              }
+            },
+            "required": [
+              "amount"
+            ],
+            "title": "BatchTransactionItem",
+            "type": "object"
+          },
+          "RecurringRule": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "maxLength": 255,
+                "minLength": 1,
+                "title": "Name",
+                "type": "string"
+              },
+              "transaction": {
+                "$ref": "#/$defs/BatchTransactionItem"
+              },
+              "frequency": {
+                "enum": [
+                  "daily",
+                  "weekly",
+                  "monthly",
+                  "yearly"
+                ],
+                "title": "Frequency",
+                "type": "string"
+              },
+              "interval": {
+                "default": 1,
+                "maximum": 365,
+                "minimum": 1,
+                "title": "Interval",
+                "type": "integer"
+              },
+              "starts_at": {
+                "title": "Starts At",
+                "type": "string"
+              },
+              "time_zone": {
+                "title": "Time Zone",
+                "type": "string"
+              },
+              "ends_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Ends At"
+              },
+              "enabled": {
+                "default": true,
+                "title": "Enabled",
+                "type": "boolean"
+              },
+              "allow_backfill": {
+                "default": false,
+                "title": "Allow Backfill",
+                "type": "boolean"
+              },
+              "dst_policy": {
+                "default": "skip",
+                "enum": [
+                  "skip",
+                  "first",
+                  "second"
+                ],
+                "title": "Dst Policy",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "transaction",
+              "frequency",
+              "starts_at",
+              "time_zone"
+            ],
+            "title": "RecurringRule",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "action": {
+            "enum": [
+              "create",
+              "update",
+              "pause",
+              "resume",
+              "delete"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RecurringRule"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Record Id"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "action",
+          "ledger_id"
+        ],
+        "title": "manage_recurring_ruleArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "run_due_recurring_rules",
+      "description": "Process currently due Cloud schedules owned by this user in one ledger. Never generates future transactions; repeated runs are idempotent.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ledger_id"
+        ],
+        "title": "run_due_recurring_rulesArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_workflow_records",
+      "description": "Read persistent workflow progress across computers/Agents. Results are ledger scoped and include optimistic revisions; paginate with offset.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "import_plan",
+              "checkpoint",
+              "review_item",
+              "classification_rule",
+              "recurring_rule",
+              "export"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status"
+          },
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ledger_id",
+          "kind"
+        ],
+        "title": "list_workflow_recordsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_workflow_record",
+      "description": "Read a saved import/reconciliation/rule/review record by ID, after checking current ledger membership.",
+      "inputSchema": {
+        "properties": {
+          "record_id": {
+            "title": "Record Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "record_id"
+        ],
+        "title": "get_workflow_recordArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_transaction_sources",
+      "description": "Read all source identities proving a transaction, including source-file hashes/row numbers.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "sync_id": {
+            "title": "Sync Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ledger_id",
+          "sync_id"
+        ],
+        "title": "list_transaction_sourcesArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "reconcile_account",
+      "description": "Compare an actual statement balance with opening balance plus all accessible account movements through a date/time. Report missing-account candidates; never silently create adjustments.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "actual_balance": {
+            "title": "Actual Balance",
+            "type": "number"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Zone"
+          }
+        },
+        "required": [
+          "ledger_id",
+          "account_id",
+          "at",
+          "actual_balance"
+        ],
+        "title": "reconcile_accountArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "link_transaction_source",
+      "description": "Attach another source receipt/order/bank entry to an existing transaction. A source identity can refer to only one transaction within a ledger.",
+      "inputSchema": {
+        "$defs": {
+          "SourceInput": {
+            "additionalProperties": false,
+            "properties": {
+              "source_system": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Source System",
+                "type": "string"
+              },
+              "source_id": {
+                "maxLength": 255,
+                "minLength": 1,
+                "title": "Source Id",
+                "type": "string"
+              },
+              "order_id": {
+                "anyOf": [
+                  {
+                    "maxLength": 255,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Order Id"
+              },
+              "file_sha256": {
+                "anyOf": [
+                  {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "File Sha256"
+              },
+              "row_number": {
+                "anyOf": [
+                  {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Row Number"
+              }
+            },
+            "required": [
+              "source_system",
+              "source_id"
+            ],
+            "title": "SourceInput",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "sync_id": {
+            "title": "Sync Id",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/$defs/SourceInput"
+          }
+        },
+        "required": [
+          "ledger_id",
+          "sync_id",
+          "source"
+        ],
+        "title": "link_transaction_sourceArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "unlink_transaction_source",
+      "description": "Remove an incorrect external-source association after user confirmation. The transaction is preserved; reserved active-import sources cannot be removed.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "reference_id": {
+            "title": "Reference Id",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ledger_id",
+          "reference_id"
+        ],
+        "title": "unlink_transaction_sourceArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "preview_import",
+      "description": "Persist a versioned dry-run of 1..200 imports. Exact source IDs identify existing entries; same-day/same-amount matches are only review candidates. No transactions are written.",
+      "inputSchema": {
+        "$defs": {
+          "BatchTransactionItem": {
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "Positive finite amount; numeric strings are accepted",
+                "exclusiveMinimum": 0,
+                "title": "Amount",
+                "type": "number"
+              },
+              "tx_type": {
+                "default": "expense",
+                "enum": [
+                  "expense",
+                  "income",
+                  "transfer"
+                ],
+                "title": "Tx Type",
+                "type": "string"
+              },
+              "happened_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Happened At"
+              },
+              "note": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Note"
+              },
+              "category": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Category"
+              },
+              "account": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Account"
+              },
+              "tags": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Tags"
+              },
+              "currency": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Currency"
+              },
+              "category_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Category Id"
+              },
+              "account_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Account Id"
+              },
+              "from_account_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "From Account Id"
+              },
+              "to_account_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "To Account Id"
+              },
+              "from_account": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "From Account"
+              },
+              "to_account": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "To Account"
+              },
+              "native_amount": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Native Amount"
+              },
+              "exclude_from_stats": {
+                "default": false,
+                "title": "Exclude From Stats",
+                "type": "boolean"
+              },
+              "exclude_from_budget": {
+                "default": false,
+                "title": "Exclude From Budget",
+                "type": "boolean"
+              },
+              "attachments": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Attachments"
+              }
+            },
+            "required": [
+              "amount"
+            ],
+            "title": "BatchTransactionItem",
+            "type": "object"
+          },
+          "ImportCandidate": {
+            "additionalProperties": false,
+            "properties": {
+              "transaction": {
+                "$ref": "#/$defs/BatchTransactionItem"
+              },
+              "sources": {
+                "items": {
+                  "$ref": "#/$defs/SourceInput"
+                },
+                "maxItems": 20,
+                "title": "Sources",
+                "type": "array"
+              },
+              "action": {
+                "default": "create",
+                "enum": [
+                  "create",
+                  "link",
+                  "skip"
+                ],
+                "title": "Action",
+                "type": "string"
+              },
+              "existing_sync_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Existing Sync Id"
+              },
+              "allow_similar": {
+                "default": false,
+                "title": "Allow Similar",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "transaction"
+            ],
+            "title": "ImportCandidate",
+            "type": "object"
+          },
+          "SourceInput": {
+            "additionalProperties": false,
+            "properties": {
+              "source_system": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Source System",
+                "type": "string"
+              },
+              "source_id": {
+                "maxLength": 255,
+                "minLength": 1,
+                "title": "Source Id",
+                "type": "string"
+              },
+              "order_id": {
+                "anyOf": [
+                  {
+                    "maxLength": 255,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Order Id"
+              },
+              "file_sha256": {
+                "anyOf": [
+                  {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "File Sha256"
+              },
+              "row_number": {
+                "anyOf": [
+                  {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Row Number"
+              }
+            },
+            "required": [
+              "source_system",
+              "source_id"
+            ],
+            "title": "SourceInput",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/$defs/ImportCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Zone"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Plan Id"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "required": [
+          "ledger_id",
+          "candidates"
+        ],
+        "title": "preview_importArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "execute_import_plan",
+      "description": "Execute the exact saved import preview after user confirmation. Restart/response-loss retries reuse the original operation; source links are persisted idempotently.",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "expected_revision": {
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "plan_id",
+          "expected_revision"
+        ],
+        "title": "execute_import_planArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "undo_import_plan",
+      "description": "Remove only transactions created by an import. Revision checks preserve later user edits; linked pre-existing entries are never removed. Confirmation required.",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "expected_revision": {
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "plan_id",
+          "expected_revision"
+        ],
+        "title": "undo_import_planArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "save_reconciliation_checkpoint",
+      "description": "Save a user-confirmed account/source coverage checkpoint, including the statement difference and dataset revision, for another Agent to continue.",
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "title": "Ledger Id",
+            "type": "string"
+          },
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "actual_balance": {
+            "title": "Actual Balance",
+            "type": "number"
+          },
+          "source_system": {
+            "title": "Source System",
+            "type": "string"
+          },
+          "coverage_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Coverage From"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Zone"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ledger_id",
+          "account_id",
+          "at",
+          "actual_balance",
+          "source_system"
+        ],
+        "title": "save_reconciliation_checkpointArguments",
+        "type": "object"
+      }
+    }
+  ]
+}

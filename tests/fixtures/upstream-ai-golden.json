@@ -1,0 +1,12 @@
+{
+  "cases": [
+    {
+      "name": "test_provider_text",
+      "status": 200,
+      "result": {
+        "success": true,
+        "preview": "hi-reply"
+      }
+    }
+  ]
+}
