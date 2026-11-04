@@ -103,7 +103,7 @@ sysConfig.post('/s3', async (c) => {
         };
         
         await db.prepare(
-            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime("now")) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
         ).bind('manage@sysConfig@upload', JSON.stringify(saveData)).run();
         
         serverLogger.info('app', '[S3] Config created successfully:', newConfig.id);
@@ -143,7 +143,7 @@ sysConfig.put('/s3/:id', async (c) => {
         };
         
         await db.prepare(
-            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime("now")) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
         ).bind('manage@sysConfig@upload', JSON.stringify({
             s3: {
                 channels: s3Channels,
@@ -175,7 +175,7 @@ sysConfig.post('/s3/:id/toggle', async (c) => {
         s3Channels[index].enabled = !s3Channels[index].enabled;
         
         await db.prepare(
-            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime("now")) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
         ).bind('manage@sysConfig@upload', JSON.stringify({
             s3: {
                 channels: s3Channels,
@@ -201,7 +201,7 @@ sysConfig.delete('/s3/:id', async (c) => {
         s3Channels = s3Channels.filter((c: any) => c.id !== id);
         
         await db.prepare(
-            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime("now")) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
         ).bind('manage@sysConfig@upload', JSON.stringify({
             s3: {
                 channels: s3Channels,
@@ -233,7 +233,7 @@ sysConfig.post('/upload', async (c) => {
     try {
         // 保存到数据库
         await db.prepare(
-            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime("now")) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
         ).bind('manage@sysConfig@upload', JSON.stringify(body)).run();
         
         return c.json(body);
