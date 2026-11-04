@@ -47,6 +47,7 @@ on:
       - 'src/routes/mcp.ts'
       - 'src/mcp/**'
       - 'tests/mcp-tools-differential.test.ts'
+      - 'tests/mcp-extra-differential.test.ts'
       - 'tests/mcp-streamable-contract.test.ts'
       - 'src/routes/workspace.ts'
       - 'tests/workspace-differential.test.ts'
@@ -203,6 +204,9 @@ jobs:
 
       - name: Run mcp tools differential test
         run: npm test -- --run tests/mcp-tools-differential.test.ts
+
+      - name: Run mcp extra differential test
+        run: npm test -- --run tests/mcp-extra-differential.test.ts
 
       - name: Run workspace differential test
         run: npm test -- --run tests/workspace-differential.test.ts
