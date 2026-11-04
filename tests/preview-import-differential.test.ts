@@ -48,6 +48,9 @@ function normalizePreview(value: Json): Json {
       if (k === 'normalized' && v && typeof v === 'object') {
         const n: Record<string, Json> = {};
         for (const [nk, nv] of Object.entries(v as Record<string, Json>)) {
+          // tag_ids 是种子派生的 sync_id（跨代码库不可比），与 id/similar 同理需剥离；
+          // tags 名称（如默认 "MCP"）保留比对，以校验 workers 正确合并默认标签。
+          if (PI_DROP.has(nk)) continue;
           n[nk] = nk === 'happened_at' ? scrubHa(nv) : nv;
         }
         out[k] = n;
