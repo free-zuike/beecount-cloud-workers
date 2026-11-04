@@ -1658,7 +1658,8 @@ def main(out_path: str) -> int:
 
         def _scrub_ai(v):
             if isinstance(v, dict):
-                return {k: _scrub_ai(x) for k, x in v.items() if k != "latency_ms"}
+                return {k: _scrub_ai(x) for k, x in v.items()
+                        if k != "latency_ms" and x is not None}
             if isinstance(v, list):
                 return [_scrub_ai(x) for x in v]
             return v
@@ -1686,7 +1687,11 @@ def main(out_path: str) -> int:
     # 比 name + description + inputSchema 顶层属性名集合。握手/通知/header 校验由 mcp-streamable-contract 覆盖。
     try:
         from src.mcp.server import mcp as _up_mcp
-        _up_tools = asyncio.run(_up_mcp.list_tools())
+        try:
+            _up_tools = asyncio.run(_up_mcp.list_tools())
+        except TypeError:
+            # 部分 FastMCP 版本 list_tools 为同步方法
+            _up_tools = _up_mcp.list_tools()
         _tool_catalog = []
         for _t in _up_tools:
             _schema = getattr(_t, "input_schema", None) or getattr(_t, "inputSchema", None) or {}
