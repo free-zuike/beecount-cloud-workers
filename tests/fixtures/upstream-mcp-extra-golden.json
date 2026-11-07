@@ -1,0 +1,112 @@
+{
+  "now": "2026-05-20T04:00:00+00:00",
+  "cases": [
+    {
+      "tool": "list_operations",
+      "args": {
+        "ledger_id": "L1"
+      },
+      "result": []
+    },
+    {
+      "tool": "list_operations",
+      "args": {
+        "ledger_id": "L3"
+      },
+      "result": []
+    },
+    {
+      "tool": "list_changes",
+      "args": {
+        "ledger_id": "L1"
+      },
+      "result": {
+        "has_more": false,
+        "items": [],
+        "next_cursor": "PvgJkS5T1yH1tu_XfpBSm63a3XKVh7mdmt7pctJ8lPV7ImFmdGVyIjowLCJmaWx0ZXIiOiI1MWFiZTk5MTFiZTVkMjY5YzkxZjYyZmVjMDU0YTIzZDNlMWM1ODBjMjc1YjdkMmRjNDc0ZTBjNDAzYTcxOWU3In0"
+      }
+    },
+    {
+      "tool": "read_attachment",
+      "args": {
+        "file_id": "f1"
+      },
+      "result": {
+        "content": [
+          {
+            "text": "{\"file_id\": \"f1\", \"ledger_id\": \"L1\", \"file_name\": \"seed.csv\", \"mime_type\": \"text/csv\", \"size_bytes\": 118, \"sha256\": \"0a4031522aaeac044a27cefe17d86bc7ec0df9bf26f6f4a3c32e9d282e8584c7\", \"resource_uri\": \"beecount://attachments/f1\"}",
+            "type": "text"
+          },
+          {
+            "text": "日期,金额,类型,分类,备注\n2026-05-16,12.5,支出,餐饮,午饭\n2026-05-17,3000,收入,工资,五月工资\n",
+            "type": "text"
+          }
+        ]
+      }
+    },
+    {
+      "tool": "export_transactions",
+      "args": {
+        "ledger_id": "L1"
+      },
+      "result": {
+        "export_id": "54c754fe-80b1-4d49-890e-445613859997",
+        "resource_uri": "beecount://exports/54c754fe-80b1-4d49-890e-445613859997",
+        "revision": 0,
+        "row_count": 7,
+        "sha256": "8b07bd1892d9c4739f473e2b2cfa81641ab1aa736da2fc83c7a4eea79dee2da8"
+      }
+    },
+    {
+      "tool": "run_due_recurring_rules",
+      "args": {
+        "ledger_id": "L1"
+      },
+      "result": {
+        "results": []
+      }
+    },
+    {
+      "tool": "list_workflow_records",
+      "args": {
+        "ledger_id": "L1",
+        "kind": "import"
+      },
+      "result": {
+        "items": [],
+        "total": 0
+      }
+    },
+    {
+      "tool": "get_operation",
+      "args": {
+        "operation_id": "nope"
+      },
+      "error": "ValueError: Operation not found"
+    },
+    {
+      "tool": "retry_operation",
+      "args": {
+        "operation_id": "nope"
+      },
+      "error": "ValueError: Operation not found"
+    },
+    {
+      "tool": "apply_classification_rule",
+      "args": {
+        "rule_id": "nope",
+        "expected_revision": 1
+      },
+      "error": "ValueError: Record not found"
+    },
+    {
+      "tool": "execute_classification_preview",
+      "args": {
+        "preview_id": "nope"
+      },
+      "result": {
+        "status": "confirmation_required"
+      }
+    }
+  ]
+}
