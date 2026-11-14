@@ -42,7 +42,7 @@
       "name": "update",
       "request": {
         "method": "PATCH",
-        "path": "/api/v1/profile/pats/1e149747-60ad-4599-b20b-b864bcfd7666",
+        "path": "/api/v1/profile/pats/226180be-0631-4c60-9671-4257cc1b3461",
         "json": {
           "name": "ci-pat-renamed"
         }
@@ -59,7 +59,7 @@
       "name": "delete",
       "request": {
         "method": "DELETE",
-        "path": "/api/v1/profile/pats/1e149747-60ad-4599-b20b-b864bcfd7666",
+        "path": "/api/v1/profile/pats/226180be-0631-4c60-9671-4257cc1b3461",
         "json": null
       },
       "status": 204,

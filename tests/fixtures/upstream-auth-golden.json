@@ -43,7 +43,7 @@
         "error": {
           "code": "AUTH_EMAIL_EXISTS",
           "message": "Email already exists",
-          "request_id": "06eac91e6c9d474791365990a4392bcd"
+          "request_id": "061ffbd07d3b4e64852f13ff13160f94"
         },
         "detail": "Email already exists"
       }
@@ -64,7 +64,7 @@
         "error": {
           "code": "VALIDATION_ERROR",
           "message": "Request validation failed",
-          "request_id": "a09272be898e4ac3b9f2981e96711dc1"
+          "request_id": "1edb7124e98c425da9883015aeaf6241"
         },
         "detail": "Request validation failed",
         "validation": [
@@ -99,7 +99,7 @@
         "error": {
           "code": "VALIDATION_ERROR",
           "message": "Request validation failed",
-          "request_id": "d89b04d8b4a74fc1b771ebb1e982495c"
+          "request_id": "eae4a08ff20849eaae157e263a004970"
         },
         "detail": "Request validation failed",
         "validation": [
@@ -161,7 +161,7 @@
         "error": {
           "code": "AUTH_INVALID_CREDENTIALS",
           "message": "Invalid credentials",
-          "request_id": "2490ba77af94490e969ed094ced05120"
+          "request_id": "63341d4db5d54f018c8abfd448edf5fe"
         },
         "detail": "Invalid credentials"
       }
@@ -172,7 +172,7 @@
         "method": "POST",
         "path": "/api/v1/auth/refresh",
         "json": {
-          "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxYzUzNTYxYS1lZjU0LTRmZjUtOTkzOS04ZGE1NmEwNTljZDgiLCJ0eXBlIjoicmVmcmVzaCIsImNsaWVudF90eXBlIjoid2ViIiwic2NvcGVzIjpbIndlYl9yZWFkIiwid2ViX3dyaXRlIiwib3BzX3dyaXRlIl0sImp0aSI6IjI3ZmZiZmU1NWQ1YTRmYjNhM2JiY2Q4ZmRhYjMxYjQ4IiwiaWF0IjoxNzkzNjkzMTEwLCJleHAiOjE3OTYyODUxMTB9.pJRP1UYblTPuOPUhwOWqOjxwpOnZ5xiuPY7HFwqAUYo"
+          "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJlYjYxZWJjZC0zYzJiLTRhM2UtOWZjZi01NzMyYTBmZWRmMTMiLCJ0eXBlIjoicmVmcmVzaCIsImNsaWVudF90eXBlIjoid2ViIiwic2NvcGVzIjpbIndlYl9yZWFkIiwid2ViX3dyaXRlIiwib3BzX3dyaXRlIl0sImp0aSI6ImI0MDY5MGNhZDAzYTRiM2RiMzdhNzg2OGQyZjY0NjAyIiwiaWF0IjoxNzk0NjU0NTY0LCJleHAiOjE3OTcyNDY1NjR9.PdqeSdOZmRzoiMt5c_Wu7vcb0F0UUv-DP7XSnUtIW5g"
         }
       },
       "status": 200,
@@ -195,7 +195,7 @@
         "method": "POST",
         "path": "/api/v1/auth/logout",
         "json": {
-          "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxYzUzNTYxYS1lZjU0LTRmZjUtOTkzOS04ZGE1NmEwNTljZDgiLCJ0eXBlIjoicmVmcmVzaCIsImNsaWVudF90eXBlIjoid2ViIiwic2NvcGVzIjpbIndlYl9yZWFkIiwid2ViX3dyaXRlIiwib3BzX3dyaXRlIl0sImp0aSI6IjI3ZmZiZmU1NWQ1YTRmYjNhM2JiY2Q4ZmRhYjMxYjQ4IiwiaWF0IjoxNzkzNjkzMTEwLCJleHAiOjE3OTYyODUxMTB9.pJRP1UYblTPuOPUhwOWqOjxwpOnZ5xiuPY7HFwqAUYo"
+          "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJlYjYxZWJjZC0zYzJiLTRhM2UtOWZjZi01NzMyYTBmZWRmMTMiLCJ0eXBlIjoicmVmcmVzaCIsImNsaWVudF90eXBlIjoid2ViIiwic2NvcGVzIjpbIndlYl9yZWFkIiwid2ViX3dyaXRlIiwib3BzX3dyaXRlIl0sImp0aSI6ImI0MDY5MGNhZDAzYTRiM2RiMzdhNzg2OGQyZjY0NjAyIiwiaWF0IjoxNzk0NjU0NTY0LCJleHAiOjE3OTcyNDY1NjR9.PdqeSdOZmRzoiMt5c_Wu7vcb0F0UUv-DP7XSnUtIW5g"
         }
       },
       "status": 401,
@@ -203,7 +203,7 @@
         "error": {
           "code": "UNAUTHORIZED",
           "message": "Not authenticated",
-          "request_id": "001c68999a244304b0453d48c22a59f9"
+          "request_id": "9f481078c5264a628afabd112c23e2a9"
         },
         "detail": "Not authenticated"
       }
