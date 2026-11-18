@@ -159,6 +159,121 @@ describe('Sync - Push', () => {
     const body = await res.json() as any;
     expect(body.accepted).toBe(1);
   });
+  it('should reject empty category names instead of overwriting valid metadata', async () => {
+    const catSyncId = crypto.randomUUID();
+    const base = Date.now();
+    const good = await env.app.request('/api/v1/sync/push', {
+      method: 'POST', headers: pushHeaders(),
+      body: JSON.stringify({ device_id: TEST_DEVICE_ID, changes: [{
+        ledger_id: '__user_global__', entity_type: 'category', entity_sync_id: catSyncId, action: 'upsert',
+        payload: { name: '餐饮', kind: 'expense', level: 1, sortOrder: 1 },
+        updated_at: new Date(base).toISOString(),
+      }] }),
+    });
+    expect(good.status).toBe(200);
+    expect((await good.json() as any).accepted).toBe(1);
+
+    const bad = await env.app.request('/api/v1/sync/push', {
+      method: 'POST', headers: pushHeaders(),
+      body: JSON.stringify({ device_id: TEST_DEVICE_ID, changes: [{
+        ledger_id: '__user_global__', entity_type: 'category', entity_sync_id: catSyncId, action: 'upsert',
+        payload: { name: '', kind: 'expense', level: 1, sortOrder: 0 },
+        updated_at: new Date(base + 1000).toISOString(),
+      }] }),
+    });
+    expect(bad.status).toBe(200);
+    const body = await bad.json() as any;
+    expect(body.accepted).toBe(0);
+    expect(body.rejected).toBe(1);
+    expect(body.conflict_samples?.[0]?.reason).toBe('invalid_category_name_rejected');
+
+    const projection = getTable(env.db, 'user_category_projection').find((row: any) => row.sync_id === catSyncId);
+    expect(projection?.name).toBe('餐饮');
+    expect(projection?.level).toBe(1);
+    const history = getTable(env.db, 'sync_changes').filter((row: any) => row.entity_type === 'category' && row.entity_sync_id === catSyncId);
+    expect(history).toHaveLength(1);
+  });
+
+  it('should reject level-2 categories without a parent', async () => {
+    const catSyncId = crypto.randomUUID();
+    const base = Date.now();
+    const parentId = crypto.randomUUID();
+
+    const parentRes = await env.app.request('/api/v1/sync/push', {
+      method: 'POST', headers: pushHeaders(),
+      body: JSON.stringify({ device_id: TEST_DEVICE_ID, changes: [{
+        ledger_id: '__user_global__', entity_type: 'category', entity_sync_id: parentId, action: 'upsert',
+        payload: { name: '餐饮', kind: 'expense', level: 1, sortOrder: 0 },
+        updated_at: new Date(base).toISOString(),
+      }] }),
+    });
+    expect(parentRes.status).toBe(200);
+
+    const good = await env.app.request('/api/v1/sync/push', {
+      method: 'POST', headers: pushHeaders(),
+      body: JSON.stringify({ device_id: TEST_DEVICE_ID, changes: [{
+        ledger_id: '__user_global__', entity_type: 'category', entity_sync_id: catSyncId, action: 'upsert',
+        payload: { name: '早餐', kind: 'expense', level: 2, sortOrder: 0, parentName: '餐饮', parentSyncId: parentId },
+        updated_at: new Date(base + 1000).toISOString(),
+      }] }),
+    });
+    expect(good.status).toBe(200);
+    expect((await good.json() as any).accepted).toBe(1);
+
+    const orphan = await env.app.request('/api/v1/sync/push', {
+      method: 'POST', headers: pushHeaders(),
+      body: JSON.stringify({ device_id: TEST_DEVICE_ID, changes: [{
+        ledger_id: '__user_global__', entity_type: 'category', entity_sync_id: catSyncId, action: 'upsert',
+        payload: { name: '早餐', kind: 'expense', level: 2, sortOrder: 0 },
+        updated_at: new Date(base + 2000).toISOString(),
+      }] }),
+    });
+    expect(orphan.status).toBe(200);
+    const body = await orphan.json() as any;
+    expect(body.accepted).toBe(0);
+    expect(body.rejected).toBe(1);
+    expect(body.conflict_samples?.[0]?.reason).toBe('invalid_category_parent_rejected');
+
+    const projection = getTable(env.db, 'user_category_projection').find((row: any) => row.sync_id === catSyncId);
+    expect(projection?.parent_sync_id).toBe(parentId);
+    expect(projection?.level).toBe(2);
+  });
+
+  it('should canonicalize parentName from a valid parentSyncId', async () => {
+    const parentId = crypto.randomUUID();
+    const childId = crypto.randomUUID();
+    const base = Date.now();
+
+    const parentRes = await env.app.request('/api/v1/sync/push', {
+      method: 'POST', headers: pushHeaders(),
+      body: JSON.stringify({ device_id: TEST_DEVICE_ID, changes: [{
+        ledger_id: '__user_global__', entity_type: 'category', entity_sync_id: parentId, action: 'upsert',
+        payload: { name: '投资收益', kind: 'income', level: 1, sortOrder: 0 },
+        updated_at: new Date(base).toISOString(),
+      }] }),
+    });
+    expect(parentRes.status).toBe(200);
+
+    const childRes = await env.app.request('/api/v1/sync/push', {
+      method: 'POST', headers: pushHeaders(),
+      body: JSON.stringify({ device_id: TEST_DEVICE_ID, changes: [{
+        ledger_id: '__user_global__', entity_type: 'category', entity_sync_id: childId, action: 'upsert',
+        payload: { name: '股票收益', kind: 'income', level: 2, sortOrder: 0, parentSyncId: parentId },
+        updated_at: new Date(base + 1000).toISOString(),
+      }] }),
+    });
+    expect(childRes.status).toBe(200);
+    expect((await childRes.json() as any).accepted).toBe(1);
+
+    const projection = getTable(env.db, 'user_category_projection').find((row: any) => row.sync_id === childId);
+    expect(projection?.parent_sync_id).toBe(parentId);
+    expect(projection?.parent_name).toBe('投资收益');
+
+    const stored = getTable(env.db, 'sync_changes').find((row: any) => row.entity_type === 'category' && row.entity_sync_id === childId);
+    const payload = JSON.parse(String(stored?.payload_json ?? '{}'));
+    expect(payload.parentSyncId).toBe(parentId);
+    expect(payload.parentName).toBe('投资收益');
+  });
 });
 
 describe('Sync - Pull', () => {
