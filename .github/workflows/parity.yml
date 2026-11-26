@@ -80,7 +80,7 @@ jobs:
           else
             # 默认对齐上游最新 tag（上游按版本发 tag）；golden 自动随上游推进。
             REF="$(gh api "repos/$REPO/tags" --jq '.[0].name' 2>/dev/null || true)"
-            if [ -z "$REF" ]; then REF="1.9.0"; fi
+            if [ -z "$REF" ]; then REF="1.10.1"; fi
             echo "::notice::对齐上游最新 tag: $REPO@$REF"
           fi
           echo "repo=$REPO" >> "$GITHUB_OUTPUT"

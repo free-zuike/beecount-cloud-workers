@@ -11,6 +11,7 @@
 
 import type { OrphanRecord, ScanReport } from './types';
 import { isAttachmentStillReferenced } from '../../lib/attachment-reference';
+import { listCategoryParentIssues } from '../category-orphans';
 
 // ---------------------------------------------------------------------------
 // A 类：DB 引用断链（实体引用已删） — 与原版 scanner.py A 类对齐
@@ -425,6 +426,35 @@ async function scanAttachmentDupRef(db: D1Database): Promise<OrphanRecord[]> {
 // scanAll — 与原版 scan_all() 对齐，聚合返回
 // ---------------------------------------------------------------------------
 
+/**
+ * A4b — 子分类的父分类已删除/缺失（对齐上游 1.10.x scan_categories_missing_parent）。
+ * can_clean = 父分类已确认删除且无交易/预算/下级分类引用。
+ */
+async function scanCategoriesMissingParent(db: D1Database): Promise<OrphanRecord[]> {
+  const issues = await listCategoryParentIssues(db);
+  return issues.map((issue) => {
+    const parentLabel = issue.parent_name || issue.parent_id;
+    let subtitle = parentLabel ? `找不到父分类「${parentLabel}」` : '未关联父分类';
+    if (issue.referenced) {
+      subtitle += ' · 仍有数据引用，请先迁移';
+    } else if (issue.parent_deleted) {
+      subtitle += ' · 已确认父分类删除';
+    } else {
+      subtitle += ' · 请核对父子关系';
+    }
+    return {
+      type: 'category_missing_parent' as const,
+      user_id: issue.user_id,
+      row_id: `${issue.user_id}:${issue.sync_id}`,
+      sync_id: issue.sync_id,
+      title: `子分类「${issue.name || issue.sync_id}」`,
+      subtitle,
+      can_clean: Boolean(issue.parent_deleted) && !issue.referenced,
+      extra: { source_change_id: issue.source_change_id },
+    };
+  });
+}
+
 export async function scanAll(db: D1Database, r2?: R2Bucket): Promise<ScanReport> {
   const dbOrphans: OrphanRecord[] = [];
   const fileOrphans: OrphanRecord[] = [];
@@ -437,6 +467,7 @@ export async function scanAll(db: D1Database, r2?: R2Bucket): Promise<ScanReport
     ...(await scanTxMissingFromAccount(db)),
     ...(await scanTxMissingToAccount(db)),
     ...(await scanBudgetMissingCategory(db)),
+    ...(await scanCategoriesMissingParent(db)),
   );
 
   // C 类：sync_changes 引用实体不存在

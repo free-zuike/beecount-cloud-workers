@@ -8,15 +8,18 @@
 import type { CleanupRecord, CleanupResult } from './types';
 import { deleteFromStorage } from '../../lib/storage-adapter';
 import { buildTxUpsertPayload, TX_PROJECTION_COLS, type TxProjectionRow } from '../../lib/tx-upsert-payload';
+import { deleteOrphanCategory } from '../category-orphans';
 
 /**
  * 清理孤立数据记录。按 type 分发清理操作，与原版 _dispatch 对齐。
  * [r2] 可选：附件/文件类孤儿清理时删除 R2 物理对象（对齐原版 file_ops）。
+ * [actorUserId] 管理员身份，写入分类清理的 sync_changes.updated_by_user_id。
  */
 export async function clean(
   db: D1Database,
   records: CleanupRecord[],
-  r2?: R2Bucket
+  r2?: R2Bucket,
+  actorUserId?: string
 ): Promise<CleanupResult> {
   let successCount = 0;
   const failures: Array<{ record_key: string; error: string }> = [];
@@ -47,6 +50,23 @@ export async function clean(
           // A4: 清空预算的分类引用（保留预算本体）
           await clearBudgetCategory(db, record);
           break;
+        case 'category_missing_parent': {
+          // A4b: 删除确认可清理的孤儿子分类（带扫描版本复核 + user-scope delete 事件）
+          const sourceChangeId = Number(extra.source_change_id);
+          if (!record.user_id || !record.sync_id || !Number.isInteger(sourceChangeId)) {
+            throw new Error('分类清理缺少扫描版本，请重新扫描');
+          }
+          const outcome = await deleteOrphanCategory(db, {
+            userId: record.user_id,
+            syncId: record.sync_id,
+            sourceChangeId,
+            actorUserId: actorUserId ?? null,
+          });
+          if (outcome === 'stale') {
+            throw new Error('分类已变化、父分类删除未确认或仍有引用，请重新扫描');
+          }
+          break;
+        }
         case 'sync_change_missing_entity': {
           // A5/C1: 删除孤立 sync_change
           if (record.row_id) {

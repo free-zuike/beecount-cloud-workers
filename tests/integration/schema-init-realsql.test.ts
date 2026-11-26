@@ -50,12 +50,20 @@ describe('新库初始化（真实 SQLite）', () => {
       expect(tables).toContain(required);
     }
     const v = sqlite.prepare("SELECT value FROM app_metadata WHERE key = 'schema_version'").get() as { value: string };
-    expect(v.value).toBe('5');
+    expect(v.value).toBe('6');
     // #133 MCP 工作流三张新表
     for (const t of ['mcp_write_operations', 'mcp_state_records', 'mcp_source_references']) {
       const got = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(t) as { name: string } | undefined;
       expect(got?.name).toBe(t);
     }
+    // v6 上游 1.10.x：通知已读 / 设备同步失败 / 跨账本移动回执与退休标记
+    for (const t of ['user_notification_reads', 'device_sync_failures', 'transaction_move_receipts', 'transaction_move_retirements']) {
+      const got = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(t) as { name: string } | undefined;
+      expect(got?.name).toBe(t);
+    }
+    // v6 备份计划新增 cron 生效边界列
+    const schedCols = (sqlite.prepare('PRAGMA table_info(backup_schedules)').all() as { name: string }[]).map((c) => c.name);
+    expect(schedCols).toContain('cron_effective_at');
     sqlite.close();
   });
 

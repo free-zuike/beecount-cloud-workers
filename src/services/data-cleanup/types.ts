@@ -12,6 +12,7 @@ export type OrphanType =
   | 'tx_missing_from_account'    // A3a: 转账 from_account_sync_id 已删
   | 'tx_missing_to_account'      // A3b: 转账 to_account_sync_id 已删
   | 'budget_missing_category'    // A4: 预算 category_sync_id 已删
+  | 'category_missing_parent'    // A4b(1.10.x 上游新增): 子分类的父分类已删除/缺失
   | 'sync_change_missing_entity' // A5/C1: sync_changes 引用实体不存在
   // B 类：附件 / 文件
   | 'attachment_no_ref'          // B1: AttachmentFile 行无 tx/category 引用
@@ -29,6 +30,8 @@ export interface OrphanRecord {
   sync_id?: string;
   file_path?: string; // B 类（R2 key / storage_path）
   size_bytes?: number;
+  /** 是否可安全清理（如父分类已确认删除且无引用）；false 时 UI 只展示不可勾选 */
+  can_clean?: boolean;
   extra?: Record<string, unknown>; // cleaner 内部用
 }
 
@@ -54,6 +57,7 @@ export interface CleanupRecord {
   sync_id?: string;
   file_path?: string;
   size_bytes?: number;
+  can_clean?: boolean;
   extra?: Record<string, unknown>;
 }
 

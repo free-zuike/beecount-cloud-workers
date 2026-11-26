@@ -23,6 +23,8 @@ import summaryRouter from './routes/summary';
 import workspaceRouter from './routes/workspace';
 import writeRouter from './routes/write';
 import batchWriteRouter from './routes/batch_write';
+import transactionMoveRouter from './routes/transactions_move';
+import notificationsRouter from './routes/notifications';
 import devicesRouter from './routes/devices';
 import profileRouter from './routes/profile';
 import patsRouter from './routes/pats';
@@ -234,7 +236,7 @@ app.route('/api/v1/setup', setupRouter);
 app.route('/api/v1/auth', authRouter);
 app.route('/api/v1/auth/2fa', twoFactorRouter); // 对齐原版 /api/v1/auth/2fa
 app.get('/api/v1/version', (c) =>
-  c.json({ name: APP_NAME, version: APP_VERSION })
+  c.json({ name: APP_NAME, version: APP_VERSION, capabilities: ['transaction_move_v1'] })
 );
 
 // 公开 Web 展示开关（与原版 /web-config 对齐）：仅暴露合作入口等开关，不泄漏实例配置。
@@ -437,7 +439,9 @@ app.route('/api/v1/read/workspace', workspaceRouter);
 app.route('/api/v1', workspaceRouter);
 app.route('/api/v1/write', writeRouter);
 app.route('/api/v1/write', batchWriteRouter);
+app.route('/api/v1/write', transactionMoveRouter);
 app.route('/api/v1/devices', devicesRouter);
+app.route('/api/v1/notifications', notificationsRouter);
 app.route('/api/v1/profile', profileRouter);
 app.route('/api/v1/profile/pats', patsRouter);
 app.route('/api/v1/attachments', attachmentsRouter);

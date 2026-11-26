@@ -3,7 +3,7 @@
  * 每次变更下方 DDL（新建表/加列/索引/迁移）时必须递增，
  * 否则已初始化的库不会重放 DDL。
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 // 迁移失败后的重试退避：避免每次冷启动重跑全量 DDL + 数据复制，
 // 把 D1 免费版每日 10 万行写入配额瞬间烧光（曾经 1 小时烧穿）。
 const MIGRATION_RETRY_BACKOFF_MS = 30 * 60 * 1000;
@@ -276,6 +276,20 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_devices_last_seen_at ON devices(last_seen_at)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_devices_revoked_at ON devices(revoked_at)').run();
 
+    // v6：上游 alembic/0024 — 认证设备的同步失败连续计数（每个方向一条）。
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS device_sync_failures (
+        device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        direction TEXT NOT NULL,
+        incident_id TEXT NOT NULL,
+        failure_count INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        first_failed_at TEXT NOT NULL,
+        last_failed_at TEXT NOT NULL,
+        PRIMARY KEY (device_id, direction)
+      )
+    `).run();
+
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS ledgers (
         id TEXT PRIMARY KEY,
@@ -385,6 +399,34 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_push_idempotency_device_id ON sync_push_idempotency(device_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_push_idempotency_idempotency_key ON sync_push_idempotency(idempotency_key)').run();
 
+    // v6：上游 alembic/0022 — 跨账本移动的幂等回执与源身份退休标记。
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS transaction_move_receipts (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        operation_id TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        PRIMARY KEY (user_id, operation_id)
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS transaction_move_retirements (
+        ledger_id TEXT NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+        sync_id TEXT NOT NULL,
+        PRIMARY KEY (ledger_id, sync_id)
+      )
+    `).run();
+
+    // v6：上游 alembic/0023 — 个人通知已读回执。
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS user_notification_reads (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        notification_id TEXT NOT NULL,
+        PRIMARY KEY (user_id, notification_id)
+      )
+    `).run();
+
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_snapshots (
         id TEXT PRIMARY KEY,
@@ -454,6 +496,7 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         next_run_at TEXT,
         last_run_at TEXT,
         last_run_status TEXT,
+        cron_effective_at TEXT,
         created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
         updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
       )
@@ -461,6 +504,9 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
 
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_schedules_user_id ON backup_schedules(user_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_backup_schedules_enabled ON backup_schedules(enabled)').run();
+
+    // v6：上游 alembic/0024 — cron 生效边界（通知中心判断「过期待备份」用）。
+    await safeAddColumn('backup_schedules', 'cron_effective_at', 'TEXT');
 
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS backup_runs (
@@ -960,6 +1006,23 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
                          AND parent.kind = user_category_projection.kind
                          AND parent.sync_id = user_category_projection.parent_sync_id
                          AND COALESCE(parent.level, 1) = 1)`
+      ).run();
+    } catch { /* 表结构异常时跳过数据修复，不影响初始化主流程 */ }
+
+    // v6：0024 等价数据修复——回填 backup_schedules.cron_effective_at（幂等，上游 alembic/0024）。
+    // updated_at 会被调度器/运行结果刷新，只有用户编辑才是旧 cron 表达式的安全历史边界；
+    // 没有编辑审计记录时退回到 created_at。
+    try {
+      await db.prepare(
+        `UPDATE backup_schedules
+         SET cron_effective_at = COALESCE(
+           (SELECT MAX(a.created_at) FROM audit_logs a
+            WHERE a.user_id = backup_schedules.user_id
+              AND a.action = 'backup_schedule_update'
+              AND json_extract(a.metadata_json, '$.scheduleId') = backup_schedules.id),
+           created_at
+         )
+         WHERE cron_effective_at IS NULL`
       ).run();
     } catch { /* 表结构异常时跳过数据修复，不影响初始化主流程 */ }
 

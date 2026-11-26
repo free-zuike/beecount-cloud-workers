@@ -15,6 +15,9 @@
 
 import { Hono } from 'hono';
 
+import { requireAnyScopes } from '../middleware/scope';
+import { listSyncFailures } from '../services/sync-health';
+
 // ===========================
 // 辅助函数
 // ===========================
@@ -173,6 +176,30 @@ devicesRouter.get('/', async (c) => {
   }));
 
   return c.json(result);
+});
+
+// GET /devices/:id/sync-health - 设备同步失败连续计数（对齐上游 1.10.x devices.py）
+devicesRouter.get('/:id/sync-health', async (c) => {
+  const denied = requireAnyScopes(c, ['web_read'], []);
+  if (denied) return denied;
+
+  const userId = c.get('userId');
+  const db = c.env.DB;
+  const deviceId = c.req.param('id');
+
+  const device = await db
+    .prepare('SELECT id, name FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL')
+    .bind(deviceId, userId)
+    .first<{ id: string; name: string }>();
+  if (!device) {
+    return c.json({ detail: 'Device not found' }, 404);
+  }
+
+  return c.json({
+    device_id: device.id,
+    device_name: device.name,
+    failures: await listSyncFailures(db, device.id),
+  });
 });
 
 // POST /devices/:id/revoke - 撤销设备（与原版对齐）

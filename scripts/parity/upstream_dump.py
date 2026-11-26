@@ -2172,6 +2172,231 @@ def main(out_path: str) -> int:
         print(f"[warn] workspace-write golden 跳过：{type(exc).__name__}: {exc}")
         traceback.print_exc()
 
+    # ---------------- 1.10.x 新端点：通知中心 / 同步健康 / 跨账本移动 ----------------
+    # 差分口径：同一夹具、直接调用上游路由函数（不经 HTTP），响应模型 model_dump(mode="json")。
+    # 归一化：ISO 时间 → <ts>；notice id / receipt_ids（kind:sha256）→ <hash>；UUID → <uuid>。
+    try:
+        from datetime import datetime as _dt2, timezone as _tz2
+        from uuid import UUID as _UUID2
+        from fastapi import HTTPException as _HTTPExc, Response as _Resp
+        from src.models import (
+            BackupRun as _BackupRun, BackupSchedule as _BackupSchedule,
+            Device as _Device, DeviceSyncFailure as _DSF, Ledger as _Ledger,
+            LedgerMember as _LedgerMember, ReadTxProjection as _ReadTx,
+            SyncChange as _SyncChange, TransactionMoveRetirement as _TMR,
+            User as _User, UserCategoryProjection as _UserCat,
+        )
+        from src.routers.notifications import (
+            MarkNotificationsRead as _MarkRead, list_notifications as _list_notifs,
+            mark_notifications_read as _mark_notifs,
+        )
+        from src.routers.devices import device_sync_health as _device_health
+        from src.routers.write.transactions_move import (
+            MovePrepareRequest as _MovePrepReq, MoveRequest as _MoveReq,
+            MoveRevision as _MoveRev, _commit_move as _commit_move, prepare_move as _prepare_move,
+        )
+
+        _ISO_RE2 = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
+        _NOTICE_ID_RE2 = re.compile(r"^([a-z_]+):[0-9a-f]{64}$")
+        _UUID_RE2 = re.compile(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+        )
+
+        def _norm_new(v):
+            if isinstance(v, list):
+                return [_norm_new(x) for x in v]
+            if isinstance(v, dict):
+                return {k: _norm_new(x) for k, x in v.items()}
+            if isinstance(v, str):
+                if _ISO_RE2.match(v):
+                    return "<ts>"
+                m2 = _NOTICE_ID_RE2.match(v)
+                if m2:
+                    return m2.group(1) + ":<hash>"
+                if _UUID_RE2.match(v):
+                    return "<uuid>"
+            return v
+
+        def _mk_session(path):
+            if os.path.exists(path):
+                os.remove(path)
+            _eng = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
+
+            @event.listens_for(_eng, "connect")
+            def _p2(dbapi_conn, _):
+                _c = dbapi_conn.cursor()
+                _c.execute("PRAGMA foreign_keys=ON")
+                _c.close()
+
+            Base.metadata.create_all(bind=_eng)
+            return sessionmaker(bind=_eng, autocommit=False, autoflush=False)()
+
+        _T0 = _dt2(2026, 1, 15, 10, 0, 0, tzinfo=_tz2.utc)
+        _T1 = _dt2(2026, 1, 16, 3, 0, 0, tzinfo=_tz2.utc)
+        _T2 = _dt2(2026, 1, 17, 3, 0, 0, tzinfo=_tz2.utc)
+
+        # ---------- 通知中心 / 同步健康 ----------
+        _ndb = _mk_session("/tmp/parity-notifications.db")
+        _nu1 = _User(id="u1", email="nu1@example.com", password_hash="x", is_admin=True)
+        _nu2 = _User(id="u2", email="nu2@example.com", password_hash="x", is_admin=False)
+        _ndb.add_all([_nu1, _nu2])
+        _ndb.flush()
+        _ndb.add(_Device(id="d1", user_id="u1", name="My Phone", platform="android", created_at=_T0))
+        _ndb.add(_DSF(device_id="d1", direction="push", incident_id="inc-1", failure_count=3,
+                      reason="changes_rejected", first_failed_at=_T0, last_failed_at=_T1))
+        _ndb.add(_DSF(device_id="d1", direction="pull", incident_id="inc-2", failure_count=1,
+                      reason="server_error", first_failed_at=_T0, last_failed_at=_T0))
+        # 正常父子对（不应产生通知）
+        _ndb.add(_UserCat(sync_id="cat-parent", user_id="u1", name="餐饮", kind="expense",
+                          level=1, source_change_id=5))
+        _ndb.add(_UserCat(sync_id="cat-child-ok", user_id="u1", name="午餐", kind="expense",
+                          level=2, parent_sync_id="cat-parent", source_change_id=6))
+        # 孤儿子分类：父 ID 不存在，且父的最后一个事件是 delete（晚于子分类变更）
+        _ndb.add(_UserCat(sync_id="cat-child-gone", user_id="u1", name="咖啡", kind="expense",
+                          level=2, parent_sync_id="cat-gone", source_change_id=7))
+        _ndb.add(_SyncChange(change_id=10, user_id="u1", scope="user", entity_type="category",
+                             entity_sync_id="cat-gone", action="delete", payload_json={},
+                             updated_at=_T0, updated_by_device_id="d1", updated_by_user_id="u1"))
+        # 备份计划：两次失败 → reason=failed(count=2)；有效起点前的成功跑不计入
+        _ndb.add(_BackupSchedule(id=1, name="每日备份", user_id="u1", cron_expr="0 3 * * *",
+                                 enabled=True, cron_effective_at=_T0, created_at=_T0, updated_at=_T0))
+        _ndb.flush()
+        _ndb.add(_BackupRun(id=1, schedule_id=1, user_id="u1", status="succeeded",
+                            started_at=_dt2(2026, 1, 14, 3, 0, 0, tzinfo=_tz2.utc),
+                            finished_at=_dt2(2026, 1, 14, 3, 5, 0, tzinfo=_tz2.utc)))
+        _ndb.add(_BackupRun(id=2, schedule_id=1, user_id="u1", status="failed",
+                            started_at=_T1, finished_at=_T1))
+        _ndb.add(_BackupRun(id=3, schedule_id=1, user_id="u1", status="failed",
+                            started_at=_T2, finished_at=_T2))
+        _ndb.commit()
+
+        _notices = [n.model_dump(mode="json") for n in _list_notifs(_Resp(), {"web_read"}, _nu1, _ndb)]
+        _notices_after = None
+        if _notices:
+            _mark_notifs(_MarkRead(ids=[_notices[0]["id"]]), {"web_write"}, _nu1, _ndb)
+            _notices_after = [
+                n.model_dump(mode="json") for n in _list_notifs(_Resp(), {"web_read"}, _nu1, _ndb)
+            ]
+        _notices_u2 = [n.model_dump(mode="json") for n in _list_notifs(_Resp(), {"web_read"}, _nu2, _ndb)]
+        _health = _device_health("d1", {"web_read"}, _nu1, _ndb).model_dump(mode="json")
+
+        _notif_golden = {
+            "notices": _norm_new(_notices),
+            "notices_after_read": _norm_new(_notices_after),
+            "notices_non_admin": _norm_new(_notices_u2),
+            "sync_health": _norm_new(_health),
+        }
+        _np = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-notifications-golden.json")
+        with open(_np, "w", encoding="utf-8") as _nfh:
+            json.dump(_notif_golden, _nfh, ensure_ascii=False, indent=2, default=str)
+            _nfh.write("\n")
+        print(f"wrote notifications golden -> {_np}")
+
+        # ---------- 跨账本移动 ----------
+        _mdb = _mk_session("/tmp/parity-move.db")
+        _mu1 = _User(id="u1", email="mu1@example.com", password_hash="x")
+        _mu2 = _User(id="u2", email="mu2@example.com", password_hash="x")
+        _mdb.add_all([_mu1, _mu2])
+        _mdb.flush()
+        for _lid, _ext, _name, _cur in (
+            ("la", "A", "账本A", "CNY"), ("lb", "B", "账本B", "CNY"),
+            ("lu", "U", "美元账本", "USD"), ("ls", "S", "共享账本", "CNY"),
+        ):
+            _mdb.add(_Ledger(id=_lid, user_id="u1", external_id=_ext, name=_name, currency=_cur))
+            _mdb.add(_LedgerMember(ledger_id=_lid, user_id="u1", role="owner", joined_at=_T0))
+        _mdb.add(_LedgerMember(ledger_id="ls", user_id="u2", role="editor", joined_at=_T0))
+        _mdb.add(_Device(id="d1", user_id="u1", name="My Phone", platform="android", created_at=_T0))
+        _mdb.add(_ReadTx(
+            ledger_id="la", sync_id="txm1", user_id="u1", tx_type="expense", amount=12.5,
+            happened_at=_T0, note="午餐", category_sync_id="cat1", category_name="餐饮",
+            category_kind="expense", tags_csv="tagA", tag_sync_ids_json='["tag-1"]',
+            attachments_json=None, tx_index=1, source_change_id=100,
+            exclude_from_stats=False, exclude_from_budget=False,
+            created_by_user_id="u1", last_edited_by_user_id="u1",
+            currency_code=None, native_amount=None,
+        ))
+        _mdb.commit()
+
+        def _mv_err(fn):
+            try:
+                fn()
+                return None
+            except _HTTPExc as exc:
+                return {"status": exc.status_code, "detail": exc.detail}
+
+        _prep = _prepare_move(
+            "A", _MovePrepReq(target_ledger_id="B", transaction_ids=["txm1"]),
+            {"app_write"}, _mu1, _mdb)
+        _prep_out = [p.model_dump(mode="json") for p in _prep]
+
+        _errs = {
+            "same_ledger": _mv_err(lambda: _prepare_move(
+                "B", _MovePrepReq(target_ledger_id="B", transaction_ids=["txm1"]),
+                {"app_write"}, _mu1, _mdb)),
+            "currency": _mv_err(lambda: _prepare_move(
+                "A", _MovePrepReq(target_ledger_id="U", transaction_ids=["txm1"]),
+                {"app_write"}, _mu1, _mdb)),
+            "shared": _mv_err(lambda: _prepare_move(
+                "A", _MovePrepReq(target_ledger_id="S", transaction_ids=["txm1"]),
+                {"app_write"}, _mu1, _mdb)),
+            "duplicate": _mv_err(lambda: _prepare_move(
+                "A", _MovePrepReq(target_ledger_id="B", transaction_ids=["txm1", "txm1"]),
+                {"app_write"}, _mu1, _mdb)),
+            "missing": _mv_err(lambda: _prepare_move(
+                "A", _MovePrepReq(target_ledger_id="B", transaction_ids=["nope"]),
+                {"app_write"}, _mu1, _mdb)),
+        }
+
+        _op = _UUID2("00000000-0000-4000-8000-000000000001")
+        _rev = int(_prep_out[0]["revision"])
+        _errs["stale_revision"] = _mv_err(lambda: _commit_move(
+            _mdb, "u1", "d1", "A",
+            _MoveReq(target_ledger_id="B", items=[_MoveRev(sync_id="txm1", revision=999)]),
+            _UUID2("00000000-0000-4000-8000-000000000002")))
+
+        _move_result, _ = _commit_move(
+            _mdb, "u1", "d1", "A",
+            _MoveReq(target_ledger_id="B", items=[_MoveRev(sync_id="txm1", revision=_rev)]),
+            _op)
+        _move_out = _move_result.model_dump(mode="json")
+        _replay_result, _ = _commit_move(
+            _mdb, "u1", "d1", "A",
+            _MoveReq(target_ledger_id="B", items=[_MoveRev(sync_id="txm1", revision=_rev)]),
+            _op)
+        _replay_out = _replay_result.model_dump(mode="json")
+        _errs["operation_reused"] = _mv_err(lambda: _commit_move(
+            _mdb, "u1", "d1", "A",
+            _MoveReq(target_ledger_id="U", items=[_MoveRev(sync_id="txm1", revision=_rev)]),
+            _op))
+
+        _src_rows = _mdb.query(_ReadTx).filter(_ReadTx.ledger_id == "la").count()
+        _dst_rows = _mdb.query(_ReadTx).filter(_ReadTx.ledger_id == "lb").count()
+        _src_tx_rows = _mdb.query(_ReadTx).filter(
+            _ReadTx.ledger_id == "la", _ReadTx.sync_id == "txm1").count()
+        _retirement_rows = _mdb.query(_TMR).count()
+
+        _move_golden = {
+            "prepare": _norm_new(_prep_out),
+            "errors": _norm_new(_errs),
+            "move": _norm_new(_move_out),
+            "replay_matches": _norm_new(_move_out) == _norm_new(_replay_out),
+            "after_move": {
+                "source_rows": _src_rows,
+                "target_rows": _dst_rows,
+                "source_tx_rows": _src_tx_rows,
+                "retirement_rows": _retirement_rows,
+            },
+        }
+        _mp = os.path.join(os.path.dirname(os.path.abspath(out_path)), "upstream-move-golden.json")
+        with open(_mp, "w", encoding="utf-8") as _mfh:
+            json.dump(_move_golden, _mfh, ensure_ascii=False, indent=2, default=str)
+            _mfh.write("\n")
+        print(f"wrote move golden -> {_mp}")
+    except Exception as exc:
+        import traceback as _tb2
+        print(f"[warn] notifications/move golden 跳过：{type(exc).__name__}: {exc}")
+        _tb2.print_exc()
+
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(golden, fh, ensure_ascii=False, indent=2, default=str)

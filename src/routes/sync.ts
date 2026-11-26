@@ -26,6 +26,7 @@ import { insertAuditLog } from '../lib/audit';
 import { deleteFromStorage } from '../lib/storage-adapter';
 import { isAttachmentStillReferenced } from '../lib/attachment-reference';
 import { healBrokenTxUpserts } from '../lib/tx-heal';
+import { recordSyncFailure, recordSyncRecovery } from '../services/sync-health';
 
 const CODE_VERSION = 'v1.3-projection-fix';
 
@@ -388,6 +389,34 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     }
     serverLogger.info('src.routers.sync', '[SYNC] ledgerMap keys:', Object.keys(ledgerMap));
 
+    // ====================== 预载「已跨账本移动」的源交易（对齐上游 1.10.x push.py） ======================
+    // 被移动走的交易在原账本留下 retirement 标记：任何迟到的 upsert 都不能让它复活。
+    // 未迁移到 v6 的库（含测试夹具）缺这张表：降级为不拦截，不影响其余推送逻辑。
+    const retiredTxKeys = new Set<string>();
+    try {
+      const txSyncIds = [...new Set(
+        changes.filter(c => c.entity_type === 'transaction' && c.entity_sync_id).map(c => c.entity_sync_id as string)
+      )];
+      const internalLedgerIds = [...new Set(Object.values(ledgerMap).map(l => l.id))];
+      if (txSyncIds.length > 0 && internalLedgerIds.length > 0) {
+        const ledgerPlaceholders = internalLedgerIds.map(() => '?').join(',');
+        for (let i = 0; i < txSyncIds.length; i += 500) {
+          const idChunk = txSyncIds.slice(i, i + 500);
+          const idPlaceholders = idChunk.map(() => '?').join(',');
+          const rows = await db
+            .prepare(
+              `SELECT ledger_id, sync_id FROM transaction_move_retirements
+               WHERE ledger_id IN (${ledgerPlaceholders}) AND sync_id IN (${idPlaceholders})`
+            )
+            .bind(...internalLedgerIds, ...idChunk)
+            .all<{ ledger_id: string; sync_id: string }>();
+          for (const row of rows.results ?? []) retiredTxKeys.add(`${row.ledger_id}:${row.sync_id}`);
+        }
+      }
+    } catch (error) {
+      serverLogger.info('src.routers.sync', '[SYNC] retirement preload skipped (table missing?):', (error as Error).message);
+    }
+
     // ====================== 优化2：批量获取现有变更（分更小的批次） ======================
     const existingChangeMap = new Map<string, { change_id: number; updated_at: string; updated_by_device_id: string | null }>();
     
@@ -558,6 +587,21 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
             continue;
           }
           ledgerRowId = ledgerRow.id;
+          // 对齐上游 1.10.x：已被跨账本移动走（retirement）的源交易，迟到的 upsert 永久拒绝，
+          // 否则旧设备会把已移动的交易在原账本「复活」。
+          if (change.entity_type === 'transaction' && retiredTxKeys.has(`${ledgerRow.id}:${change.entity_sync_id}`)) {
+            rejected++;
+            conflictCount++;
+            if (conflictSamples.length < 20) {
+              conflictSamples.push({
+                reason: 'transaction_moved',
+                ledgerId: change.ledger_id,
+                entityType: 'transaction',
+                entitySyncId: change.entity_sync_id,
+              });
+            }
+            continue;
+          }
           key = `${ledgerRow.id}:${change.entity_type}:${change.entity_sync_id}`;
         }
 
@@ -767,6 +811,14 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         .bind(userId)
         .first<{ max_id: number | null }>();
       maxCursor = maxRow?.max_id ?? 0;
+    }
+
+    // 对齐上游 1.10.x sync_health：非移动冲突的拒绝计入连续失败；有接受即清零。
+    // （全部拒绝都来自 transaction_moved 时不计数 —— 那是终态，不是故障。）
+    if (rejected > conflictCount) {
+      await recordSyncFailure(db, deviceId, 'push', 'changes_rejected');
+    } else if (accepted > 0) {
+      await recordSyncRecovery(db, deviceId, 'push');
     }
 
     const response: SyncPushResponse = {
@@ -1207,6 +1259,9 @@ syncRouter.get('/pull', async (c) => {
           .bind(userId, deviceId, ledgerExtId, lastCursor, now, lastCursor, now).run();
       }
     }
+
+    // 对齐上游 1.10.x sync_health：任一次成功拉取即清零该设备 pull 方向的连续失败
+    if (deviceId) await recordSyncRecovery(db, deviceId, 'pull');
 
     return c.json({
       changes: limitedResults.map(c => {

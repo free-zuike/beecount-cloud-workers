@@ -1429,9 +1429,9 @@ backupRouter.patch('/schedules/:id', apiValidator('json', ScheduleUpdateSchema),
   const serverNow = nowUtc();
 
   const existing = await db
-    .prepare('SELECT id FROM backup_schedules WHERE id = ?')
+    .prepare('SELECT id, enabled, cron_expr, user_id FROM backup_schedules WHERE id = ?')
     .bind(scheduleId)
-    .first();
+    .first<{ id: number; enabled: number | boolean; cron_expr: string; user_id: string }>();
 
   if (!existing) {
     return c.json({ error: 'Schedule not found' }, 404);
@@ -1451,6 +1451,14 @@ backupRouter.patch('/schedules/:id', apiValidator('json', ScheduleUpdateSchema),
 
   const updates: string[] = ['updated_at = ?'];
   const params: (string | number | null)[] = [serverNow];
+
+  // 对齐上游 0024：启用或改 cron 时刷新生效边界（通知中心据此判断是否已过期）
+  const enabling = req.enabled === true && !existing.enabled;
+  const changingCron = req.cron_expr !== undefined && req.cron_expr !== existing.cron_expr;
+  if (enabling || changingCron) {
+    updates.push('cron_effective_at = ?');
+    params.push(serverNow);
+  }
 
   if (req.name !== undefined) {
     updates.push('name = ?');

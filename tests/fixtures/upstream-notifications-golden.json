@@ -1,0 +1,107 @@
+{
+  "notices": [
+    {
+      "id": "backup_schedule_issue:<hash>",
+      "unread": true,
+      "type": "backup_schedule_issue",
+      "schedule_id": 1,
+      "schedule_name": "每日备份",
+      "reason": "failed",
+      "count": 2,
+      "run_id": 3,
+      "at": "<ts>"
+    },
+    {
+      "id": "device_sync_failure:<hash>",
+      "unread": true,
+      "type": "device_sync_failure",
+      "device_id": "d1",
+      "device_name": "My Phone",
+      "failures": [
+        {
+          "direction": "push",
+          "count": 3,
+          "reason": "changes_rejected",
+          "first_failed_at": "<ts>",
+          "last_failed_at": "<ts>"
+        }
+      ]
+    },
+    {
+      "id": "category_missing_parent:<hash>",
+      "unread": true,
+      "type": "category_missing_parent",
+      "count": 1,
+      "categories": [
+        {
+          "id": "cat-child-gone",
+          "name": "咖啡",
+          "parent_name": null
+        }
+      ]
+    }
+  ],
+  "notices_after_read": [
+    {
+      "id": "backup_schedule_issue:<hash>",
+      "unread": false,
+      "type": "backup_schedule_issue",
+      "schedule_id": 1,
+      "schedule_name": "每日备份",
+      "reason": "failed",
+      "count": 2,
+      "run_id": 3,
+      "at": "<ts>"
+    },
+    {
+      "id": "device_sync_failure:<hash>",
+      "unread": true,
+      "type": "device_sync_failure",
+      "device_id": "d1",
+      "device_name": "My Phone",
+      "failures": [
+        {
+          "direction": "push",
+          "count": 3,
+          "reason": "changes_rejected",
+          "first_failed_at": "<ts>",
+          "last_failed_at": "<ts>"
+        }
+      ]
+    },
+    {
+      "id": "category_missing_parent:<hash>",
+      "unread": true,
+      "type": "category_missing_parent",
+      "count": 1,
+      "categories": [
+        {
+          "id": "cat-child-gone",
+          "name": "咖啡",
+          "parent_name": null
+        }
+      ]
+    }
+  ],
+  "notices_non_admin": [],
+  "sync_health": {
+    "device_id": "d1",
+    "device_name": "My Phone",
+    "failures": [
+      {
+        "direction": "pull",
+        "count": 1,
+        "reason": "server_error",
+        "first_failed_at": "<ts>",
+        "last_failed_at": "<ts>"
+      },
+      {
+        "direction": "push",
+        "count": 3,
+        "reason": "changes_rejected",
+        "first_failed_at": "<ts>",
+        "last_failed_at": "<ts>"
+      }
+    ]
+  }
+}

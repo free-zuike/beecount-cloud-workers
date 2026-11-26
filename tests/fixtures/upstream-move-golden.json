@@ -1,0 +1,74 @@
+{
+  "prepare": [
+    {
+      "sync_id": "txm1",
+      "revision": 100,
+      "transaction": {
+        "syncId": "txm1",
+        "type": "expense",
+        "amount": 12.5,
+        "happenedAt": "<ts>",
+        "note": "午餐",
+        "categoryId": "cat1",
+        "categoryName": "餐饮",
+        "categoryKind": "expense",
+        "tags": "tagA",
+        "tagIds": [
+          "tag-1"
+        ],
+        "txIndex": 1,
+        "createdByUserId": "u1",
+        "excludeFromStats": false,
+        "excludeFromBudget": false
+      }
+    }
+  ],
+  "errors": {
+    "same_ledger": {
+      "status": 409,
+      "detail": "MOVE_SAME_LEDGER"
+    },
+    "currency": {
+      "status": 409,
+      "detail": "MOVE_REQUIRES_SAME_CURRENCY"
+    },
+    "shared": {
+      "status": 409,
+      "detail": "MOVE_REQUIRES_PRIVATE_LEDGERS"
+    },
+    "duplicate": {
+      "status": 422,
+      "detail": "MOVE_DUPLICATE_SELECTION"
+    },
+    "missing": {
+      "status": 409,
+      "detail": "MOVE_SOURCE_CHANGED"
+    },
+    "stale_revision": {
+      "status": 409,
+      "detail": "MOVE_SOURCE_CHANGED"
+    },
+    "operation_reused": {
+      "status": 409,
+      "detail": "MOVE_OPERATION_REUSED"
+    }
+  },
+  "move": {
+    "operation_id": "<uuid>",
+    "items": [
+      {
+        "source_sync_id": "txm1",
+        "target_sync_id": "<uuid>"
+      }
+    ],
+    "attachment_ids": {},
+    "server_timestamp": "<ts>"
+  },
+  "replay_matches": true,
+  "after_move": {
+    "source_rows": 0,
+    "target_rows": 1,
+    "source_tx_rows": 0,
+    "retirement_rows": 1
+  }
+}
