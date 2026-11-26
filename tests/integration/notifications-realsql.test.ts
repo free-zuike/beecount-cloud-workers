@@ -204,8 +204,16 @@ describe('通知中心（真实 SQLite，对齐上游 1.10.x）', () => {
     expect(other.status).toBe(404);
   });
 
-  it('缺 web_read scope → 403', async () => {
-    const { status } = await getNotifications({ 'X-Test-Scopes': 'app_write' });
-    expect(status).toBe(403);
+  it('宽松模式（默认）：app_write 令牌可读通知（兼容老会话）', async () => {
+    const { status, json } = await getNotifications({ 'X-Test-Scopes': 'app_write' });
+    expect(status).toBe(200);
+    expect(Array.isArray(json)).toBe(true);
+  });
+
+  it('严格模式（ALLOW_APP_RW_SCOPES=false）：app_write 令牌 → 403', async () => {
+    const res = await app.request('/api/v1/notifications', {
+      headers: { 'X-Test-Scopes': 'app_write' },
+    }, { DB: db, ALLOW_APP_RW_SCOPES: 'false' } as any);
+    expect(res.status).toBe(403);
   });
 });

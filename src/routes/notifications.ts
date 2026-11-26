@@ -9,7 +9,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 
-import { requireAnyScopes } from '../middleware/scope';
+import { allowAppRwScopes, requireAnyScopes } from '../middleware/scope';
 import { activeNotices, applyReadState, readKeysOf } from '../services/notifications';
 
 type Bindings = {
@@ -32,7 +32,8 @@ async function loadUser(db: D1Database, userId: string) {
 }
 
 notificationsRouter.get('/', async (c) => {
-  const denied = requireAnyScopes(c, ['web_read'], []);
+  // 与 read/write/devices 同一兼容策略：ALLOW_APP_RW_SCOPES 宽松模式下 app_write 也可读
+  const denied = requireAnyScopes(c, ['web_read'], allowAppRwScopes(c) ? ['app_write'] : []);
   if (denied) return denied;
 
   const userId = c.get('userId');
@@ -56,7 +57,7 @@ const MarkNotificationsReadSchema = z.object({
 });
 
 notificationsRouter.post('/read', zValidator('json', MarkNotificationsReadSchema), async (c) => {
-  const denied = requireAnyScopes(c, ['web_write'], []);
+  const denied = requireAnyScopes(c, ['web_write'], allowAppRwScopes(c) ? ['app_write'] : []);
   if (denied) return denied;
 
   const userId = c.get('userId');

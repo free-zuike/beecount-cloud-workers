@@ -15,7 +15,7 @@
 
 import { Hono } from 'hono';
 
-import { requireAnyScopes } from '../middleware/scope';
+import { allowAppRwScopes, requireAnyScopes } from '../middleware/scope';
 import { listSyncFailures } from '../services/sync-health';
 
 // ===========================
@@ -180,7 +180,7 @@ devicesRouter.get('/', async (c) => {
 
 // GET /devices/:id/sync-health - 设备同步失败连续计数（对齐上游 1.10.x devices.py）
 devicesRouter.get('/:id/sync-health', async (c) => {
-  const denied = requireAnyScopes(c, ['web_read'], []);
+  const denied = requireAnyScopes(c, ['web_read'], allowAppRwScopes(c) ? ['app_write'] : []);
   if (denied) return denied;
 
   const userId = c.get('userId');

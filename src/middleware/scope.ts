@@ -13,7 +13,7 @@
  */
 import { Context, Next } from 'hono';
 
-function allowAppRwScopes(c: any): boolean {
+export function allowAppRwScopes(c: any): boolean {
   const v = (c.env as any)?.ALLOW_APP_RW_SCOPES;
   if (typeof v === 'string') return v === 'true';
   return v !== false;
