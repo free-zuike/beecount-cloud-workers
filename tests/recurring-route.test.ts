@@ -109,6 +109,9 @@ describe('周期规则 REST 挂载路径（对齐上游 api_prefix 根）', () =
     expect(body.items[0].created_at).toBeNull();        // 空串 → null
     expect(body.items[0].updated_at).toBe('not-a-date'); // 无效格式原样透传
     expect(body.items[0].next_due_at).toBeNull();
+    // 生产回归：SELECT 必须带 revision —— 前端变更需要 expected_revision，
+    // 漏列会导致列表项无 revision → 关闭/停用 422
+    expect(body.items[0].revision).toBe(1);
   });
 
   it('旧 MCP 规则（非 UUID id）pause 不被 zod 误拦（生产回归）', async () => {
