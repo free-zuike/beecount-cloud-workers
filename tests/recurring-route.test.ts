@@ -26,6 +26,12 @@ beforeEach(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ledger_id TEXT, source_system TEXT,
       entity_type TEXT, entity_sync_id TEXT, metadata_json TEXT, created_at TEXT
     );
+    CREATE TABLE sync_changes (
+      change_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ledger_id TEXT, entity_type TEXT,
+      entity_sync_id TEXT, action TEXT, payload_json TEXT, updated_at TEXT,
+      updated_by_user_id TEXT, updated_by_device_id TEXT, scope TEXT
+    );
+    CREATE TABLE audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ledger_id TEXT, action TEXT, metadata_json TEXT, created_at TEXT);
   `);
 
   db = {
@@ -103,5 +109,26 @@ describe('周期规则 REST 挂载路径（对齐上游 api_prefix 根）', () =
     expect(body.items[0].created_at).toBeNull();        // 空串 → null
     expect(body.items[0].updated_at).toBe('not-a-date'); // 无效格式原样透传
     expect(body.items[0].next_due_at).toBeNull();
+  });
+
+  it('旧 MCP 规则（非 UUID id）pause 不被 zod 误拦（生产回归）', async () => {
+    sqlite.prepare(
+      `INSERT INTO mcp_state_records (id, user_id, ledger_id, kind, revision, status, data_json, created_at, updated_at)
+       VALUES ('old-rule-20240101', 'user-1', 'ledger-1', 'recurring_rule', 3, 'active', ?, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')`
+    ).run(JSON.stringify({
+      rule: { name: '旧规则', frequency: 'monthly', starts_at: '2024-01-01', time_zone: 'Asia/Shanghai', day_of_month: 1 },
+      anchor_local: '2024-01-01T00:00:00+08:00',
+      execution_owner: 'cloud',
+      next_index: 2,
+    }));
+
+    const res = await app.request('/api/v1/ledgers/lg1/recurring-rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'pause', record_id: 'old-rule-20240101', expected_revision: 3, confirm: true }),
+    }, { DB: db, JWT_SECRET: 'x' });
+    const body = await res.json() as { status?: string };
+    expect(res.status).toBe(200);
+    expect(body.status).toBe('paused');
   });
 });

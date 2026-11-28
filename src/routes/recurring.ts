@@ -8,7 +8,7 @@
  */
 
 import { Hono } from 'hono';
-import { zValidator } from '@hono/zod-validator';
+import { apiValidator } from '../lib/api-validator';
 import { z } from 'zod';
 
 import { allowAppRwScopes, requireAnyScopes } from '../middleware/scope';
@@ -47,9 +47,11 @@ const LocalOccurrenceSchema = z.object({
 const RuleChangeSchema = z.object({
   action: z.enum(['create', 'update', 'pause', 'resume', 'delete']),
   data: z.unknown().nullable().optional(),
-  record_id: z.string().uuid().nullable().optional(),
+  // 旧 MCP 写入的规则 ID 不是 UUID 格式 —— 上游 REST 路由也不校验 uuid，
+  // 只要求非空；宽松为普通字符串
+  record_id: z.string().min(1).max(255).nullable().optional(),
   expected_revision: z.number().int().min(1).nullable().optional(),
-  client_id: z.string().uuid().nullable().optional(),
+  client_id: z.string().min(1).max(255).nullable().optional(),
   confirm: z.boolean().default(false),
   migrate: z.boolean().default(false),
   automatic: z.boolean().default(false),
@@ -180,7 +182,7 @@ recurringRouter.get('/ledgers/:ledgerId/recurring-rules', async (c) => {
 
 recurringRouter.post(
   '/ledgers/:ledgerId/recurring-rules',
-  zValidator('json', RuleChangeSchema),
+  apiValidator('json', RuleChangeSchema),
   async (c) => {
     const denied = requireAnyScopes(
       c,
