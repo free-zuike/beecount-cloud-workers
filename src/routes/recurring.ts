@@ -73,6 +73,22 @@ function errorStatus(message: string): number {
   return 422;
 }
 
+/**
+ * 上游 error_handling 信封（FastAPI HTTPException 统一包装为
+ * {error:{code,message,request_id}, detail}）。前端 extractApiError 读
+ * error.code / error.message —— 裸 {detail} 会被显示成 [INTERNAL_ERROR]。
+ */
+function errorEnvelope(status: number, message: string): Record<string, unknown> {
+  const lower = message.toLowerCase();
+  let code = status === 409 ? 'CONFLICT'
+    : status === 404 ? 'NOT_FOUND'
+    : status === 403 ? 'FORBIDDEN'
+    : 'VALIDATION_ERROR';
+  if (lower.includes('ledger not found')) code = 'LEDGER_NOT_FOUND';
+  if (lower.includes('record not found')) code = 'ENTITY_NOT_FOUND';
+  return { error: { code, message, request_id: 'unknown' }, detail: message };
+}
+
 // ---------------------------------------------------------------------------
 // GET /write/ledgers/:ledgerId/recurring-rules - 列表
 // ---------------------------------------------------------------------------
@@ -93,7 +109,7 @@ recurringRouter.get('/ledgers/:ledgerId/recurring-rules', async (c) => {
     )
     .bind(ledgerExternalId, userId)
     .first<{ id: string; user_id: string; external_id: string }>();
-  if (!ledger) return c.json({ detail: 'Ledger not found' }, 404);
+  if (!ledger) return c.json(errorEnvelope(404, 'Ledger not found'), 404 as 404);
 
   // 确定角色（owner/editor）
   const member = await db
@@ -177,6 +193,14 @@ recurringRouter.post(
     const args = c.req.valid('json');
     const ledgerExternalId = c.req.param('ledgerId');
 
+    // 路由级参数校验（对齐上游 change_rule 前置检查）
+    if (args.action === 'create' && !args.client_id) {
+      return c.json(errorEnvelope(422, 'client_id required'), 422 as 422);
+    }
+    if (args.action !== 'create' && !(args.record_id && args.expected_revision)) {
+      return c.json(errorEnvelope(422, 'record_id and expected_revision required'), 422 as 422);
+    }
+
     const ctx = mcpContext(c);
     try {
       const result = await changeRecurringRule(ctx, {
@@ -196,14 +220,14 @@ recurringRouter.post(
         reviewed_mapping: args.reviewed_mapping ?? null,
       });
       if ((result as Record<string, unknown>).status === 'operation_pending') {
-        return c.json({ detail: 'OCCURRENCE_PENDING' }, 409);
+        return c.json(errorEnvelope(409, 'OCCURRENCE_PENDING'), 409 as 409);
       }
       return c.json(result);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       const status = (err as { status?: number }).status;
-      if (status) return c.json({ detail: message }, status as 403);
-      return c.json({ detail: message }, errorStatus(message) as 422);
+      const resolved = status ?? errorStatus(message);
+      return c.json(errorEnvelope(resolved, message), resolved as 422);
     }
   }
 );
