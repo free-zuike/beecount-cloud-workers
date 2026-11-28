@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+      # 灰度/测试分支：合并到 main 前先部署到生产 Worker 验证（测完可移除）
+      - feat/upstream-main
   workflow_dispatch:
 
 jobs:

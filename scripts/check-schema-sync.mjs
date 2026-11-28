@@ -31,12 +31,19 @@ const KNOWN = {
     'settings',          // key-value 配置（S3 上传配置等）
     'ai_image_cache',    // 截图记账缓存（D1+R2 持久化，上游无）
     'backup_restores',   // 恢复任务（上游无恢复功能）
+    // 以下两张上游 1.11.0 models.py 已有（#150）；CI 的 schema 参照是自家 main
+    // （workflows 里 upstream remote 指向 fork），合并前属预期差异，故放行：
+    'sync_operation_receipts', // #150 操作回执（device_id+operation_id 幂等重放）
+    'ws_relay_frames',         // #150 WS 帧中转（跨实例短生命周期帧流）
   ]),
   // 列级已知差异（本地有/上游无）。注意：以下曾误列为本地扩展，但经核对上游
   // 1.9.0 Alembic 后确认全部上游已有，属对齐项，故清空：
   //   attachment_kind(0006) / month_start_day(0014) / pat_name(0009) /
   //   last_edited_by_user_id(0012) / scope+ledger_id 可空(0010)
-  columnAdditions: {},
+  columnAdditions: {
+    // #150 延迟附件 GC（上游 models.py ReadTxProjection 已有；CI 参照自家 main）
+    read_tx_projection: ['pending_attachment_gc_json', 'attachment_gc_after'],
+  },
   columnMissing: {},
   // 类型/约束级已知差异：键为 "表.列"，值为原因（有意为之）
   typeExceptions: {
