@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
 import { initializeDatabase, SCHEMA_VERSION } from './db/schema';
-import { APP_VERSION, APP_NAME } from './version';
+import { APP_NAME, resolveVersionPolicy } from './version';
 import { authMiddleware } from './middleware/auth';
 import { scopeGuard } from './middleware/scope';
 import { validateAccessToken } from './auth';
@@ -24,6 +24,7 @@ import workspaceRouter from './routes/workspace';
 import writeRouter from './routes/write';
 import batchWriteRouter from './routes/batch_write';
 import transactionMoveRouter from './routes/transactions_move';
+import recurringRouter from './routes/recurring';
 import notificationsRouter from './routes/notifications';
 import devicesRouter from './routes/devices';
 import profileRouter from './routes/profile';
@@ -235,9 +236,17 @@ app.get('/.well-known/oauth-protected-resource/*', (c) => {
 app.route('/api/v1/setup', setupRouter);
 app.route('/api/v1/auth', authRouter);
 app.route('/api/v1/auth/2fa', twoFactorRouter); // 对齐原版 /api/v1/auth/2fa
-app.get('/api/v1/version', (c) =>
-  c.json({ name: APP_NAME, version: APP_VERSION, capabilities: ['transaction_move_v1'] })
-);
+app.get('/api/v1/version', (c) => {
+  // #151：下发 App 版本兼容策略（env 可覆盖，对齐上游 main.py public_version）
+  const policy = resolveVersionPolicy(c.env as { APP_VERSION?: string; MIN_APP_VERSION?: string; RECOMMENDED_APP_VERSION?: string });
+  return c.json({
+    name: APP_NAME,
+    version: policy.version,
+    min_app_version: policy.minAppVersion,
+    recommended_app_version: policy.recommendedAppVersion,
+    capabilities: ['transaction_move_v1', 'recurring_rules_v1'],
+  });
+});
 
 // 公开 Web 展示开关（与原版 /web-config 对齐）：仅暴露合作入口等开关，不泄漏实例配置。
 app.get('/api/v1/web-config', (c) =>
@@ -440,6 +449,7 @@ app.route('/api/v1', workspaceRouter);
 app.route('/api/v1/write', writeRouter);
 app.route('/api/v1/write', batchWriteRouter);
 app.route('/api/v1/write', transactionMoveRouter);
+app.route('/api/v1/write', recurringRouter);
 app.route('/api/v1/devices', devicesRouter);
 app.route('/api/v1/notifications', notificationsRouter);
 app.route('/api/v1/profile', profileRouter);
@@ -578,6 +588,26 @@ export default {
       } catch (error) {
         console.error('[CRON] MCP recurring rules error:', error);
       }
+    }
+
+    // #150 延迟附件 GC（对齐上游 _start_pending_attachment_gc：每 5 分钟批量过期处理）
+    try {
+      const { expirePendingAttachmentGc } = await import('./services/attachment-gc');
+      const processed = await expirePendingAttachmentGc(db, { R2: env.R2 });
+      if (processed > 0) console.log('[CRON] Pending attachment GC processed:', processed);
+    } catch (error) {
+      console.error('[CRON] Pending attachment GC error:', error);
+    }
+
+    // #150 ws_relay 帧剪枝（对齐上游 RETENTION 5min + MAX_FRAMES 8192 backlog 上限）
+    try {
+      await db.prepare('DELETE FROM ws_relay_frames WHERE created_at < ?')
+        .bind(new Date(Date.now() - 5 * 60 * 1000).toISOString())
+        .run();
+      await db.prepare('DELETE FROM ws_relay_frames WHERE id <= (SELECT MAX(id) FROM ws_relay_frames) - 8192')
+        .run();
+    } catch {
+      // 表不存在（未迁移旧库）静默跳过
     }
 
     try {

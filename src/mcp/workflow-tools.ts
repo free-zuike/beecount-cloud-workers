@@ -30,7 +30,7 @@ export interface ImportCandidate {
   allow_similar?: boolean;
 }
 
-interface MCPStateRow {
+export interface MCPStateRow {
   id: string;
   user_id: string;
   ledger_id: string;
@@ -116,6 +116,10 @@ export async function saveRecord(
     expected_revision?: number | null;
     status?: string;
     next_due_at?: string | null;
+    /** v1.11（#148）：App 迁移交接 — 周期规则创建用稳定 ID + 创建前检查 */
+    create_id?: string | null;
+    check_create?: (() => Promise<Record<string, unknown> | null>) | null;
+    after_save?: ((row: MCPStateRow) => Promise<Record<string, unknown> | null>) | null;
   },
 ): Promise<Record<string, unknown>> {
   const { db, userId } = c;
@@ -130,9 +134,12 @@ export async function saveRecord(
       throw new Error('An executing/completed import plan cannot be edited; create a new preview');
     }
     const before = recordOut(row);
+    // 对齐上游：executing 状态的周期规则不能被普通更新覆盖（有 5 分钟租约保护）
+    const executingGuard = opts.kind === 'recurring_rule' && row.status === 'executing'
+      ? ' AND status != \'executing\'' : '';
     const updated = await db.prepare(
       `UPDATE mcp_state_records SET data_json = ?, status = ?, revision = revision + 1, updated_at = ?, next_due_at = ?
-       WHERE id = ? AND revision = ?`
+       WHERE id = ? AND revision = ?${executingGuard}`
     ).bind(JSON.stringify(opts.data), opts.status ?? row.status, now, opts.next_due_at ?? null, opts.record_id, opts.expected_revision).run();
     if (updated.meta.changes === 0) throw new Error('REVISION_CONFLICT: workflow record changed');
     const afterRow = await db.prepare('SELECT * FROM mcp_state_records WHERE id = ?').bind(opts.record_id).first<MCPStateRow>();
@@ -141,7 +148,22 @@ export async function saveRecord(
     ).bind(userId, ledger.id, 'mcp_workflow_' + opts.kind, JSON.stringify({ record_id: opts.record_id, before, after: recordOut(afterRow!) }), now).run();
     return recordOut(afterRow!);
   }
-  const [id, inserted] = [uuid4(), nowIso()];
+  // v1.11（#148）：创建前检查（迁移交接/并发创建去重）— 命中则重放既有记录
+  if (opts.check_create) {
+    const existing = await opts.check_create();
+    if (existing !== null) {
+      const replay = { ...existing };
+      if (opts.after_save) {
+        // after_save 需要 row 形态；回放场景手工构造
+        const rowLike = { id: String(existing.id), ledger_id: ledger.id, user_id: userId, kind: opts.kind, revision: Number(existing.revision ?? 1), status: String(existing.status ?? 'active'), data_json: JSON.stringify(existing.data ?? existing), next_due_at: (existing.next_due_at as string | null) ?? null, created_at: now, updated_at: now } as MCPStateRow;
+        const extra = await opts.after_save(rowLike);
+        if (extra) Object.assign(replay, extra);
+      }
+      return replay;
+    }
+  }
+  const id = opts.create_id || uuid4();
+  const inserted = nowIso();
   await db.prepare(
     `INSERT INTO mcp_state_records (id, user_id, ledger_id, kind, revision, status, data_json, next_due_at, created_at, updated_at)
      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`
@@ -150,7 +172,12 @@ export async function saveRecord(
   await db.prepare(
     `INSERT INTO audit_logs (user_id, ledger_id, action, metadata_json, created_at) VALUES (?, ?, ?, ?, ?)`
   ).bind(userId, ledger.id, 'mcp_workflow_' + opts.kind, JSON.stringify({ record_id: id, before: null, after: recordOut(row!) }), inserted).run();
-  return recordOut(row!);
+  const out = recordOut(row!);
+  if (opts.after_save && row) {
+    const extra = await opts.after_save(row);
+    if (extra) Object.assign(out, extra);
+  }
+  return out;
 }
 
 export async function listWorkflowRecords(

@@ -26,6 +26,7 @@ const TABLES = `
     icon_cloud_file_id TEXT, icon TEXT, icon_type TEXT, custom_icon_path TEXT, icon_cloud_sha256 TEXT
   );
   CREATE TABLE read_tx_projection (
+      pending_attachment_gc_json TEXT, attachment_gc_after TEXT,
     ledger_id TEXT, sync_id TEXT, user_id TEXT, tx_type TEXT, amount REAL DEFAULT 0,
     happened_at TEXT, category_sync_id TEXT, category_name TEXT, category_kind TEXT,
     primary key (ledger_id, sync_id)

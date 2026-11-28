@@ -23,6 +23,7 @@ beforeEach(() => {
       hidden INTEGER DEFAULT 0, source_change_id INTEGER DEFAULT 0
     );
     CREATE TABLE read_tx_projection (
+      pending_attachment_gc_json TEXT, attachment_gc_after TEXT,
       sync_id TEXT PRIMARY KEY, ledger_id TEXT, tx_type TEXT, amount REAL, currency_code TEXT, native_amount REAL,
       happened_at TEXT, account_sync_id TEXT, from_account_sync_id TEXT, to_account_sync_id TEXT, exclude_from_stats INTEGER DEFAULT 0
     );

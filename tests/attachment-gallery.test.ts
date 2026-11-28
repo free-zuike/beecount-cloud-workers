@@ -21,6 +21,7 @@ const TABLES = `
     ledger_id TEXT, user_id TEXT, role TEXT, PRIMARY KEY (ledger_id, user_id)
   );
   CREATE TABLE read_tx_projection (
+      pending_attachment_gc_json TEXT, attachment_gc_after TEXT,
     ledger_id TEXT, sync_id TEXT, user_id TEXT, tx_type TEXT, amount REAL DEFAULT 0,
     happened_at TEXT, note TEXT, category_sync_id TEXT, category_name TEXT,
     account_sync_id TEXT, account_name TEXT, from_account_sync_id TEXT, to_account_sync_id TEXT,

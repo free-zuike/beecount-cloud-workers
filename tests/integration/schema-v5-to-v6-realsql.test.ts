@@ -81,7 +81,7 @@ describe('schema v5 → v6 迁移（真实 SQLite）', () => {
       .prepare("SELECT value FROM app_metadata WHERE key = 'schema_version'")
       .get() as { value: string };
     expect(version.value).toBe(String(SCHEMA_VERSION));
-    expect(SCHEMA_VERSION).toBe(6);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(7);
 
     const columns = (sqlite.prepare('PRAGMA table_info(backup_schedules)').all() as Array<{ name: string }>)
       .map((c) => c.name);
@@ -125,6 +125,6 @@ describe('schema v5 → v6 迁移（真实 SQLite）', () => {
     const version = sqlite
       .prepare("SELECT value FROM app_metadata WHERE key = 'schema_version'")
       .get() as { value: string };
-    expect(version.value).toBe('6');
+    expect(version.value).toBe(String(SCHEMA_VERSION));
   });
 });

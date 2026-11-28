@@ -45,7 +45,7 @@ export const WRITE_PATH_TABLES = `
   CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, is_admin BOOLEAN DEFAULT 0);
   CREATE TABLE ledgers (id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, name TEXT, currency TEXT);
   CREATE TABLE ledger_members (ledger_id TEXT, user_id TEXT, role TEXT, joined_at TEXT);
-  CREATE TABLE devices (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, platform TEXT, last_seen_at TEXT, last_ip TEXT, revoked_at TEXT, created_at TEXT);
+  CREATE TABLE devices (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, platform TEXT, app_version TEXT, last_seen_at TEXT, last_ip TEXT, revoked_at TEXT, created_at TEXT);
   CREATE TABLE sync_changes (
     change_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ledger_id TEXT, entity_type TEXT,
     entity_sync_id TEXT, action TEXT, payload_json TEXT, updated_at TEXT,
@@ -58,7 +58,7 @@ export const WRITE_PATH_TABLES = `
     account_sync_id TEXT, account_name TEXT,
     from_account_sync_id TEXT, from_account_name TEXT,
     to_account_sync_id TEXT, to_account_name TEXT,
-    tags_csv TEXT, tag_sync_ids_json TEXT, attachments_json TEXT, tx_index INTEGER DEFAULT 0,
+    tags_csv TEXT, tag_sync_ids_json TEXT, attachments_json TEXT, pending_attachment_gc_json TEXT, attachment_gc_after TEXT, tx_index INTEGER DEFAULT 0,
     created_by_user_id TEXT, last_edited_by_user_id TEXT, source_change_id INTEGER DEFAULT 0,
     exclude_from_stats BOOLEAN DEFAULT 0, exclude_from_budget BOOLEAN DEFAULT 0,
     currency_code TEXT, native_amount REAL,

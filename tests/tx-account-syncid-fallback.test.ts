@@ -21,7 +21,7 @@ beforeEach(() => {
     CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL);
     CREATE TABLE ledgers (id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, name TEXT, currency TEXT, month_start_day INTEGER DEFAULT 1);
     CREATE TABLE ledger_members (ledger_id TEXT, user_id TEXT, role TEXT, joined_at TEXT);
-    CREATE TABLE devices (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, platform TEXT, last_seen_at TEXT, last_ip TEXT, revoked_at TEXT, created_at TEXT);
+    CREATE TABLE devices (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, platform TEXT, app_version TEXT, last_seen_at TEXT, last_ip TEXT, revoked_at TEXT, created_at TEXT);
     CREATE TABLE sync_cursors (
       id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, device_id TEXT NOT NULL,
       ledger_external_id TEXT NOT NULL, last_cursor INTEGER DEFAULT 0 NOT NULL, updated_at TEXT,
@@ -38,7 +38,7 @@ beforeEach(() => {
       account_sync_id TEXT, account_name TEXT,
       from_account_sync_id TEXT, from_account_name TEXT,
       to_account_sync_id TEXT, to_account_name TEXT,
-      tags_csv TEXT, tag_sync_ids_json TEXT, attachments_json TEXT, tx_index INTEGER,
+      tags_csv TEXT, tag_sync_ids_json TEXT, attachments_json TEXT, pending_attachment_gc_json TEXT, attachment_gc_after TEXT, tx_index INTEGER,
       created_by_user_id TEXT, last_edited_by_user_id TEXT, source_change_id INTEGER,
       currency_code TEXT, native_amount REAL,
       exclude_from_stats INTEGER DEFAULT 0, exclude_from_budget INTEGER DEFAULT 0,

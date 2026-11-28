@@ -118,7 +118,7 @@ const ENTITY_TABLES_DDL = `
   CREATE TABLE user_category_projection (sync_id TEXT, user_id TEXT, name TEXT, kind TEXT, level INTEGER, sort_order INTEGER, icon TEXT, icon_type TEXT);
   CREATE TABLE user_tag_projection (sync_id TEXT, user_id TEXT, name TEXT, color TEXT);
   CREATE TABLE read_budget_projection (ledger_id TEXT, sync_id TEXT, user_id TEXT, budget_type TEXT, category_sync_id TEXT, amount REAL, period TEXT, start_day INTEGER, enabled INTEGER, source_change_id INTEGER DEFAULT 0);
-  CREATE TABLE read_tx_projection (ledger_id TEXT, sync_id TEXT, user_id TEXT, tx_type TEXT, amount REAL, happened_at TEXT, note TEXT, category_sync_id TEXT, category_name TEXT, category_kind TEXT, account_sync_id TEXT, account_name TEXT, tags_csv TEXT, tag_sync_ids_json TEXT, currency_code TEXT, native_amount REAL, tx_index INTEGER, source_change_id INTEGER, exclude_from_stats INTEGER, exclude_from_budget INTEGER, created_by_user_id TEXT);
+  CREATE TABLE read_tx_projection (ledger_id TEXT, sync_id TEXT, user_id TEXT, tx_type TEXT, amount REAL, happened_at TEXT, note TEXT, category_sync_id TEXT, category_name TEXT, category_kind TEXT, account_sync_id TEXT, account_name TEXT, tags_csv TEXT, tag_sync_ids_json TEXT, currency_code TEXT, native_amount REAL, tx_index INTEGER, source_change_id INTEGER, exclude_from_stats INTEGER, exclude_from_budget INTEGER, created_by_user_id TEXT, pending_attachment_gc_json TEXT, attachment_gc_after TEXT);
 `;
 
 function buildUpstreamFormatDb(): Uint8Array {

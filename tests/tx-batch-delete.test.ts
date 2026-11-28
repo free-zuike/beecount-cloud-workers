@@ -23,6 +23,7 @@ const TABLES = `
     updated_by_user_id TEXT, updated_by_device_id TEXT, scope TEXT
   );
   CREATE TABLE read_tx_projection (
+      pending_attachment_gc_json TEXT, attachment_gc_after TEXT,
     ledger_id TEXT, sync_id TEXT, user_id TEXT, tx_type TEXT, amount REAL DEFAULT 0,
     happened_at TEXT, note TEXT, PRIMARY KEY (ledger_id, sync_id)
   );

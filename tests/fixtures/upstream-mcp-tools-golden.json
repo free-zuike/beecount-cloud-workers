@@ -3592,6 +3592,48 @@
                 "title": "Time Zone",
                 "type": "string"
               },
+              "day_of_month": {
+                "anyOf": [
+                  {
+                    "maximum": 31,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Day Of Month"
+              },
+              "day_of_week": {
+                "anyOf": [
+                  {
+                    "maximum": 7,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Day Of Week"
+              },
+              "month_of_year": {
+                "anyOf": [
+                  {
+                    "maximum": 12,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Month Of Year"
+              },
               "ends_at": {
                 "anyOf": [
                   {

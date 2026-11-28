@@ -417,8 +417,9 @@ async function runBatchCreate(c: any, ledgerExternalId: string): Promise<Respons
       fromAccountName: txAccountCols.from_account_name,
       toAccountId: txAccountCols.to_account_sync_id,
       toAccountName: txAccountCols.to_account_name,
-      tags: mergedTags.length ? mergedTags : null,
-      tagIds: tagIds.length ? tagIds : null,
+      // #150 full_transaction_change：显式空值（tags:''/tagIds:[]）标记 web 完整记录
+      tags: mergedTags.length ? mergedTags : '',
+      tagIds: tagIds.length ? tagIds : [],
       attachments,
       excludeFromStats: tx.exclude_from_stats ?? false,
       excludeFromBudget: tx.exclude_from_budget ?? false,

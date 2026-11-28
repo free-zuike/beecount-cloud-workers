@@ -890,8 +890,8 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
     fromAccountName: req.from_account_name ?? null,
     toAccountId: req.to_account_id ?? null,
     toAccountName: req.to_account_name ?? null,
-    tags: req.tags ?? null,
-    tagIds: req.tag_ids ?? null,
+    tags: req.tags ?? '',
+    tagIds: req.tag_ids ?? [],
     attachments: req.attachments ?? null,
     excludeFromStats: req.exclude_from_stats ?? false,
     excludeFromBudget: req.exclude_from_budget ?? false,
@@ -903,7 +903,8 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
   const happenedAt = payload.happenedAt as string;
   const resolvedTagsCsv = await resolveTagsCsv(db, req.tags as string | string[] | null, req.tag_ids as string[] | null);
   // 确保 tags 始终存为字符串（Flutter App 期望 tags 是 String? 而非 List）
-  payload.tags = resolvedTagsCsv ?? null;
+  // #150 full_transaction_change：显式空值标记 web 完整记录（区别于 mobile patch）
+  payload.tags = resolvedTagsCsv ?? '';
 
   // 按当前用户解析标签名称→标签 ID，覆盖前端传入的 tag_ids（共享账本中前端可能传入错误用户的标签 ID）
   if (resolvedTagsCsv) {
@@ -914,7 +915,7 @@ writeRouter.post('/ledgers/:ledgerId/transactions', zValidator('json', WriteTran
       if (tagRows.results.length > 0) {
         payload.tagIds = tagRows.results.map(r => r.sync_id);
       } else {
-        payload.tagIds = null;
+        payload.tagIds = [];
       }
     }
   }

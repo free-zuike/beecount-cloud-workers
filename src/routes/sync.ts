@@ -27,6 +27,7 @@ import { deleteFromStorage } from '../lib/storage-adapter';
 import { isAttachmentStillReferenced } from '../lib/attachment-reference';
 import { healBrokenTxUpserts } from '../lib/tx-heal';
 import { recordSyncFailure, recordSyncRecovery } from '../services/sync-health';
+import { extractClientAppVersion, isVersionBelow, resolveVersionPolicy, type VersionPolicy } from '../version';
 
 const CODE_VERSION = 'v1.3-projection-fix';
 
@@ -191,18 +192,60 @@ async function enrichTxPayloadsWithUserIds(
 // ===========================
 
 const SyncPushRequestSchema = z.object({
+  // #150：请求逐项写入回执（对齐上游 SyncPushRequest.return_results）
+  return_results: z.boolean().optional(),
   device_id: z.string(),
   changes: z.array(
     z.object({
+      // #150：操作回执协议（对齐上游 SyncChangeIn）。老客户端不发这些字段。
+      operation_id: z.string().min(1).max(64).optional().nullable(),
+      restore_after_change_id: z.number().int().positive().optional().nullable(),
+      changed_fields: z.array(z.string()).optional().nullable(),
       ledger_id: z.string().optional().nullable(),
       entity_type: z.string(),
       entity_sync_id: z.string(),
       action: z.enum(['upsert', 'delete']),
       payload: z.any().nullable().optional().default({}),
       updated_at: z.string().or(z.date()),
+      scope: z.string().optional().nullable(),
     })
   ),
 });
+
+/** #150：逐项写入回执（对齐上游 SyncPushItemResult）。 */
+export type SyncPushItemResult = {
+  status: 'accepted' | 'conflict' | 'rejected';
+  change_id: number | null;
+  reason: string | null;
+  winner: SyncChangeOutWinner | null;
+};
+
+/** #150：winner — 实体当前最新变更（payload 从投影物化补全，对齐上游 SyncChangeOut）。 */
+export type SyncChangeOutWinner = {
+  change_id: number;
+  ledger_id: string;
+  entity_type: string;
+  entity_sync_id: string;
+  action: string;
+  payload: Record<string, unknown>;
+  updated_at: string;
+  updated_by_device_id: string | null;
+  scope: string;
+};
+
+/** #150：预载的最新变更完整行（existingChangeMap 值类型）。 */
+type LatestChangeRow = {
+  change_id: number;
+  updated_at: string;
+  updated_by_device_id: string | null;
+  action: string;
+  payload_json: string | null;
+  scope: string;
+  user_id: string;
+  ledger_id: string | null;
+  entity_type: string;
+  entity_sync_id: string;
+};
 
 type SyncPushResponse = {
   accepted: number;
@@ -212,6 +255,7 @@ type SyncPushResponse = {
   server_cursor: number;
   server_timestamp: string;
   projection_errors?: Array<{ change_id: number; entity_type: string; entity_sync_id: string; error: string }>;
+  results?: SyncPushItemResult[] | null;
 };
 
 // ===========================
@@ -224,6 +268,10 @@ type Bindings = {
   BEECOUNT_DO: DurableObjectNamespace;
   R2?: R2Bucket;
   NODE_ENV?: string;
+  // #151：App 版本兼容策略（对齐上游 MIN_APP_VERSION / RECOMMENDED_APP_VERSION 环境变量）
+  APP_VERSION?: string;
+  MIN_APP_VERSION?: string;
+  RECOMMENDED_APP_VERSION?: string;
 };
 
 type Variables = {
@@ -235,6 +283,351 @@ type Variables = {
 // ===========================
 
 const syncRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
+
+// ---------------------------------------------------------------------------
+// #151：App 版本兼容门控（对齐上游 sync/_shared.py sync_client_version_check）
+// ---------------------------------------------------------------------------
+
+type SyncDeviceVersionRow = { id: string; app_version: string | null; platform: string | null };
+
+function upgradeRequiredBody(policy: VersionPolicy, clientAppVersion: string | null) {
+  const message = `BeeCount App ${policy.minAppVersion} or newer is required`;
+  // 对齐上游 error_handling._error_payload + _http_exception_handler：
+  // detail dict 的字段平铺到顶层，error 信封 code 取 426 状态映射
+  return {
+    error: { code: 'APP_UPGRADE_REQUIRED', message, request_id: 'unknown' },
+    detail: message,
+    code: 'app_upgrade_required',
+    server_version: policy.version,
+    min_app_version: policy.minAppVersion,
+    recommended_app_version: policy.recommendedAppVersion,
+    client_app_version: clientAppVersion,
+  };
+}
+
+/**
+ * 从 X-BeeCount-App-Version 请求头刷新 Device.app_version 并强制最低 App 版本；
+ * 低于 MIN_APP_VERSION 时返回 426 响应（调用方直接 return），否则返回 null。
+ * - header 优先；无 header 且设备平台不是 web 时回退用落库的 app_version；
+ * - web 平台设备（或无设备上下文）只按 header 校验，不受移动端最低版本约束。
+ */
+async function syncClientVersionCheck(
+  c: {
+    req: { header(name: string): string | undefined };
+    env: { DB: D1Database; APP_VERSION?: string; MIN_APP_VERSION?: string; RECOMMENDED_APP_VERSION?: string };
+    json(body: unknown, status?: number): Response;
+  },
+  device: SyncDeviceVersionRow | null,
+): Promise<Response | null> {
+  const headerVersion = extractClientAppVersion((name) => c.req.header(name));
+  if (device && headerVersion && device.app_version !== headerVersion) {
+    await c.env.DB.prepare('UPDATE devices SET app_version = ? WHERE id = ?')
+      .bind(headerVersion, device.id)
+      .run();
+    device.app_version = headerVersion;
+  }
+
+  let effectiveVersion = headerVersion;
+  if (effectiveVersion === null && device && (device.platform ?? '').trim().toLowerCase() !== 'web') {
+    effectiveVersion = device.app_version;
+  }
+
+  const policy = resolveVersionPolicy(c.env);
+  if (isVersionBelow(effectiveVersion, policy.minAppVersion)) {
+    return c.json(upgradeRequiredBody(policy, effectiveVersion), 426);
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// #150：逐项回执辅助（对齐上游 sync_applier.py merge_with_existing + push.py _winner）
+// ---------------------------------------------------------------------------
+
+function jsonParseSafe(value: string | null | undefined): unknown {
+  if (!value) return null;
+  try { return JSON.parse(value); } catch { return null; }
+}
+
+/** winner payload 里的账户字段规范化（camelCase 版，对齐上游 normalize_transaction_accounts）。 */
+function normalizeWinnerAccounts(payload: Record<string, unknown>): Record<string, unknown> {
+  const kind = String(payload.type ?? payload.txType ?? 'expense').toLowerCase();
+  if (kind === 'transfer') {
+    payload.accountId = null;
+    payload.accountName = null;
+  } else {
+    payload.fromAccountId = null;
+    payload.fromAccountName = null;
+    payload.toAccountId = null;
+    payload.toAccountName = null;
+  }
+  return payload;
+}
+
+/**
+ * 附件条目 → (cloudFileId → 本地文件名集合)（对齐上游 _attachment_local_names）。
+ * 只统计带 cloudFileId 的条目 —— 无 cloudFileId 的是「上传中」的占位。
+ */
+function attachmentLocalNames(attachmentsJson: string | null | undefined): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  if (!attachmentsJson) return out;
+  let arr: unknown;
+  try { arr = JSON.parse(attachmentsJson); } catch { return out; }
+  if (!Array.isArray(arr)) return out;
+  for (const item of arr) {
+    if (item && typeof item === 'object') {
+      const fid = (item as Record<string, unknown>).cloudFileId;
+      if (typeof fid === 'string' && fid.trim()) {
+        const key = fid.trim();
+        const names = out.get(key) ?? new Set<string>();
+        const name = (item as Record<string, unknown>).fileName;
+        if (typeof name === 'string' && name) names.add(name);
+        out.set(key, names);
+      }
+    }
+  }
+  return out;
+}
+
+type ProjectionRow = Record<string, unknown> | null;
+
+/**
+ * ledger-scope 投影行 → 完整 payload（对齐上游 merge_with_existing）。
+ * overrides 里非 None 的字段覆盖基线；基线缺行时 transaction 走
+ * normalize(patch)（对齐上游 existing is None 分支）。
+ */
+async function mergeLedgerProjectionRow(
+  db: D1Database,
+  entityType: string,
+  ledgerId: string,
+  syncId: string,
+  overrides: Record<string, unknown>,
+): Promise<Record<string, unknown> | null> {
+  if (entityType === 'transaction') {
+    const row = await db
+      .prepare(
+        `SELECT sync_id, tx_type, amount, happened_at, note, category_sync_id, category_name, category_kind,
+                account_sync_id, account_name, from_account_sync_id, from_account_name,
+                to_account_sync_id, to_account_name, tags_csv, tag_sync_ids_json, attachments_json,
+                tx_index, created_by_user_id, last_edited_by_user_id,
+                exclude_from_stats, exclude_from_budget, currency_code, native_amount
+         FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?`
+      )
+      .bind(ledgerId, syncId)
+      .first<ProjectionRow>();
+    if (!row) return normalizeWinnerAccounts({ ...overrides });
+    const base: Record<string, unknown> = {
+      syncId: row.sync_id,
+      type: row.tx_type,
+      amount: row.amount,
+      happenedAt: row.happened_at,
+      note: row.note,
+      categoryId: row.category_sync_id,
+      categoryName: row.category_name,
+      categoryKind: row.category_kind,
+      accountId: row.account_sync_id,
+      accountName: row.account_name,
+      fromAccountId: row.from_account_sync_id,
+      fromAccountName: row.from_account_name,
+      toAccountId: row.to_account_sync_id,
+      toAccountName: row.to_account_name,
+      tags: row.tags_csv,
+      tagIds: jsonParseSafe(row.tag_sync_ids_json as string | null),
+      attachments: jsonParseSafe(row.attachments_json as string | null),
+      txIndex: row.tx_index,
+      createdByUserId: row.created_by_user_id,
+      updatedByUserId: row.last_edited_by_user_id,
+      excludeFromStats: !!row.exclude_from_stats,
+      excludeFromBudget: !!row.exclude_from_budget,
+      currencyCode: row.currency_code,
+      nativeAmount: row.native_amount,
+    };
+    // 上游 merge_from_spec：仅 non-None 覆盖；note/tags/tagIds 是关系字段，
+    // 显式键才覆盖（names-only 客户端不得保留过期 tagIds）。
+    const merged: Record<string, unknown> = { ...base };
+    for (const [k, v] of Object.entries(overrides)) {
+      if (v !== null && v !== undefined) merged[k] = v;
+    }
+    if ('note' in overrides) merged.note = overrides.note ?? null;
+    if ('tags' in overrides || 'tagIds' in overrides) {
+      merged.tags = overrides.tags ?? null;
+      merged.tagIds = overrides.tagIds ?? null;
+    }
+    // 多币种联动（对齐 _sync_native_amount_after_merge）：带新 amount 不带
+    // nativeAmount 时按隐含汇率等比缩放；old_amount=0 退化为 1:1。
+    if (overrides.amount != null && overrides.nativeAmount == null && row.native_amount != null) {
+      const newAmount = Number(overrides.amount);
+      const oldAmount = Number(row.amount ?? 0);
+      const oldNative = Number(row.native_amount);
+      if (Number.isFinite(newAmount) && Number.isFinite(oldAmount) && newAmount !== oldAmount) {
+        merged.nativeAmount = oldAmount === 0 ? newAmount : (newAmount * oldNative) / oldAmount;
+      }
+    }
+    return normalizeWinnerAccounts(merged);
+  }
+  if (entityType === 'budget') {
+    const row = await db
+      .prepare(
+        `SELECT sync_id, budget_type, category_sync_id, amount, period, start_day, enabled
+         FROM read_budget_projection WHERE ledger_id = ? AND sync_id = ?`
+      )
+      .bind(ledgerId, syncId)
+      .first<ProjectionRow>();
+    if (!row) return { ...overrides };
+    const merged: Record<string, unknown> = {
+      syncId: row.sync_id,
+      type: row.budget_type,
+      categoryId: row.category_sync_id,
+      amount: row.amount,
+      period: row.period,
+      startDay: row.start_day,
+      enabled: !!row.enabled,
+    };
+    for (const [k, v] of Object.entries(overrides)) {
+      if (v !== null && v !== undefined) merged[k] = v;
+    }
+    return merged;
+  }
+  // 未登记的 entity_type：对齐上游 spec is None → 原样返回 payload
+  return { ...overrides };
+}
+
+/** user-scope 投影行 → 完整 payload（对齐上游 merge_with_existing_user）。 */
+async function mergeUserProjectionRow(
+  db: D1Database,
+  userId: string,
+  entityType: string,
+  syncId: string,
+): Promise<Record<string, unknown> | null> {
+  switch (entityType) {
+    case 'account': {
+      const row = await db
+        .prepare(
+          `SELECT sync_id, name, account_type, currency, initial_balance, note, credit_limit,
+                  billing_day, payment_due_day, bank_name, card_last_four, hidden
+           FROM user_account_projection WHERE user_id = ? AND sync_id = ?`
+        )
+        .bind(userId, syncId)
+        .first<ProjectionRow>();
+      if (!row) return null;
+      return {
+        syncId: row.sync_id,
+        name: row.name,
+        type: row.account_type,
+        currency: row.currency,
+        initialBalance: row.initial_balance,
+        note: row.note,
+        creditLimit: row.credit_limit,
+        billingDay: row.billing_day,
+        paymentDueDay: row.payment_due_day,
+        bankName: row.bank_name,
+        cardLastFour: row.card_last_four,
+        hidden: !!row.hidden,
+      };
+    }
+    case 'category': {
+      const row = await db
+        .prepare(
+          `SELECT sync_id, name, kind, level, sort_order, icon, icon_type, custom_icon_path,
+                  icon_cloud_file_id, icon_cloud_sha256, parent_name, parent_sync_id
+           FROM user_category_projection WHERE user_id = ? AND sync_id = ?`
+        )
+        .bind(userId, syncId)
+        .first<ProjectionRow>();
+      if (!row) return null;
+      return {
+        syncId: row.sync_id,
+        name: row.name,
+        kind: row.kind,
+        level: row.level,
+        sortOrder: row.sort_order,
+        icon: row.icon,
+        iconType: row.icon_type,
+        customIconPath: row.custom_icon_path,
+        iconCloudFileId: row.icon_cloud_file_id,
+        iconCloudSha256: row.icon_cloud_sha256,
+        parentName: row.parent_name,
+        parentSyncId: row.parent_sync_id,
+      };
+    }
+    case 'tag': {
+      const row = await db
+        .prepare(`SELECT sync_id, name, color FROM user_tag_projection WHERE user_id = ? AND sync_id = ?`)
+        .bind(userId, syncId)
+        .first<ProjectionRow>();
+      if (!row) return null;
+      return { syncId: row.sync_id, name: row.name, color: row.color };
+    }
+    case 'exchange_rate_override': {
+      const row = await db
+        .prepare(
+          `SELECT sync_id, base_currency, quote_currency, rate, updated_at
+           FROM user_exchange_rate_projection WHERE user_id = ? AND sync_id = ?`
+        )
+        .bind(userId, syncId)
+        .first<ProjectionRow>();
+      if (!row) return null;
+      return {
+        syncId: row.sync_id,
+        baseCurrency: row.base_currency,
+        quoteCurrency: row.quote_currency,
+        rate: row.rate,
+        updatedAt: row.updated_at,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+type WinnerLedgerRef = { id: string; external_id: string } | null;
+
+/**
+ * #150 winner：实体当前最新变更 + 投影物化补全（对齐上游 push.py _winner）。
+ * delete 事件 payload 保持原样；其余按 scope 从投影行合并。
+ */
+async function buildWinner(
+  db: D1Database,
+  row: LatestChangeRow,
+  ledger: WinnerLedgerRef,
+): Promise<SyncChangeOutWinner> {
+  let payload: Record<string, unknown>;
+  try {
+    payload = (row.payload_json ? JSON.parse(row.payload_json) : {}) as Record<string, unknown>;
+  } catch {
+    payload = {};
+  }
+  if (row.action !== 'delete') {
+    if (row.scope === 'user') {
+      const merged = await mergeUserProjectionRow(db, row.user_id, row.entity_type, row.entity_sync_id);
+      if (merged) payload = { ...payload, ...merged };
+    } else if (ledger && row.entity_type === 'ledger') {
+      const l = await db
+        .prepare('SELECT name, currency, month_start_day FROM ledgers WHERE id = ?')
+        .bind(ledger.id)
+        .first<{ name: string | null; currency: string | null; month_start_day: number | null }>();
+      payload = {
+        ...payload,
+        ledgerName: l?.name ?? null,
+        currency: l?.currency ?? null,
+        monthStartDay: l?.month_start_day ?? null,
+      };
+    } else if (ledger) {
+      const merged = await mergeLedgerProjectionRow(db, row.entity_type, ledger.id, row.entity_sync_id, {});
+      if (merged) payload = { ...payload, ...merged };
+    }
+  }
+  return {
+    change_id: row.change_id,
+    ledger_id: ledger ? ledger.external_id : '__user_global__',
+    entity_type: row.entity_type,
+    entity_sync_id: row.entity_sync_id,
+    action: row.action,
+    payload,
+    updated_at: row.updated_at,
+    updated_by_device_id: row.updated_by_device_id,
+    scope: row.scope,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // POST /sync/push - 增量推送：客户端推送变更到服务端
@@ -273,11 +666,11 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     // 验证设备有效性（设备必须属于当前用户且未被撤销）
     const device = await db
       .prepare(
-        `SELECT id FROM devices
+        `SELECT id, app_version, platform FROM devices
          WHERE id = ? AND user_id = ? AND revoked_at IS NULL`
       )
       .bind(deviceId, userId)
-      .first();
+      .first<SyncDeviceVersionRow>();
 
     serverLogger.info('src.routers.sync', '[SYNC] device check result:', device);
 
@@ -293,6 +686,10 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
       )
       .bind(serverNow, c.req.header('CF-Connecting-IP') ?? null, deviceId)
       .run();
+
+    // #151：App 版本兼容门控（低于 MIN_APP_VERSION 的 App → 426）
+    const versionBlocked = await syncClientVersionCheck(c, device);
+    if (versionBlocked) return versionBlocked;
 
     let accepted = 0;
     let rejected = 0;
@@ -418,8 +815,9 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
     }
 
     // ====================== 优化2：批量获取现有变更（分更小的批次） ======================
-    const existingChangeMap = new Map<string, { change_id: number; updated_at: string; updated_by_device_id: string | null }>();
-    
+    // #150：预载含 action/payload_json/scope/user_id（逐项回执的 winner 需要完整行）
+    const existingChangeMap = new Map<string, LatestChangeRow>();
+
     if (changes.length > 0) {
       // 准备有效的变更查询参数
       const validChangeEntries = changes
@@ -442,23 +840,24 @@ syncRouter.post('/push', zValidator('json', SyncPushRequestSchema), async (c) =>
         const batch = batches[batchIdx];
         if (batch.length === 0) continue;
 
-        let query = `SELECT ledger_id, entity_type, entity_sync_id, change_id, updated_at, updated_by_device_id FROM sync_changes WHERE (`;
+        let query = `SELECT ledger_id, entity_type, entity_sync_id, change_id, updated_at, updated_by_device_id, action, payload_json, scope, user_id FROM sync_changes WHERE (`;
         const params: (string | number)[] = [];
-        
+
         for (let i = 0; i < batch.length; i++) {
           if (i > 0) query += ' OR ';
           const entry = batch[i];
           query += `(ledger_id = ? AND entity_type = ? AND entity_sync_id = ?)`;
           params.push(entry.ledgerId, entry.entity_type, entry.entity_sync_id);
         }
-        query += ')';
-        
+        // ORDER BY 保证 map 覆盖后留下的是最新 change_id（winner 语义依赖）
+        query += ') ORDER BY change_id ASC';
+
         serverLogger.info('src.routers.sync', '[SYNC] Querying batch', batchIdx + 1, '/', batches.length, 'with', params.length, 'params');
         const existingChanges = await db
           .prepare(query)
           .bind(...params)
-          .all<{ ledger_id: string; entity_type: string; entity_sync_id: string; change_id: number; updated_at: string; updated_by_device_id: string | null }>();
-        
+          .all<LatestChangeRow>();
+
         serverLogger.info('src.routers.sync', '[SYNC] Batch', batchIdx + 1, 'found', existingChanges.results.length, 'changes');
         for (const change of existingChanges.results) {
           const key = `${change.ledger_id}:${change.entity_type}:${change.entity_sync_id}`;
@@ -478,15 +877,15 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
     for (let i = 0; i < userGlobalEntries.length; i += 30) {
       const batch = userGlobalEntries.slice(i, i + 30);
       if (batch.length === 0) continue;
-      let q = `SELECT entity_type, entity_sync_id, change_id, updated_at, updated_by_device_id FROM sync_changes WHERE scope = 'user' AND user_id = ? AND (`;
+      let q = `SELECT entity_type, entity_sync_id, change_id, updated_at, updated_by_device_id, action, payload_json, scope, user_id FROM sync_changes WHERE scope = 'user' AND user_id = ? AND (`;
       const p: (string | number)[] = [userId];
       for (let j = 0; j < batch.length; j++) {
         if (j > 0) q += ' OR ';
         q += `(entity_type = ? AND entity_sync_id = ?)`;
         p.push(batch[j].entity_type, batch[j].entity_sync_id);
       }
-      q += ')';
-      const rows = await db.prepare(q).bind(...p).all<{ entity_type: string; entity_sync_id: string; change_id: number; updated_at: string; updated_by_device_id: string | null }>();
+      q += ') ORDER BY change_id ASC';
+      const rows = await db.prepare(q).bind(...p).all<LatestChangeRow>();
       for (const r of rows.results) {
         const key = `user:${userId}:${r.entity_type}:${r.entity_sync_id}`;
         existingChangeMap.set(key, r);
@@ -497,6 +896,21 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
     // ====================== 优化3：批量写入变更（分小批次避免 CPU 超时） ======================
     const conflictList: typeof conflictSamples = [];
     const BATCH_INSERT_SIZE = 10; // 每批处理 10 个插入，控制 D1 调用次数
+
+    // #150：逐项写入回执（对齐上游 push.py results）。每条 change 一个回执，
+    // 初始 rejected，被接受/冲突时升级 —— 与上游 receipt 语义一致。
+    const returnResults = req.return_results === true;
+    const itemReceipts: SyncPushItemResult[] = changes.map(() => ({
+      status: 'rejected',
+      change_id: null,
+      reason: null,
+      winner: null,
+    }));
+    // winner 依赖投影应用后的物化状态 → accepted+changed_fields 延迟到批次
+    // 投影应用后构建（重放/冲突 winner 在扫描时即时构建，读旧物化状态）
+    const pendingAcceptedWinners: Array<{ idx: number; row: LatestChangeRow; ledger: WinnerLedgerRef }> = [];
+    // operation_id → 持久回执 INSERT（需拿到 change_id 后执行）
+    const receiptStmts: any[] = [];
 
     // 批量预加载 member role（避免每条变更都查一次 ledger_members）
     const memberRoleMap = new Map<string, string>();
@@ -515,6 +929,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
       change: typeof changes[0];
       ledgerRow: typeof ledgerMap[string] | null;
       newChangeId: number;
+      storedPayloadJson: string;
     }> = [];
 
     // 全量预载 user-global 投影已有的行（一次查询替代每批多次 SELECT，大幅减少 D1 调用数）
@@ -548,12 +963,27 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         lwwKey: string;
         lwwTs: string;
         lwwDevice: string;
+        changeIdx: number;
+        scopeValue: string;
+        changeUserIdVal: string;
+        storedPayloadJson: string;
+        winnerLedgerRef: WinnerLedgerRef;
       }> = [];
 
-      for (const change of batchChanges) {
+      // #150：单批扫描分两阶段 —— 阶段1 处理普通变更（批量插入 + 投影应用），
+      // 阶段2 处理 changed_fields patch 变更（此时 map/投影已包含同批普通变更，
+      // 对齐上游逐条 flush 语义：patch 基线必须包含同批先前变更的效果）。
+      const processScanBatch = async (patchPhase: boolean): Promise<void> => {
+      for (let bi = 0; bi < batchChanges.length; bi++) {
+        const change = batchChanges[bi];
+        const changeIdx = startIdx + bi;
         // 对齐原版：附件不写 sync_changes（App 不识别 attachment 实体类型，
         // 附件信息通过交易 payload 的 attachments 字段同步）
         if (change.entity_type === 'attachment') {
+          continue;
+        }
+        const hasPatchFields = !!(change.changed_fields && change.changed_fields.length > 0);
+        if (hasPatchFields !== patchPhase) {
           continue;
         }
         // user-global 实体：category/account/tag/exchange_rate_override 按类型
@@ -575,6 +1005,12 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           key = `user:${userId}:${change.entity_type}:${change.entity_sync_id}`;
           scope = 'user';
         } else {
+          // #150：ledger-scoped 必须带 ledger_id（对齐上游 missing_ledger）
+          if (!change.ledger_id) {
+            rejected++;
+            itemReceipts[changeIdx].reason = 'missing_ledger';
+            continue;
+          }
           const ledgerRow = ledgerMap[change.ledger_id as string];
           if (!ledgerRow) {
             serverLogger.info('src.routers.sync', '[SYNC] SKIPPED - ledger not found for', change.entity_type, 'ledger_id:', change.ledger_id);
@@ -584,28 +1020,75 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           const callerRole = memberRoleMap.get(ledgerRow.id) ?? (ledgerRow.user_id === userId ? 'owner' : null);
           if (callerRole !== 'owner' && (change.entity_type === 'ledger' || change.entity_type === 'ledger_snapshot')) {
             rejected++;
+            itemReceipts[changeIdx].reason = 'ledger_owner_required';
             continue;
           }
           ledgerRowId = ledgerRow.id;
-          // 对齐上游 1.10.x：已被跨账本移动走（retirement）的源交易，迟到的 upsert 永久拒绝，
-          // 否则旧设备会把已移动的交易在原账本「复活」。
-          if (change.entity_type === 'transaction' && retiredTxKeys.has(`${ledgerRow.id}:${change.entity_sync_id}`)) {
-            rejected++;
-            conflictCount++;
-            if (conflictSamples.length < 20) {
-              conflictSamples.push({
-                reason: 'transaction_moved',
-                ledgerId: change.ledger_id,
-                entityType: 'transaction',
-                entitySyncId: change.entity_sync_id,
-              });
-            }
-            continue;
-          }
           key = `${ledgerRow.id}:${change.entity_type}:${change.entity_sync_id}`;
         }
 
         const latestChange = existingChangeMap.get(key);
+        const winnerLedgerRef: WinnerLedgerRef = isUserGlobal
+          ? null
+          : { id: ledgerRowId as string, external_id: ledgerMap[change.ledger_id as string]?.external_id ?? (change.ledger_id as string) };
+
+        // #150：操作回执重放（对齐上游 previous 分支）——先于 retirement/LWW 判定
+        let previousReceipt: { change_id: number; ledger_id: string | null; entity_type: string; entity_sync_id: string; action: string } | null = null;
+        if (change.operation_id) {
+          previousReceipt = await db
+            .prepare(
+              `SELECT change_id, ledger_id, entity_type, entity_sync_id, action
+               FROM sync_operation_receipts WHERE device_id = ? AND operation_id = ?`
+            )
+            .bind(deviceId, change.operation_id)
+            .first<{ change_id: number; ledger_id: string | null; entity_type: string; entity_sync_id: string; action: string }>();
+          if (previousReceipt) {
+            const identityMatches =
+              previousReceipt.entity_type === change.entity_type
+              && previousReceipt.entity_sync_id === change.entity_sync_id
+              && previousReceipt.action === change.action
+              && (previousReceipt.ledger_id ?? null) === (isUserGlobal ? null : ledgerRowId);
+            if (!identityMatches) {
+              // 重放不能换个身份复用同一 operation_id
+              rejected++;
+              itemReceipts[changeIdx].reason = 'operation_identity_mismatch';
+              continue;
+            }
+            accepted++;
+            itemReceipts[changeIdx].status = 'accepted';
+            itemReceipts[changeIdx].change_id = previousReceipt.change_id;
+            if (returnResults && latestChange
+                && (previousReceipt.change_id !== latestChange.change_id || (change.changed_fields && change.changed_fields.length > 0))) {
+              itemReceipts[changeIdx].winner = await buildWinner(db, latestChange, winnerLedgerRef);
+            }
+            continue;
+          }
+        }
+
+        // #150：已被跨账本移动走（retirement）的源交易，迟到的 upsert 永久拒绝，
+        // 否则旧设备会把已移动的交易在原账本「复活」。（对齐上游 transaction_moved）
+        if (!isUserGlobal && change.entity_type === 'transaction' && ledgerRowId
+            && retiredTxKeys.has(`${ledgerRowId}:${change.entity_sync_id}`)) {
+          rejected++;
+          conflictCount++;
+          if (conflictSamples.length < 20) {
+            conflictSamples.push({
+              reason: 'transaction_moved',
+              ledgerId: change.ledger_id,
+              entityType: 'transaction',
+              entitySyncId: change.entity_sync_id,
+            });
+          }
+          itemReceipts[changeIdx].status = 'conflict';
+          itemReceipts[changeIdx].reason = 'transaction_moved';
+          if (latestChange && latestChange.action === 'delete') {
+            itemReceipts[changeIdx].change_id = latestChange.change_id;
+            if (returnResults) {
+              itemReceipts[changeIdx].winner = await buildWinner(db, latestChange, winnerLedgerRef);
+            }
+          }
+          continue;
+        }
 
         const incomingTuple = { ts: clampedUpdatedAt.getTime(), deviceId };
         let existingTuple: { ts: number; deviceId: string; changeId: number } | null = null;
@@ -618,17 +1101,49 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           };
         }
 
-        // 已有变更且更新更新 → 冲突拒绝
-        if (existingTuple && existingTuple.ts > incomingTuple.ts) {
+        // #150：显式恢复必须指认用户真正看到的墓碑（对齐上游 restore_version_mismatch）
+        if (change.restore_after_change_id != null
+            && (!latestChange || latestChange.action !== 'delete'
+                || latestChange.change_id !== change.restore_after_change_id || change.action !== 'upsert')) {
+          rejected++;
+          itemReceipts[changeIdx].reason = 'restore_version_mismatch';
+          if (latestChange) {
+            itemReceipts[changeIdx].change_id = latestChange.change_id;
+            if (returnResults) {
+              itemReceipts[changeIdx].winner = await buildWinner(db, latestChange, winnerLedgerRef);
+            }
+          }
+          continue;
+        }
+
+        // #150：删除态保护 —— 对已删除实体的迟到 upsert 一律冲突（对齐上游
+        // entity_deleted / restore_deleted_transaction），即使是更新的时间戳也不能复活。
+        let conflictReason: string | null = null;
+        if (latestChange && latestChange.action === 'delete' && change.action === 'upsert'
+            && ['transaction', 'category', 'tag', 'account', 'budget'].includes(change.entity_type)) {
+          if (change.entity_type === 'transaction' && (change.payload as Record<string, unknown> | null)?.restoredSnapshot === true) {
+            conflictReason = 'restore_deleted_transaction';
+          } else if (change.restore_after_change_id == null) {
+            conflictReason = 'entity_deleted';
+          }
+        }
+        // LWW：已有变更更新（或同秒且服务端设备字典序更大）→ 冲突拒绝
+        if (!conflictReason && existingTuple
+            && (existingTuple.ts > incomingTuple.ts
+                || (existingTuple.ts === incomingTuple.ts && (existingTuple.deviceId ?? '') > (deviceId ?? '')))) {
+          conflictReason = 'lww_rejected_older_change';
+        }
+
+        if (conflictReason) {
           rejected++;
           conflictCount++;
-          serverLogger.info('src.routers.sync', '[SYNC] REJECTED - older change:', change.entity_type, change.entity_sync_id, 'server_ts:', existingTuple.ts, 'incoming_ts:', incomingTuple.ts);
+          serverLogger.info('src.routers.sync', '[SYNC] REJECTED - conflict:', change.entity_type, change.entity_sync_id, 'reason:', conflictReason, 'server_ts:', existingTuple?.ts, 'incoming_ts:', incomingTuple.ts);
           const conflictSample = {
-            reason: 'lww_rejected_older_change',
+            reason: conflictReason,
             ledgerId: change.ledger_id,
             entityType: change.entity_type,
             entitySyncId: change.entity_sync_id,
-            existingChangeId: existingTuple.changeId,
+            existingChangeId: existingTuple?.changeId ?? latestChange?.change_id ?? null,
           };
           if (conflictList.length < 20) {
             conflictList.push(conflictSample);
@@ -637,9 +1152,9 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           const auditDetails = {
             ...conflictSample,
             incomingUpdatedAt: clampedUpdatedAt.toISOString(),
-            existingUpdatedAt: new Date(existingTuple.ts).toISOString(),
+            existingUpdatedAt: existingTuple ? new Date(existingTuple.ts).toISOString() : null,
             incomingDeviceId: deviceId,
-            existingDeviceId: existingTuple.deviceId,
+            existingDeviceId: existingTuple?.deviceId ?? null,
           };
           conflictAuditStmts.push(
             db.prepare(
@@ -650,33 +1165,51 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
               safeJsonStringify({ entityType: 'sync_conflict', entityId: null, details: auditDetails, level: 'INFO', logger: null }),
             ),
           );
+          itemReceipts[changeIdx].status = 'conflict';
+          itemReceipts[changeIdx].reason = conflictReason;
+          if (latestChange) {
+            itemReceipts[changeIdx].change_id = latestChange.change_id;
+            if (returnResults) {
+              itemReceipts[changeIdx].winner = await buildWinner(db, latestChange, winnerLedgerRef);
+            }
+          }
           continue;
         }
 
-        // 时间戳相同时按 device_id 字典序裁决（与原版 tuple 排序对齐）
-        if (existingTuple && existingTuple.ts === incomingTuple.ts) {
-          const incomingDid = deviceId ?? '';
-          const existingDid = existingTuple.deviceId ?? '';
-          if (existingDid > incomingDid) {
-            // 服务端设备赢 → 拒绝
-            rejected++;
-            conflictCount++;
-            continue;
-          }
-          if (existingDid === incomingDid) {
-            // 幂等重放 → 接受
-            accepted++;
-            continue;
-          }
-          // incomingDid > existingDid → 落入下方接受逻辑
-        }
-        if (existingTuple && existingTuple.ts === incomingTuple.ts && existingTuple.deviceId === incomingTuple.deviceId) {
+        // 时间戳相同且同设备 → 幂等重放（仅老协议变更；新协议带 operation_id /
+        // changed_fields / restore_after_change_id 的变更必须走完整落库路径）
+        const isIdempotentReplayCandidate = !change.operation_id && !change.changed_fields && change.restore_after_change_id == null;
+        if (isIdempotentReplayCandidate && existingTuple
+            && existingTuple.ts === incomingTuple.ts && (existingTuple.deviceId ?? '') === (deviceId ?? '')) {
+          // 幂等重放 → 接受
           accepted++;
+          itemReceipts[changeIdx].status = 'accepted';
+          itemReceipts[changeIdx].change_id = existingTuple.changeId;
           continue;
+        }
+
+        // #150：changed_fields → 先从投影合并出「完整事件」再落库（对齐上游
+        // push.py:413）。新客户端同时发全量行，服务端把 patch 按 changed_fields
+        // 叠加到物化基线上，存量增量读者收到与全量读取一致的状态。
+        let payloadForStorage = change.payload;
+        if (change.changed_fields && change.changed_fields.length > 0 && latestChange
+            && latestChange.action !== 'delete' && change.action !== 'delete'
+            && (change.entity_type === 'transaction' || change.entity_type === 'ledger')
+            && !isUserGlobal && ledgerRowId) {
+          const payloadObj = (typeof change.payload === 'object' && change.payload !== null ? change.payload : {}) as Record<string, unknown>;
+          const patch: Record<string, unknown> = {};
+          for (const k of change.changed_fields) {
+            if (k in payloadObj) patch[k] = payloadObj[k];
+          }
+          if (change.entity_type === 'transaction') {
+            payloadForStorage = (await mergeLedgerProjectionRow(db, 'transaction', ledgerRowId, change.entity_sync_id, patch)) ?? patch;
+          } else {
+            const latestWinner = await buildWinner(db, latestChange, winnerLedgerRef);
+            payloadForStorage = { ...latestWinner.payload, ...patch };
+          }
         }
 
         // 注入 createdByUserId / updatedByUserId（与原版 §7 对齐）
-        let payloadForStorage = change.payload;
         if (change.entity_type === 'transaction' && typeof payloadForStorage === 'object' && payloadForStorage !== null) {
           const p = { ...payloadForStorage } as Record<string, unknown>;
           if (!p.updatedByUserId) p.updatedByUserId = userId;
@@ -688,7 +1221,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           payloadForStorage = p;
         }
 
-        const ledgerRowRef = isUserGlobal ? null : { id: ledgerRowId as string, external_id: '' };
+        const storedPayloadJson = safeJsonStringify(payloadForStorage ?? {});
 
         // 添加到批量插入 — ledger-scoped 使用 ledger owner 的 user_id（与原版对齐）
         const changeUserId = isUserGlobal ? userId : (ledgerMap[change.ledger_id as string]?.user_id ?? userId);
@@ -698,7 +1231,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
             change.entity_type ?? '',
             change.entity_sync_id ?? '',
             change.action ?? 'upsert',
-            safeJsonStringify(payloadForStorage ?? {}),
+            storedPayloadJson,
             clampedUpdatedAt.toISOString(),
             deviceId ?? null,
             userId,
@@ -721,6 +1254,11 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           lwwKey: key,
           lwwTs: clampedUpdatedAt.toISOString(),
           lwwDevice: deviceId ?? null,
+          changeIdx,
+          scopeValue: scope,
+          changeUserIdVal: changeUserId,
+          storedPayloadJson,
+          winnerLedgerRef,
         });
 
         if (!isUserGlobal && ledgerRowId) {
@@ -741,10 +1279,16 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           }
         }
       }
+      };
 
-      // 执行这一批次的插入（分块 db.batch：一次批量 = 1 次 D1 API 请求，
-      // 大幅减少 API 调用数，避免超 Worker api_limit 上限）
-      if (insertPromises.length > 0) {
+      // 阶段1：普通变更扫描（changed_fields patch 变更延后到阶段2）
+      await processScanBatch(false);
+
+      // 执行插入 + 地图/回执/投影更新（阶段1、阶段2 共用）
+      const flushInsertPromises = async (): Promise<void> => {
+      if (insertPromises.length === 0) return;
+
+      {
         const stmts = insertPromises.map(p => p.stmt);
         const allResults: { meta: { last_row_id: number } }[] = [];
         for (let i = 0; i < stmts.length; i += 100) {
@@ -756,26 +1300,68 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         
         // 记录处理的变更以便后续应用投影
         for (let i = 0; i < insertPromises.length; i++) {
-          const { change, ledgerRow, lwwKey, lwwTs, lwwDevice } = insertPromises[i];
+          const { change, ledgerRow, lwwKey, lwwTs, lwwDevice, changeIdx, scopeValue, changeUserIdVal, storedPayloadJson, winnerLedgerRef } = insertPromises[i];
           const changeId = allResults[i].meta.last_row_id as number;
           maxCursor = Math.max(maxCursor, changeId);
-          processedChanges.push({ change, ledgerRow, newChangeId: changeId });
+          processedChanges.push({ change, ledgerRow, newChangeId: changeId, storedPayloadJson });
           // 更新冲突 map：同批内后续重复实体按幂等跳过（对齐原版 flush 语义）
           if (lwwKey) {
-            existingChangeMap.set(lwwKey, { change_id: changeId, updated_at: lwwTs, updated_by_device_id: lwwDevice });
+            existingChangeMap.set(lwwKey, {
+              change_id: changeId,
+              updated_at: lwwTs,
+              updated_by_device_id: lwwDevice,
+              action: change.action,
+              payload_json: storedPayloadJson,
+              scope: scopeValue,
+              user_id: changeUserIdVal,
+              ledger_id: scopeValue === 'user' ? null : (ledgerRow?.id ?? null),
+              entity_type: change.entity_type,
+              entity_sync_id: change.entity_sync_id,
+            });
+          }
+          // #150：accepted 逐项回执 + 操作回执持久化
+          itemReceipts[changeIdx].status = 'accepted';
+          itemReceipts[changeIdx].change_id = changeId;
+          if (change.operation_id) {
+            receiptStmts.push(db.prepare(
+              `INSERT INTO sync_operation_receipts (device_id, operation_id, change_id, ledger_id, entity_type, entity_sync_id, action)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`
+            ).bind(deviceId, change.operation_id, changeId, scopeValue === 'user' ? null : (ledgerRow?.id ?? null), change.entity_type, change.entity_sync_id, change.action));
+          }
+          if (change.changed_fields && change.changed_fields.length > 0) {
+            pendingAcceptedWinners.push({
+              idx: changeIdx,
+              row: {
+                change_id: changeId,
+                updated_at: lwwTs,
+                updated_by_device_id: lwwDevice,
+                action: change.action,
+                payload_json: storedPayloadJson,
+                scope: scopeValue,
+                user_id: changeUserIdVal,
+                ledger_id: scopeValue === 'user' ? null : (ledgerRow?.id ?? null),
+                entity_type: change.entity_type,
+                entity_sync_id: change.entity_sync_id,
+              },
+              ledger: winnerLedgerRef,
+            });
           }
         }
 
         // 立即应用这一批次的投影更新（收集写入语句后分块 db.batch 执行，减少 D1 调用数）
+        // #150：投影应用使用「存储 payload」（changed_fields 已合并为完整事件，
+        // 对齐上游 apply_change_to_projection(change=row_change)）
         const batchCollector: any[] = [];
-        for (const { change, ledgerRow, newChangeId } of processedChanges) {
+        for (const { change, ledgerRow, newChangeId, storedPayloadJson } of processedChanges) {
+          let appliedPayload: Record<string, unknown> | null = (change.payload && typeof change.payload === 'object' ? change.payload : {}) as Record<string, unknown>;
+          try { appliedPayload = JSON.parse(storedPayloadJson) as Record<string, unknown>; } catch { /* 保底用原始 payload */ }
           if (isUserGlobalType(change.entity_type)) {
               await applyUserChangeToProjection(db, userId, {
                 change_id: newChangeId,
                 entity_type: change.entity_type,
                 entity_sync_id: change.entity_sync_id,
                 action: change.action,
-                payload: change.payload,
+                payload: appliedPayload,
               }, c.env.R2, userGlobalPreloaded.get(change.entity_type)?.get(change.entity_sync_id), batchCollector);
             } else if (ledgerRow) {
               await applyChangeToProjection(db, ledgerRow.id, userId, {
@@ -783,7 +1369,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
                 entity_type: change.entity_type,
                 entity_sync_id: change.entity_sync_id,
                 action: change.action,
-                payload: change.payload,
+                payload: appliedPayload,
                 ledger_id: ledgerRow.id,
               }, c.env.R2);
             }
@@ -797,8 +1383,27 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
           await db.batch(conflictAuditStmts.slice(i, i + 100));
         }
         conflictAuditStmts.length = 0;
+        // #150：操作回执 INSERT（与投影同批执行）
+        for (let i = 0; i < receiptStmts.length; i += 100) {
+          await db.batch(receiptStmts.slice(i, i + 100));
+        }
+        receiptStmts.length = 0;
         processedChanges.length = 0; // 清空已处理的列表
+        insertPromises.length = 0; // 两阶段共用：flush 后必须清空，防止阶段2 重复执行阶段1 语句
       }
+      // #150：accepted winner 在本批投影应用后构建（merge 读取最新物化行）
+      for (const wr of pendingAcceptedWinners) {
+        itemReceipts[wr.idx].winner = await buildWinner(db, wr.row, wr.ledger);
+      }
+      pendingAcceptedWinners.length = 0;
+      };
+
+      // 阶段1 flush：普通变更落库 + 投影应用 + 回执
+      await flushInsertPromises();
+
+      // 阶段2：changed_fields patch 变更 —— 此时 map/投影已包含同批普通变更
+      await processScanBatch(true);
+      await flushInsertPromises();
     }
 
     // 合并冲突样本
@@ -829,6 +1434,8 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
       server_cursor: maxCursor,
       server_timestamp: serverNow,
       projection_errors: projectionErrors.length > 0 ? projectionErrors : undefined,
+      // #150：仅请求方要求时返回逐项回执（避免影响既有 golden 差分）
+      results: returnResults ? itemReceipts : undefined,
     };
 
     serverLogger.info('src.routers.sync', '[SYNC] /sync/push result - accepted:', accepted, 'rejected:', rejected, 'conflicts:', conflictCount, 'server_cursor:', maxCursor, 'projection_errors:', projectionErrors.length);
@@ -839,6 +1446,14 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
       details: { accepted, rejected, conflict_count: conflictCount, device_id: deviceId },
     });
 
+    // #150：WS 帧中转落库（对齐上游 ws_relay：跨实例按提交顺序可重放的短生命周期
+    // 帧流；DO 仍是即时投递路径，这里只做持久化 + cron 剪枝，供重连补发/排查）。
+    // 先收集参数、flush 时才 prepare —— 老库缺表时构造期不会抛错。
+    const relayFrames: Array<{ uid: string; payload: string }> = [];
+    const recordRelayFrame = (uid: string, message: unknown) => {
+      relayFrames.push({ uid, payload: JSON.stringify(message) });
+    };
+
     // WS 广播给所有受影响账本的成员（通过 Durable Object）
     if (Object.keys(touchedLedgers).length > 0) {
       try {
@@ -848,20 +1463,20 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
             .bind(internalId).all<{ user_id: string }>();
           const memberIds = new Set([userId, ...members.results.map(m => m.user_id)]);
           for (const uid of memberIds) {
+            const frame = {
+              type: 'sync_change',
+              ledgerId: extId,
+              serverCursor: maxCursor,
+              serverTimestamp: serverNow,
+            };
+            recordRelayFrame(uid, frame);
             try {
               const doId = c.env.BEECOUNT_DO.idFromName(`ws-${uid}`);
               const doStub = c.env.BEECOUNT_DO.get(doId);
               await doStub.fetch(new Request(`https://dummy/broadcast`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  message: JSON.stringify({
-                    type: 'sync_change',
-                    ledgerId: extId,
-                    serverCursor: maxCursor,
-                    serverTimestamp: serverNow,
-                  }),
-                }),
+                body: JSON.stringify({ message: JSON.stringify(frame) }),
               }));
             } catch {}
           }
@@ -899,6 +1514,7 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         serverCursor: maxCursor,
         serverTimestamp: serverNow,
       };
+      recordRelayFrame(userId, userGlobalPayload);
       try {
         const doId = c.env.BEECOUNT_DO.idFromName(`ws-${userId}`);
         const doStub = c.env.BEECOUNT_DO.get(doId);
@@ -938,13 +1554,20 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
             if (member.role === 'owner') continue;
             // 给每个非 owner member 广播 shared_resource_change
             for (const ev of pendingSharedResourceEvents) {
+              // #150：延迟帧在投递时解析（对齐上游 relay.publish shared_owner 路径）——
+              // 同批后续变更可能已再次改写实体，帧内容取当前投影行；
+              // 实体已被删除 → 投递 delete 墓碑（payload 只带 syncId）。
+              const currentRow = await mergeUserProjectionRow(db, userId, ev.resource_type as string, ev.sync_id as string);
+              const deliveredAction = currentRow ? ev.action : 'delete';
+              const deliveredPayload = currentRow ?? { syncId: ev.sync_id };
               const msg = {
                 type: 'shared_resource_change',
                 ledgerId: sl.external_id,
                 resourceType: ev.resource_type,
-                action: ev.action,
-                payload: ev.payload,
+                action: deliveredAction,
+                payload: deliveredPayload,
               };
+              recordRelayFrame(member.user_id, msg);
               try {
                 const doId = c.env.BEECOUNT_DO.idFromName(`ws-${member.user_id}`);
                 const doStub = c.env.BEECOUNT_DO.get(doId);
@@ -963,6 +1586,21 @@ const USER_GLOBAL_TYPES = ['category', 'account', 'tag', 'exchange_rate_override
         }
       } catch (e) {
         serverLogger.info('src.routers.sync', '[SYNC] shared_resource fan-out failed (non-fatal):', e);
+      }
+    }
+
+    // #150：帧持久化（ws_relay_frames 表缺失时静默降级 —— 未迁移的旧库不影响主流程）
+    if (relayFrames.length > 0) {
+      try {
+        for (let i = 0; i < relayFrames.length; i += 100) {
+          const chunk = relayFrames.slice(i, i + 100);
+          await db.batch(chunk.map(f =>
+            db.prepare('INSERT INTO ws_relay_frames (user_id, payload, created_at) VALUES (?, ?, ?)')
+              .bind(f.uid, f.payload, serverNow),
+          ));
+        }
+      } catch (e) {
+        serverLogger.info('src.routers.sync', '[SYNC] relay frames persist skipped (non-fatal):', (e as Error).message);
       }
     }
 
@@ -1147,17 +1785,23 @@ syncRouter.get('/pull', async (c) => {
 
   try {
 // 设备验证 + heartbeat
+    let deviceVersionRow: SyncDeviceVersionRow | null = null;
     if (deviceId) {
       const device = await db
-        .prepare('SELECT id FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL')
+        .prepare('SELECT id, app_version, platform FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL')
         .bind(deviceId, userId)
-        .first();
+        .first<SyncDeviceVersionRow>();
       if (!device) {
         return c.json({ error: 'Invalid device' }, 401);
       }
       await db.prepare('UPDATE devices SET last_seen_at = ? WHERE id = ? AND user_id = ?')
         .bind(new Date().toISOString(), deviceId, userId).run();
+      deviceVersionRow = device;
     }
+
+    // #151：App 版本兼容门控（无 device_id 时仅按 header 校验）
+    const versionBlocked = await syncClientVersionCheck(c, deviceVersionRow);
+    if (versionBlocked) return versionBlocked;
 
     // 获取用户可访问的所有账本 ID（自有 + 共享成员）— 与原版 list_accessible_ledgers 对齐
     const accessibleLedgerRows = await db.prepare(
@@ -1380,6 +2024,10 @@ syncRouter.get('/full', async (c) => {
   if (!ledgerId) {
     return c.json({ error: 'ledger_id is required' }, 400);
   }
+
+  // #151：App 版本兼容门控（全量快照同样拦截旧版 App；无设备上下文，仅按 header）
+  const versionBlocked = await syncClientVersionCheck(c, null);
+  if (versionBlocked) return versionBlocked;
 
   try {
     // 支持共享账本：先查 owner 的，再查通过 ledger_members 共享的
@@ -2162,7 +2810,8 @@ async function applyChangeToProjection(
            account_sync_id, account_name, from_account_sync_id, from_account_name,
            to_account_sync_id, to_account_name, tags_csv, tag_sync_ids_json, attachments_json,
            tx_index, created_by_user_id, last_edited_by_user_id,
-           exclude_from_stats, exclude_from_budget, currency_code, native_amount
+           exclude_from_stats, exclude_from_budget, currency_code, native_amount,
+           pending_attachment_gc_json, attachment_gc_after
            FROM read_tx_projection WHERE ledger_id = ? AND sync_id = ?`
         ).bind(ledgerId, change.entity_sync_id).first<Record<string, unknown>>();
 
@@ -2190,6 +2839,8 @@ async function applyChangeToProjection(
           exclude_from_budget: (payload as any).excludeFromBudget ?? existingTx?.exclude_from_budget ?? 0,
           currency_code: (payload as any).currencyCode ?? existingTx?.currency_code ?? null,
           native_amount: (payload as any).nativeAmount ?? existingTx?.native_amount ?? null,
+          pending_attachment_gc_json: null as string | null,
+          attachment_gc_after: null as string | null,
         };
 
         // 与原版 _sync_native_amount_after_merge 对齐：amount 改变时联动 nativeAmount
@@ -2229,6 +2880,58 @@ async function applyChangeToProjection(
           txMerged.to_account_sync_id = (await resolveAccountIdByName(txMerged.to_account_name as string)) ?? null;
         }
 
+        // #150 延迟附件 GC（对齐上游 projection._upsert_tx + schedule_attachment_gc）：
+        // known = 既有 pending 挂起 ∪ 旧附件条目 (cloudFileId → 本地文件名)；
+        // removed = known − 新附件引用。上传中的草稿批次（存在无 cloudFileId 的条目，
+        // 上传与 outbox 分批到达）→ 被移除的附件挂起 1 天再回收；完整批次 → 立即 GC。
+        const knownHeld = new Map<string, Set<string>>();
+        try {
+          const prevPending = JSON.parse((existingTx?.pending_attachment_gc_json as string) || '{}') as Record<string, string[]>;
+          if (prevPending && typeof prevPending === 'object') {
+            for (const [fid, names] of Object.entries(prevPending)) {
+              knownHeld.set(fid, new Set(Array.isArray(names) ? names : []));
+            }
+          }
+        } catch { /* ignore */ }
+        for (const [fid, names] of attachmentLocalNames((existingTx?.attachments_json as string) ?? null)) {
+          const set = knownHeld.get(fid) ?? new Set<string>();
+          for (const n of names) set.add(n);
+          knownHeld.set(fid, set);
+        }
+        const newLocalNames = attachmentLocalNames(txMerged.attachments_json as string);
+        const removedFids = [...knownHeld.keys()].filter(fid => !newLocalNames.has(fid));
+        const incomingAttachments = Array.isArray((payload as any).attachments) ? (payload as any).attachments as Array<Record<string, unknown>> : [];
+        const incompleteUpload = incomingAttachments.some(a => a && typeof a === 'object' && !a.cloudFileId);
+        const holdFids = incompleteUpload ? removedFids : [];
+        let attachmentGcAfter: string | null = null;
+        if (holdFids.length > 0) {
+          attachmentGcAfter = (existingTx?.attachment_gc_after as string) ?? new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+        }
+        txMerged.pending_attachment_gc_json = holdFids.length > 0
+          ? safeJsonStringify(Object.fromEntries(holdFids.slice().sort().map(fid => [fid, [...(knownHeld.get(fid) ?? [])].sort()])))
+          : null;
+        txMerged.attachment_gc_after = attachmentGcAfter;
+
+        // 完整批次：被移除且未挂起的附件立即回收（对齐上游 commit 前 GC）
+        if (!incompleteUpload) {
+          for (const fileId of removedFids) {
+            try {
+              const attFile = await db.prepare(
+                "SELECT storage_path, sha256 FROM attachment_files WHERE id = ? AND attachment_kind = 'transaction'"
+              ).bind(fileId).first<{ storage_path: string | null; sha256: string | null }>();
+              if (!attFile) continue;
+              const stillReferenced = await isAttachmentStillReferenced({ db, fileId, sha256: attFile.sha256, scope: { userId } });
+              if (stillReferenced) continue;
+              if (attFile.storage_path) {
+                await deleteFromStorage(db, { R2: r2 }, attFile.storage_path.replace(/^beecount\//, ''));
+              }
+              await db.prepare('DELETE FROM attachment_files WHERE id = ?').bind(fileId).run();
+            } catch (gcErr) {
+              serverLogger.info('src.routers.sync', '[SYNC] attachment gc skipped:', (gcErr as Error).message);
+            }
+          }
+        }
+
         await db
           .prepare(
             `INSERT OR REPLACE INTO read_tx_projection
@@ -2240,8 +2943,9 @@ async function applyChangeToProjection(
               tags_csv, tag_sync_ids_json, attachments_json, tx_index,
               created_by_user_id, last_edited_by_user_id, source_change_id,
               currency_code, native_amount,
-              exclude_from_stats, exclude_from_budget)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              exclude_from_stats, exclude_from_budget,
+              pending_attachment_gc_json, attachment_gc_after)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .bind(
             ledgerId,
@@ -2271,6 +2975,8 @@ async function applyChangeToProjection(
             txMerged.native_amount,
             txMerged.exclude_from_stats ? 1 : 0,
             txMerged.exclude_from_budget ? 1 : 0,
+            txMerged.pending_attachment_gc_json,
+            txMerged.attachment_gc_after,
           )
           .run();
       }

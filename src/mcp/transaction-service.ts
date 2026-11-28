@@ -230,6 +230,7 @@ export async function createMany(
     time_zone?: string | null;
     idempotency_key?: string | null;
     single?: boolean;
+    add_mcp_tag?: boolean;
   },
 ): Promise<Record<string, unknown>> {
   const { db, userId } = c;
@@ -262,14 +263,14 @@ export async function createMany(
     try {
       // 对齐上游 BatchTransactionItem：extra="forbid" + amount>0 + tx_type 枚举 + native_amount>0
       validateBatchItem(transactions[index], index);
-      normalized.push(await prepareTransaction(c, ledger, transactions[index], { time_zone: opts.time_zone }));
+      normalized.push(await prepareTransaction(c, ledger, transactions[index], { time_zone: opts.time_zone, add_mcp_tag: opts.add_mcp_tag }));
     } catch (exc: unknown) {
       throw new McpToolError(`transactions[${index}]: ${exc instanceof Error ? exc.message : String(exc)}`);
     }
   }
 
-  // 默认标签（owner 自己）
-  if (ledger.user_id === userId) {
+  // 默认标签（owner 自己）；add_mcp_tag=false（App 迁移周期规则）时跳过
+  if (ledger.user_id === userId && opts.add_mcp_tag !== false) {
     await ensureMcpTag(c, ledger.external_id);
     for (const body of normalized) {
       const names = (body.tags as string[] | undefined) || [];
@@ -427,8 +428,9 @@ export async function prepareTransaction(
   c: McpContext,
   ledger: LedgerInfo,
   raw: Record<string, unknown>,
-  opts: { time_zone?: string | null; existing?: Record<string, unknown> | null } = {},
+  opts: { time_zone?: string | null; existing?: Record<string, unknown> | null; add_mcp_tag?: boolean } = {},
 ): Promise<Record<string, unknown>> {
+  const addMcpTag = opts.add_mcp_tag !== false;
   const { db, userId } = c;
   const partial = opts.existing !== undefined && opts.existing !== null;
   const existing = opts.existing;
@@ -521,7 +523,10 @@ export async function prepareTransaction(
   }
 
   if (!partial || (raw.tags !== undefined && raw.tags !== null)) {
-    const tags = !partial ? mergeDefaultTag(raw.tags as string[] | null | undefined) : (raw.tags as string[] | undefined || []);
+    // 对齐上游 add_mcp_tag=False：App 迁移的周期规则生成不走 MCP 默认标签
+    const tags = !partial
+      ? (addMcpTag ? mergeDefaultTag(raw.tags as string[] | null | undefined) : (raw.tags as string[] | null | undefined ?? []))
+      : (raw.tags as string[] | undefined || []);
     body.tags = tags;
     body.tag_ids = await lookupTagSyncIds(c, ledger, tags);
   }

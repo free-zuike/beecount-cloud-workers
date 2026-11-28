@@ -54,7 +54,7 @@ const DDL = `
     account_sync_id TEXT, account_name TEXT,
     from_account_sync_id TEXT, from_account_name TEXT,
     to_account_sync_id TEXT, to_account_name TEXT,
-    tags_csv TEXT, tag_sync_ids_json TEXT, attachments_json TEXT, tx_index INTEGER, source_change_id INTEGER,
+    tags_csv TEXT, tag_sync_ids_json TEXT, attachments_json TEXT, pending_attachment_gc_json TEXT, attachment_gc_after TEXT, tx_index INTEGER, source_change_id INTEGER,
     exclude_from_stats INTEGER, exclude_from_budget INTEGER,
     created_by_user_id TEXT, last_edited_by_user_id TEXT, currency_code TEXT, native_amount REAL
   );

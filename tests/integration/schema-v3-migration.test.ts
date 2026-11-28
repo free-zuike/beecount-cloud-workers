@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createRealDb } from '../helpers/realsql-db';
-import { initializeDatabase } from '../../src/db/schema';
+import { initializeDatabase, SCHEMA_VERSION } from '../../src/db/schema';
 
 // SCHEMA v3/v4 迁移（对齐原版 Alembic）：用真实 SQLite 验证存量库(v2 结构)
 // 迁移后数据不丢——mock-db 的 getTable 直接改内存数组，不求值真实 SQL，
@@ -119,7 +119,7 @@ describe('SCHEMA v3/v4 迁移（真实 SQLite 数据安全）', () => {
     expect(artifacts).toHaveLength(1);
   });
 
-  it('全新库初始化直接得到 v6 结构，不触发迁移，版本号=6', async () => {
+  it('全新库初始化直接得到当前结构，不触发迁移', async () => {
     const { sqlite, db } = createRealDb();
     await initializeDatabase(db as any);
     const memberCount = sqlite.prepare('SELECT COUNT(*) c FROM ledger_members').get() as { c: number };
@@ -129,6 +129,6 @@ describe('SCHEMA v3/v4 迁移（真实 SQLite 数据安全）', () => {
     expect(inviteCount.c).toBe(0);
     expect(remoteCount.c).toBe(0);
     const meta = sqlite.prepare("SELECT value FROM app_metadata WHERE key = 'schema_version'").get() as any;
-    expect(meta.value).toBe('6');
+    expect(meta.value).toBe(String(SCHEMA_VERSION));
   });
 });

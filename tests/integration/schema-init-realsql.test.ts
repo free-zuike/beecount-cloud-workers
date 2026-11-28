@@ -1,13 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import type { SQLInputValue } from 'node:sqlite';
-import { initializeDatabase } from '../../src/db/schema';
+import { initializeDatabase, SCHEMA_VERSION } from '../../src/db/schema';
 import { createRealDb } from '../helpers/realsql-db';
 
 // 全新库初始化必须在真实 SQLite 上完整成功（schema.ts 曾含引用已删列的
 // 死索引 idx_audit_logs_entity → no such column → 外层 catch 吞掉 → 后续
 // DDL 全跳 → 版本号写不进 → 每次冷启动重跑必挂。已移除，本测试锁住此回归）。
 describe('新库初始化（真实 SQLite）', () => {
+  // 版本号随 SCHEMA_VERSION 联动（当前 v7 = 上游 0025/0026/0027）
   it('initializeDatabase 全新库完整建表并写入 schema_version=5', async () => {
     const sqlite = new DatabaseSync(':memory:');
     const db: D1Database = {
@@ -50,7 +51,7 @@ describe('新库初始化（真实 SQLite）', () => {
       expect(tables).toContain(required);
     }
     const v = sqlite.prepare("SELECT value FROM app_metadata WHERE key = 'schema_version'").get() as { value: string };
-    expect(v.value).toBe('6');
+    expect(v.value).toBe(String(SCHEMA_VERSION));
     // #133 MCP 工作流三张新表
     for (const t of ['mcp_write_operations', 'mcp_state_records', 'mcp_source_references']) {
       const got = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(t) as { name: string } | undefined;

@@ -63,6 +63,7 @@ export async function createTransactions(
     ledger_id?: string | null;
     time_zone?: string | null;
     idempotency_key?: string | null;
+    add_mcp_tag?: boolean;
   },
 ): Promise<Record<string, unknown>> {
   return createMany(c, {
@@ -70,6 +71,7 @@ export async function createTransactions(
     ledger_id: args.ledger_id,
     time_zone: args.time_zone,
     idempotency_key: args.idempotency_key,
+    add_mcp_tag: args.add_mcp_tag,
     single: false,
   });
 }

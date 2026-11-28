@@ -26,6 +26,7 @@ const TABLES = `
     PRIMARY KEY (ledger_id, sync_id)
   );
   CREATE TABLE read_tx_projection (
+      pending_attachment_gc_json TEXT, attachment_gc_after TEXT,
     ledger_id TEXT, sync_id TEXT, user_id TEXT, tx_type TEXT, amount REAL DEFAULT 0,
     happened_at TEXT, category_sync_id TEXT, exclude_from_stats BOOLEAN DEFAULT 0,
     exclude_from_budget BOOLEAN DEFAULT 0, native_amount REAL, PRIMARY KEY (ledger_id, sync_id)

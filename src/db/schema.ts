@@ -3,7 +3,7 @@
  * 每次变更下方 DDL（新建表/加列/索引/迁移）时必须递增，
  * 否则已初始化的库不会重放 DDL。
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 // 迁移失败后的重试退避：避免每次冷启动重跑全量 DDL + 数据复制，
 // 把 D1 免费版每日 10 万行写入配额瞬间烧光（曾经 1 小时烧穿）。
 const MIGRATION_RETRY_BACKOFF_MS = 30 * 60 * 1000;
@@ -399,6 +399,34 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_push_idempotency_device_id ON sync_push_idempotency(device_id)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_sync_push_idempotency_idempotency_key ON sync_push_idempotency(idempotency_key)').run();
 
+    // v7：上游 alembic/0025 — 逐项写入的持久回执（设备 + 操作 ID 幂等，
+    // 保留原始标识符，即使账本/事件随后被删除或压缩）。
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS sync_operation_receipts (
+        device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        operation_id TEXT NOT NULL,
+        change_id INTEGER NOT NULL,
+        ledger_id TEXT,
+        entity_type TEXT NOT NULL,
+        entity_sync_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        PRIMARY KEY (device_id, operation_id)
+      )
+    `).run();
+
+    // v7：上游 alembic/0026 — 跨进程用户寻址的短生命周期 WS 帧中转。
+    // （Workers 架构下实时投递由 BEECOUNT_DO 原生完成，该表仅保留协议
+    //   数据面；我们的实现不写入，也不轮询。）
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS ws_relay_frames (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    `).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS ix_ws_relay_frames_created_at ON ws_relay_frames(created_at)').run();
+
     // v6：上游 alembic/0022 — 跨账本移动的幂等回执与源身份退休标记。
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS transaction_move_receipts (
@@ -615,6 +643,10 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
         tags_csv TEXT,
         tag_sync_ids_json TEXT,
         attachments_json TEXT,
+        -- v7（上游 alembic/0027）：设备仍在分批上传的交易，被移除的附件 id
+        -- 先挂起（附 1 天宽限期），等 manifest 补全后再判定是否真正孤立。
+        pending_attachment_gc_json TEXT,
+        attachment_gc_after TEXT,
         tx_index INTEGER DEFAULT 0 NOT NULL,
         created_by_user_id TEXT,
         last_edited_by_user_id TEXT,
@@ -630,6 +662,10 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
     // Migrate: add currency_code/native_amount for multi-currency (0018)
     await safeAddColumn('read_tx_projection', 'currency_code', 'TEXT');
     await safeAddColumn('read_tx_projection', 'native_amount', 'REAL');
+    // v7（上游 alembic/0027）：挂起的附件 GC 候选与到期时间
+    await safeAddColumn('read_tx_projection', 'pending_attachment_gc_json', 'TEXT');
+    await safeAddColumn('read_tx_projection', 'attachment_gc_after', 'TEXT');
+    await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_tx_projection_attachment_gc_after ON read_tx_projection(attachment_gc_after)').run();
 
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_tx_ledger_time ON read_tx_projection(ledger_id, happened_at DESC, tx_index DESC)').run();
     await db.prepare('CREATE INDEX IF NOT EXISTS ix_read_tx_ledger_category ON read_tx_projection(ledger_id, category_sync_id)').run();
