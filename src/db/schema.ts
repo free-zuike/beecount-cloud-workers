@@ -3,7 +3,7 @@
  * 每次变更下方 DDL（新建表/加列/索引/迁移）时必须递增，
  * 否则已初始化的库不会重放 DDL。
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 // 迁移失败后的重试退避：避免每次冷启动重跑全量 DDL + 数据复制，
 // 把 D1 免费版每日 10 万行写入配额瞬间烧光（曾经 1 小时烧穿）。
 const MIGRATION_RETRY_BACKOFF_MS = 30 * 60 * 1000;
@@ -1059,6 +1059,14 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
            created_at
          )
          WHERE cron_effective_at IS NULL`
+      ).run();
+    } catch { /* 表结构异常时跳过数据修复，不影响初始化主流程 */ }
+
+    // v8：旧 MCP 写入的周期规则行 revision 可能为 NULL/0（关闭/停用需要
+    // expected_revision 比对，前端会带上列表返回的 revision）—— 幂等回填为 1。
+    try {
+      await db.prepare(
+        'UPDATE mcp_state_records SET revision = 1 WHERE kind = \'recurring_rule\' AND (revision IS NULL OR revision < 1)'
       ).run();
     } catch { /* 表结构异常时跳过数据修复，不影响初始化主流程 */ }
 
