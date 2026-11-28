@@ -50,8 +50,8 @@
         "ledger_id": "L1"
       },
       "result": {
-        "export_id": "794dc11b-676c-407d-8b84-3ceb0496392d",
-        "resource_uri": "beecount://exports/794dc11b-676c-407d-8b84-3ceb0496392d",
+        "export_id": "35ca3bbb-8f14-4ff2-9ab6-a792ce3e9a45",
+        "resource_uri": "beecount://exports/35ca3bbb-8f14-4ff2-9ab6-a792ce3e9a45",
         "revision": 0,
         "row_count": 7,
         "sha256": "8b07bd1892d9c4739f473e2b2cfa81641ab1aa736da2fc83c7a4eea79dee2da8"
