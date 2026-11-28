@@ -12,7 +12,7 @@ const FALLBACK_VERSION = '1.0.0';
 const DEFAULT_MIN_APP_VERSION = '4.0.0';
 const DEFAULT_RECOMMENDED_APP_VERSION = '4.1.0';
 
-export const APP_VERSION = '1.10.1';
+export const APP_VERSION = '1.11.0';
 
 export const APP_NAME = 'BeeCount Cloud';
 
