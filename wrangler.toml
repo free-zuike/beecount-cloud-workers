@@ -60,10 +60,6 @@ EMBEDDING_BASE_URL = "https://api.siliconflow.cn/v1"
 # JWT_SECRET 与 CLOUDFLARE_API_TOKEN 通过 Cloudflare Secret 管理（严禁放 [vars] 明文）：
 # - JWT_SECRET:            Dashboard → Workers → Settings → Variables and Secrets，或 npx wrangler secret put JWT_SECRET
 # - CLOUDFLARE_API_TOKEN:  CI 自动注入（deploy.yml 中 wrangler secret put），不在此处定义
-# #151 App 版本兼容门控：上游默认 min 4.0.0 是对上游 App 版本线的约束；
-# 我们 fork 的 App 版本线为 3.7.x（5 台在用设备），低于 4.0.0 会被 426 拦同步。
-# 覆盖为 3.0.0 保住存量设备；待全部升级到 4.1.0 后可删除此行恢复上游默认。
-MIN_APP_VERSION = "3.0.0"
 
 [observability]
 enabled = true
