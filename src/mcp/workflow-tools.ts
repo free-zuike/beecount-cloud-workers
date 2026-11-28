@@ -73,6 +73,15 @@ function parseJsonOrNull(text: string | null): unknown {
   }
 }
 
+/** 时间字段安全转换：无效/非标准格式原样透传，避免 Invalid time value 500
+ *  （生产实况：早期 MCP 写入的规则行时间字段存在空值/非 ISO 格式）。 */
+function safeIso(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return `${d.toISOString().replace(/Z$/, '+00:00')}`;
+}
+
 export function recordOut(row: MCPStateRow): Record<string, unknown> {
   // 对齐上游 record_out（1.9.0 实测）：data 是**对象**，只有落库时才序列化成
   // data_json；时间用 isoformat(+00:00)
@@ -84,9 +93,9 @@ export function recordOut(row: MCPStateRow): Record<string, unknown> {
     revision: row.revision,
     status: row.status,
     data,
-    next_due_at: row.next_due_at ? `${new Date(row.next_due_at).toISOString().replace(/Z$/, '+00:00')}` : null,
-    created_at: `${new Date(row.created_at).toISOString().replace(/Z$/, '+00:00')}`,
-    updated_at: `${new Date(row.updated_at).toISOString().replace(/Z$/, '+00:00')}`,
+    next_due_at: row.next_due_at ? safeIso(row.next_due_at) : null,
+    created_at: safeIso(row.created_at),
+    updated_at: safeIso(row.updated_at),
   };
 }
 

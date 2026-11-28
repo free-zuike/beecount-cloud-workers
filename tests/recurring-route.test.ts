@@ -87,4 +87,21 @@ describe('周期规则 REST 挂载路径（对齐上游 api_prefix 根）', () =
     const body = await res.json() as Record<string, unknown>;
     expect(body.detail).toBe('Ledger not found');
   });
+
+  it('旧规则行时间字段无效 → 列表仍 200（Invalid time value 生产回归）', async () => {
+    // 生产实况：早期 MCP 写入的规则行存在空串/非 ISO 时间，recordOut 曾
+    // 无条件 toISOString → RangeError → 整个列表 500
+    sqlite.prepare(
+      `INSERT INTO mcp_state_records (id, user_id, ledger_id, kind, revision, status, data_json, next_due_at, created_at, updated_at)
+       VALUES ('r1', 'user-1', 'ledger-1', 'recurring_rule', 1, 'active', ?, NULL, '', 'not-a-date')`
+    ).run(JSON.stringify({ rule: { name: '旧规则', frequency: 'monthly', time_zone: 'Asia/Shanghai' }, anchor_local: '2025-06-01T00:00:00+08:00' }));
+
+    const res = await app.request('/api/v1/ledgers/lg1/recurring-rules', {}, { DB: db, JWT_SECRET: 'x' });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { items: Array<Record<string, unknown>> };
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].created_at).toBeNull();        // 空串 → null
+    expect(body.items[0].updated_at).toBe('not-a-date'); // 无效格式原样透传
+    expect(body.items[0].next_due_at).toBeNull();
+  });
 });

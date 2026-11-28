@@ -121,12 +121,12 @@ recurringRouter.get('/ledgers/:ledgerId/recurring-rules', async (c) => {
 
   const rows = await db
     .prepare(
-      `SELECT id, data_json, next_due_at, status, user_id, created_at FROM mcp_state_records
+      `SELECT id, data_json, next_due_at, status, user_id, created_at, updated_at FROM mcp_state_records
        WHERE ledger_id = ? AND kind = 'recurring_rule' AND status != 'deleted'
        ORDER BY created_at, id`
     )
     .bind(ledger.id)
-    .all<{ id: string; data_json: string; next_due_at: string | null; status: string; user_id: string; created_at: string }>();
+    .all<{ id: string; data_json: string; next_due_at: string | null; status: string; user_id: string; created_at: string; updated_at: string | null }>();
 
   // 对齐上游 last_imported_dates + last_generated_local_date + next_local
   const imported = await lastImportedDates(db, ledger.id);
