@@ -449,7 +449,9 @@ app.route('/api/v1', workspaceRouter);
 app.route('/api/v1/write', writeRouter);
 app.route('/api/v1/write', batchWriteRouter);
 app.route('/api/v1/write', transactionMoveRouter);
-app.route('/api/v1/write', recurringRouter);
+// 周期规则 REST（#148）：上游挂在 api_prefix 根下（/api/v1/ledgers/{id}/recurring-rules），
+// 不在 /write 下 —— App 端/前端都按此路径请求
+app.route('/api/v1', recurringRouter);
 app.route('/api/v1/devices', devicesRouter);
 app.route('/api/v1/notifications', notificationsRouter);
 app.route('/api/v1/profile', profileRouter);

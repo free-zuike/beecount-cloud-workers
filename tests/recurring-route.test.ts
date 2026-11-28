@@ -1,0 +1,90 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
+import { Hono } from 'hono';
+import syncRouter from '../src/routes/sync';
+import recurringRouter from '../src/routes/recurring';
+
+// #148 周期规则 REST 路由挂载回归：上游挂在 api_prefix 根下
+// （/api/v1/ledgers/{id}/recurring-rules，App 端与前端均按此路径请求），
+// 曾因误挂 /api/v1/write 导致前端「新建周期账单」404。
+let sqlite: DatabaseSync;
+let db: D1Database;
+let app: Hono<{ Bindings: { DB: D1Database; JWT_SECRET: string }; Variables: { userId: string; scopes?: string[] } }>;
+
+beforeEach(() => {
+  sqlite = new DatabaseSync(':memory:');
+  sqlite.exec(`
+    CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, is_admin BOOLEAN DEFAULT 0);
+    CREATE TABLE ledgers (id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, name TEXT, currency TEXT, month_start_day INTEGER DEFAULT 1, created_at TEXT);
+    CREATE TABLE ledger_members (ledger_id TEXT, user_id TEXT, role TEXT, joined_at TEXT);
+    CREATE TABLE devices (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, platform TEXT, app_version TEXT, os_version TEXT, device_model TEXT, last_ip TEXT, last_seen_at TEXT, revoked_at TEXT, created_at TEXT);
+    CREATE TABLE mcp_state_records (
+      id TEXT PRIMARY KEY, user_id TEXT, ledger_id TEXT, kind TEXT, status TEXT,
+      data_json TEXT, next_due_at TEXT, revision INTEGER DEFAULT 1, created_at TEXT, updated_at TEXT
+    );
+    CREATE TABLE mcp_source_references (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ledger_id TEXT, source_system TEXT,
+      entity_type TEXT, entity_sync_id TEXT, metadata_json TEXT, created_at TEXT
+    );
+  `);
+
+  db = {
+    prepare(sql: string) {
+      const statement = sqlite.prepare(sql);
+      const normalize = (v: unknown): unknown => (typeof v === 'boolean' ? (v ? 1 : 0) : v);
+      let params: unknown[] = [];
+      return {
+        bind(...values: unknown[]) { params = values.map(normalize); return this; },
+        async run() {
+          const r = statement.run(...params as never[]);
+          return { meta: { last_row_id: Number(r.lastInsertRowid), changes: r.changes } };
+        },
+        async first<T = unknown>() {
+          const row = statement.get(...params as never[]) as T | undefined;
+          return row ?? null;
+        },
+        async all<T = unknown>() {
+          return { results: statement.all(...params as never[]) as T[] };
+        },
+      };
+    },
+    async batch(stmts: { run(): Promise<unknown> }[]) {
+      const out = [];
+      for (const s of stmts) out.push(await s.run());
+      return out;
+    },
+  } as unknown as D1Database;
+
+  sqlite.prepare("INSERT INTO users (id, email, password_hash, is_admin) VALUES ('user-1', 'rr@x.com', 'x', 0)").run();
+  sqlite.prepare("INSERT INTO devices (id, user_id, name, platform, app_version, created_at) VALUES ('d1', 'user-1', 'p', 'ios', '4.1.0', '2025-01-01')").run();
+  sqlite.prepare("INSERT INTO ledgers (id, user_id, external_id, name, currency, created_at) VALUES ('ledger-1', 'user-1', 'lg1', 'L', 'CNY', '2025-01-01')").run();
+  sqlite.prepare("INSERT INTO ledger_members (ledger_id, user_id, role, joined_at) VALUES ('ledger-1', 'user-1', 'owner', '2025-01-01')").run();
+
+  app = new Hono<{ Bindings: { DB: D1Database; JWT_SECRET: string }; Variables: { userId: string } }>();
+  app.use('*', async (c, next) => {
+    c.set('userId', 'user-1');
+    c.set('scopes', ['app_write']);
+    await next();
+  });
+  // 复刻 index.ts 的挂载结构：根下 + /write 下
+  app.route('/api/v1', recurringRouter);
+});
+
+afterEach(() => sqlite.close());
+
+describe('周期规则 REST 挂载路径（对齐上游 api_prefix 根）', () => {
+  it('GET /api/v1/ledgers/:ledgerId/recurring-rules 可达（空列表 200）', async () => {
+    const res = await app.request('/api/v1/ledgers/lg1/recurring-rules', {}, { DB: db, JWT_SECRET: 'x' });
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.items).toEqual([]);
+    expect(body.can_create).toBe(true);
+  });
+
+  it('未知账本 → 404 Ledger not found（而非路由缺失）', async () => {
+    const res = await app.request('/api/v1/ledgers/nope/recurring-rules', {}, { DB: db, JWT_SECRET: 'x' });
+    expect(res.status).toBe(404);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.detail).toBe('Ledger not found');
+  });
+});

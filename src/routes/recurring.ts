@@ -1,10 +1,10 @@
 /**
  * 周期规则 REST 路由（对齐上游 1.10.1+ routers/recurring.py，#148）。
  *
- * 挂载在 /api/v1/write 下（与上游 app.include_router(recurring.router, prefix=api_prefix) 一致，
+ * 挂载在 /api/v1 根下（与上游 app.include_router(recurring.router, prefix=api_prefix) 一致，
  * 路由自带 /ledgers/{ledger_id}/recurring-rules 前缀）：
- * - GET  /write/ledgers/:ledgerId/recurring-rules       — 列表（含 next_local/can_edit）
- * - POST /write/ledgers/:ledgerId/recurring-rules       — 创建/更新/暂停/恢复/删除（含迁移交接）
+ * - GET  /api/v1/ledgers/:ledgerId/recurring-rules       — 列表（含 next_local/can_edit）
+ * - POST /api/v1/ledgers/:ledgerId/recurring-rules       — 创建/更新/暂停/恢复/删除（含迁移交接）
  */
 
 import { Hono } from 'hono';
